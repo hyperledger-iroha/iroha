@@ -2576,7 +2576,6 @@ async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_rou
         NonZeroU64::new(1).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -2654,7 +2653,6 @@ fn install_two_peer_npos_roster(
     }
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
-        None,
         None,
         None,
         0,
@@ -2753,7 +2751,6 @@ async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is
     {
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
-            None,
             None,
             None,
             0,
@@ -3123,7 +3120,6 @@ async fn authoritative_lane_peers_use_pinned_committee_after_autoscale_activatio
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -3138,7 +3134,6 @@ async fn authoritative_lane_peers_use_pinned_committee_after_autoscale_activatio
     app.state
         .update_latest_block_header_cache_for_tests(BlockHeader::new(
             NonZeroU64::new(7).expect("non-zero height"),
-            None,
             None,
             None,
             0,
@@ -3404,7 +3399,10 @@ async fn incoming_read_proxy_rejects_retired_lane_hint() {
 #[cfg(all(feature = "app_api", feature = "connect"))]
 #[tokio::test]
 async fn incoming_read_proxy_rejects_lane_dataspace_mismatch_hint() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
     let response = incoming_read_proxy_response_for_route(app, route).await;

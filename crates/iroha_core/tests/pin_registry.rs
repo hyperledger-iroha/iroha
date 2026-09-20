@@ -755,7 +755,7 @@ fn make_state() -> State {
     state
 }
 fn completion_anchor_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 42, 0)
+    iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 42, 0)
 }
 fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     ProviderIngestFinalizedAnchorV1 {
@@ -879,7 +879,7 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
 }
 fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
     let nz_height = NonZeroU64::new(height).expect("height must be non-zero");
-    iroha_data_model::block::BlockHeader::new(nz_height, None, None, None, 0, 0)
+    iroha_data_model::block::BlockHeader::new(nz_height, None, None, 0, 0)
 }
 fn default_digest() -> ManifestDigest {
     manifest_digest_for_seed(0xAA)

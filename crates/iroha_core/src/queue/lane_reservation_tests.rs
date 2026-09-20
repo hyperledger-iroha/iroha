@@ -4571,3 +4571,218 @@ fn ambiguous_reservation_put_disables_global_and_lane_selection_until_restart_re
         );
     }
 }
+
+fn poll_lane_retirement_release(wait: &mut mv::ReleaseFuture) -> std::task::Poll<()> {
+    std::future::Future::poll(
+        std::pin::Pin::new(wait),
+        &mut std::task::Context::from_waker(std::task::Waker::noop()),
+    )
+}
+
+#[test]
+fn lane_retirement_release_tracks_exact_incarnation_and_retains_early_release() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    install_globally_certified_test_reservation_journals(&queue, &dir);
+    for _ in 0..2 {
+        push_globally_bound_lane_reservation_candidate(
+            &queue,
+            &state,
+            &dir,
+            accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+        );
+    }
+    let scope = lane_reservation_scope(
+        &state,
+        b"release-observer-owner",
+        b"release-observer-proposal",
+    );
+    let other_incarnation = Hash::new(b"release-observer-other-incarnation");
+    let (mut exact, other) = {
+        let observer = queue
+            .lock_lane_retirement_observer()
+            .try_into_cut()
+            .expect("uncontended original Queue owners");
+        let exact = observer
+            .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation)
+            .expect("healthy queue")
+            .expect("ordinary route work owns the scope");
+        let other = observer
+            .lane_pending_work_release(scope.lane_id, scope.dataspace_id, other_incarnation)
+            .expect("healthy queue")
+            .expect("ordinary route work owns every incarnation");
+        (exact.wait_for_release(), other)
+    };
+    assert!(poll_lane_retirement_release(&mut exact).is_pending());
+    let (wake_tx, wake_rx) = mpsc::sync_channel(8);
+    queue.set_sumeragi_wake(wake_tx);
+    let keys = queue
+        .reserve_transactions_for_lane(&state, scope, nonzero!(2_usize))
+        .expect("bind ordinary work to its exact incarnation")
+        .iter()
+        .map(|reserved| *reserved.key())
+        .collect::<Vec<_>>();
+    assert_eq!(keys.len(), 2);
+    assert!(
+        wake_rx.try_recv().is_ok(),
+        "actual condition release wakes the worker"
+    );
+    assert!(
+        poll_lane_retirement_release(&mut other.wait_for_release()).is_ready(),
+        "release before the first future registration must not be lost",
+    );
+    assert!(
+        poll_lane_retirement_release(&mut exact).is_pending(),
+        "release of another incarnation must not wake this scope",
+    );
+    assert!(
+        wake_rx.try_recv().is_err(),
+        "one scope release produces one worker wake"
+    );
+    queue
+        .commit_lane_reservation_group_prefix_for_test(&keys, 1)
+        .expect("publish one exact Commit barrier");
+    assert!(
+        poll_lane_retirement_release(&mut exact).is_pending(),
+        "a Commit barrier still owns its exact incarnation",
+    );
+    assert!(
+        wake_rx.try_recv().is_err(),
+        "partial ownership transitions do not wake"
+    );
+    queue
+        .commit_lane_reservation_group(&keys)
+        .expect("finish both exact terminal owners");
+    assert!(poll_lane_retirement_release(&mut exact).is_ready());
+    assert!(wake_rx.try_recv().is_ok());
+    assert!(queue.lane_retirement_releases.lock().is_empty());
+    assert_eq!(
+        queue
+            .lock_lane_retirement_observer()
+            .try_into_cut()
+            .expect("uncontended original Queue owners")
+            .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation,),
+        Ok(None),
+    );
+}
+
+#[test]
+fn lane_retirement_release_waits_for_ordinary_work_removal() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
+    let hash = transaction.hash_as_entrypoint();
+    push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+    let scope = lane_reservation_scope(
+        &state,
+        b"ordinary-release-owner",
+        b"ordinary-release-proposal",
+    );
+    let observation = queue
+        .lock_lane_retirement_observer()
+        .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation)
+        .expect("healthy queue")
+        .expect("ordinary work blocks retirement");
+    let mut registered = observation.clone().wait_for_release();
+    assert!(poll_lane_retirement_release(&mut registered).is_pending());
+    let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+    queue.set_sumeragi_wake(wake_tx);
+    assert_eq!(queue.remove_committed_hashes([hash], None), 1);
+    assert!(poll_lane_retirement_release(&mut registered).is_ready());
+    assert!(poll_lane_retirement_release(&mut observation.wait_for_release()).is_ready());
+    assert!(wake_rx.try_recv().is_ok());
+    assert!(queue.lane_retirement_releases.lock().is_empty());
+}
+
+#[test]
+fn lane_retirement_fault_wakes_waiters_and_is_not_retryable_contention() {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let dir = tempdir().expect("tempdir");
+    push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &dir,
+        accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+    );
+    let scope = lane_reservation_scope(&state, b"fault-release-owner", b"fault-release-proposal");
+    let mut wait = queue
+        .lock_lane_retirement_observer()
+        .try_into_cut()
+        .expect("uncontended original Queue owners")
+        .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation)
+        .expect("healthy queue")
+        .expect("retained ordinary owner")
+        .wait_for_release();
+    assert!(poll_lane_retirement_release(&mut wait).is_pending());
+    let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+    queue.set_sumeragi_wake(wake_tx);
+    queue.mark_plan_journal_durability_fault(&std::io::Error::other("injected ambiguity"), None);
+    assert!(poll_lane_retirement_release(&mut wait).is_ready());
+    assert!(wake_rx.try_recv().is_ok());
+    let observer = queue
+        .lock_lane_retirement_observer()
+        .try_into_cut()
+        .expect("uncontended original Queue owners");
+    assert_eq!(
+        observer.lane_pending_work_release(
+            scope.lane_id,
+            scope.dataspace_id,
+            scope.lane_incarnation
+        ),
+        Err(QueueLaneRetirementUnavailable::DurabilityFault)
+    );
+    assert_eq!(
+        observer.lane_pending_work_release(
+            scope.lane_id,
+            scope.dataspace_id,
+            Hash::prehashed([0; Hash::LENGTH])
+        ),
+        Err(QueueLaneRetirementUnavailable::InvalidIncarnation)
+    );
+    assert!(queue.lane_retirement_releases.lock().is_empty());
+}
+
+/// Retain a real lane reservation and its exact pending retirement observation.
+/// Keep the returned directory alive until the reservation is consumed with
+/// `Queue::commit_lane_reservation_for_test`; the real journals own the release.
+pub(crate) fn lane_retirement_release_fixture_for_test() -> (
+    Arc<Queue>,
+    mv::ReleaseWait,
+    LaneQueueReservationKeyV1,
+    tempfile::TempDir,
+) {
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let state = lane_reservation_test_state();
+    let queue = Arc::new(Queue::test(config_factory(), &time_source));
+    let directory = tempdir().expect("lane retirement fixture journals");
+    install_globally_certified_test_reservation_journals(&queue, &directory);
+    push_globally_bound_lane_reservation_candidate(
+        &queue,
+        &state,
+        &directory,
+        accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+    );
+    let scope = lane_reservation_scope(
+        &state,
+        b"worker-release-fixture-owner",
+        b"worker-release-fixture-proposal",
+    );
+    let key = *queue
+        .reserve_transactions_for_lane(&state, scope, nonzero!(1_usize))
+        .expect("reserve actual worker fixture transaction")[0]
+        .key();
+    let wait = queue
+        .lock_lane_retirement_observer()
+        .try_into_cut()
+        .expect("uncontended original Queue owners")
+        .lane_pending_work_release(scope.lane_id, scope.dataspace_id, scope.lane_incarnation)
+        .expect("healthy worker fixture queue")
+        .expect("exact reservation blocks lane retirement");
+    (queue, wait, key, directory)
+}

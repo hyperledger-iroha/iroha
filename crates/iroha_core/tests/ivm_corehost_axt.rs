@@ -1,6 +1,8 @@
 //! Regression tests for mapping IVM core host APIs to AXT bindings.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::similar_names, clippy::too_many_lines)]
+#[path = "../src/execution_output_test_support.rs"]
+mod execution_output_test_support;
 use iroha_config::parameters::actual::NexusAxt as ActualAxtTiming;
 #[cfg(feature = "app_api")]
 use iroha_core::block::BlockBuilder;
@@ -815,7 +817,7 @@ fn axt_policy_snapshot_refreshes_current_slot() {
     // Seed a matching hash/header pair so the synthetic state exposes an
     // authenticated, non-zero AXT slot.
     let slot_length_ms = state.view().nexus().axt.slot_length_ms.get();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, slot_length_ms, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, slot_length_ms, 0);
     anchor_axt_test_header(&mut state, header);
     let entry = AxtPolicyEntry {
         manifest_root: [0x11; 32],
@@ -1377,18 +1379,24 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     // snapshot. The candidate block context supplies the exact consensus slot
     // and permanent counter projection used by deterministic validation.
     let deterministic_snapshot = state_block.axt_policy_snapshot();
-    base_block
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
+    {
+        let outputs = execution_output_test_support::structural_network_outputs(
+            &base_block,
             &entry_hashes,
             Vec::new(),
+        );
+        base_block.set_execution_outputs(
+            outputs,
+            1,
             BTreeMap::new(),
             Vec::new(),
             deterministic_snapshot,
+            Default::default(),
+            Vec::new(),
+            &execution_output_test_support::structural_output_limits(),
         )
-        .expect("empty validation block should advertise its deterministic AXT post-state");
-    // Empty live validation commits one deterministic pipeline-event fragment.
-    base_block.set_committed_fragment_count(1);
+    }
+    .expect("empty validation block should advertise its deterministic AXT post-state");
     let valid_block = ValidBlock::validate_unchecked(base_block, &mut state_block).unpack(|_| {});
     let mut committed = valid_block.commit_unchecked().unpack(|_| {});
     let mut replay_snapshot = committed
@@ -1412,16 +1420,17 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     // synthetic replay fixture.
     committed
         .as_mut()
-        .set_transaction_results_with_transcripts(
+        .set_execution_outputs(
             Vec::new(),
-            &entry_hashes,
-            Vec::new(),
+            1,
             BTreeMap::new(),
             vec![envelope.clone()],
             replay_snapshot,
+            Default::default(),
+            Vec::new(),
+            &execution_output_test_support::structural_output_limits(),
         )
         .expect("replay fixture should retain its AXT envelope");
-    committed.as_mut().set_committed_fragment_count(1);
     let peer_id = PeerId::new(signer.public_key().clone());
     let _ = state_block.apply_without_execution(&committed, vec![peer_id.clone()]);
     state_block
@@ -1571,7 +1580,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
         },
         dsid,
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 25, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 25, 0);
     let mut block = state.block(header);
     {
         use iroha_data_model::nexus::{
@@ -1711,7 +1720,7 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
         },
     );
     let binding = AxtBinding::new([0xCD; 32]);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
     let mut block = state.block(header);
     {
         use iroha_data_model::nexus::{
@@ -1787,7 +1796,7 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
         1,
         "ledger entry should be present after recording"
     );
-    let header2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 10, 0);
+    let header2 = BlockHeader::new(nonzero!(2_u64), None, None, 10, 0);
     let mut block2 = state.block(header2);
     {
         let _stx = block2.transaction();
@@ -1876,7 +1885,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         }],
     };
     let binding = AxtBinding::new(binding_bytes);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 5, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 5, 0);
     let mut block = state.block(header);
     {
         use iroha_data_model::nexus::{
@@ -1981,7 +1990,6 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero synthetic height"),
             previous_hash,
-            None,
             None,
             slot_length_ms.saturating_mul(height),
             0,
@@ -2152,7 +2160,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         handles: vec![handle_fragment.clone()],
         commit_height: 1,
     };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_lane_id = Some(lane);
@@ -2357,18 +2365,24 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     // Derive the advertised post-state from the authenticated candidate block
     // so its slot and permanent counter projection match live validation.
     let deterministic_snapshot = state_block.axt_policy_snapshot();
-    base_block
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
+    {
+        let outputs = execution_output_test_support::structural_network_outputs(
+            &base_block,
             &entry_hashes,
             Vec::new(),
+        );
+        base_block.set_execution_outputs(
+            outputs,
+            1,
             BTreeMap::new(),
             Vec::new(),
             deterministic_snapshot,
+            Default::default(),
+            Vec::new(),
+            &execution_output_test_support::structural_output_limits(),
         )
-        .expect("empty validation block should advertise its deterministic AXT post-state");
-    // Empty live validation commits one deterministic pipeline-event fragment.
-    base_block.set_committed_fragment_count(1);
+    }
+    .expect("empty validation block should advertise its deterministic AXT post-state");
     let valid = iroha_core::block::ValidBlock::validate_unchecked(base_block, &mut state_block)
         .unpack(|_| {});
     let mut committed = valid.commit_unchecked().unpack(|_| {});
@@ -2390,16 +2404,17 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     replay_snapshot.version = AxtPolicySnapshot::compute_version(&replay_snapshot.entries);
     committed
         .as_mut()
-        .set_transaction_results_with_transcripts(
+        .set_execution_outputs(
             Vec::new(),
-            &entry_hashes,
-            Vec::new(),
+            1,
             BTreeMap::new(),
             envelopes.clone(),
             replay_snapshot,
+            Default::default(),
+            Vec::new(),
+            &execution_output_test_support::structural_output_limits(),
         )
         .expect("empty committed test block should attach AXT envelope results");
-    committed.as_mut().set_committed_fragment_count(1);
     assert_eq!(
         committed
             .as_ref()
@@ -2566,7 +2581,7 @@ fn axt_replay_entries_expire_after_retention_window() {
     state.prune_axt_replay_ledger_for_tests(5, retention_slots);
     anchor_axt_test_header(
         &mut state,
-        BlockHeader::new(nonzero!(1_u64), None, None, None, 5, 0),
+        BlockHeader::new(nonzero!(1_u64), None, None, 5, 0),
     );
     let mut vm = IVM::new(1_000_000);
     let mut host = CoreHost::from_state(authority.clone(), &state)

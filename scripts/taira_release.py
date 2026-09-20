@@ -19,7 +19,24 @@ For a mutable-source prequalification diagnostic, check accepts repeatable
 --focus-regression HARNESS=EXACT_TEST: check and compile mandatory configuration
 and only explicitly selected harnesses, then run their exact tests. It writes
 no qualification checkpoint and cannot be selected by prepare.
-No keys, runtime configuration, SSH, signing, activation or publishing inputs
+Development checks default to LLVM 18 on Linux, requiring /usr/bin/clang-18 and
+/usr/bin/ld.lld-18 before compilation; missing tools fail without fallback.
+Install clang-18 and lld-18 with the platform package manager, or explicitly select
+--native-linker system for diagnosis. macOS keeps the system Apple linker. Changing this
+selection invalidates Cargo fingerprints and can rebuild dependencies once in the
+same warm lane; repeating the selection reuses them. Authenticated prepare pins
+--native-linker, platform, and the native Rust linker driver's compiler/linker paths,
+SHA256 digests and sizes in its request and revalidates them before and after work
+and on resume. Linux defaults to LLVM 18; explicit system uses the same clang-18
+driver with /usr/bin/ld. macOS system uses the selected Xcode Apple clang and ld.
+Missing tools fail without fallback. These generated native flags never enter the
+separate shipping Zig environment; inherited compiler flags remain excluded.
+Changing selection or tools requires a fresh output, and can rebuild native Cargo
+fingerprints in the existing lane. Both platforms still run only host-native gates;
+Mac preparation does not establish Linux-specific supervisor behavior.
+New owned preparation directories are created 0700 component by component,
+independent of the parent umask. Unsafe existing directories are refused without
+changing their modes. No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Successful source refreshes retire their verified previous materialization only
 after durable publication. Failed captures, outputs and Cargo caches remain intact.
@@ -29,8 +46,10 @@ Preparation records the sanitized environment in a separate owner-private file.
 Resume restores those exact inputs before resolving tools, so session PATH changes
 do not invalidate successful checks. An explicit incremental-policy change still
 requires a fresh preparation; old records without an environment are not resumed.
-The active repository must remain on optimizations, and the executing controller
-sources must match the selected signed commit.
+The active repository must remain on optimizations, and the executing
+bootstrap sources must match the selected signed commit. Native qualification
+loads its gate only from the authenticated source capture; it does not import
+the mutable checkout gate.
 """
 
 from __future__ import annotations
@@ -55,26 +74,34 @@ import uuid
 
 sys.dont_write_bytecode = True
 from release_artifact_contract import (
-    ReleaseArtifactError, canonical_json_bytes, create_fresh_directory,
+    ReleaseArtifactError, canonical_json_bytes, create_fresh_directory, ensure_private_directory,
     exclusive_output_fd, exclusive_write_bytes, stable_hash_path,
     stable_open_relative,
 )
-import taira_release_check as gate
 from taira_cargo_cache import admit_source_fingerprints, local_package_names, source_fingerprints
+from taira_cargo_artifact import cargo_hash_path, cargo_open_relative
 
 
 TARGET = "aarch64-unknown-linux-gnu"
 BINARIES = (("iroha3d_taira", "irohad"), ("iroha", "iroha_cli"),
             ("sorafs-node", "sorafs_node"), ("kagami", "iroha_kagami"))
+LINUX_NATIVE_LLVM_TOOL_PATHS = (
+    ("compiler", Path("/usr/bin/clang-18"), Path("/usr/lib/llvm-18/bin/clang")),
+    ("linker", Path("/usr/bin/ld.lld-18"), Path("/usr/lib/llvm-18/bin/lld")),
+)
 MAX_BINARY_BYTES = 4 * 1024**3
 BUILD_FREE_FLOOR_BYTES = 8 * 1024**3
 CAPTURE_HEADROOM_BYTES = 256 * 1024**2
 PROGRESS_SECONDS = 30
 SESSION_SCHEMA = "taira.local-preparation.v1"
 BUILD_SOURCES = ("scripts/taira_release.py", "scripts/taira_release_check.py",
-                 "scripts/taira_cargo_cache.py",
+                 "scripts/taira_cargo_cache.py", "scripts/taira_cargo_artifact.py",
                  "scripts/release_artifact_contract.py", "scripts/cargo_fast.sh",
                  "scripts/cargo_zigbuild_linux.sh", "scripts/zig_linux_gnu.py")
+# The native gate is authenticated with every captured build input, then loaded
+# from that capture. Only these controller files execute from the live checkout.
+BOOTSTRAP_SOURCES = tuple(path for path in BUILD_SOURCES
+                          if path != "scripts/taira_release_check.py")
 
 
 class PrepareError(RuntimeError):
@@ -123,6 +150,110 @@ def native_check_environment(environment: dict[str, str], inherited: dict[str, s
     if incremental == "1" and Path(native.get("RUSTC_WRAPPER", "")).name == "sccache":
         native.pop("RUSTC_WRAPPER")
     return native
+
+
+def default_development_linker() -> str:
+    """Use LLVM for Linux development checks and preserve the macOS system linker."""
+    return "llvm" if sys.platform == "linux" else "system"
+
+
+def development_linker_environment(environment: dict[str, str], preference: str) -> dict[str, str]:
+    """Apply the Linux development choice after environment sanitization."""
+    require(preference in {"system", "llvm"}, "native linker must be system or llvm")
+    if preference == "system":
+        return dict(environment)
+    require(sys.platform == "linux", "--native-linker llvm is supported only for Linux development checks")
+    require(not any(name in environment for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"))
+            and not any(name.startswith("CARGO_TARGET_") and name.endswith("_LINKER")
+                        for name in environment),
+            "development linker selection requires the sanitized native environment")
+    tools = llvm_native_linker_tools()
+    # The ld.lld basename selects ELF mode; invoking its canonical target `lld`
+    # directly would select the generic driver instead. Validate and report both.
+    flags = (f"-Clinker={tools['compiler']['path']} "
+             f"-Clink-arg=-fuse-ld={tools['linker']['invocation']}")
+    print("[taira-check] development native linker llvm: "
+          + json.dumps(tools, sort_keys=True), flush=True)
+    print("[taira-check] changing native linker selection invalidates Cargo fingerprints; "
+          "expect a one-time dependency rebuild in this existing warm lane. "
+          "Repeating the same selection reuses its cache; switching back invalidates it again.", flush=True)
+    return environment | {"RUSTFLAGS": flags}
+
+
+def llvm_native_linker_tools() -> dict[str, dict[str, object]]:
+    """Inspect the one fixed LLVM installation shared by both native workflows."""
+    tools = {}
+    for role, invocation, expected in LINUX_NATIVE_LLVM_TOOL_PATHS:
+        remedy = ("install executable clang-18" if role == "compiler" else
+                  "install executable lld-18 or select --native-linker system")
+        try:
+            path = real_path(invocation.resolve(strict=True))
+        except OSError as error:
+            raise PrepareError(
+                f"--native-linker llvm requires installed LLVM 18 tools: missing {invocation}; {remedy}"
+            ) from error
+        require(path == expected, f"LLVM {role} must resolve to the fixed installed path {expected}")
+        info = stable_hash_path(path)
+        require(bool(info.mode & stat.S_IXUSR) and os.access(path, os.X_OK),
+                f"LLVM {role} is not executable: {invocation}; {remedy}")
+        require(invocation.resolve(strict=True) == path, f"LLVM {role} changed during inspection")
+        tools[role] = {"invocation": str(invocation), "path": str(path),
+                       "sha256": info.sha256, "size": info.size}
+    return tools
+
+
+def system_native_linker_paths() -> tuple[tuple[str, Path, Path], ...]:
+    """Resolve the system linker with a Clang driver that can name its exact path."""
+    require(sys.platform in {"darwin", "linux"}, "native linker requires macOS or Linux")
+    if sys.platform == "darwin":
+        paths = []
+        for name in ("clang", "ld"):
+            selected = subprocess.check_output(
+                ["/usr/bin/xcrun", "--find", name], cwd="/",
+                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+                stdin=subprocess.DEVNULL, text=True, timeout=15).strip()
+            paths.append(Path(selected))
+    else:
+        linker = Path("/usr/bin/ld")
+        return (LINUX_NATIVE_LLVM_TOOL_PATHS[0],
+                ("linker", linker, linker.resolve(strict=True)))
+    return tuple((role, path, path.resolve(strict=True))
+                 for role, path in zip(("compiler", "linker"), paths))
+
+
+def preparation_native_linker(preference: str) -> dict[str, object]:
+    """Bind the native driver and linker; shipping Zig remains a separate owner."""
+    require(preference in {"system", "llvm"}, "native linker must be system or llvm")
+    if preference == "llvm":
+        require(sys.platform == "linux", "--native-linker llvm is supported only on Linux")
+        tools = llvm_native_linker_tools()
+    else:
+        tools = {}
+        for role, invocation, expected in system_native_linker_paths():
+            path = real_path(invocation.resolve(strict=True))
+            require(path == expected, f"system native {role} changed during resolution")
+            info = stable_hash_path(path)
+            require(bool(info.mode & stat.S_IXUSR) and os.access(path, os.X_OK),
+                    f"system native {role} is not executable: {invocation}")
+            require(invocation.resolve(strict=True) == path,
+                    f"system native {role} changed during inspection")
+            tools[role] = {"invocation": str(invocation), "path": str(path),
+                           "sha256": info.sha256, "size": info.size}
+    return {"preference": preference, "platform": sys.platform, "tools": tools}
+
+
+def preparation_native_environment(environment: dict[str, str], linker: dict[str, object]) -> dict[str, str]:
+    """Generate exact native flags without admitting inherited compiler hooks."""
+    require(not any(name in environment for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"))
+            and not any(name.startswith("CARGO_TARGET_") and name.endswith("_LINKER")
+                        for name in environment),
+            "preparation linker selection requires the sanitized native environment")
+    tools = linker["tools"]
+    # Use the invocation alias for LLVM: ld.lld selects ELF mode, unlike lld.
+    # Encoded flags also preserve spaces in the selected Apple toolchain path.
+    flags = (f"-Clinker={tools['compiler']['path']}",
+             f"-Clink-arg=-fuse-ld={tools['linker']['invocation']}")
+    return environment | {"CARGO_ENCODED_RUSTFLAGS": "\x1f".join(flags)}
 
 
 def recorded_preparation_environment(output: Path, target_dir: Path,
@@ -272,8 +403,8 @@ def verify_controller_module_origins(root: Path) -> None:
     """Keep unrelated checkout modules outside the admitted live controller."""
     modules = {
         "release_artifact_contract": "scripts/release_artifact_contract.py",
-        "taira_release_check": "scripts/taira_release_check.py",
         "taira_cargo_cache": "scripts/taira_cargo_cache.py",
+        "taira_cargo_artifact": "scripts/taira_cargo_artifact.py",
     }
     allowed = {root / "scripts/taira_release.py", *(root / path for path in modules.values())}
     for name, relative in modules.items():
@@ -307,8 +438,10 @@ def verify_controller_sources(root: Path, commit: str) -> None:
             selected.append(row)
     require({row.split(b"\t", 1)[1] for row in selected} == required,
             "signed commit is missing a required build controller source")
+    bootstrap = {os.fsencode(path) for path in BOOTSTRAP_SOURCES}
+    live = [row for row in selected if row.split(b"\t", 1)[1] in bootstrap]
     try:
-        source_snapshot(root, b"\0".join(selected) + b"\0")
+        source_snapshot(root, b"\0".join(live) + b"\0")
     except (PrepareError, OSError) as error:
         raise PrepareError("build controller differs from signed commit: " + str(error)) from error
     verify_controller_module_origins(root)
@@ -463,8 +596,10 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
             return source
         try:
             frozen_snapshot(source, entries, target_dir)
-        except PrepareError:
+        except (PrepareError, FileNotFoundError, NotADirectoryError):
             require(state is not None, "unexpected unrecorded source capture")
+            # Added paths and file/directory replacements need not exist in the
+            # previous tree. Other I/O failures still retain their diagnostic.
             # Preserve timestamps only from a complete, unchanged previous tree.
             previous_entries = commit_entries(root, state["commit"])
             frozen_snapshot(source, previous_entries, target_dir)
@@ -493,7 +628,7 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
                 path = pending / os.fsdecode(relative)
                 require(not Path(os.fsdecode(relative)).is_absolute()
                         and ".." not in Path(os.fsdecode(relative)).parts, "source path escapes capture")
-                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                ensure_private_directory(path.parent, anchor=pending)
                 if mode == b"160000":
                     path.mkdir(mode=0o700)
                     continue
@@ -677,8 +812,10 @@ def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
     # only after a successful build and independent source/tool revalidation.
     with exclusive_output_fd(log, mode=0o600) as output:
         try:
+            # Cargo's locks and outputs must satisfy capture custody even when
+            # the invoking Linux account has a group-writable default umask.
             child = subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
-                                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+                                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True, umask=0o077,
                                      pass_fds=tuple(fd for fd in (lock_fd, lane_lock_fd, mode_lock_fd) if fd is not None))
             try:
                 while True:
@@ -726,7 +863,7 @@ def freeze(path: Path, *, directory: bool = False) -> None:
 
 
 def capture_artifacts(target_dir: Path, output_dir: Path) -> list[dict[str, object]]:
-    sources = [(name, package, stable_hash_path(target_dir / TARGET / "release" / name,
+    sources = [(name, package, cargo_hash_path(target_dir / TARGET / "release" / name,
                                                 max_size=MAX_BINARY_BYTES))
                for name, package in BINARIES]
     capacity_preflight([(output_dir, sum(info.size for _, _, info in sources)
@@ -740,7 +877,7 @@ def capture_artifacts(target_dir: Path, output_dir: Path) -> list[dict[str, obje
                 "release artifact must be an executable ELF")
         require(original.stat().st_uid == os.geteuid(), "release artifact must be owner-held")
         destination = capture / name
-        with stable_open_relative(target_dir, relative, expected=expected) as source:
+        with cargo_open_relative(target_dir, relative, expected=expected) as source:
             require(valid_elf(os.read(source, 20)), "release artifact is not AArch64 Linux ELF: " + name)
             os.lseek(source, 0, os.SEEK_SET)
             with exclusive_output_fd(destination, mode=0o755) as output:
@@ -931,23 +1068,33 @@ def cargo_lane(root: Path, target_dir: Path, role: str):
 
 
 def development_check(root: Path, target: Path | None, inherited: dict[str, str],
-                      *, native_check_scope: str = "basic", focused_regressions=None) -> None:
-    if focused_regressions is not None:
-        gate.focused_regression_stages(native_check_scope, focused_regressions)
-    root = real_path(root)
-    target_dir = development_target(root, target, inherited)
-    with cargo_lane(root, target_dir, "development") as lock_fd:
-        env = child_environment(inherited, target_dir)
-        env, _ = isolated_cargo_environment(root, root, env)
-        print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
-        native = native_check_environment(env, inherited)
-        if focused_regressions is None:
-            gate.run_checks(root, environment=native, lock_fds=(lock_fd,),
-                            qualification_scope=native_check_scope)
-        else:
-            gate.run_prequalification(root, focused_regressions=focused_regressions,
-                                      environment=native, lock_fds=(lock_fd,),
-                                      qualification_scope=native_check_scope)
+                      *, native_check_scope: str = "basic", focused_regressions=None,
+                      native_linker: str | None = None) -> None:
+    # Mutable-source diagnostics intentionally use the checkout gate. Preparation
+    # never imports this module and authenticates its captured gate separately.
+    import taira_release_check as gate
+
+    try:
+        if focused_regressions is not None:
+            gate.focused_regression_stages(native_check_scope, focused_regressions)
+        root = real_path(root)
+        target_dir = development_target(root, target, inherited)
+        with cargo_lane(root, target_dir, "development") as lock_fd:
+            env = child_environment(inherited, target_dir)
+            env, _ = isolated_cargo_environment(root, root, env)
+            print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
+            native = native_check_environment(env, inherited)
+            native = development_linker_environment(
+                native, default_development_linker() if native_linker is None else native_linker)
+            if focused_regressions is None:
+                gate.run_checks(root, environment=native, lock_fds=(lock_fd,),
+                                qualification_scope=native_check_scope)
+            else:
+                gate.run_prequalification(root, focused_regressions=focused_regressions,
+                                          environment=native, lock_fds=(lock_fd,),
+                                          qualification_scope=native_check_scope)
+    except gate.CheckError as error:
+        raise PrepareError(str(error)) from error
 
 
 @contextlib.contextmanager
@@ -955,7 +1102,7 @@ def source_lane(root: Path, target_dir: Path):
     # Preserve the fixed-source custody lock even across preparer upgrades.
     key = hashlib.sha256(os.fsencode(target_dir)).hexdigest()[:24]
     parent = target_dir / "taira-release-sources" / key
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_private_directory(parent, anchor=target_dir)
     real_path(parent)
     with preparation_lock(parent) as lock_fd:
         yield parent / "source", lock_fd
@@ -1030,11 +1177,15 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     env.update(IROHA_ZIG_BINARY=str(args.zig), IROHA_GIT_COMMIT_HASH=args.expected_commit,
                VERGEN_GIT_SHA=args.expected_commit)
     env, compiler_tools = isolated_cargo_environment(root, source, env)
-    native_env = native_check_environment(env, {"CARGO_INCREMENTAL": incremental})
+    native_linker = preparation_native_linker(args.native_linker)
+    native_env = preparation_native_environment(
+        native_check_environment(env, {"CARGO_INCREMENTAL": incremental}), native_linker)
+    print("[taira-release] pinned native linker " + json.dumps(native_linker, sort_keys=True), flush=True)
     command = build_command(source, target_dir, env["CARGO"])
     base = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer,
             "native_check_scope": args.native_check_scope,
             "native_incremental": native_env["CARGO_INCREMENTAL"] == "1",
+            "native_linker": native_linker,
             "environment_sha256": hashlib.sha256(canonical_json_bytes(environment_record)).hexdigest(),
             # This is the effective gate environment: child_environment excludes
             # CARGO_BUILD_TARGET, and both commit variables are normalized above.
@@ -1052,6 +1203,8 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
         output = create_fresh_directory(output, mode=0o700)
 
     def revalidate():
+        require(preparation_native_linker(args.native_linker) == native_linker,
+                "native linker choice or tool identity changed during preparation")
         require(recorded_preparation_environment(output, target_dir, request) == environment_record,
                 "preparation environment checkpoint changed during preparation")
         require(frozen_snapshot(source, entries, target_dir) == before, "captured source changed during preparation")
@@ -1138,6 +1291,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
             retire_checkpoint(independent_checks)
 
         admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks)
+        revalidate()
         if checks.exists():
             print("[taira-release] reused completed native CLI checks", flush=True)
         else:
@@ -1150,6 +1304,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
             revalidate()
             if not checks.exists():
                 write_record(checks, {"request": request, "passed": True})
+        revalidate()
         stage("Linux release build", lambda: run_build(source, command, env, attempt / "cargo.log", lock_fd=lock_fd, lane_lock_fd=lane_lock_fd, mode_lock_fd=mode_lock_fd))
         with source_fingerprints(source, target_dir, TARGET, packages, repair=False):
             revalidate()
@@ -1175,9 +1330,13 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
                              help="basic Taira deployment checks (default), or full regression qualification")
         if name == "check":
+            command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
+                                 help="development only: LLVM 18 by default on Linux (clang-18/lld-18 required), system on macOS; explicit system selects the diagnostic fallback; changing selection rebuilds Cargo dependencies")
             command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
                                  help="development diagnostic: check and compile configuration plus explicitly selected harnesses; not qualification")
         if name == "prepare":
+            command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
+                                 help="pinned native gate linker: LLVM 18 by default on Linux; system Apple ld on macOS; separate from shipping Zig")
             command.add_argument("--expected-commit", required=True)
             command.add_argument("--expected-signer", required=True, help="independently reviewed signing-key fingerprint")
             command.add_argument("--output-dir", type=Path, required=True)
@@ -1193,7 +1352,7 @@ def main() -> int:
     try:
         require(sys.platform in {"darwin", "linux"}, "Taira preparation requires macOS or Linux")
         if args.command == "check":
-            options = {"native_check_scope": args.native_check_scope}
+            options = {"native_check_scope": args.native_check_scope, "native_linker": args.native_linker}
             if args.focus_regression is not None:
                 options["focused_regressions"] = tuple(args.focus_regression)
             development_check(args.repo_root, args.target_dir, dict(os.environ), **options)
@@ -1201,7 +1360,7 @@ def main() -> int:
             args.target_dir = args.target_dir or args.repo_root / "target"
             prepared = prepare(args)
             print(f"[taira-release] prepared {prepared['commit']}: {args.output_dir / 'result.json'}", flush=True)
-    except (PrepareError, ReleaseArtifactError, gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (PrepareError, ReleaseArtifactError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[taira-release] FAIL: {error}", file=sys.stderr, flush=True)
         return 1
     return 0

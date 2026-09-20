@@ -1511,8 +1511,9 @@ impl AdaptiveThresholdBlsPublicTranscript<BeaconPurpose> {
 
 /// Non-cloneable, zeroizing adaptive threshold signing share `(s, r, u)`.
 ///
-/// The type has no byte export, serialization, or `Debug` implementation and
-/// is deliberately separate from generic account/consensus key containers.
+/// The type has no generic serialization or `Debug` implementation and is
+/// deliberately separate from account/consensus key containers. Its consuming
+/// export is reserved for immediate zeroizing runtime-custody handoff.
 pub struct AdaptiveThresholdBlsSecretShare<P: ThresholdBlsPurpose> {
     session_id: [u8; 32],
     transcript_hash: [u8; 32],
@@ -1603,6 +1604,17 @@ impl<P: ThresholdBlsPurpose> AdaptiveThresholdBlsSecretShare<P> {
             scalar_bytes: Zeroizing::new([s, r, u]),
             marker: PhantomData,
         })
+    }
+
+    /// Consume this verified share into a zeroizing supervisor-custody buffer.
+    ///
+    /// This is an explicit private runtime handoff, not a public serialization
+    /// surface. The caller must immediately consume the result into an
+    /// authenticated runtime credential or sealed custody owner. The original
+    /// allocation is cleared before this secret owner is dropped.
+    #[must_use]
+    pub fn into_components_for_runtime_custody(mut self) -> Zeroizing<[[u8; 32]; 3]> {
+        Zeroizing::new(std::mem::take(&mut *self.scalar_bytes))
     }
 
     /// Return the one-based signer index without exposing share material.

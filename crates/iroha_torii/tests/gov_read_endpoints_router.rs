@@ -43,14 +43,8 @@ async fn gov_proposal_get_router_mapping() {
     let mut raw_state = State::new_for_testing(World::default(), kura, query);
     let id_bytes = [0xCDu8; 32];
     let id_hex = hex::encode(id_bytes);
-    let header = iroha_data_model::block::BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header =
+        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
     {
         // Open and immediately drop a state block to set up initial header if required.
         let _ = raw_state.block(header);

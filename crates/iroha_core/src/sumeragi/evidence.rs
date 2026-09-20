@@ -3,8 +3,8 @@
 //! The first release accepts only complete signed v2 artifact pairs bound to
 //! an authenticated immutable height context. Retired global-v1 evidence
 //! layouts are not decoded or reconstructed. Private observations stay in a
-//! bounded process-local cache; only proofs carried by committed blocks enter
-//! WSV.
+//! bounded process-local cache, restored from original completed lifecycle
+//! reports after restart; only proofs carried by committed blocks enter WSV.
 use crate::state::{State, WorldReadOnly};
 #[cfg(feature = "bls")]
 use iroha_crypto::Algorithm;
@@ -741,6 +741,80 @@ pub(crate) fn pending_v2_evidence_admissions_from_snapshot(
     }
     selected
 }
+/// Restore eligible completed diagnostic reports once, before cold-start
+/// activation. The height range comes from the applied State and its evidence
+/// horizon; directories cannot nominate a height or a context. Each original
+/// proof is revalidated against Kura-authenticated finality, never the merely
+/// checksummed context-recovery store. Missing/pruned finality is not authority.
+///
+/// Only one bounded ledger frame and the existing bounded pending pool are
+/// retained at a time. A configured zero/unlimited horizon may require scanning
+/// the full applied chain. No ledger, WSV row or lifecycle scheduler is mutated.
+pub(crate) fn recover_finalized_lifecycle_equivocations(state: &State) -> Result<usize, String> {
+    let (height, horizon) = {
+        let view = state.view();
+        (
+            u64::try_from(view.height()).map_err(|_| "State height exceeds u64".to_owned())?,
+            configured_v2_evidence_horizon(view.world()),
+        )
+    };
+    let proposal_height = height
+        .checked_add(1)
+        .ok_or_else(|| "evidence recovery has no successor height".to_owned())?;
+    let first_height = match horizon {
+        Some(horizon) if horizon != 0 => proposal_height.saturating_sub(horizon).max(1),
+        _ => 1,
+    };
+    let mut restored = 0;
+    for height in first_height..=height {
+        let Some(finality) = state
+            .kura()
+            .v2_finality_artifact(height)
+            .map_err(|error| format!("recover evidence finality at height {height}: {error}"))?
+        else {
+            // Snapshot/pruned history cannot authenticate diagnostic proofs.
+            continue;
+        };
+        restored += recover_context_lifecycle_equivocations(
+            state,
+            &finality.height_context,
+            &finality.validator_set_pops,
+        )?;
+    }
+    Ok(restored)
+}
+
+/// Restore completed reports from one already-authenticated context. Service
+/// construction supplies its retained active context before workers start;
+/// historical recovery supplies the actual Kura finality context and PoPs.
+/// Pending/Cancelled rows remain under their existing lifecycle owner.
+pub(in crate::sumeragi) fn recover_context_lifecycle_equivocations(
+    state: &State,
+    context: &wire_v2::HeightContext,
+    proofs_of_possession: &[Vec<u8>],
+) -> Result<usize, String> {
+    if &context.network_id != state.network_id_ref() {
+        return Err("evidence recovery context belongs to another network".to_owned());
+    }
+    let root = state
+        .kura()
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(context.id().0.as_ref()));
+    let proofs = super::v2_lifecycle_coordinator::LifecycleLedgerV1::read_completed_equivocations(
+        &root, context,
+    )
+    .map_err(|error| format!("recover completed equivocation reports: {error}"))?;
+    let mut restored = 0;
+    for proof in proofs {
+        restored += usize::from(
+            retain_sumeragi_v2_equivocation(state, context, proofs_of_possession, proof)
+                .map_err(|error| format!("authenticate recovered equivocation report: {error}"))?,
+        );
+    }
+    Ok(restored)
+}
+
 /// Validate and retain exact Sumeragi v2 equivocation artifacts for admission.
 ///
 /// The caller supplies the immutable context and PoPs recovered from the
@@ -1629,9 +1703,26 @@ mod tests {
         .commit_unchecked()
         .unpack(|_| {});
         let mut executed_block: iroha_data_model::block::SignedBlock = committed.into();
-        executed_block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("attach deterministic v2 evidence fixture results");
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &executed_block,
+                &[],
+                Vec::new(),
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            executed_block.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+        }
+        .expect("attach deterministic v2 evidence fixture results");
         let block = std::sync::Arc::new(executed_block);
         state
             .kura()
@@ -1758,7 +1849,6 @@ mod tests {
             core::num::NonZeroU64::new(height).expect("non-zero test height"),
             None,
             None,
-            None,
             now_ms,
             view,
         );
@@ -1793,7 +1883,6 @@ mod tests {
     fn penalty_header(height: u64) -> BlockHeader {
         BlockHeader::new(
             core::num::NonZeroU64::new(height).expect("non-zero penalty test height"),
-            None,
             None,
             None,
             height.saturating_mul(1_000),
@@ -2538,7 +2627,6 @@ mod tests {
             core::num::NonZeroU64::new(BLOCK_HEIGHT).expect("non-zero test height"),
             None,
             None,
-            None,
             30,
             0,
         );
@@ -2633,7 +2721,6 @@ mod tests {
 
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(BLOCK_HEIGHT).expect("non-zero test height"),
-            None,
             None,
             None,
             30,

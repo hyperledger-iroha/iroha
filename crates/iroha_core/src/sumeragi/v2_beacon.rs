@@ -86,9 +86,11 @@ pub(crate) struct V2GlobalBeaconLifecycle {
     roster: Vec<PeerId>,
     local_validator: Option<wire::ValidatorIndex>,
     signer: Option<Arc<dyn GlobalThresholdBeaconPartialSignerV1>>,
-    requested: bool,
     required_for_consensus: bool,
     active: Option<ActiveGlobalBeaconRound>,
+    // Retained only until independently useful work or an authenticated peer
+    // partial requests activation. No session validation or signing at idle.
+    deferred_state: Option<Arc<State>>,
     outbound: Vec<wire::ConsensusMessageV2>,
 }
 
@@ -131,33 +133,23 @@ impl V2GlobalBeaconLifecycle {
                 roster,
                 local_validator: None,
                 signer: None,
-                requested: false,
                 required_for_consensus: false,
                 active: None,
+                deferred_state: None,
                 outbound: Vec::new(),
             });
         }
-        let npos_boundary_requested = context.mode == wire::ConsensusMode::Npos
-            && context
-                .height
-                .checked_add(1)
-                .is_some_and(|next| next == context.epoch_end_height);
+        let required_for_consensus = Self::required_for_height(context, state);
         let world = state.world_view();
-        let logical_beacon_id = BeaconSessionId::for_network_v1(&context.network_id);
-        let parliament_requested_at_height = world
-            .parliament_required_beacon_pulse_slots
-            .get(&(logical_beacon_id, context.height))
-            .is_some_and(|attempts| !attempts.is_empty());
-        let required_for_consensus = npos_boundary_requested || parliament_requested_at_height;
         if !required_for_consensus {
             return Ok(Self {
                 context: context.clone(),
                 roster,
                 local_validator,
                 signer,
-                requested: false,
                 required_for_consensus,
                 active: None,
+                deferred_state: None,
                 outbound: Vec::new(),
             });
         }
@@ -256,17 +248,79 @@ impl V2GlobalBeaconLifecycle {
             roster,
             local_validator,
             signer,
-            requested: true,
             required_for_consensus,
             active,
+            deferred_state: None,
             outbound: Vec::new(),
         })
     }
 
+    /// Retain the height's pulse requirement without starting an idle ceremony.
+    /// Readiness remains independently bound to the actual session and provider.
+    pub(crate) fn open_deferred(
+        context: &wire::HeightContext,
+        state: Arc<State>,
+        local_validator: Option<wire::ValidatorIndex>,
+        signer: Option<Arc<dyn GlobalThresholdBeaconPartialSignerV1>>,
+    ) -> Result<Self, V2GlobalBeaconError> {
+        context.validate()?;
+        let required_for_consensus =
+            local_validator.is_some() && Self::required_for_height(context, state.as_ref());
+        Ok(Self {
+            context: context.clone(),
+            roster: context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            local_validator,
+            signer,
+            required_for_consensus,
+            active: None,
+            deferred_state: required_for_consensus.then_some(state),
+            outbound: Vec::new(),
+        })
+    }
+
+    fn required_for_height(context: &wire::HeightContext, state: &State) -> bool {
+        let npos_boundary_requested = context.mode == wire::ConsensusMode::Npos
+            && context.height.checked_add(1) == Some(context.epoch_end_height);
+        let world = state.world_view();
+        let logical_beacon_id = BeaconSessionId::for_network_v1(&context.network_id);
+        let parliament_requested = world
+            .parliament_required_beacon_pulse_slots
+            .get(&(logical_beacon_id, context.height))
+            .is_some_and(|attempts| !attempts.is_empty());
+        npos_boundary_requested || parliament_requested
+    }
+
+    /// Activate only on real carrier demand, preserving the strict session,
+    /// roster and authenticated-parent checks of the explicit constructor.
+    pub(crate) fn activate(&mut self) -> Result<(), V2GlobalBeaconError> {
+        if self.active.is_some() || !self.required_for_consensus {
+            return Ok(());
+        }
+        let state = self
+            .deferred_state
+            .as_ref()
+            .ok_or(V2GlobalBeaconError::State(
+                "mandatory beacon activation lost its committed state owner",
+            ))?;
+        let activated = Self::open(
+            &self.context,
+            state,
+            self.local_validator,
+            self.signer.clone(),
+        )?;
+        *self = activated;
+        Ok(())
+    }
+
     /// Return whether committed state requests a pulse attempt at this height.
     #[must_use]
+    #[cfg(test)]
     pub(crate) const fn pulse_requested(&self) -> bool {
-        self.requested
+        self.required_for_consensus
     }
 
     /// Return whether absence of the pulse must stop consensus at this height.
@@ -369,7 +423,6 @@ impl V2GlobalBeaconLifecycle {
         if message.round.view != active_view {
             return Err(V2GlobalBeaconError::WrongView);
         }
-        self.begin_round(active_view)?;
         let seat = message
             .partial
             .signer_index
@@ -379,6 +432,10 @@ impl V2GlobalBeaconLifecycle {
         if self.roster.get(seat) != Some(sender) {
             return Err(V2GlobalBeaconError::SenderMismatch);
         }
+        // Transport seat/context validation precedes deferred local activation.
+        // The ingress owner treats activation failure as a rejected partial.
+        self.activate()?;
+        self.begin_round(active_view)?;
         let active = self.active.as_mut().ok_or(V2GlobalBeaconError::State(
             "partial arrived outside a required beacon height",
         ))?;

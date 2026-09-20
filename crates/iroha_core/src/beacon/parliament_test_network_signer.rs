@@ -265,6 +265,18 @@ impl TestNetworkParliamentBeaconPartialSignerV1 {
 }
 
 impl GlobalThresholdBeaconPartialSignerV1 for TestNetworkParliamentBeaconPartialSignerV1 {
+    fn attest_partial_signing_capability(
+        &self,
+        _session: &ValidatedGlobalThresholdBeaconSessionV1,
+        _expected_signer_index: u16,
+    ) -> Result<
+        super::GlobalThresholdBeaconPartialSigningCapabilityV1,
+        super::GlobalThresholdBeaconCapabilityErrorV1,
+    > {
+        // Deterministic test-only keys cannot attest production readiness.
+        Err(super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned)
+    }
+
     fn sign_partial(
         &self,
         session: &ValidatedGlobalThresholdBeaconSessionV1,

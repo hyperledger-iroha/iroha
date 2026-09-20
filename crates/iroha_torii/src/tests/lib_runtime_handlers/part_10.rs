@@ -14,6 +14,7 @@ async fn signed_query_proxy_tries_next_candidate_only_before_dispatch() {
     let attempts_ref = attempts.clone();
     let first_peer_id_for_closure = first_peer_id.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(first_peer_id.clone()),
             ToriiProxyCandidate::P2p(second_peer_id.clone()),

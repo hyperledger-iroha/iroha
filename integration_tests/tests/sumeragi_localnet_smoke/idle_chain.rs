@@ -1,5 +1,6 @@
 //! Four-validator qualification for bounded progress, clean idle, and proposal work.
 use super::*;
+use iroha::data_model::block::execution_output::ExecutionOutputV1;
 #[allow(clippy::too_many_lines)]
 pub(super) async fn run_permissioned_progress() -> Result<()> {
     init_instruction_registry();
@@ -344,7 +345,7 @@ pub(super) async fn run() -> Result<()> {
                 .iter()
                 .filter(|block| {
                     block
-                        .entrypoint_hashes()
+                        .network_input_hashes()
                         .any(|hash| hash == external_entrypoint)
                 })
                 .collect::<Vec<_>>();
@@ -412,7 +413,7 @@ pub(super) async fn run() -> Result<()> {
                 .iter()
                 .filter(|block| {
                     block
-                        .entrypoint_hashes()
+                        .network_input_hashes()
                         .any(|hash| hash == registration_entrypoint)
                 })
                 .collect::<Vec<_>>();
@@ -438,7 +439,7 @@ pub(super) async fn run() -> Result<()> {
             }
             let trigger_blocks = blocks
                 .iter()
-                .filter(|block| block.time_triggers().any(|entry| entry.id == trigger_id))
+                .filter(|block| block.execution_outputs().iter().any(|output| matches!(output, ExecutionOutputV1::Time(row) if row.invocation.trigger.trigger_id == trigger_id)))
                 .collect::<Vec<_>>();
             ensure!(
                 trigger_blocks.len() == 1,
@@ -450,7 +451,7 @@ pub(super) async fn run() -> Result<()> {
                 trigger_block.header().height().get() == internal_height
                     && !trigger_block.is_empty()
                     && trigger_block.external_entrypoint_count() == 0
-                    && trigger_block.time_triggers().len() == 1,
+                    && trigger_block.execution_outputs().iter().filter(|output| matches!(output, ExecutionOutputV1::Time(_))).count() == 1,
                 "peer {index} did not commit one internal-only trigger carrier: {trigger_block:?}"
             );
             if let Some(expected) = internal_block_hash {

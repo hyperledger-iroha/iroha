@@ -547,7 +547,7 @@ fn validate_completion_precommit_failures_preserve_both_sides_and_dispatch() {
             holder
                 .registry_for_test_mut()
                 .entries
-                .insert(fixture.address, pending)
+                .insert(fixture.address, Box::new(pending))
                 .is_none()
         );
         let coordinator_before = format!("{coordinator:?}");

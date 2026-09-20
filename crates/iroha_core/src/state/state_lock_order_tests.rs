@@ -18,7 +18,6 @@ fn state_block_orders_block_hashes_before_world() {
         NonZeroU64::new(1).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );

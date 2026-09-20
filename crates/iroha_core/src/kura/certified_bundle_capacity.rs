@@ -1,4 +1,412 @@
+/// Authenticated ordinary predecessors retained until State authorizes their reset.
+/// A READY frontier additionally requires its exact independently authenticated source.
+/// This observation grants no mutation authority and never consumes a reservation.
+struct DeferredCertifiedReset {
+    frontier_hash: HashOf<CertifiedLaneBlockArtifact>,
+    predecessors: Vec<iroha_data_model::block::consensus::LaneBlockDescriptorV1>,
+}
+struct CertifiedBundleInventory {
+    bundles: Vec<AutonomousLaneMergeBundleV1>,
+    reset: Option<DeferredCertifiedReset>,
+}
+/// One immediate recovery of an exact journal admitted by restored State authority.
+/// The held pair and frontier snapshots prevent applying the admission to replacement objects.
+struct AdmittedCertifiedResetRecovery {
+    entry: LaneStorageEntry,
+    frontier: LatestCertifiedLaneBlockFrontierRead,
+    pair: BoundProgressPair,
+    append: Option<CertifiedBundleAppendRecovery>,
+}
 impl Kura {
+    /// Reopen the exact READY/input/source join under prune, before taking
+    /// geometry/sidecar locks. The result is evidence, not State reset authority.
+    fn certified_reset_source_under_prune_guard(
+        &self,
+        entry: &LaneStorageEntry,
+        artifact: &CertifiedLaneBlockArtifact,
+    ) -> Result<Option<DurableAutonomousLaneMergeSource>> {
+        let Some(availability) = artifact.prepare_qc.payload_availability_qc.as_ref() else {
+            return Ok(None);
+        };
+        self.durable_autonomous_lane_merge_source_at_retained_entry_under_prune_guard(
+            entry,
+            artifact.proposal.descriptor.lane_block_height,
+            availability.body.network_id,
+            availability.body.epoch,
+            Some(artifact),
+            false,
+        )
+        .map(Some)
+        .map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_owned())
+        })
+    }
+    /// Inspect full history only when the fixed index/frontier join can conceal a reset.
+    /// The ordinary steady path keeps its bounded target read; a reset authenticates
+    /// every retained row and every append preimage before returning debt.
+    fn certified_reset_debt_locked(
+        &self,
+        entry: &LaneStorageEntry,
+        frontier: &CertifiedLaneBlockArtifact,
+        source: Option<&DurableAutonomousLaneMergeSource>,
+    ) -> Result<Option<DeferredCertifiedReset>> {
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+        let recovery = self.certified_bundle_pair_has_exact_append_recovery_locked(
+            &data_path,
+            &index_path,
+            frontier.proposal.descriptor.lane_block_height,
+            &frontier.encode_framed()?,
+            CertifiedLaneBlockArtifact::FORMAT_LABEL,
+        )?;
+        let mut pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let needs_inventory = if recovery.is_some() {
+            // A partially replaced index is not its original image. Inspect the
+            // exact journal's complete preimage, including all higher old slots.
+            true
+        } else if let BoundProgressPair::Present(bound) = &mut pair {
+            let height = frontier.proposal.descriptor.lane_block_height;
+            let range = self.bound_indexed_sidecar_height_range(
+                bound,
+                CertifiedLaneBlockArtifact::FORMAT_LABEL,
+            )?;
+            let existing = self.read_populated_consensus_lane_slot(
+                bound,
+                height,
+                CertifiedLaneBlockArtifact::FORMAT_LABEL,
+                |bound| {
+                    self.read_certified_lane_block_artifact_structural_from_bound_locked(
+                        entry.lane_id,
+                        height,
+                        bound,
+                    )
+                },
+            )?;
+            range.is_some_and(|range| *range.end() > height)
+                || existing
+                    .as_ref()
+                    .is_some_and(|existing| existing != frontier)
+        } else {
+            false
+        };
+        let stable = match &pair {
+            BoundProgressPair::Present(bound) => self.bound_progress_sidecar_unchanged(bound),
+            BoundProgressPair::Absent(namespace) => {
+                self.bound_progress_namespace_unchanged(namespace)
+            }
+        };
+        if !stable {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "certified reset observation changed its held pair",
+            ));
+        }
+        if !needs_inventory {
+            return Ok(None);
+        }
+        let inventory = self.preflight_certified_bundle_inventory_locked(
+            entry,
+            Some(frontier),
+            source,
+            None,
+            None,
+        )?;
+        Ok(inventory.reset)
+    }
+    fn require_certified_reset_authority(
+        &self,
+        frontier: &CertifiedLaneBlockArtifact,
+        debt: &DeferredCertifiedReset,
+        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+    ) -> Result<()> {
+        if !authority.is_some_and(|authority| {
+            debt.frontier_hash == HashOf::new(frontier)
+                && authority.authorizes_proposal(&frontier.proposal)
+                && debt.predecessors.iter().all(|old| {
+                    authority.permits_frontier_replacement(old, &frontier.proposal.descriptor)
+                })
+        }) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "certified reset debt requires exact restored State authority for every predecessor",
+            ));
+        }
+        Ok(())
+    }
+    /// Compare a canonical slot to an already authenticated frontier. Equality
+    /// inherits the frontier's cryptographic authority; unequal predecessors
+    /// still require the full inventory authenticator. This never populates a
+    /// cache, and pending journal/rewrite work cannot qualify as complete.
+    fn certified_pair_is_exact_locked(
+        &self,
+        entry: &LaneStorageEntry,
+        artifact: &CertifiedLaneBlockArtifact,
+    ) -> Result<bool> {
+        let (data, index) = Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+        if self.certified_bundle_pair_has_any_recovery_locked(&data, &index)? {
+            return Ok(false);
+        }
+        let mut pair = self.open_bound_progress_pair(&data, &index)?;
+        let BoundProgressPair::Present(bound) = &mut pair else {
+            return Ok(false);
+        };
+        let exact = self
+            .read_populated_consensus_lane_slot(
+                bound,
+                artifact.proposal.descriptor.lane_block_height,
+                CertifiedLaneBlockArtifact::FORMAT_LABEL,
+                |bound| {
+                    self.read_certified_lane_block_artifact_structural_from_bound_locked(
+                        entry.lane_id,
+                        artifact.proposal.descriptor.lane_block_height,
+                        bound,
+                    )
+                },
+            )?
+            .as_ref()
+            == Some(artifact);
+        if !self.bound_progress_sidecar_unchanged(bound) {
+            return Err(Self::invalid_lane_artifact_error(
+                index,
+                "certified exact-slot observation changed its held pair",
+            ));
+        }
+        Ok(exact)
+    }
+    /// Admit an exact reset continuation without mutating files or publishing a cache.
+    fn prepare_certified_reset_recovery_locked(
+        &self,
+        entry: &LaneStorageEntry,
+        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+        source: Option<&DurableAutonomousLaneMergeSource>,
+    ) -> Result<Option<AdmittedCertifiedResetRecovery>> {
+        let Some(frontier) = self.read_latest_certified_lane_block_frontier_locked(entry, false)?
+        else {
+            return Ok(None);
+        };
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+        let pair = self.open_bound_progress_pair(&data_path, &index_path)?;
+        let artifact = &frontier.frontier.artifact;
+        let append = self.certified_bundle_pair_has_exact_append_recovery_locked(
+            &data_path,
+            &index_path,
+            artifact.proposal.descriptor.lane_block_height,
+            &artifact.encode_framed()?,
+            CertifiedLaneBlockArtifact::FORMAT_LABEL,
+        )?;
+        if append.is_none() && self.certified_pair_is_exact_locked(entry, artifact)? {
+            // Exact completed slots are read/durability stutters. All retained
+            // history stays charged; no descriptor is discarded or rewritten.
+            self.confirm_latest_certified_lane_block_frontier_read_locked(
+                entry,
+                &frontier.snapshot,
+            )?;
+            return Ok(None);
+        }
+        let debt = self.certified_reset_debt_locked(entry, artifact, source)?;
+        if let Some(debt) = &debt {
+            self.require_certified_reset_authority(artifact, debt, authority)?;
+        }
+        if artifact.prepare_qc.payload_availability_qc.is_some() && append.is_some() {
+            self.preflight_certified_bundle_inventory_locked(
+                entry,
+                Some(artifact),
+                source,
+                None,
+                None,
+            )?;
+        }
+        if debt.is_none() && append.is_none() {
+            return Ok(None);
+        }
+        let admitted = AdmittedCertifiedResetRecovery {
+            entry: entry.clone(),
+            frontier,
+            pair,
+            append,
+        };
+        self.recheck_admitted_certified_reset_recovery_locked(&admitted, &data_path, &index_path)?;
+        Ok(Some(admitted))
+    }
+    fn recheck_admitted_certified_reset_recovery_locked(
+        &self,
+        admitted: &AdmittedCertifiedResetRecovery,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<()> {
+        let expected =
+            Self::certified_lane_block_paths_for_entry(&admitted.entry, &self.store_root);
+        let unchanged = match &admitted.pair {
+            BoundProgressPair::Present(bound) => self.bound_progress_sidecar_unchanged(bound),
+            BoundProgressPair::Absent(namespace) => {
+                self.bound_progress_namespace_unchanged(namespace)
+            }
+        };
+        self.require_active_lane_artifact(
+            &admitted.entry,
+            &admitted.frontier.frontier.artifact.proposal.descriptor,
+        )?;
+        self.confirm_latest_certified_lane_block_frontier_read_locked(
+            &admitted.entry,
+            &admitted.frontier.snapshot,
+        )?;
+        if expected.0 != data_path || expected.1 != index_path || !unchanged {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path.to_path_buf(),
+                "admitted certified reset recovery changed its exact pair",
+            ));
+        }
+        let artifact = &admitted.frontier.frontier.artifact;
+        let append = self.certified_bundle_pair_has_exact_append_recovery_locked(
+            data_path,
+            index_path,
+            artifact.proposal.descriptor.lane_block_height,
+            &artifact.encode_framed()?,
+            CertifiedLaneBlockArtifact::FORMAT_LABEL,
+        )?;
+        if append != admitted.append {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path.to_path_buf(),
+                "admitted certified reset append changed before recovery",
+            ));
+        }
+        Ok(())
+    }
+    /// Common recovery fence, including geometry and terminal-rewrite callers.
+    /// It runs only when fixed recovery artifacts exist, before their first mutation.
+    fn require_certified_reset_recovery_admission_locked(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<Option<AdmittedCertifiedResetRecovery>> {
+        if data_path.file_name().and_then(std::ffi::OsStr::to_str)
+            != Some(CERTIFIED_LANE_BLOCKS_DATA_FILE)
+        {
+            return Ok(None);
+        }
+        let directory = data_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                data_path.to_path_buf(),
+                "certified recovery has no parent",
+            )
+        })?;
+        let path = directory.join(LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_FILE);
+        let Some(snapshot) = self.read_regular_sidecar_snapshot(
+            &path,
+            directory,
+            usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX),
+        )?
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "certified recovery has no mandatory durable frontier",
+            ));
+        };
+        let frontier = Self::decode_latest_certified_lane_block_frontier(&path, &snapshot.bytes)?;
+        Self::validate_certified_lane_block_artifact(&frontier.artifact).map_err(|message| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                format!("certified recovery frontier is invalid: {message}"),
+            )
+        })?;
+        let descriptor = &frontier.artifact.proposal.descriptor;
+        let current = self
+            .lane_storage_entries
+            .lock()
+            .get(&descriptor.lane_id)
+            .cloned();
+        let entry = if let Some(entry) = current.filter(|entry| {
+            Self::certified_lane_block_paths_for_entry(entry, &self.store_root)
+                == (data_path.to_path_buf(), index_path.to_path_buf())
+        }) {
+            entry
+        } else {
+            self.retained_lane_storage_entries_under_geometry_guard()?
+                .into_iter()
+                .find(|entry| {
+                    Self::certified_lane_block_paths_for_entry(entry, &self.store_root)
+                        == (data_path.to_path_buf(), index_path.to_path_buf())
+                })
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        data_path.to_path_buf(),
+                        "certified recovery has no exact retained instance",
+                    )
+                })?
+        };
+        self.require_active_lane_artifact(&entry, descriptor)?;
+        if frontier
+            .artifact
+            .prepare_qc
+            .payload_availability_qc
+            .is_some()
+        {
+            let namespace = self.open_bound_progress_namespace(data_path, index_path)?;
+            let has_append = self
+                .open_optional_bound_progress_file(
+                    &namespace,
+                    &Self::bound_progress_append_intent_path(index_path),
+                )?
+                .is_some()
+                || self
+                    .open_optional_bound_progress_file(
+                        &namespace,
+                        &Self::bound_progress_append_build_path(index_path),
+                    )?
+                    .is_some();
+            if !has_append {
+                // Preserve the independently authenticated autonomous terminal
+                // rewrite path. This grants no ordinary append/reset exception.
+                return Ok(None);
+            }
+        }
+        // No generic caller possesses State reset authority. An exact same-byte
+        // retry yields no debt and continues; a real overwrite remains deferred.
+        self.prepare_certified_reset_recovery_locked(&entry, None, None)
+    }
+    fn recover_certified_pair_with_state_authority_locked(
+        &self,
+        entry: &LaneStorageEntry,
+        expected_frontier: &CertifiedLaneBlockArtifact,
+        authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+        source: Option<&DurableAutonomousLaneMergeSource>,
+    ) -> Result<()> {
+        let actual = self
+            .read_latest_certified_lane_block_frontier_locked(entry, false)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "certified recovery lost its exact frontier",
+                )
+            })?;
+        if actual.frontier.artifact != *expected_frontier {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "certified recovery frontier changed before State admission",
+            ));
+        }
+        let admitted = self.prepare_certified_reset_recovery_locked(entry, authority, source)?;
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+        self.confirm_latest_certified_lane_block_frontier_read_locked(entry, &actual.snapshot)?;
+        let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        if !self.recover_bound_progress_sidecar_artifacts_in_namespace_impl(
+            &namespace,
+            &data_path,
+            &index_path,
+            CertifiedLaneBlockArtifact::FORMAT_LABEL,
+            admitted.as_ref(),
+            None,
+        ) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "certified pair recovery did not reach an authorized durable fixed point",
+            ));
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     fn write_certified_lane_block_artifact(
         &self,
@@ -14,10 +422,17 @@ impl Kura {
         lane_commit_authorization: Option<AutonomousLaneCommitPersistenceAuthorization>,
     ) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
+        let entry = self.lane_storage_entry(artifact.proposal.descriptor.lane_id)?;
+        let source = if lane_commit_authorization.is_some() {
+            self.certified_reset_source_under_prune_guard(&entry, artifact)?
+        } else {
+            None
+        };
         self.write_certified_lane_block_artifact_with_authority_under_prune_guard(
             artifact,
             authority,
             lane_commit_authorization,
+            source.as_ref(),
         )
     }
     /// Read a certified standalone lane block by lane and lane-local block height.
@@ -52,7 +467,7 @@ impl Kura {
     }
     fn publish_certified_frontier_and_consume_capacity_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         artifact: &CertifiedLaneBlockArtifact,
         authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
         autonomous_certificate: bool,
@@ -134,7 +549,7 @@ impl Kura {
     }
     fn read_latest_certified_lane_block_frontier_structural_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         recover_build: bool,
     ) -> Result<Option<LatestCertifiedLaneBlockFrontierRead>> {
         if self
@@ -209,7 +624,7 @@ impl Kura {
     }
     fn recover_latest_certified_lane_block_frontier_build_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         namespace: &BoundProgressNamespace,
         frontier_path: &Path,
         build_path: &Path,
@@ -383,6 +798,7 @@ impl Kura {
             &artifact,
             authority,
             lane_commit_authorization,
+            autonomous_source.as_ref(),
         )?;
         self.ensure_prune_recovery_not_required()?;
         if let Some((network_id, epoch)) = autonomous_context.as_ref() {
@@ -593,6 +1009,46 @@ impl Kura {
                 }
             };
         let payload_len = u64::try_from(payload.len())?;
+        if let Some(layout) = layout
+            && height < layout.base_height
+        {
+            let intent = BoundProgressAppendIntentV1::for_prepend(
+                &namespace,
+                data_path,
+                index_path,
+                height,
+                old_data_len,
+                payload,
+                index.as_mut().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        index_path.to_path_buf(),
+                        "prepend capacity lost its bound index",
+                    )
+                })?,
+            )
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(index_path.to_path_buf(), message)
+            })?;
+            let stable = payload_len
+                .checked_add(intent.new_index_len - intent.old_index_len)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        index_path.to_path_buf(),
+                        "prepend capacity overflows",
+                    )
+                })?;
+            let transient =
+                u64::try_from(norito::canonical_frame_len(&intent).map_err(Error::NoritoFrame)?)?;
+            drop(index);
+            drop(data);
+            if !self.certified_bundle_capacity_pair_read_unchanged(&pair)? {
+                return Err(Self::invalid_lane_artifact_error(
+                    index_path.to_path_buf(),
+                    "prepend pair changed during admission",
+                ));
+            }
+            return Ok((stable, transient, 0, false));
+        }
         let (new_index_len, index_write_offset, old_index_bytes, new_index_bytes) =
             if let Some(entry_pos) = layout.and_then(|layout| layout.entry_position(height)) {
                 let index_file = index.as_mut().ok_or_else(|| {
@@ -655,16 +1111,6 @@ impl Kura {
                     .to_vec(),
                 )
             } else {
-                if let Some(layout) = layout
-                    && height < layout.base_height
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        index_path.to_path_buf(),
-                        format!(
-                            "{kind} composite capacity does not admit a backward index prepend"
-                        ),
-                    ));
-                }
                 let mut new_index_bytes = Vec::new();
                 let (layout, index_write_offset) = match layout {
                     Some(layout) => (layout, old_index_len),
@@ -854,7 +1300,7 @@ impl Kura {
     }
     fn certified_bundle_capacity_plan(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         artifact: &CertifiedLaneBlockArtifact,
         source: &DurableAutonomousLaneMergeSource,
     ) -> Result<CertifiedBundleCapacityPlan> {
@@ -1025,7 +1471,7 @@ impl Kura {
             .transpose()?;
         if append_build_metadata.as_ref().is_some_and(|metadata| {
             metadata.len()
-                > u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES).unwrap_or(u64::MAX)
+                > u64::try_from(BOUND_PROGRESS_APPEND_INTENT_DECODE_MAX_BYTES).unwrap_or(u64::MAX)
         }) {
             return Err(Self::invalid_lane_artifact_error(
                 append_build_path.clone(),
@@ -1182,7 +1628,16 @@ impl Kura {
             .metadata()
             .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
             .len();
-        if data_len < intent.old_data_len || index_len < intent.old_index_len {
+        let index_limit = INDEXED_SIDECAR_BASE_HEADER_SIZE_U64.saturating_add(
+            (MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES as u64)
+                .saturating_mul(PIPELINE_INDEX_ENTRY_SIZE_U64),
+        );
+        if intent.old_index_len > index_limit
+            || data_len < intent.old_data_len
+            || data_len > intent.new_data_len
+            || index_len < intent.old_index_len
+            || index_len > intent.old_index_len.max(intent.new_index_len)
+        {
             return Err(Self::invalid_lane_artifact_error(
                 data_path.to_path_buf(),
                 format!("{kind} append intent cannot reconstruct its stable preimage"),
@@ -1335,15 +1790,17 @@ impl Kura {
             payloads.insert(height, payload);
         }
         ranges.sort_unstable();
-        if indexed_end != intent.old_data_len
+        // Indexed replacement appends fresh bytes and intentionally leaves its
+        // former payload unindexed. Those bytes remain physically charged; they
+        // are not evidence. Authenticate every indexed range without inventing
+        // a compaction requirement that the actual append writer does not meet.
+        if indexed_end > intent.old_data_len
             || ranges.windows(2).any(|pair| pair[1].0 < pair[0].1)
-            || ranges.first().is_some_and(|range| range.0 != 0)
-            || ranges.windows(2).any(|pair| pair[0].1 != pair[1].0)
             || !self.bound_progress_sidecar_unchanged(bound)
         {
             return Err(Self::invalid_lane_artifact_error(
                 data_path.to_path_buf(),
-                format!("{kind} append preimage is overlapping, incomplete, or changed"),
+                format!("{kind} append preimage is overlapping, out of bounds, or changed"),
             ));
         }
         Ok(payloads)
@@ -1376,12 +1833,12 @@ impl Kura {
     /// temporary or cross-slot orphan fails closed here.
     fn preflight_certified_bundle_inventory_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         frontier: Option<&CertifiedLaneBlockArtifact>,
         frontier_source: Option<&DurableAutonomousLaneMergeSource>,
         retention: Option<&AuthenticatedLaneHistoryRetention>,
         obsolete_bundle_recovery: Option<&CertifiedBundleAppendRecovery>,
-    ) -> Result<Vec<AutonomousLaneMergeBundleV1>> {
+    ) -> Result<CertifiedBundleInventory> {
         let (certified_data_path, certified_index_path) =
             Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
         let certified_recovery = if let Some(frontier) = frontier {
@@ -1618,26 +2075,73 @@ impl Kura {
                     "certified or bundle history exists without its mandatory durable frontier",
                 ));
             }
-            return Ok(Vec::new());
+            return Ok(CertifiedBundleInventory {
+                bundles: Vec::new(),
+                reset: None,
+            });
         };
+        self.require_active_lane_artifact(entry, &frontier.proposal.descriptor)?;
         let frontier_height = frontier.proposal.descriptor.lane_block_height;
-        if certified.keys().any(|height| *height > frontier_height) {
-            return Err(Self::invalid_lane_artifact_error(
-                certified_data_path,
-                "certified history advances beyond its durable frontier",
-            ));
-        }
-        if let Some(existing) = certified.get(&frontier_height)
-            && existing != frontier
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "durable certified frontier conflicts with its indexed lane slot",
-            ));
-        }
-        // A terminal cursor owns only missing cross-pair dependencies below
-        // its discarded prefix. Physical history must still have a frontier,
-        // remain below it, and agree with its exact indexed current slot.
+        let reset_ceiling = certified
+            .iter()
+            .filter(|(height, artifact)| {
+                **height > frontier_height || (**height == frontier_height && *artifact != frontier)
+            })
+            .map(|(_, artifact)| artifact.proposal.descriptor.proposal_height)
+            .max();
+        let reset = if let Some(reset_ceiling) = reset_ceiling {
+            let ready = frontier.prepare_qc.payload_availability_qc.is_some();
+            if ready {
+                let source = frontier_source.ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        certified_data_path.clone(),
+                        "certified reset READY frontier lacks its exact authenticated source",
+                    )
+                })?;
+                let _authorization = Self::authorize_autonomous_lane_commit_persistence(
+                    source, frontier,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(certified_data_path.clone(), message)
+                })?;
+            }
+            // Only ordinary predecessors can be deferred. A completed exact
+            // frontier bundle is permitted, but no old READY/bundle history is
+            // discarded or reclassified as reset debt.
+            if bundles
+                .values()
+                .any(|bundle| bundle.certified.proposal.descriptor.proposal_height <= reset_ceiling)
+                || certified.values().any(|artifact| {
+                    artifact.proposal.descriptor.proposal_height <= reset_ceiling
+                        && artifact.prepare_qc.payload_availability_qc.is_some()
+                })
+                || reset_ceiling >= frontier.proposal.descriptor.proposal_height
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    certified_data_path.clone(),
+                    if certified.keys().any(|height| *height > frontier_height) {
+                        "certified history advances beyond its durable frontier"
+                    } else {
+                        "durable certified frontier conflicts with its indexed lane slot"
+                    },
+                ));
+            }
+            Some(DeferredCertifiedReset {
+                frontier_hash: HashOf::new(frontier),
+                predecessors: certified
+                    .values()
+                    .filter(|artifact| {
+                        artifact.proposal.descriptor.proposal_height <= reset_ceiling
+                    })
+                    .map(|artifact| artifact.proposal.descriptor.clone())
+                    .collect(),
+            })
+        } else {
+            None
+        };
+        // Terminal authority only owns discarded cross-pair dependencies.
+        // Ordinary reset debt has independently authenticated every retained row;
+        // it remains physically present and cannot become autonomous repair work.
         certified.retain(|_, artifact| {
             !retention.is_some_and(|proof| proof.permits_discard(&artifact.proposal.descriptor))
         });
@@ -1680,14 +2184,18 @@ impl Kura {
         // stable preimage. A caller must not discard this evidence and reread
         // the same pair through the live no-recovery-artifacts path before
         // all-route capacity admission permits completing the pending append.
-        Ok(bundles.into_values().collect())
+        Ok(CertifiedBundleInventory {
+            bundles: bundles.into_values().collect(),
+            reset,
+        })
     }
     fn certified_bundle_capacity_consumed_components_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         artifact: &CertifiedLaneBlockArtifact,
         source: &DurableAutonomousLaneMergeSource,
         authority: Option<&crate::state::CertifiedLaneBlockPersistenceAuthority>,
+        deferred: Option<&DeferredCertifiedReset>,
     ) -> Result<BTreeSet<CertifiedBundleCapacityComponent>> {
         let descriptor = &artifact.proposal.descriptor;
         let mut consumed = BTreeSet::new();
@@ -1769,7 +2277,13 @@ impl Kura {
                         let existing_is_active = self
                             .require_active_lane_artifact(entry, existing_descriptor)
                             .is_ok();
-                        if existing_is_active && !reset_authorized {
+                        if existing_is_active
+                            && !reset_authorized
+                            && !deferred.is_some_and(|debt| {
+                                debt.frontier_hash == HashOf::new(artifact)
+                                    && debt.predecessors.contains(existing_descriptor)
+                            })
+                        {
                             return Err(Self::invalid_lane_artifact_error(
                                 certified_data_path,
                                 "certified/bundle capacity slot aliases another certificate",
@@ -2002,7 +2516,7 @@ impl Kura {
         };
         let plan = self.certified_bundle_capacity_plan(&entry, artifact, source)?;
         let consumed = self.certified_bundle_capacity_consumed_components_locked(
-            &entry, artifact, source, authority,
+            &entry, artifact, source, authority, None,
         )?;
         self.ensure_certified_bundle_capacity_plan_locked(
             plan,
@@ -2032,9 +2546,15 @@ impl Kura {
                 })
             })
     }
+    // TODO: remap certified_bundle_retirement_blocker to the active retirement owner
+    // before removing this helper from the formal recovery/capacity source binding.
+    #[expect(
+        dead_code,
+        reason = "retained for the formal recovery/capacity binding until its retirement owner is remapped"
+    )]
     fn ensure_lane_has_no_certified_bundle_capacity_reservation(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
     ) -> Result<()> {
         if self
             .certified_bundle_capacity_reservations
@@ -2173,11 +2693,7 @@ impl Kura {
             self.ensure_prune_recovery_not_required()?;
             let entries = {
                 let _geometry_guard = self.lane_geometry_lock.lock();
-                self.lane_storage_entries
-                    .lock()
-                    .values()
-                    .cloned()
-                    .collect::<Vec<_>>()
+                self.retained_lane_storage_entries_under_geometry_guard()?
             };
             let mut rebuilt = BTreeMap::<
                 CertifiedBundleCapacityIdentity,
@@ -2189,13 +2705,8 @@ impl Kura {
                     self.authenticated_lane_history_retention_under_prune_guard(&entry)?;
                 let artifact = {
                     let _geometry_guard = self.lane_geometry_lock.lock();
-                    let active = self.lane_storage_entry(entry.lane_id)?;
-                    if active != entry {
-                        return Err(Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            "lane geometry changed during certified/bundle reservation rebuild",
-                        ));
-                    }
+                    self.require_retained_lane_storage_entry(&entry)?;
+                    let active = &entry;
                     let _sidecar_guard = self.sidecar_lock.lock();
                     let frontier =
                         self.read_latest_certified_lane_block_frontier_locked(&active, true)?;
@@ -2216,7 +2727,8 @@ impl Kura {
                 )?;
                 let Some(artifact) = artifact else {
                     let _geometry_guard = self.lane_geometry_lock.lock();
-                    let active = self.lane_storage_entry(entry.lane_id)?;
+                    self.require_retained_lane_storage_entry(&entry)?;
+                    let active = &entry;
                     let _sidecar_guard = self.sidecar_lock.lock();
                     self.preflight_certified_bundle_inventory_locked(
                         &active,
@@ -2243,7 +2755,8 @@ impl Kura {
                 {
                     let persisted = {
                         let _geometry_guard = self.lane_geometry_lock.lock();
-                        let active = self.lane_storage_entry(entry.lane_id)?;
+                        self.require_retained_lane_storage_entry(&entry)?;
+                        let active = &entry;
                         self.require_active_lane_artifact(&active, &artifact.proposal.descriptor)?;
                         let _sidecar_guard = self.sidecar_lock.lock();
                         self.preflight_certified_bundle_inventory_locked(
@@ -2256,9 +2769,9 @@ impl Kura {
                                 .find_map(|plan| plan.bundle_recovery()),
                         )?
                     };
-                    for bundle in persisted {
+                    for bundle in persisted.bundles {
                         self.validate_startup_persisted_autonomous_bundle_under_prune_guard(
-                            &bundle,
+                            &entry, &bundle,
                         )?;
                     }
                     obsolete_append_plans.extend(obsolete_plans);
@@ -2271,8 +2784,8 @@ impl Kura {
                     .expect("non-discardable autonomous frontier has availability evidence");
                 let descriptor = &artifact.proposal.descriptor;
                 let source = self
-                    .durable_autonomous_lane_merge_source_under_prune_guard(
-                        descriptor.lane_id,
+                    .durable_autonomous_lane_merge_source_at_retained_entry_under_prune_guard(
+                        &entry,
                         descriptor.lane_block_height,
                         availability.body.network_id,
                         availability.body.epoch,
@@ -2289,13 +2802,11 @@ impl Kura {
                     })?;
                 let (plan, consumed, persisted) = {
                     let _geometry_guard = self.lane_geometry_lock.lock();
-                    let active = self.lane_storage_entry(descriptor.lane_id)?;
+                    self.require_retained_lane_storage_entry(&entry)?;
+                    let active = &entry;
                     self.require_active_lane_artifact(&active, descriptor)?;
                     let _sidecar_guard = self.sidecar_lock.lock();
                     let plan = self.certified_bundle_capacity_plan(&active, &artifact, &source)?;
-                    let consumed = self.certified_bundle_capacity_consumed_components_locked(
-                        &active, &artifact, &source, None,
-                    )?;
                     let persisted = self.preflight_certified_bundle_inventory_locked(
                         &active,
                         Some(&artifact),
@@ -2303,10 +2814,28 @@ impl Kura {
                         retention.as_ref(),
                         None,
                     )?;
+                    let consumed = self.certified_bundle_capacity_consumed_components_locked(
+                        &active,
+                        &artifact,
+                        &source,
+                        None,
+                        persisted.reset.as_ref(),
+                    )?;
                     (plan, consumed, persisted)
                 };
-                for bundle in persisted {
-                    self.validate_startup_persisted_autonomous_bundle_under_prune_guard(&bundle)?;
+                for bundle in persisted.bundles {
+                    self.validate_startup_persisted_autonomous_bundle_under_prune_guard(
+                        &entry, &bundle,
+                    )?;
+                }
+                let outstanding_components = plan
+                    .component_bytes
+                    .keys()
+                    .filter(|component| !consumed.contains(component))
+                    .copied()
+                    .collect::<BTreeSet<_>>();
+                if outstanding_components.is_empty() {
+                    continue;
                 }
                 if rebuilt.keys().any(|identity| {
                     identity.lane_id == plan.identity.lane_id
@@ -2317,15 +2846,6 @@ impl Kura {
                         self.store_root.clone(),
                         "startup certified/bundle inventory has conflicting identities for one route",
                     ));
-                }
-                let outstanding_components = plan
-                    .component_bytes
-                    .keys()
-                    .filter(|component| !consumed.contains(component))
-                    .copied()
-                    .collect::<BTreeSet<_>>();
-                if outstanding_components.is_empty() {
-                    continue;
                 }
                 if rebuilt.len() >= MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
                     return Err(Self::invalid_lane_artifact_error(

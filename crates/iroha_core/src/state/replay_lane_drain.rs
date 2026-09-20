@@ -181,6 +181,7 @@ mod tests {
             lane_incarnation: marker.lane_incarnation,
             lane_block_height: marker.lane_block_height,
             lane_block_descriptor_hash: marker.lane_block_descriptor_hash,
+            applied_global_height: 1,
         };
         let mut world = World::default();
         for (key, payload) in [

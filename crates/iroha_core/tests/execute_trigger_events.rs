@@ -118,9 +118,9 @@ fn register_trigger(
             .unpack(|_| {});
     let committed_register = valid_register.commit_unchecked().unpack(|_| {});
     assert!(
-        committed_register.as_ref().error(0).is_none(),
+        committed_register.as_ref().output_error(0).is_none(),
         "register trigger transaction rejected during execution: {:?}",
-        committed_register.as_ref().error(0)
+        committed_register.as_ref().output_error(0)
     );
     let _ = register_state_block.apply_without_execution(&committed_register, Vec::new());
     let fragment_count = register_state_block.committed_fragment_count();
@@ -163,7 +163,7 @@ fn execute_trigger(
     let committed_execute = valid_execute.commit_unchecked().unpack(|_| {});
     let execute_error = committed_execute
         .as_ref()
-        .error(0)
+        .output_error(0)
         .map(|error| format!("{error:?}"));
     let events = execute_state_block.apply_without_execution(&committed_execute, Vec::new());
     let fragment_count = execute_state_block.committed_fragment_count();

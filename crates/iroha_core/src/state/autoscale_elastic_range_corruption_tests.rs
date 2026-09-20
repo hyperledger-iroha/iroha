@@ -58,8 +58,13 @@ fn assert_autoscale_rejects_runtime_elastic_range_corruption(scale_in: bool) {
                     panic!("{name}: seed internally managed elastic lane: {err}")
                 });
         }
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        store_committed_autoscale_history_block_for_test(&state, &kura, &first);
+        let mut state_block = state.block(second.header());
         {
-            let mut nexus = state.nexus.write();
+            let nexus = &mut state_block.nexus;
             if let Some(dataspace) = extra_dataspace {
                 nexus.dataspace_catalog = dataspace_catalog_with_extra(dataspace);
             }
@@ -78,10 +83,7 @@ fn assert_autoscale_rejects_runtime_elastic_range_corruption(scale_in: bool) {
             .unwrap_or_else(|err| panic!("{name}: corrupted test catalog: {err}"));
             nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
         }
-        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-        let mut state_block = state.block(second.header());
+        retain_fixture_lane_identities_for_overlay(&mut state_block);
         if !scale_in {
             state_block.add_committed_fragments(100);
         }

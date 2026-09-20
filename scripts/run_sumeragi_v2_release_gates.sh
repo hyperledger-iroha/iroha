@@ -2,11 +2,72 @@
 # Execute the source-bound Sumeragi v2 PR or production-release corridor.
 set -euo pipefail
 umask 077
+# Dynamic descriptor close scopes require the production Bash 5 runtime.
+# Reject an unsupported shell before any child can inherit the gate channel.
+if (( BASH_VERSINFO[0] < 5 )); then
+  echo "Sumeragi v2 validation requires Bash 5 or newer" >&2
+  exit 2
+fi
 profile="${1:---pr}"
 if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; then
   echo "usage: $0 [--pr|--release]" >&2
   exit 2
 fi
+# Only the original protected outer release receives a gate endpoint. These
+# are parent-selected invocation inputs, not runtime feature toggles.
+release_gate_active=0
+if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]; then
+  if [[ ! "${IROHA_RELEASE_SCALING_GATE_FD:-}" =~ ^[1-9][0-9]{0,6}$ ]] \
+    || ((IROHA_RELEASE_SCALING_GATE_FD < 3 || IROHA_RELEASE_SCALING_GATE_FD >= 1048576)); then
+    echo "production release requires one bounded inherited gate descriptor" >&2
+    exit 2
+  fi
+  for release_binding in IROHA_RELEASE_SCALING_INVOCATION_SHA256 \
+    IROHA_RELEASE_SCALING_CHALLENGE IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256; do
+    if [[ ! "${!release_binding:-}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "production release requires exact parent scaling bindings" >&2
+      exit 2
+    fi
+  done
+  for release_path_input in IROHA_RELEASE_INVOCATION_ROOT IROHA_RELEASE_TEMP_BASE; do
+    if [[ ! "${!release_path_input:-}" =~ ^/[A-Za-z0-9_./+-]+$ ]]; then
+      echo "production release requires shell-safe parent-selected paths" >&2
+      exit 2
+    fi
+  done
+  readonly release_gate_fd="$IROHA_RELEASE_SCALING_GATE_FD"
+  readonly release_gate_invocation_sha256="$IROHA_RELEASE_SCALING_INVOCATION_SHA256"
+  readonly release_gate_challenge="$IROHA_RELEASE_SCALING_CHALLENGE"
+  readonly release_gate_helper_sha256="$IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256"
+  release_gate_active=1
+else
+  for release_binding in IROHA_RELEASE_SCALING_GATE_FD \
+    IROHA_RELEASE_SCALING_INVOCATION_SHA256 IROHA_RELEASE_SCALING_CHALLENGE \
+    IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256; do
+    if [[ -n "${!release_binding+x}" ]]; then
+      echo "PR and sealed inner runners cannot receive a scaling gate channel" >&2
+      exit 2
+    fi
+  done
+fi
+for release_retired_input in IROHA_RELEASE_SCALING_CONFIGURATION_SHA256 \
+  IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST IROHA_RELEASE_SCALING_IROHAD_SHA256 \
+  IROHA_RELEASE_SCALING_IROHA_CLI_SHA256 IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256; do
+  if [[ -n "${!release_retired_input+x}" ]]; then
+    echo "retired external scaling inputs are not accepted" >&2
+    exit 2
+  fi
+done
+unset IROHA_RELEASE_SCALING_GATE_FD IROHA_RELEASE_SCALING_INVOCATION_SHA256
+unset IROHA_RELEASE_SCALING_CHALLENGE IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256
+unset release_binding release_path_input release_retired_input
+
+# The authenticated runner and its Bash forks retain gate authority. These
+# scopes preserve ordinary variables while excluding the gate and Bash's saved
+# aliases from exec'ed helpers; they do not sandbox trusted shell code. Qualify
+# the selected Bash with actual socket/alias observations: version checks and
+# source tests alone do not establish exec-helper isolation.
+release_initial_without_gate() {
 readonly repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 # A production release is launched only by the externally authenticated
@@ -68,20 +129,6 @@ if [[ "$profile" == "--release" \
   # The protected bootstrap already authenticated the candidate identity,
   # runner, tools, and closed launch environment. Do not execute a mutable
   # candidate Python helper before constructing the independent mirror.
-  for scaling_digest_name in \
-    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256 \
-    IROHA_RELEASE_SCALING_IROHAD_SHA256 \
-    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256 \
-    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256; do
-    if [[ ! "${!scaling_digest_name:-}" =~ ^[0-9a-f]{64}$ ]]; then
-      echo "production release requires authenticated lowercase SHA-256 scaling trust anchor ${scaling_digest_name}" >&2
-      exit 1
-    fi
-  done
-  if [[ -z "${IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST:-}" ]]; then
-    echo "production release requires IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST from the authenticated bootstrap environment" >&2
-    exit 1
-  fi
   if [[ -z "${IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST:-}" \
     || ! "${IROHA_RELEASE_EXPECTED_SDK_DEPENDENCY_BUNDLE_MANIFEST_SHA256:-}" \
       =~ ^[0-9a-f]{64}$ ]]; then
@@ -122,6 +169,7 @@ fi
 export IROHA_TEST_REQUIRE_NETWORK=1
 unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
+unset TEST_NETWORK_BIN_IROHAD_TAIRA CARGO_BIN_EXE_iroha3d_taira
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 unset IROHA_TEST_SKIP_BUILD
 unset IROHA_TEST_TARGET_DIR IROHA_RELEASE_PREBUILT_MANIFEST_SHA256
@@ -177,7 +225,7 @@ export GIT_CONFIG_VALUE_1=false
 readonly release_runner_support_components=(
   scripts/run_sumeragi_v2_release_gates_support.sh
 )
-readonly release_runner_support_sha256="7b889e930e8733f9664e4ae7bf5a7189683e4d7452e7f4397364929925a1d292"
+readonly release_runner_support_sha256="c529c3ad42fdded1356b55c3d1e665dbc8523adbfb52e4618dfa063b3be35224"
 if ((${#release_runner_support_components[@]} != 1)); then
   echo "release runner support manifest is invalid" >&2
   exit 1
@@ -473,6 +521,15 @@ if [[ "$profile" == "--pr" && "${IROHA_RELEASE_PRIVATE_PR:-0}" == 1 ]]; then
     --verify --root "$repo_root" --no-writable-paths
   export PATH="$IROHA_RELEASE_PR_BIN" GIT_EXEC_PATH="$IROHA_RELEASE_PR_BIN"
 fi
+  return 0
+}
+if ((release_gate_active)); then
+  release_initial_without_gate {release_gate_fd}<&-
+else
+  release_initial_without_gate
+fi
+unset -f release_initial_without_gate
+
 # Production evidence never executes in the caller's mutable checkout. Require
 # one committed source tree, reproduce it in a fully independent clone without
 # alternates or shared object inodes, copy the separately-bound ignored
@@ -480,6 +537,7 @@ fi
 # re-enters this script from that sealed source. The candidate's Git directory
 # is read-only throughout; no linked-worktree administrative state is created.
 if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]; then
+  release_prepare_without_gate() {
   release_bootstrap_evidence_dir="$(
     canonical_path "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR"
   )" || {
@@ -511,21 +569,6 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   fi
   readonly release_tool_probe_helper
-  release_scaling_source_manifest="$(
-    canonical_path "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
-  )" || {
-    echo "the configured G-SCALE evidence manifest is unavailable" >&2
-    exit 1
-  }
-  if [[ "$release_scaling_source_manifest" \
-      != "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-    || "${release_scaling_source_manifest##*/}" != scaling_evidence.json \
-    || ! -f "$release_scaling_source_manifest" \
-    || -L "$release_scaling_source_manifest" ]]; then
-    echo "G-SCALE evidence must be an absolute canonical regular non-symlink scaling_evidence.json" >&2
-    exit 1
-  fi
-  readonly release_scaling_source_manifest
   release_sdk_dependency_bundle_manifest="$(
     canonical_path "$IROHA_RELEASE_SDK_DEPENDENCY_BUNDLE_MANIFEST"
   )" || {
@@ -799,47 +842,45 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   }
 
-  # Keep build-capable descendants in a fresh external root whose ancestry
-  # contains neither the caller source nor the protected bootstrap archive.
-  release_invocation_base=/private/tmp
-  [[ -d "$release_invocation_base" && ! -L "$release_invocation_base" ]] \
-    || release_invocation_base=/tmp
-  release_invocation_base="$(canonical_path "$release_invocation_base")"
-  release_invocation_root="$("$release_python_bin" -I -S - \
+  # The original bootstrap allocated and retains this exact invocation root.
+  # Shell spelling/metadata checks supplement that retained parent authority.
+  release_invocation_root="$(canonical_path "$IROHA_RELEASE_INVOCATION_ROOT")" || exit 1
+  release_invocation_base="$(canonical_path "$IROHA_RELEASE_TEMP_BASE")" || exit 1
+  if [[ "$release_invocation_root" != "$IROHA_RELEASE_INVOCATION_ROOT" \
+    || "$release_invocation_base" != "$IROHA_RELEASE_TEMP_BASE" \
+    || "${release_invocation_root%/*}" != "$release_invocation_base" \
+    || ! "${release_invocation_root##*/}" =~ ^iroha-sumeragi-v2-release[.][0-9a-f]{32}$ \
+    || ! -d "$release_invocation_root" || -L "$release_invocation_root" ]]; then
+    echo "parent-selected release invocation root changed or is invalid" >&2
+    exit 1
+  fi
+  "$release_python_bin" -I -S - "$release_invocation_root" \
     "$release_invocation_base" "$repo_root" "$release_bootstrap_evidence_dir" \
-    "$inherited_cargo_cache_home" <<'PY'
+    "$inherited_cargo_cache_home" <<'ROOT_CHECK'
 from pathlib import Path
 import os
 import stat
 import sys
-import tempfile
-
-base = Path(sys.argv[1]).resolve(strict=True)
-metadata = base.lstat()
-if (
-    stat.S_ISLNK(metadata.st_mode)
-    or not stat.S_ISDIR(metadata.st_mode)
-    or not (metadata.st_uid == 0 and metadata.st_mode & stat.S_ISVTX)
-):
-    raise SystemExit("release invocation base is not a root-owned sticky directory")
-root = Path(tempfile.mkdtemp(prefix="iroha-sumeragi-v2-release.", dir=base))
-root.chmod(0o700)
-for raw in sys.argv[2:]:
-    other = Path(raw).resolve(strict=False)
+root, base = (Path(value) for value in sys.argv[1:3])
+for path in (root, base):
+    if path.resolve(strict=True) != path or path.is_symlink():
+        raise SystemExit("parent-selected invocation path is not canonical")
+metadata, ancestry = root.lstat(), base.lstat()
+if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+    or not stat.S_ISDIR(ancestry.st_mode) or ancestry.st_uid != 0
+    or not ancestry.st_mode & stat.S_ISVTX):
+    raise SystemExit("parent-selected invocation ownership is invalid")
+for value in sys.argv[3:]:
+    other = Path(value).resolve(strict=False)
     if root == other or root in other.parents or other in root.parents:
-        root.rmdir()
-        raise SystemExit("release invocation overlaps a protected input root")
-print(root)
-PY
-  )"
-  release_invocation_root="$(canonical_path "$release_invocation_root")" || {
-    echo "the authenticated release invocation root could not be resolved" >&2
-    exit 1
-  }
-  readonly release_invocation_root
+        raise SystemExit("parent-selected invocation overlaps a protected input")
+ROOT_CHECK
+  readonly release_invocation_root release_invocation_base
   release_invocation_retained=0
   cleanup_release_invocation() {
     local status=$?
+    {
     if (( ! release_invocation_retained )); then
       "$release_python_bin" -I -S "$release_runtime_helper" \
         --cleanup-invocation --cleanup-base "$release_invocation_base" \
@@ -848,6 +889,7 @@ PY
     fi
     trap - EXIT
     exit "$status"
+    } {release_gate_fd}<&-
   }
   trap cleanup_release_invocation EXIT
   readonly release_invocation_base
@@ -1199,15 +1241,7 @@ PY
   readonly release_cargo_cache_input_inventory_sha256="$(
     sha256_file "$release_cargo_cache_input_inventory"
   )"
-  readonly release_scaling_bundle="$release_invocation_root/scaling-evidence"
-  readonly release_scaling_inventory="$release_invocation_root/scaling-input.json"
-  readonly release_scaling_evidence_manifest="$release_scaling_bundle/scaling_evidence.json"
-  "$release_python_bin" -I -S "$release_runtime_helper" \
-    --copy-private-bundle \
-    --bundle-source "${release_scaling_source_manifest%/*}" \
-    --bundle-root "$release_scaling_bundle" \
-    --inventory "$release_scaling_inventory"
-  readonly release_scaling_inventory_sha256="$(sha256_file "$release_scaling_inventory")"
+  readonly release_scaling_archive_root="$release_host_root/scaling"
   readonly release_sdk_input_root="$release_invocation_root/sdk-inputs"
   readonly release_sdk_work_root="$release_invocation_root/sdk-work"
   readonly release_sdk_archive="$release_invocation_root/sdk-dependency-bundle.tar"
@@ -1277,11 +1311,6 @@ PY
     IROHA_RELEASE_EXPECTED_IDENTITY_PATH="$sealed_identity_path" \
     IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256="$candidate_manifest_sha256" \
     IROHA_RELEASE_CHILD_RESULT_PATH="$release_child_result_path" \
-    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256="$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
-    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST="$release_scaling_evidence_manifest" \
-    IROHA_RELEASE_SCALING_IROHAD_SHA256="$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
-    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
-    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
     IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT="$release_formal_replay_source_receipt" \
     IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT="$release_formal_replay_release_root" \
     IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256="$IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256" \
@@ -1418,13 +1447,6 @@ PY
     --inventory "$release_cargo_cache_input_inventory" || runtime_verification_status=$?
   [[ "$(sha256_file "$release_cargo_cache_input_inventory")" == "$release_cargo_cache_input_inventory_sha256" ]] \
     || runtime_verification_status=1
-  [[ "$(sha256_file "$release_scaling_inventory")" == "$release_scaling_inventory_sha256" ]] \
-    || runtime_verification_status=1
-  "$release_python_bin" -I -S "$release_runtime_helper" \
-    --verify-private-bundle \
-    --bundle-source "${release_scaling_source_manifest%/*}" \
-    --bundle-root "$release_scaling_bundle" \
-    --inventory "$release_scaling_inventory" || runtime_verification_status=$?
   [[ "$(sha256_file "$release_sdk_inventory")" == "$release_sdk_inventory_sha256" ]] \
     || runtime_verification_status=1
   "$release_python_bin" -I -S "$release_runtime_helper" \
@@ -1533,6 +1555,72 @@ PY
     echo "candidate identity changed while the sealed release child executed" >&2
     sealed_status=1
   fi
+  readonly release_scaling_handoff_helper="$release_bootstrap_evidence_dir/scaling-handoff.py"
+  if [[ ! -f "$release_scaling_handoff_helper" || -L "$release_scaling_handoff_helper" \
+    || "$(sha256_file "$release_scaling_handoff_helper")" != "$release_gate_helper_sha256" ]]; then
+    echo "protected scaling handoff helper changed" >&2
+    sealed_status=1
+  fi
+  return 0
+  }
+  release_prepare_without_gate {release_gate_fd}<&-
+  unset -f release_prepare_without_gate
+
+  if ((sealed_status == 0)); then
+    set +e
+    "$release_python_bin" -I -B -S "$release_scaling_handoff_helper" \
+      --gate-fd "$release_gate_fd" \
+      --invocation-sha256 "$release_gate_invocation_sha256" \
+      --challenge "$release_gate_challenge"
+    release_scaling_handoff_status=$?
+    set -e
+    if ((release_scaling_handoff_status != 0)); then
+      sealed_status=$release_scaling_handoff_status
+    fi
+  fi
+  # One handoff only; no subsequent child or publication can inherit it.
+  exec {release_gate_fd}<&-
+  release_gate_active=0
+
+  if ((sealed_status == 0)); then
+    "$release_python_bin" -I -S "$release_runtime_helper" \
+      --verify-runtime-sources --runtime-root "$release_child_runtime" \
+      --runtime-inventory "$release_runtime_inventory" \
+      "${release_runtime_arguments[@]}" || sealed_status=$?
+    [[ "$(sha256_file "$release_runtime_inventory")" == "$release_runtime_inventory_sha256" ]] \
+      || sealed_status=1
+    "$release_python_bin" -I -S "$release_runtime_helper" --verify-cache-sources \
+      --source-cargo-home "$inherited_cargo_cache_home" \
+      --cargo-home "$release_host_root/cargo-home" \
+      --inventory "$release_cargo_cache_input_inventory" || sealed_status=$?
+    [[ "$(sha256_file "$release_cargo_cache_input_inventory")" == "$release_cargo_cache_input_inventory_sha256" ]] \
+      || sealed_status=1
+    for release_checked_root in "$repo_root" "$sealed_repo_root"; do
+      if [[ "$release_checked_root" == "$repo_root" ]]; then
+        release_expected_identity="$candidate_identity_json"
+      else
+        release_expected_identity="$sealed_identity_json"
+      fi
+      if [[ "$("$release_python_bin" -I -S \
+        "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
+        --root "$release_checked_root" --release-identity-json)" != "$release_expected_identity" ]]; then
+        echo "source identity changed during the parent-owned scaling experiment" >&2
+        sealed_status=1
+      fi
+    done
+  fi
+  readonly release_scaling_execution_record="$release_bootstrap_evidence_dir/scaling-execution.json"
+  if ((sealed_status == 0)); then
+    if [[ ! -s "$release_scaling_execution_record" || -L "$release_scaling_execution_record" ]]; then
+      echo "original parent scaling execution record is missing" >&2
+      sealed_status=2
+    else
+      # This digest binds the validator input. Bootstrap separately compares the
+      # protected bytes with its retained original process/artifact observations.
+      release_scaling_execution_sha256="$(sha256_file "$release_scaling_execution_record")"
+      readonly release_scaling_execution_sha256
+    fi
+  fi
   if ((sealed_status == 0)); then
     release_receipt_arguments=(
       --candidate-identity "$candidate_identity_path" \
@@ -1577,7 +1665,8 @@ PY
       --g4p-completion "$multilane_four_peer_completion_path" \
       --g12-seed-completion "$nexus_cross_completion_path" \
       --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \
-      --scaling-evidence-manifest "$release_scaling_evidence_manifest" \
+      --scaling-execution-record "$release_scaling_execution_record" \
+      --expected-scaling-execution-sha256 "$release_scaling_execution_sha256" \
       --sdk-dependency-archive "$release_sdk_archive" \
       --sdk-dependency-input-inventory "$release_sdk_inventory" \
       --sdk-dependency-final-work-inventory \
@@ -1585,16 +1674,10 @@ PY
       --runtime-tool-probe-manifest \
         "$release_runtime_tool_probe_manifest" \
       --runtime-tool-probe-result "$release_runtime_tool_probe_result" \
-      --expected-scaling-trial-harness-sha256 \
-        "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
-      --expected-scaling-configuration-sha256 \
-        "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
-      --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
-      --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
       --repository-root "$sealed_repo_root" \
       --output "$aggregate_receipt_path"
     )
-    "$release_python_bin" -I -S \
+    "$release_python_bin" -I -B -S \
       "$sealed_repo_root/scripts/write_sumeragi_v2_release_receipt.py" \
       "${release_receipt_arguments[@]}" || sealed_status=$?
   fi
@@ -1602,7 +1685,7 @@ PY
     release_validator_stdout="$release_invocation_root/receipt-validator.stdout"
     release_validator_stderr="$release_invocation_root/receipt-validator.stderr"
     set +e
-    "$release_python_bin" -I -S "$release_bootstrap_evidence_dir/validate-receipt.py" \
+    "$release_python_bin" -I -B -S "$release_bootstrap_evidence_dir/validate-receipt.py" \
       "${release_receipt_arguments[@]}" --verify-existing \
       --validation-ack "$release_invocation_root/receipt-validation-ack.json" \
       --source-manifest-sha256 "$sealed_manifest_sha256" \
@@ -1627,16 +1710,10 @@ PY
       --bootstrap-evidence "$release_bootstrap_evidence_dir" \
       --source-manifest-sha256 "$sealed_manifest_sha256" \
       --candidate-root "$repo_root" \
-      --scaling-evidence-manifest "$release_scaling_evidence_manifest" \
+      --scaling-execution-record "$release_scaling_execution_record" \
+      --expected-scaling-execution-sha256 "$release_scaling_execution_sha256" \
       --expected-signer-fingerprint \
         "$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
-      --expected-scaling-trial-harness-sha256 \
-        "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
-      --expected-scaling-configuration-sha256 \
-        "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
-      --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
-      --expected-scaling-iroha-cli-sha256 \
-        "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
       || sealed_status=$?
   fi
   if ((sealed_status == 0)); then
@@ -1651,7 +1728,7 @@ PY
     else
       release_invocation_retained=1
       echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
-      echo "Sumeragi v2 production release gates passed, including exact 531/531 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 531/531 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, parent-observed G-SCALE execution, and 100,000 heights; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
@@ -1671,11 +1748,6 @@ if [[ "$profile" == "--release" ]]; then
 fi
 verify_release_identity "release corridor entry"
 if [[ "$profile" == "--release" ]]; then
-  readonly IROHA_RELEASE_SCALING_CONFIGURATION_SHA256
-  readonly IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST
-  readonly IROHA_RELEASE_SCALING_IROHAD_SHA256
-  readonly IROHA_RELEASE_SCALING_IROHA_CLI_SHA256
-  readonly IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256
   readonly IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT
   readonly IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT
   readonly IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256
@@ -2937,7 +3009,7 @@ required_multilane_core_focus_tests=(
   kura::tests::pending_queue_plan_admission_survives_retired_purge_and_process_reopen
   kura::lane_geometry::tests::first_release_retirement_rejects_obsolete_autonomous_rewrite_without_promotion
   sumeragi::v2_lane_work::tests::native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash
-  sumeragi::v2_lane_work::tests::grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or_wsv_mutation
+  sumeragi::v2_lane_work::tests::grouped_native_amx_prevote_local_capacity_refusal_preserves_kura_and_wsv
   sumeragi::v2_lane_work::tests::normal_lane_adapter_serves_certificate_free_canonical_executed_block_chunks
   sumeragi::v2_lane_work::tests::canonical_executed_block_recovery_rejects_drift_rotates_signers_and_caches_exact_body
   sumeragi::v2_lane_work::tests::canonical_executed_block_multichunk_restarts_whole_wire_after_byzantine_signer
@@ -3676,11 +3748,12 @@ if ((corridor_enabled)); then
     exit 1
   fi
 fi
-# These are the real-network four-peer acceptance gates. Keep their exact
-# harness/name inventory source-bound and non-ignored even though ordinary
-# developer runs may opt out inside the test body.
-readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
-readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
+# TODO: implement the native recreation/recovery qualifications before opening
+# G-4P. The earlier source inventory check refuses their current absence.
+# Keep all four required identities source-bound and non-ignored; executable
+# MergeQC evidence cannot satisfy the native recreation/recovery requirements.
+readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::nexus_autoscale_native_four_peer_recreates_lane_and_rejects_stale_artifacts"
+readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_native_recovers_missing_execution_evidence_after_restart"
 readonly multilane_autoscale_drain_release_test="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly multilane_native_amx_rotating_release_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly bpng_native_bootstrap_release_test="alias_registry_bootstrap_network::bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion"
@@ -4128,6 +4201,71 @@ run_corridor_leg \
   run_cargo test --locked --offline -p iroha --lib \
     client::tests::get_sumeragi_ -- --test-threads=1
 
+# Async SDK and Native query boundaries are mandatory counted release legs.
+rust_async_sdk_tests=(
+  query::asynchronous::tests::collects_typed_pages_with_fresh_signed_nonces_and_exact_cursor_authority
+  query::asynchronous::tests::singular_parameters_preserve_json_negotiation_and_output_type
+  query::asynchronous::tests::singular_shape_mismatch_is_an_error_without_panic_or_retry
+  query::asynchronous::tests::start_failure_is_dispatched_once_for_transport_and_decode_errors
+  query::asynchronous::tests::malformed_and_lost_continuations_terminally_consume_the_cursor
+  query::asynchronous::tests::cancelled_continuation_cannot_replay_the_signed_nonce
+  query::asynchronous::tests::invalid_fetch_size_fails_before_query_dispatch
+  query::asynchronous::tests::singular_constraints_check_across_empty_and_nonempty_pages
+  query::asynchronous::tests::compatibility_failure_uses_async_probe_and_never_submits_the_query
+  client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation
+  blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io
+)
+for required_test in "${rust_async_sdk_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_list"; then
+    echo "missing required Rust async SDK test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_ignored_list"; then
+    echo "required Rust async SDK test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+rust_async_request_wire_test="query::builder::tests::encoded_request_is_shared_with_synchronous_execution"
+rust_async_request_wire_list="$(
+  run_cargo test --locked --offline -p iroha_data_model --lib \
+    "$rust_async_request_wire_test" -- --list --exact
+)"
+rust_async_request_wire_ignored_list="$(
+  run_cargo test --locked --offline -p iroha_data_model --lib \
+    "$rust_async_request_wire_test" -- --list --exact --ignored
+)"
+if ! grep -Fqx -- "${rust_async_request_wire_test}: test" <<<"$rust_async_request_wire_list" \
+  || grep -Fqx -- "${rust_async_request_wire_test}: test" <<<"$rust_async_request_wire_ignored_list"; then
+  echo "required query request wire test is missing or ignored" >&2
+  exit 1
+fi
+rust_async_native_typed_test="typed_musubi_queries_distinguish_found_absent_and_stale_results"
+if ! grep -Fqx -- "${rust_async_native_typed_test}: test" <<<"$multilane_native_release_test_list" \
+  || grep -Fqx -- "${rust_async_native_typed_test}: test" <<<"$multilane_native_release_ignored_test_list"; then
+  echo "required Native typed query test is missing or ignored" >&2
+  exit 1
+fi
+run_corridor_leg \
+  sumeragi-async-query-rust cargo-exact 9 \
+  "cargo test --locked --offline -p iroha --lib query::asynchronous::tests:: -- --test-threads=1" \
+  run_cargo test --locked --offline -p iroha --lib query::asynchronous::tests:: -- --test-threads=1
+run_corridor_leg \
+  sumeragi-async-diagnostics-rust cargo-exact 1 \
+  "cargo test --locked --offline -p iroha --lib client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation -- --exact --test-threads=1" \
+  run_cargo test --locked --offline -p iroha --lib client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation -- --exact --test-threads=1
+run_corridor_leg \
+  sumeragi-blocking-boundary-rust cargo-exact 1 \
+  "cargo test --locked --offline -p iroha --lib blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io -- --exact --test-threads=1" \
+  run_cargo test --locked --offline -p iroha --lib blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io -- --exact --test-threads=1
+run_corridor_leg \
+  query-request-wire-rust cargo-exact 1 \
+  "cargo test --locked --offline -p iroha_data_model --lib query::builder::tests::encoded_request_is_shared_with_synchronous_execution -- --exact --test-threads=1" \
+  run_cargo test --locked --offline -p iroha_data_model --lib query::builder::tests::encoded_request_is_shared_with_synchronous_execution -- --exact --test-threads=1
+run_corridor_leg \
+  native-amx-typed-query-rust cargo-exact 1 \
+  "cargo test --locked --offline -p integration_tests --test native_amx_routing typed_musubi_queries_distinguish_found_absent_and_stale_results -- --exact --test-threads=1" \
+  run_cargo test --locked --offline -p integration_tests --test native_amx_routing typed_musubi_queries_distinguish_found_absent_and_stale_results -- --exact --test-threads=1
+
 readonly sumeragi_v2_sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
 sumeragi_v2_sdk_diagnostics_suite_source_manifest_sha256="$(
   bash "$sumeragi_v2_sdk_diagnostics_harness" --suite-source-manifest-sha256
@@ -4395,42 +4533,11 @@ record_corridor_log \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$release_receipt_contract_log"
 
-# Seal the benchmark collector and independent validator themselves before
-# trusting a G-SCALE bundle. These tests execute no benchmark and no Cargo
-# command; they exercise exact pair ordering, non-weakenable thresholds,
-# source binding, bounded artifacts, and every fail-fast collection boundary.
-multilane_scaling_contract_files=(
-  scripts/tests/validate_multilane_scaling_evidence_test.py
-  scripts/tests/run_multilane_scaling_gate_test.py
-)
-multilane_scaling_contract_log="$(
-  corridor_contract_log_path preflight-multilane-scaling
-)"
-release_gate_boundary "preflight-multilane-scaling:before" || exit $?
-set +e
-PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
-  "${multilane_scaling_contract_files[@]}" 2>&1 | tee "$multilane_scaling_contract_log"
-multilane_scaling_pipeline_status=("${PIPESTATUS[@]}")
-set -e
-release_gate_boundary "preflight-multilane-scaling:after-natural-completion" \
-  || exit $?
-multilane_scaling_pass_summary="$(
-  grep -Ec '^53 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
-    "$multilane_scaling_contract_log" || true
-)"
-if ((multilane_scaling_pipeline_status[0] != 0 \
-    || multilane_scaling_pipeline_status[1] != 0)) \
-  || [[ "$multilane_scaling_pass_summary" != 1 ]]; then
-  echo "G-SCALE runner/validator preflight did not run exactly 53 passing tests (pytest=${multilane_scaling_pipeline_status[0]}, tee=${multilane_scaling_pipeline_status[1]})" >&2
-  exit 1
-fi
-record_corridor_log \
-  preflight-multilane-scaling pytest 53 \
-  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${multilane_scaling_contract_files[*]}" \
-  "$multilane_scaling_contract_log" \
-  "${multilane_scaling_pipeline_status[0]}" \
-  "${multilane_scaling_pipeline_status[1]}"
-((corridor_enabled)) || rm -f -- "$multilane_scaling_contract_log"
+# The original protected parent runs the complete source-bound scaling preflight
+# after this inner runner returns and before creating the collector's experiment
+# scope. Its one-use handoff succeeds only after all preflight units, the actual
+# collector and native archive checks succeed. PR/inner modes mint no preflight
+# success; aggregate publication remains downstream of the parent handoff.
 
 # Run the complete fail-closed proof-ledger, Verus-evidence, and TLC-trace
 # normalizer contract corpus before trusting any expensive formal result. The
@@ -4442,6 +4549,9 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py
   pytests/scripts/sumeragi_v2_multilane_native_merge_manifest_test.py
   pytests/scripts/sumeragi_v2_multilane_passive_recovery_contract_test.py
+  pytests/scripts/sumeragi_v2_multilane_semantic_binding_reconciliation_test.py
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_current_reviewed_include_components_have_exact_owner_and_source
+  pytests/scripts/sumeragi_v2_multilane_models_test.py::test_current_reviewed_include_closure_rejects_missing_duplicate_and_extra_source
   pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_legacy_layout_only_claim
   pytests/scripts/sumeragi_v2_multilane_models_test.py::test_inflight_composed_contract_rejects_state_order_weakening
   pytests/scripts/sumeragi_v2_multilane_models_terminal_tail_test.py::test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping
@@ -4454,14 +4564,15 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_binds_current_semantic_sources
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_ledger_weakening
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
+  pytests/scripts/sumeragi_v2_multilane_kura_native_reconciliation_test.py
+  pytests/scripts/sumeragi_v2_multilane_kura_inflight_reconciliation_test.py
+  pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_api_authority_separation_requires_async_diagnostics_owner
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,386 ledger/checker cases (including the
-# lexically executed case components and the reviewed 13-case post-merge
-# expansion), 29 pinned-Verus evidence cases,
-# 27 TLC-normalizer cases, 14 reviewed-Rust closure cases, 31 Native/passive
-# multilane source-contract cases, and twenty cases from twelve selected
-# layout/wire selectors.
+# Actual collection binds 6,172 unique cases across these 24 exact selectors,
+# including all Native and in-flight Kura reconciliation controls and the
+# complete semantic reconciliation suite. Collection fixes the required census;
+# this gate requires every selected case to execute and pass.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
 set +e
 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
@@ -4470,15 +4581,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5507 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^6172 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5507 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 6172 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5507 \
+  preflight-proof-fidelity pytest 6172 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -4521,8 +4632,8 @@ publish_corridor_completion() {
   fi
   # 43 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped SDK +
-  # 6 diagnostics + 10 pytest legs = 84.
-  readonly expected_corridor_leg_count=84
+  # 6 diagnostics + 5 async query boundary + 9 pytest legs = 88.
+  readonly expected_corridor_leg_count=88
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -4644,36 +4755,6 @@ publish_corridor_completion() {
 }
 verify_release_identity "after release contract preflights"
 
-run_release_scaling_gate() {
-  scaling_preflight_report="${IROHA_RELEASE_HOST_ROOT}/scaling-validation-preflight.json"
-  rm -f -- "$scaling_preflight_report"
-  run_cooperative_gate source-bound-g-scale-validation \
-    "$IROHA_RELEASE_PYTHON_BIN" -I -S \
-    scripts/nexus/validate_multilane_scaling_evidence.py \
-    "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-    --report "$scaling_preflight_report" \
-    --expected-source-revision "$release_head_commit" \
-    --expected-workspace-source-sha256 "$release_source_manifest_sha256" \
-    --expected-validator-sha256 "$(
-      sha256_file scripts/nexus/validate_multilane_scaling_evidence.py
-    )" \
-    --expected-trial-harness-sha256 \
-      "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
-    --expected-configuration-sha256 \
-      "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
-    --expected-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
-    --expected-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
-    --expected-repository-root "$repo_root" \
-    --quiet
-  if [[ ! -s "$scaling_preflight_report" \
-    || -L "$scaling_preflight_report" ]]; then
-    echo "source-bound G-SCALE validation did not publish its preflight report" >&2
-    exit 1
-  fi
-  rm -f -- "$scaling_preflight_report"
-  verify_release_identity "after source-bound G-SCALE validation"
-}
-
 run_release_formal_gate() {
   # Bind the strict deductive ledger and its backend evidence before any seed,
   # network, scaling, chaos, or soak work so a proof failure stops release
@@ -4727,7 +4808,8 @@ verify_bpng_native_bootstrap_release_identity() {
       != "${IROHA_TEST_TARGET_DIR:-}/message-control/release/iroha3d" \
     || "${TEST_NETWORK_BIN_IROHA:-}" \
       != "${IROHA_TEST_TARGET_DIR:-}/release/iroha" \
-    || "${KAGAMI_BIN:-}" != "${IROHA_TEST_TARGET_DIR:-}/release/kagami" ]]; then
+    || "${KAGAMI_BIN:-}" != "${IROHA_TEST_TARGET_DIR:-}/release/kagami" \
+    || "${TEST_NETWORK_BIN_IROHAD_TAIRA:-}" != "${IROHA_TEST_TARGET_DIR:-}/release/iroha3d_taira" ]]; then
     echo "native BPNG release binary exports changed at ${checkpoint}" >&2
     return 1
   fi
@@ -4896,7 +4978,6 @@ if [[ "$profile" == "--release" ]]; then
     fi
   done
   verify_release_identity "after G-12P two-hour rotating-validator fault soak"
-  run_release_scaling_gate
 fi
 
 if [[ "$profile" == "--pr" ]]; then

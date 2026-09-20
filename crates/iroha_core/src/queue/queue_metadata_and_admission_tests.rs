@@ -387,6 +387,92 @@ fn contains_pending_hash_ignores_committed_entries() {
     assert!(!queue.contains_pending_hash(hash, &state));
 }
 #[test]
+fn contains_pending_hash_waiting_for_state_does_not_pin_queue_removal() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new(world_with_test_domains(), kura, query_handle);
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let queue = Queue::test(config_factory(), &time_source);
+    let tx = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+    let hash = tx.as_ref().hash_as_entrypoint();
+    queue.push(tx, state.view()).expect("push tx");
+    assert!(queue.contains_pending_hash(hash, &state));
+    let generation = state.state_view_generation();
+    let original_hashes = state.view().block_hashes.clone();
+
+    // The real publication writer blocks State::view at its first hash read. Its
+    // original journal is aborted after the concurrency cut; nothing is published.
+    let hashes = state.block_hashes.block().detach();
+    let writer = hashes
+        .try_prepare_publication(&state.block_hashes, |_, _| {
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .unwrap_or_else(|(_, error)| panic!("prepare original hash writer: {error:?}"));
+    let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(1);
+    *queue.pending_hash_state_view_handoff.lock() = Some(reached_tx);
+    let (lookup_tx, lookup_rx) = std::sync::mpsc::sync_channel(1);
+    let (removed_tx, removed_rx) = std::sync::mpsc::sync_channel(1);
+    let timeout = Duration::from_secs(5);
+    let (reached, removed_while_held, lookup_while_held, lookup, removal) =
+        std::thread::scope(|scope| {
+            let lookup = scope.spawn(|| {
+                let pending = queue.contains_pending_hash(hash, &state);
+                let _ = lookup_tx.send(pending);
+                pending
+            });
+            let reached = reached_rx.recv_timeout(timeout);
+            let removal = scope.spawn(|| {
+                let removed = queue.remove_committed_hashes([hash], None);
+                let _ = removed_tx.send(removed);
+                removed
+            });
+            let removed_while_held = removed_rx.recv_timeout(timeout);
+            let lookup_while_held = lookup_rx.try_recv();
+
+            // Release the physical blocker before assertions or joins even if a
+            // regressed lookup pins the shard and removal cannot finish. Buffered
+            // notifications and closed receivers cannot strand either worker.
+            drop(writer.abort());
+            drop(reached_rx);
+            drop(removed_rx);
+            drop(lookup_rx);
+            let lookup = lookup.join();
+            let removal = removal.join();
+            (
+                reached,
+                removed_while_held,
+                lookup_while_held,
+                lookup,
+                removal,
+            )
+        });
+
+    assert_eq!(
+        reached,
+        Ok(()),
+        "lookup reached its actual State view boundary"
+    );
+    assert_eq!(
+        removed_while_held,
+        Ok(1),
+        "Queue removal must complete while the original State hash writer is held"
+    );
+    assert!(matches!(
+        lookup_while_held,
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert!(!lookup.expect("pending lookup thread"));
+    assert_eq!(removal.expect("queue removal thread"), 1);
+    assert!(!queue.contains_entrypoint_hash(hash));
+    assert!(!queue.contains_pending_hash(hash, &state));
+    assert_eq!(queue.active_len(), 0);
+    assert!(!queue.transaction_selection_durability_faulted());
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.view().block_hashes, original_hashes);
+    assert!(state.view().transactions.get(&hash).is_none());
+}
+#[test]
 fn gossip_batch_with_state_removes_committed_entries() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -464,32 +550,71 @@ async fn push_rejects_without_governance_manifest() {
         1
     );
 }
+/// Preserve the signed operation while targeting the fixture's actual configured dataspace.
+fn accepted_uaid_dataspace_tx(
+    state: &State,
+    dataspace: DataSpaceId,
+    account: &AccountId,
+    key_pair: &KeyPair,
+    time_source: &TimeSource,
+) -> AcceptedTransaction<'static> {
+    let nexus = state.nexus_snapshot();
+    let alias = &nexus
+        .dataspace_catalog
+        .by_id(dataspace)
+        .expect("fixture target dataspace exists")
+        .alias;
+    let target = DomainId::try_new(&unique_test_domain_name("uaid"), alias)
+        .expect("domain in the actual configured target dataspace");
+    let tx = accepted_tx_with(
+        account.clone(),
+        key_pair,
+        time_source,
+        vec![Unregister::domain(target).into()],
+        Metadata::default(),
+    );
+    let plan = ConfigLaneRouter::new(
+        nexus.routing_policy,
+        nexus.dataspace_catalog,
+        nexus.lane_catalog,
+    )
+    .try_route_plan_with_view(&tx, &state.view())
+    .expect("signed instruction must resolve before UAID compliance is tested");
+    assert_eq!(
+        plan,
+        RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, dataspace)),
+        "the actual instruction and the fixture router must name the same route"
+    );
+    tx
+}
+
 #[tokio::test]
 async fn uaid_without_dataspace_binding_is_rejected() {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::missing-binding"));
     let dataspace = DataSpaceId::new(7);
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, false);
-    let kura = Kura::blank_kura_for_testing();
+    let nexus = test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]);
     let query_handle = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
     let metrics = Arc::new(Metrics::default());
     #[cfg(feature = "telemetry")]
-    let state = {
-        let mut state = State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        );
-        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-        Arc::new(state)
-    };
+    let state = Arc::new(new_queue_test_state_with_telemetry(
+        world,
+        nexus,
+        query_handle,
+        StateTelemetry::new(metrics.clone(), true),
+    ));
     #[cfg(not(feature = "telemetry"))]
-    let state = {
-        let mut state = State::new(world, kura, query_handle);
-        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-        Arc::new(state)
-    };
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world,
+        nexus,
+        query_handle,
+    ));
+    #[cfg(feature = "telemetry")]
+    assert!(std::ptr::eq(
+        state.metrics().metrics_ref(),
+        metrics.as_ref()
+    ));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -519,7 +644,7 @@ async fn uaid_without_dataspace_binding_is_rejected() {
     let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
     queue.install_lane_manifests(&manifests);
     let result = queue.push(
-        accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+        accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
         state.view(),
     );
     match result {
@@ -578,27 +703,28 @@ async fn uaid_binding_allows_lane_identity_extraction() {
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::bound"));
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
-    let kura = Kura::blank_kura_for_testing();
+    let nexus = test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]);
     let query_handle = LiveQueryStore::start_test();
     #[cfg(feature = "telemetry")]
     let metrics = Arc::new(Metrics::default());
     #[cfg(feature = "telemetry")]
-    let state = {
-        let mut state = State::with_telemetry(
-            world,
-            kura.clone(),
-            query_handle.clone(),
-            StateTelemetry::new(metrics.clone(), true),
-        );
-        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-        Arc::new(state)
-    };
+    let state = Arc::new(new_queue_test_state_with_telemetry(
+        world,
+        nexus,
+        query_handle,
+        StateTelemetry::new(metrics.clone(), true),
+    ));
     #[cfg(not(feature = "telemetry"))]
-    let state = {
-        let mut state = State::new(world, kura, query_handle);
-        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-        Arc::new(state)
-    };
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world,
+        nexus,
+        query_handle,
+    ));
+    #[cfg(feature = "telemetry")]
+    assert!(std::ptr::eq(
+        state.metrics().metrics_ref(),
+        metrics.as_ref()
+    ));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
         lane: LaneId::SINGLE,
@@ -629,7 +755,7 @@ async fn uaid_binding_allows_lane_identity_extraction() {
     queue.install_lane_manifests(&manifests);
     queue
         .push(
-            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
             state.view(),
         )
         .expect("UAID with active dataspace binding should be admitted");
@@ -672,11 +798,11 @@ async fn uaid_binding_allows_matching_dataspace() {
     let dataspace = DataSpaceId::new(24);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::aligned"));
     let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, true);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world, kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-    let state = Arc::new(state);
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world,
+        test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]),
+        LiveQueryStore::start_test(),
+    ));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test_with_router_for_routes(
         config_factory(),
@@ -689,7 +815,7 @@ async fn uaid_binding_allows_matching_dataspace() {
     );
     queue
         .push(
-            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
             state.view(),
         )
         .expect("UAID bound to dataspace should be admitted");
@@ -713,11 +839,11 @@ async fn uaid_with_inactive_target_dataspace_manifest_is_rejected() {
     inactive.lifecycle.mark_expired(2);
     set.upsert(inactive);
     world.space_directory_manifests.insert(uaid, set);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world, kura, query_handle);
-    install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, dataspace)]);
-    let state = Arc::new(state);
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world,
+        test_nexus_for_routes(&[(LaneId::SINGLE, dataspace)]),
+        LiveQueryStore::start_test(),
+    ));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test_with_router_for_routes(
         config_factory(),
@@ -729,7 +855,7 @@ async fn uaid_with_inactive_target_dataspace_manifest_is_rejected() {
         &[(LaneId::SINGLE, dataspace)],
     );
     let result = queue.push(
-        accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+        accepted_uaid_dataspace_tx(&state, dataspace, &account_id, &key_pair, &time_source),
         state.view(),
     );
     match result {

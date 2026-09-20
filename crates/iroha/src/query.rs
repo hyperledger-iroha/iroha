@@ -1,5 +1,6 @@
 //! Functions and types to make queries to the Iroha peer.
 #![allow(clippy::result_large_err)]
+mod asynchronous;
 use crate::{
     client::{APPLICATION_NORITO, Client, QueryResult, ResponseReport, join_torii_url},
     crypto::{HashOf, KeyPair},
@@ -21,6 +22,7 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder},
     http_default::{DefaultHttpTransport, DefaultRequestBuilder},
 };
+pub use asynchronous::{AsyncQueryBuilderExt, QueryStream};
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
@@ -36,6 +38,40 @@ use std::{
 use url::Url;
 
 const TRANSACTION_DETAILS_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Check only the response's local source/output bindings, not inclusion or finality.
+/// The full executed carrier and independently authenticated commitment remain required.
+pub(crate) fn validate_transaction_details_bindings(
+    details: &PipelineTransactionDetailsResponse,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+) -> Result<()> {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+    let transaction = &details.transaction;
+    let ExecutionOutputV1::Network(output) = transaction.output() else {
+        return Err(eyre!(
+            "transaction-details response carries an internal execution output"
+        ));
+    };
+    if details.hash != entrypoint_hash.to_string()
+        || transaction.entrypoint_hash() != &entrypoint_hash
+        || transaction.entrypoint().hash() != entrypoint_hash
+        || transaction.output_hash() != &HashOf::new(transaction.output())
+        || output.input_index != transaction.entrypoint_proof().leaf_index()
+        || output.input_index != transaction.output_proof().leaf_index()
+        || (output.result.is_err()
+            && (!output.result.batch_transfer_outcomes().is_empty()
+                || !output.completions.is_empty()))
+        || output
+            .completions
+            .windows(2)
+            .any(|pair| pair[0].callback_index >= pair[1].callback_index)
+    {
+        return Err(eyre!(
+            "transaction-details response does not match the requested entrypoint/output binding"
+        ));
+    }
+    Ok(())
+}
 
 /// The exact details route must never manufacture proof absence from an HTTP status.
 fn decode_transaction_details_failure(response: &http::Response<Vec<u8>>) -> QueryError {
@@ -262,12 +298,11 @@ fn decode_query_failure(response: &http::Response<Vec<u8>>) -> QueryError {
     }
     // ErrorEnvelope is the node's public, redacted diagnostic. Never display
     // unparsed upstream bytes or infer ValidationFail variants from status alone.
-    QueryError::Other(eyre!(
-        "query failed; HTTP {}; {}: {}",
-        response.status(),
-        envelope.code(),
-        envelope.message()
-    ))
+    QueryError::Http {
+        status: response.status(),
+        code: envelope.code().to_owned(),
+        message: envelope.message().to_owned(),
+    }
 }
 /// Decode `QueryResponse` from a canonical Norito byte body.
 fn decode_query_response_body(body: &[u8]) -> QueryResult<QueryResponse> {
@@ -366,6 +401,16 @@ impl QueryCursor {
 /// Different errors as a result of query response handling
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
+    /// A server rejection decoded from one canonical public error envelope.
+    #[error("query failed; HTTP {status}; {code}: {message}")]
+    Http {
+        /// HTTP status returned by the server.
+        status: StatusCode,
+        /// Machine-readable error code from the validated envelope.
+        code: String,
+        /// Public diagnostic from the validated envelope.
+        message: String,
+    },
     /// Query validation error
     #[error("query validation error: {0}")]
     Validation(#[from] ValidationFail),
@@ -552,12 +597,13 @@ impl Client {
     /// This uses the dedicated authenticated transaction-details route with the one canonical
     /// `FindTransactions` equality predicate accepted by Torii. The response must be canonical
     /// bounded Norito and must repeat the requested entrypoint hash, a self-consistent entrypoint
-    /// and result hash. Both successful and rejected transaction results are returned unchanged.
+    /// and full typed Network output hash, with its exact input-index join. Both successful and
+    /// rejected results are returned unchanged. This local check does not authenticate finality.
     ///
     /// # Errors
     ///
     /// Returns an error if request binding or signing fails, Torii rejects the query, the response
-    /// violates the strict transport/codec contract, or any requested hash/result binding differs.
+    /// violates the strict transport/codec contract, or any requested source/output binding differs.
     pub fn get_transaction_details(
         &self,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -588,17 +634,8 @@ impl Client {
             "Failed to get exact transaction details",
         )
         .map_err(QueryError::from)?;
-        let expected_hash = entrypoint_hash.to_string();
-        let transaction = &details.transaction;
-        if details.hash != expected_hash
-            || transaction.entrypoint_hash() != &entrypoint_hash
-            || transaction.entrypoint().hash() != entrypoint_hash
-            || transaction.result_hash() != &transaction.result().hash()
-        {
-            return Err(QueryError::Other(eyre!(
-                "transaction-details response does not match the requested entrypoint/result hash"
-            )));
-        }
+        validate_transaction_details_bindings(&details, entrypoint_hash)
+            .map_err(QueryError::from)?;
         Ok(details)
     }
 
@@ -790,7 +827,9 @@ mod query_errors_handling {
                 .header(CONTENT_TYPE, media_type)
                 .body(body)?;
             let error = decode_singular_query_response(&response).expect_err("asset is missing");
-            assert!(matches!(error, QueryError::Other(_)));
+            assert!(matches!(&error, QueryError::Http { status, code, message }
+                if *status == StatusCode::NOT_FOUND && code == envelope.code()
+                    && message == envelope.message()));
             let message = error.to_string();
             assert!(message.contains("404") && message.contains(envelope.code()));
             assert!(message.contains(envelope.message()));
@@ -1159,6 +1198,11 @@ mod query_errors_handling {
         for (status, code, message) in [
             (
                 StatusCode::NOT_FOUND,
+                "query_validation_failed",
+                "missing fixture entity",
+            ),
+            (
+                StatusCode::NOT_FOUND,
                 "route_not_found",
                 "route unavailable",
             ),
@@ -1184,15 +1228,24 @@ mod query_errors_handling {
             ),
         ] {
             let envelope = ErrorEnvelope::new(code, message);
-            let response = Response::builder()
-                .status(status)
-                .header(CONTENT_TYPE, APPLICATION_NORITO)
-                .body(norito::to_bytes(&envelope)?)?;
-            let error = decode_query_response(&response).expect_err("server failure");
-            assert!(matches!(error, QueryError::Other(_)));
-            let rendered = error.to_string();
-            assert!(rendered.contains(status.as_str()));
-            assert!(rendered.contains(code) && rendered.contains(message));
+            for (media, body) in [
+                (APPLICATION_NORITO, norito::to_bytes(&envelope)?),
+                ("application/json", json::to_vec(&envelope)?),
+            ] {
+                let response = Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, media)
+                    .body(body)?;
+                let error = decode_query_response(&response).expect_err("server failure");
+                assert!(matches!(error, QueryError::Http {
+                status: actual_status,
+                code: ref actual_code,
+                message: ref actual_message,
+            } if actual_status == status && actual_code == code && actual_message == message));
+                let rendered = error.to_string();
+                assert!(rendered.contains(status.as_str()));
+                assert!(rendered.contains(code) && rendered.contains(message));
+            }
         }
         Ok(())
     }
@@ -1502,6 +1555,13 @@ mod query_errors_handling {
         .expect("sign transaction-details fixture");
         let entrypoint = TransactionEntrypoint::External(signed);
         let entrypoint_hash = entrypoint.hash();
+        let output = iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+            iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            },
+        );
         let transaction = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
                 [0x77; iroha_crypto::Hash::LENGTH],
@@ -1509,17 +1569,15 @@ mod query_errors_handling {
             entrypoint_hash,
             entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
             entrypoint,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
+            output_hash: HashOf::new(&output),
+            output_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            output,
         };
         (
             entrypoint_hash,
             PipelineTransactionDetailsResponse {
                 hash: entrypoint_hash.to_string(),
                 transaction,
-                trigger_completions: Vec::new(),
             },
         )
     }
@@ -1927,17 +1985,17 @@ mod query_errors_handling {
 
         let client = compatible_client_with_conflicting_wire_headers();
         let mut mismatched = details;
-        mismatched.transaction.result_hash = HashOf::from_untyped_unchecked(
+        mismatched.transaction.output_hash = HashOf::from_untyped_unchecked(
             iroha_crypto::Hash::prehashed([0x93; iroha_crypto::Hash::LENGTH]),
         );
-        let encoded = norito::to_bytes(&mismatched).expect("encode mismatched result hash");
+        let encoded = norito::to_bytes(&mismatched).expect("encode mismatched output hash");
         let error = with_mock_http(
             move |_| {
                 Ok(Response::builder()
                     .status(HttpStatusCode::OK)
                     .header("content-type", APPLICATION_NORITO)
                     .body(encoded.clone())
-                    .expect("mismatched result response"))
+                    .expect("mismatched output response"))
             },
             |mock_transport| {
                 let client = client
@@ -1951,8 +2009,118 @@ mod query_errors_handling {
                 client.get_successful_transaction_details(entrypoint_hash)
             },
         )
-        .expect_err("result hash mismatch must be rejected");
-        assert!(error.to_string().contains("entrypoint/result hash"));
+        .expect_err("output hash mismatch must be rejected");
+        assert!(error.to_string().contains("entrypoint/output binding"));
+    }
+    #[test]
+    fn transaction_details_reader_rejects_internal_and_wrong_source_outputs() {
+        use iroha_data_model::block::execution_output::{
+            ExecutionOutputV1, InvocationCompletionV1, TimeInvocationV1, TriggerUseV1,
+        };
+        use iroha_data_model::events::{
+            time::{TimeEvent, TimeInterval},
+            trigger_completed::TriggerCompletedOutcome,
+        };
+        for mutation in 0..8 {
+            let client = compatible_client_with_conflicting_wire_headers();
+            let (hash, mut details) = successful_transaction_details_fixture();
+            match mutation {
+                0 => {
+                    let ExecutionOutputV1::Network(row) = &mut details.transaction.output else {
+                        unreachable!()
+                    };
+                    row.input_index = 1;
+                }
+                1 => {
+                    details.transaction.entrypoint_proof =
+                        crate::crypto::MerkleProof::from_audit_path(1, Vec::new())
+                }
+                2 => {
+                    details.transaction.output =
+                        ExecutionOutputV1::time_output_limit_rejection(TimeInvocationV1 {
+                            schedule_index: 0,
+                            event: TimeEvent {
+                                interval: TimeInterval {
+                                    since_ms: 0,
+                                    length_ms: 1,
+                                },
+                            },
+                            trigger: TriggerUseV1 {
+                                trigger_id: "query-internal-output".parse().unwrap(),
+                                registered_at_height: 0,
+                                action_hash: iroha_crypto::Hash::new(
+                                    b"query internal output fixture",
+                                ),
+                            },
+                        });
+                }
+                3 => {
+                    let ExecutionOutputV1::Network(row) = &mut details.transaction.output else {
+                        unreachable!()
+                    };
+                    let completion = InvocationCompletionV1 {
+                        callback_index: 1,
+                        trigger_id: "duplicate-callback".parse().unwrap(),
+                        outcome: TriggerCompletedOutcome::Success,
+                    };
+                    row.completions = vec![completion.clone(), completion];
+                }
+                4 => {
+                    details.transaction.entrypoint = successful_transaction_details_fixture()
+                        .1
+                        .transaction
+                        .entrypoint
+                }
+                5 => {
+                    details.transaction.output_proof =
+                        crate::crypto::MerkleProof::from_audit_path(1, Vec::new())
+                }
+                6 | 7 => {
+                    let ExecutionOutputV1::Network(row) = &mut details.transaction.output else {
+                        unreachable!()
+                    };
+                    row.result = iroha_data_model::transaction::TransactionResult::new(Err(
+                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                            iroha_data_model::ValidationFail::NotPermitted("rolled back".into()),
+                        ),
+                    ));
+                    row.completions = vec![InvocationCompletionV1 {
+                        callback_index: 0,
+                        trigger_id: "rolled-back-callback".parse().unwrap(),
+                        outcome: if mutation == 6 {
+                            TriggerCompletedOutcome::Success
+                        } else {
+                            TriggerCompletedOutcome::Failure("rolled back".into())
+                        },
+                    }];
+                }
+                _ => unreachable!(),
+            }
+            // Rehash the altered output: neither self-consistency nor an internal row's
+            // complete result can establish the requested Network source binding.
+            details.transaction.output_hash = HashOf::new(&details.transaction.output);
+            let body = norito::to_bytes(&details).unwrap();
+            let error = with_mock_http(
+                move |_| {
+                    Ok(Response::builder()
+                        .status(HttpStatusCode::OK)
+                        .header("content-type", APPLICATION_NORITO)
+                        .body(body.clone())
+                        .unwrap())
+                },
+                |transport| {
+                    let client = client.with_test_http_transport(transport);
+                    *client.data_model_compatibility.lock().unwrap() =
+                        DataModelCompatibility::SubmitCompatible;
+                    client.get_transaction_details(hash)
+                },
+            )
+            .expect_err("foreign/internal output must fail exact-details binding");
+            assert!(
+                error.to_string().contains("transaction-details response"),
+                "mutation {mutation}: {error}"
+            );
+        }
     }
     fn with_mock_http<R>(
         responder: impl Fn(RequestSnapshot) -> Result<Response<Vec<u8>>> + Send + Sync + 'static,

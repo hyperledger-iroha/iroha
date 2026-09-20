@@ -1,3 +1,5 @@
+//! Canonical spool ownership, authenticated storage, and exact source geometry controls.
+
 use super::*;
 use std::{
     fs,
@@ -125,8 +127,12 @@ fn production_adapter_surface_has_no_path_key_or_raw_snapshot_escape() {
     assert!(source.len() <= 16_000);
     assert!(production.contains("ConfidentialSpoolWriterV1"));
     assert!(production.contains("ConfidentialSpoolSnapshotV1"));
-    assert!(production.contains("phase23_rns_link_secret_main_v1"));
-    assert!(production.contains("phase23_rns_link_secret_nonce_v1"));
+    assert!(production.contains("canonical_source_layouts_v1("));
+    assert!(production.contains("ConfidentialSpoolLayoutV1::new_v1("));
+    assert!(production.contains("SECRET_MAIN_SLOT_COUNT_V1"));
+    assert!(production.contains("SECRET_MAIN_PLAINTEXT_BYTES_V1"));
+    assert!(production.contains("SECRET_NONCE_SLOT_COUNT_V1"));
+    assert!(production.contains("SECRET_NONCE_PLAINTEXT_BYTES_V1"));
     assert!(production.contains("live: Option<LiveRnsLinkSecretSpoolWriterV1>"));
     assert!(production.matches(".live\n            .take()").count() >= 2);
     assert!(!production.contains("pub fn"));
@@ -137,6 +143,29 @@ fn production_adapter_surface_has_no_path_key_or_raw_snapshot_escape() {
         assert!(
             !production.contains(forbidden),
             "forbidden surface: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn canonical_source_layouts_validate_exact_tuples_without_filesystem_effects() {
+    let (main, nonce) = canonical_source_layouts_v1([0x31; 32], [0x32; 32]).unwrap();
+    assert_eq!(main.slot_count_v1(), 38_528);
+    assert_eq!(main.plaintext_len_v1(), 8_192);
+    assert_eq!(main.ciphertext_record_len_v1(), 8_208);
+    assert_eq!(main.file_len_v1(), 316_237_824);
+    assert_eq!(nonce.slot_count_v1(), 43);
+    assert_eq!(nonce.plaintext_len_v1(), 32);
+    assert_eq!(nonce.ciphertext_record_len_v1(), 48);
+    assert_eq!(nonce.file_len_v1(), 2_064);
+    assert_ne!(main, nonce);
+    let changed = canonical_source_layouts_v1([0x33; 32], [0x32; 32]).unwrap();
+    assert_ne!(main, changed.0);
+    assert_eq!(nonce, changed.1);
+    for (main_context, nonce_context) in [([0; 32], [0x32; 32]), ([0x31; 32], [0; 32])] {
+        assert_eq!(
+            canonical_source_layouts_v1(main_context, nonce_context),
+            Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
         );
     }
 }

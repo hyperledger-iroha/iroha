@@ -318,11 +318,13 @@ fn pending_queue_plan_frontier_mismatch_preserves_all_retirement_candidates() {
             0x75,
         );
         let second = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+            &queue_plan_entrypoint_for_state_test(&state, 0x75),
             &binding,
             &validators,
             &[2, 3],
         );
         let incoming = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+            &queue_plan_entrypoint_for_state_test(&state, 0x75),
             &binding,
             &validators,
             &[0, 3],
@@ -401,11 +403,13 @@ fn pending_queue_plan_checked_publication_deduplicates_and_retires_alternate_sub
         0x76,
     );
     let second = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        &queue_plan_entrypoint_for_state_test(&state, 0x76),
         &binding,
         &validators,
         &[2, 3],
     );
     let incoming = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        &queue_plan_entrypoint_for_state_test(&state, 0x76),
         &binding,
         &validators,
         &[0, 3],

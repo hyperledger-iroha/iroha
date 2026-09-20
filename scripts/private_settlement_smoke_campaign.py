@@ -80,6 +80,11 @@ EVIDENCE_NAMES = frozenset(
         "continuous", "state-restarted", "finality-before", "finality-after"
     ) for peer in range(PEER_COUNT)}
 )
+HAPPY_DAY_EVIDENCE_NAMES = frozenset(
+    EVIDENCE_NAMES - {"restarts.json"}
+    - {f"{prefix}-{peer:02}.json" for prefix in ("state-restarted", "finality-after")
+       for peer in range(PEER_COUNT)}
+)
 CRYPTOGRAPHIC_SCOPE = (
     "Rust get_bridge_finality_anchor verifies BLS and the canonical finality proof; "
     "Python validates retained evidence and bindings, not BLS signatures. "
@@ -220,11 +225,12 @@ def outside_repo(path: Path, repo: Path) -> None:
     require(path != repo and repo not in path.parents, "campaign evidence must be outside the repository")
 
 
-def validate_request(value: Any, commit: str, run: int) -> dict[str, Any]:
-    """Validate one current smoke request and its canonical content-derived ID."""
+def validate_request(value: Any, commit: str, run: int, *, kind: str = "smoke") -> dict[str, Any]:
+    """Bind a request to its explicitly selected experiment and exact intent."""
+    require(kind in ("smoke", "happy_day"), "unknown experiment kind")
     request = fields(value, REQUEST_FIELDS, "request")
     require(type(request["version"]) is int and request["version"] == 1
-            and request["protocol"] == PROTOCOL and request["kind"] == "smoke", "wrong smoke protocol")
+            and request["protocol"] == PROTOCOL and request["kind"] == kind, "wrong experiment protocol/kind")
     digest(request["invocation_nonce"], "invocation nonce")
     digest(request["commit"], "commit", (40, 64))
     require(request["commit"] == commit and integer(request["run"], 0, 9, "run") == run,
@@ -235,16 +241,18 @@ def validate_request(value: Any, commit: str, run: int) -> dict[str, Any]:
     return request
 
 
-def new_request(commit: str, run: int) -> dict[str, Any]:
+def new_request(commit: str, run: int, *, kind: str = "smoke") -> dict[str, Any]:
     """Create fresh per-run network entropy before any process starts."""
-    request = {"version": 1, "protocol": PROTOCOL, "kind": "smoke", "commit": commit,
+    require(kind in ("smoke", "happy_day"), "unknown experiment kind")
+    request = {"version": 1, "protocol": PROTOCOL, "kind": kind, "commit": commit,
                "seed": secrets.randbits(64), "run": run, "invocation_nonce": secrets.token_hex(32)}
     request["request_id"] = sha(canonical(request))
-    return validate_request(request, commit, run)
+    return validate_request(request, commit, run, kind=kind)
 
 
-def terminal_success(output: str) -> None:
+def terminal_success(output: str, *, kind: str = "smoke") -> None:
     """Require an executed exact test, excluding zero-test/ignored/skip successes."""
+    require(kind in ("smoke", "happy_day"), "unknown experiment kind")
     terminals = re.findall(r"^test result: .*?$", output, re.MULTILINE)
     require(len(terminals) == 1 and re.fullmatch(
         r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; \d+ filtered out; finished in .+",
@@ -253,16 +261,22 @@ def terminal_success(output: str) -> None:
             "smoke test was not executed")
     require(re.search(r"\bskip(?:ped|ping)?\b|\bretrying\b|fresh startup attempt [2-9]", output,
                       re.IGNORECASE) is None, "smoke reported a skip or retry")
-    require(output.count("APS smoke completed:") == 1, "missing unique Rust smoke completion")
+    require(output.count(f"APS {kind} completed:") == 1, "missing unique Rust experiment completion")
+    other = "happy_day" if kind == "smoke" else "smoke"
+    require(f"APS {other} completed:" not in output, "another experiment completion was mixed into the stream")
 
 
-def validate_inventory(before: Any, after: Any, restarts: Any, validator_sha: str) -> list[Any]:
-    """Check sixteen disjoint identities/configurations and every replaced process."""
-    require(isinstance(before, list) and isinstance(after, list) and isinstance(restarts, list)
-            and len(before) == len(after) == len(restarts) == PEER_COUNT, "incomplete process inventory")
+def validate_inventory(before: Any, after: Any, restarts: Any, validator_sha: str,
+                       *, kind: str = "smoke") -> list[Any]:
+    """Check identity/configuration and the process lifecycle selected by the experiment."""
+    require(kind in ("smoke", "happy_day"), "unknown experiment kind")
+    require(isinstance(before, list) and isinstance(after, list)
+            and len(before) == len(after) == PEER_COUNT, "incomplete process inventory")
+    require((kind == "smoke" and isinstance(restarts, list) and len(restarts) == PEER_COUNT)
+            or (kind == "happy_day" and restarts is None), "wrong experiment restart inventory")
     names = {"peer_index", "peer_id", "committee_index", "validator_index", "pid",
              "executable_sha256", "configuration_sha256"}
-    identities, configurations = [], []
+    identities = []
     for rows in (before, after):
         pids = []
         for index, item in enumerate(rows):
@@ -276,19 +290,22 @@ def validate_inventory(before: Any, after: Any, restarts: Any, validator_sha: st
             require(row["executable_sha256"] == validator_sha and row["peer_id"] is not None,
                     "process executable/identity substitution")
         require(len(set(pids)) == 16, "process inventory repeats a PID")
-    for index, (old, new, restart) in enumerate(zip(before, after, restarts, strict=True)):
-        record = fields(restart, {"peer_index", "before_pid", "after_pid"}, "restart")
-        require(integer(record["peer_index"], 0, 15, "restart peer index") == index
-                and integer(record["before_pid"], 1, 2**32 - 1, "restart before PID") == old["pid"]
-                and integer(record["after_pid"], 1, 2**32 - 1, "restart after PID") == new["pid"]
-                and record == {"peer_index": index, "before_pid": old["pid"], "after_pid": new["pid"]}
-                and old["pid"] != new["pid"], "restart did not replace the exact process")
+    for index, (old, new) in enumerate(zip(before, after, strict=True)):
+        if kind == "smoke":
+            record = fields(restarts[index], {"peer_index", "before_pid", "after_pid"}, "restart")
+            require(integer(record["peer_index"], 0, 15, "restart peer index") == index
+                    and integer(record["before_pid"], 1, 2**32 - 1, "restart before PID") == old["pid"]
+                    and integer(record["after_pid"], 1, 2**32 - 1, "restart after PID") == new["pid"]
+                    and record == {"peer_index": index, "before_pid": old["pid"], "after_pid": new["pid"]}
+                    and old["pid"] != new["pid"], "restart did not replace the exact process")
+        else:
+            require(old["pid"] == new["pid"], "happy-day validator process changed")
         require(all(old[name] == new[name] for name in names - {"pid"}),
                 "restart changed validator identity, configuration, or executable")
         identities.append(old["peer_id"])
-        configurations.append(old["configuration_sha256"])
     require(len({canonical(identity) for identity in identities}) == 16, "validator identities overlap")
-    require(len(set(configurations)) == 16, "validator configurations are not individually committed")
+    # These digests bind ordered shared input layers. Node identities and PIDs
+    # are checked independently above; identical validator layers are valid.
     return identities
 
 
@@ -304,10 +321,13 @@ def state_identity(observation: Any, peer: int, label: str) -> Any:
     return result
 
 
-def validate_states(evidence: dict[str, Any], finalized_height: int) -> tuple[Any, Any]:
+def validate_states(evidence: dict[str, Any], finalized_height: int,
+                    *, kind: str = "smoke") -> tuple[Any, Any]:
     """Require baseline financial state at every preparation stage and exact atomic deltas."""
+    require(kind in ("smoke", "happy_day"), "unknown experiment kind")
+    phases = STATE_PHASES + (tuple(f"restarted-{index:02}" for index in range(16)) if kind == "smoke" else ())
     vectors = {}
-    for phase in STATE_PHASES + tuple(f"restarted-{index:02}" for index in range(16)):
+    for phase in phases:
         name = f"state-{phase}.json"
         snapshot = fields(evidence[name], {"label", "validators"}, name)
         expected_label = "smoke-restarted" if phase.startswith("restarted-") else f"smoke-{phase}"
@@ -354,10 +374,14 @@ def validate_continuous(record: Any, peer: int, bundle: bytes, before: Any, afte
             "continuous count/failure mismatch")
     classes = []
     seen_finalized = False
+    previous_final_local = None
     baseline = release_runner._fault_ledger_attempt_identity(before)
+    finalized_ledger = release_runner._fault_ledger_attempt_identity(after)
     for observation in observations:
         identity = state_identity(observation, peer, "continuous observation")
-        if identity == after:
+        if release_runner._fault_ledger_attempt_identity(identity) == finalized_ledger:
+            previous_final_local = release_runner._validate_finalized_local_reconciliation(
+                identity, after, previous_final_local)
             seen_finalized = True
             classes.append("finalized")
         else:
@@ -365,6 +389,8 @@ def validate_continuous(record: Any, peer: int, bundle: bytes, before: Any, afte
                     "continuous partial application or rollback")
             classes.append("baseline")
     require(classes[0] == "baseline" and classes[-1] == "finalized", "continuous stream lacks both endpoints")
+    require(state_identity(observations[-1], peer, "continuous terminal") == after,
+            "continuous terminal state retains unreconciled local staging")
     chain = hashlib.sha256(release_runner.FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1 + bundle + struct.pack("<Q", peer))
     for observation in observations:
         chain.update(bytes.fromhex(observation["response_sha256"]))
@@ -405,6 +431,9 @@ def validate_continuous(record: Any, peer: int, bundle: bytes, before: Any, afte
             require(position + repetitions <= len(observations), "phase attempts exceed retained responses")
             for _ in range(repetitions):
                 observation = observations[position]
+                if name == "terminal":
+                    require(state_identity(observation, peer, "continuous terminal phase") == after,
+                            "terminal phase observation retains unreconciled local staging")
                 require(classes[position] == kind and observation["response_hex"] == attempt["evidence"],
                         "phase attempt does not match the corresponding retained raw response")
                 phase_chain.update(bytes((1 if kind == "baseline" else 2,)))
@@ -581,8 +610,11 @@ def validate_certificates(evidence: dict[str, Any], result: dict[str, Any], iden
     return bundle
 
 
-def validate_run(path: Path, request: dict[str, Any], validator_sha: str) -> dict[str, Any]:
-    """Read and validate all 80 retained artifacts from one successful Rust invocation."""
+def validate_run(path: Path, request: dict[str, Any], validator_sha: str,
+                 *, kind: str = "smoke") -> dict[str, Any]:
+    """Validate the exact financial evidence population of the selected experiment."""
+    require(kind in ("smoke", "happy_day"), "unknown experiment kind")
+    evidence_names = EVIDENCE_NAMES if kind == "smoke" else HAPPY_DAY_EVIDENCE_NAMES
     owner_path(path, directory=True)
     evidence_path = path / "evidence"
     owner_path(evidence_path, directory=True)
@@ -590,39 +622,41 @@ def validate_run(path: Path, request: dict[str, Any], validator_sha: str) -> dic
         "request_sha256", "network_id", "participants", "processes", "restarted", "activation_height",
         "authority_context_height", "finalized_height", "signed_rs16_observations", "continuous_checks",
         "passed", "artifacts"}, "Rust smoke result")
-    validate_request(result["request"], request["commit"], request["run"])
+    validate_request(result["request"], request["commit"], request["run"], kind=kind)
     require(result["request"] == request and result["request_sha256"] == sha(read_bytes(path / "request.json"))
             and type(result["version"]) is int and result["version"] == 1
-            and result["protocol"] == PROTOCOL and result["kind"] == "smoke"
+            and result["protocol"] == PROTOCOL and result["kind"] == kind
             and result["passed"] is True, "unbound Rust result")
-    for name, expected in (("participants", 3), ("processes", 16), ("restarted", 16), ("signed_rs16_observations", 16)):
+    for name, expected in (("participants", 3), ("processes", 16),
+                           ("restarted", 16 if kind == "smoke" else 0), ("signed_rs16_observations", 16)):
         require(type(result[name]) is int and result[name] == expected, f"wrong {name}")
     _activation, _authority, height = validate_smoke_result_heights(result)
-    require({item.name for item in evidence_path.iterdir()} == EVIDENCE_NAMES, "incomplete or extra smoke evidence files")
+    require({item.name for item in evidence_path.iterdir()} == evidence_names, "incomplete or extra experiment evidence files")
     inventory = result["artifacts"]
-    require(isinstance(inventory, list) and len(inventory) == len(EVIDENCE_NAMES), "incomplete artifact manifest")
+    require(isinstance(inventory, list) and len(inventory) == len(evidence_names), "incomplete artifact manifest")
     evidence = {}
     for item in inventory:
         entry = fields(item, {"name", "bytes", "sha256"}, "evidence entry")
         name = entry["name"]
-        require(isinstance(name, str) and name in EVIDENCE_NAMES and name not in evidence,
+        require(isinstance(name, str) and name in evidence_names and name not in evidence,
                 "duplicate or unsafe evidence entry")
         raw = read_bytes(evidence_path / name)
         require(integer(entry["bytes"], 1, MAX_JSON_BYTES, "evidence size") == len(raw)
                 and entry["sha256"] == sha(raw), "evidence byte/digest mismatch")
         evidence[name] = release_runner.strict_json_loads(raw.decode("utf-8"), name)
-    validate_request(evidence["request.json"], request["commit"], request["run"])
+    validate_request(evidence["request.json"], request["commit"], request["run"], kind=kind)
     require(evidence["request.json"] == request, "Rust evidence replays another request")
     identities = validate_inventory(evidence["processes-before.json"], evidence["processes-after.json"],
-                                    evidence["restarts.json"], validator_sha)
+                                    evidence["restarts.json"] if kind == "smoke" else None,
+                                    validator_sha, kind=kind)
     bundle = validate_certificates(evidence, result, identities)
-    before, after = validate_states(evidence, height)
+    before, after = validate_states(evidence, height, kind=kind)
     checks = sum(validate_continuous(evidence[f"continuous-{peer:02}.json"], peer, bundle, before, after)
                  for peer in range(16))
     require(integer(result["continuous_checks"], 48, 160_000, "total continuous checks") == checks,
             "aggregate continuous coverage mismatch")
     anchors = {validate_finality(evidence[f"finality-{phase}-{peer:02}.json"], result, identities)
-               for phase in ("before", "after") for peer in range(16)}
+               for phase in (("before", "after") if kind == "smoke" else ("before",)) for peer in range(16)}
     require(len(anchors) == 1, "peers/restarts disagree on finalized block or semantic height context")
     return {"network_id": result["network_id"], "bundle_id": bundle.hex(),
             "validator_identities": identities, "finalized_height": height, "continuous_checks": checks,

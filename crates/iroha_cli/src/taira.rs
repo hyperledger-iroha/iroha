@@ -1,5 +1,5 @@
 //! Taira public testnet diagnostics and write canaries.
-use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction};
+use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction_with_expiry};
 use eyre::{Context, Result, eyre};
 use iroha::{
     blocking::Client as BlockingIrohaClient,
@@ -166,6 +166,9 @@ pub enum Command {
     /// Plan, apply, resume, or inspect an exact dataspace and namespace deployment.
     #[command(subcommand)]
     DataspaceDeploy(crate::taira_dataspace_deploy::Command),
+    /// Maintain the independently provisioned public mint-finality roster for each epoch.
+    #[command(subcommand)]
+    EpochMaintenance(crate::taira_dataspace_deploy::epoch_maintenance::Command),
     /// Check Taira read-side health and MCP route posture.
     Doctor(Doctor),
     /// Preflight or execute the strictly authorized compiled public reset.
@@ -188,6 +191,7 @@ impl Run for Command {
         match self {
             Self::Account(cmd) => cmd.run(context),
             Self::DataspaceDeploy(cmd) => cmd.run(context),
+            Self::EpochMaintenance(cmd) => cmd.run(context),
             Self::Doctor(cmd) => cmd.run(context),
             Self::PublicReset(_) => eyre::bail!(
                 "`taira public-reset` must be dispatched before client configuration is loaded"
@@ -1866,7 +1870,7 @@ fn submit_prepared_inrou_until(
 
 /// Only transport unavailability may retain a pending observation. Authorization,
 /// compatibility, decoding, and proof errors are immediately returned to the caller.
-fn observation_transport_unavailable(error: &eyre::Report) -> bool {
+pub(crate) fn observation_transport_unavailable(error: &eyre::Report) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<reqwest::Error>()
@@ -4398,9 +4402,14 @@ fn prepare_final_canary_operation(
     insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_sha256)?;
     let instruction = Log::new(LogLevel::INFO, message);
     let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
-    let (transaction, fee_quote) =
-        quote_and_sign_transaction(&client, executable, fee_payment.clone(), metadata)
-            .wrap_err("failed to quote and sign exact Taira canary transaction")?;
+    let (transaction, fee_quote) = quote_and_sign_transaction_with_expiry(
+        &client,
+        executable,
+        fee_payment.clone(),
+        metadata,
+        binding.execution_expires_at_unix_ms,
+    )
+    .wrap_err("failed to quote and sign exact Taira canary transaction")?;
     let wire = transaction
         .encode_wire_v1()
         .map_err(|error| eyre!("failed to encode exact Taira canary transaction: {error}"))?;
@@ -8422,20 +8431,25 @@ mod tests {
         let validated = queued_onboarding_fixture();
         let transaction = validated.transaction().unwrap().clone();
         let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
+        let output = iroha::data_model::block::execution_output::ExecutionOutputV1::Network(
+            iroha::data_model::block::execution_output::NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            },
+        );
         let committed = CommittedTransaction {
             block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"confirmed block")),
             entrypoint_hash: transaction.hash_as_entrypoint(),
             entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
             entrypoint: TransactionEntrypoint::External(transaction.clone()),
-            result_hash: result.hash(),
-            result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
+            output_hash: iroha_crypto::HashOf::new(&output),
+            output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+            output,
         };
         let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
             hash: transaction.hash_as_entrypoint().to_string(),
             transaction: committed,
-            trigger_completions: Vec::new(),
         };
         let query_bytes = norito::to_bytes(&details).unwrap();
         let polls = AtomicUsize::new(0);
@@ -8537,6 +8551,13 @@ mod tests {
         let result = iroha::data_model::transaction::TransactionResult::new(Ok(
             iroha::data_model::transaction::DataTriggerSequence::default(),
         ));
+        let output = iroha::data_model::block::execution_output::ExecutionOutputV1::Network(
+            iroha::data_model::block::execution_output::NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            },
+        );
         let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
             hash: transaction.hash_as_entrypoint().to_string(),
             transaction: iroha::data_model::query::CommittedTransaction {
@@ -8546,12 +8567,10 @@ mod tests {
                 entrypoint_hash: transaction.hash_as_entrypoint(),
                 entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
                 entrypoint: TransactionEntrypoint::External(transaction.clone()),
-                result_hash: result.hash(),
-                result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-                result,
-                merge_inclusion: None,
+                output_hash: iroha_crypto::HashOf::new(&output),
+                output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                output,
             },
-            trigger_completions: Vec::new(),
         };
         let proof_reads = AtomicUsize::new(0);
         let server = spawn_mock_http(6, move |request| match path_only(&request.path) {
@@ -9670,7 +9689,19 @@ mod tests {
                             .lock()
                             .expect("requests")
                             .push(request.clone());
-                        write_mock_response(&mut stream, response);
+                        if let Err(error) = write_mock_response(&mut stream, response) {
+                            // Deadline-bound probes may close a connection before the mock
+                            // finishes replying. Keep recording requests and serving retries.
+                            assert!(
+                                matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::BrokenPipe
+                                        | std::io::ErrorKind::ConnectionReset
+                                        | std::io::ErrorKind::ConnectionAborted
+                                ),
+                                "write mock response: {error}"
+                            );
+                        }
                         accepted += 1;
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -9740,7 +9771,7 @@ mod tests {
     fn find_header_end(raw: &[u8]) -> Option<usize> {
         raw.windows(4).position(|window| window == b"\r\n\r\n")
     }
-    fn write_mock_response(stream: &mut TcpStream, response: MockResponse) {
+    fn write_mock_response(stream: &mut TcpStream, response: MockResponse) -> std::io::Result<()> {
         let reason = match response.status {
             200 => "OK",
             202 => "Accepted",
@@ -9760,13 +9791,12 @@ mod tests {
             reason,
             response.content_type,
             body.len()
-        )
-        .expect("write mock response headers");
+        )?;
         for (name, value) in response.headers {
-            write!(stream, "{name}: {value}\r\n").expect("write mock response header");
+            write!(stream, "{name}: {value}\r\n")?;
         }
-        write!(stream, "\r\n").expect("finish mock response headers");
-        stream.write_all(body).expect("write mock response body");
+        write!(stream, "\r\n")?;
+        stream.write_all(body)
     }
     fn finish_mock(server: MockHttpServer) -> Vec<MockRequest> {
         server.stop.store(true, Ordering::Release);
@@ -9776,6 +9806,65 @@ mod tests {
             .into_inner()
             .expect("requests")
     }
+
+    #[test]
+    fn mock_http_server_continues_after_client_disconnect() {
+        let (received_tx, received_rx) = std::sync::mpsc::channel();
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        let closed_rx = Mutex::new(closed_rx);
+        let server = spawn_mock_http(2, move |request| {
+            if request.path == "/cancelled" {
+                received_tx.send(()).expect("notify request received");
+                closed_rx
+                    .lock()
+                    .expect("client closure receiver")
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("client closes before the response");
+                // Use a large response so the mock observes the client disconnect
+                // while writing, even if the initial headers fit in the socket buffer.
+                MockResponse::text(200, "x".repeat(4 * 1024 * 1024))
+            } else {
+                assert_eq!(request.path, "/retry");
+                MockResponse::text(200, "ok")
+            }
+        });
+        let address = server.base_url.strip_prefix("http://").unwrap();
+        let mut cancelled = TcpStream::connect(address).expect("connect cancelled request");
+        cancelled
+            .write_all(b"GET /cancelled HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .expect("send cancelled request");
+        received_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("server received complete request");
+        cancelled
+            .shutdown(std::net::Shutdown::Both)
+            .expect("close client before response");
+        drop(cancelled);
+        closed_tx.send(()).expect("notify client closed");
+
+        let mut retry = TcpStream::connect(address).expect("connect retry");
+        retry
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bound retry read");
+        retry
+            .write_all(b"GET /retry HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .expect("send retry");
+        let mut response = String::new();
+        retry
+            .read_to_string(&mut response)
+            .expect("read retry response");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with("\r\n\r\nok"));
+        let requests = finish_mock(server);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/cancelled", "/retry"]
+        );
+    }
+
     fn path_only(path: &str) -> &str {
         path.split_once('?').map_or(path, |(path, _)| path)
     }
@@ -12203,6 +12292,112 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn doctor_faucet_policy_checks_both_scopes_without_authentication() {
+        let policy: Value =
+            json::from_slice(&doctor_account_tests::faucet_response().body).unwrap();
+        let disabled = norito::json!({
+            "code": "account_faucet_disabled",
+            "message": "Account faucet is disabled"
+        });
+        let mut extended = policy.clone();
+        extended
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_owned(), Value::Bool(true));
+        let mut unsupported_schema = policy.clone();
+        unsupported_schema
+            .as_object_mut()
+            .unwrap()
+            .insert("schema_version".to_owned(), Value::from(2_u64));
+        let mut zero_amount = policy.clone();
+        zero_amount
+            .as_object_mut()
+            .unwrap()
+            .insert("amount".to_owned(), Value::from("0"));
+        let cases = [
+            ("enabled", 200, Some(policy.clone()), true),
+            ("disabled", 503, Some(disabled.clone()), false),
+            ("missing", 404, None, false),
+            ("unavailable", 502, None, false),
+            ("forbidden", 403, None, false),
+            ("non-JSON success", 200, None, false),
+            ("malformed success", 200, Some(norito::json!({})), false),
+            ("unknown field", 200, Some(extended), false),
+            ("unsupported schema", 200, Some(unsupported_schema), false),
+            ("zero issuance", 200, Some(zero_amount), false),
+            ("disabled body with success status", 200, Some(disabled), false),
+            ("enabled body with unavailable status", 503, Some(policy), false),
+        ];
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            for (label, status, body, accepted) in &cases {
+                let status = *status;
+                let body = body.clone();
+                let server = spawn_mock_http(16, move |request| {
+                    if path_only(&request.path) == "/v1/accounts/faucet/policy" {
+                        match &body {
+                            Some(body) => MockResponse::json(status, body.clone()),
+                            None => MockResponse::text(status, "not JSON"),
+                        }
+                    } else {
+                        doctor_mock_response(request, None)
+                    }
+                });
+                let report = run_doctor(&server.base_url, scope).expect("doctor report");
+                let requests = finish_mock(server);
+                assert_eq!(
+                    report_status(&report),
+                    Some(if *accepted { "ok" } else { "fail" }),
+                    "{scope:?}: {label}"
+                );
+                let faucet_requests = requests
+                    .iter()
+                    .filter(|request| path_only(&request.path) == "/v1/accounts/faucet/policy")
+                    .collect::<Vec<_>>();
+                assert_eq!(faucet_requests.len(), 1, "{scope:?}: {label}");
+                let request = faucet_requests[0];
+                assert_eq!(request.method, "GET");
+                assert_eq!(request.path, "/v1/accounts/faucet/policy");
+                assert!(request.body.is_empty());
+                for header in [
+                    "authorization",
+                    "proxy-authorization",
+                    "cookie",
+                    "x-iroha-account",
+                    "x-iroha-signature",
+                    "x-iroha-timestamp-ms",
+                    "x-iroha-nonce",
+                ] {
+                    assert!(
+                        request.header_values(header).is_empty(),
+                        "unexpected {header}"
+                    );
+                }
+                let check = report["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|check| check["name"].as_str() == Some("account_faucet_policy"))
+                    .expect("faucet policy check");
+                let observed_status = if status == 200 && !*accepted { 0 } else { status };
+                assert_eq!(check["http_status"].as_u64(), Some(u64::from(observed_status)));
+                assert_eq!(check["ok"].as_bool(), Some(*accepted));
+                assert_eq!(
+                    report["failures"].as_array().unwrap().len(),
+                    usize::from(!*accepted)
+                );
+                assert!(report["warnings"].as_array().unwrap().is_empty(), "{scope:?}: {label}");
+            }
+            let expected = doctor_expected_checks(scope);
+            let (_, status, detail) = expected
+                .iter()
+                .find(|(name, _, _)| *name == "account_faucet_policy")
+                .expect("public reset requires the faucet policy check");
+            assert_eq!(*status, 200);
+            assert!(detail.is_none());
+        }
+    }
+
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
         let server = spawn_mock_http(16, |request| doctor_mock_response(request, None));

@@ -18,12 +18,8 @@ fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
 use super::*;
 use crate::{
     block::{BlockBuilder, ValidBlock},
-    governance::manifest::{
-        GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
-    },
-    prelude::{AcceptedTransaction, StateReadOnly, World},
+    prelude::{AcceptedTransaction, World},
     query::store::LiveQueryStore,
-    smartcontracts::Registrable,
     state::State,
     sumeragi::network_topology::Topology,
 };
@@ -42,7 +38,6 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     Level,
-    account::Account,
     asset::AssetDefinitionId,
     block::{
         BlockExecutionContextBundle, BlockHeader, BlockSignature, CertifiedMergeLedgerReference,
@@ -58,10 +53,9 @@ use iroha_data_model::{
         },
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    domain::Domain,
     isi::{InstructionBox, Log, Upgrade},
     merge::MergeQuorumCertificate,
-    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneStorageProfile, LaneVisibility},
+    nexus::{LaneCatalog, LaneConfig as ModelLaneConfig},
     prelude::{Executor, IvmBytecode},
     transaction::{
         Executable, TransactionBuilder,
@@ -69,15 +63,12 @@ use iroha_data_model::{
     },
     trigger::DataTriggerSequence,
 };
-use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_telemetry::metrics::Metrics;
-use iroha_test_samples::{
-    SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
-};
+use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use iroha_version::codec::EncodeVersioned;
 use nonzero_ext::nonzero;
 use tempfile::TempDir;
@@ -608,7 +599,6 @@ fn merge_entry_with_indexed_entrypoint_reservation(
                 b"kura-index-refresh-parent",
             ))),
             None,
-            None,
             1,
             0,
         ),
@@ -663,7 +653,15 @@ fn store_indexed_reservation_carrier(
 ) {
     let mut blocks = DummyBlocks::new();
     let genesis = blocks.next_with_results();
-    let raw_carrier = blocks.next_with_results();
+    // Certified merge execution owns the complete economic input. Its global
+    // carrier must not repeat DummyBlocks' unrelated ordinary transaction.
+    let raw_carrier = blocks.next_empty_with_results();
+    assert_eq!(raw_carrier.external_entrypoints_cloned().count(), 0);
+    assert!(
+        raw_carrier
+            .execution_context()
+            .is_none_or(|context| context.external.is_empty())
+    );
     let (mut entry, entrypoint_hash, reservation) = merge_entry_with_indexed_reservation(1, salt);
     let batch = entry
         .execution_batch
@@ -679,26 +677,27 @@ fn store_indexed_reservation_carrier(
         .proposal
         .descriptor
         .clone();
-    let lane_entry = kura
-        .lane_storage_entry(descriptor.lane_id)
-        .expect("reservation fixture targets an active lane");
     publish_initial_configured_lane_geometry_for_test(
         kura,
         &RuntimeLaneConfig::default(),
-        &BTreeMap::from([(lane_entry.lane_id, descriptor.lane_incarnation)]),
+        &BTreeMap::from([(descriptor.lane_id, descriptor.lane_incarnation)]),
     );
-    let mut executed_carrier = raw_carrier.as_ref().clone();
+    // Context changes invalidate execution outputs. Install the certified
+    // reference first, then finalize and sign this exact complete carrier.
+    let carrier = bind_merge_entry_to_carrier(raw_carrier, &mut entry);
+    let mut executed_carrier = carrier.as_ref().clone();
     attach_ok_results_to_block(&mut executed_carrier);
-    let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut entry);
+    let carrier = Arc::new(executed_carrier);
     assert!(
         carrier.has_results(),
         "a canonical reservation carrier must contain execution results"
     );
     assert_eq!(
-        carrier.results().count(),
         carrier.external_entrypoints_cloned().count(),
-        "the reservation carrier must contain one result per ordinary entrypoint"
+        0,
+        "the reservation carrier must keep certified external execution in its sidecar"
     );
+    assert_eq!(carrier.output_results().count(), 0);
     assert_eq!(
         entry
             .execution_batch
@@ -769,8 +768,39 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
     block: &SignedBlock,
     parent: Option<&V2FinalityArtifact>,
     keypairs: &[KeyPair],
+    execution_commitment: ExecutionCommitment,
+    merge_carrier: Option<iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1>,
+) -> V2FinalityArtifact {
+    v2_finality_artifact_for_block_with_keys_and_context_policy(
+        block,
+        parent,
+        keypairs,
+        execution_commitment,
+        merge_carrier,
+        test_network_id(b"kura-v2-finality-test"),
+        0,
+        100,
+        DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn v2_finality_artifact_for_block_with_keys_and_context_policy(
+    block: &SignedBlock,
+    parent: Option<&V2FinalityArtifact>,
+    keypairs: &[KeyPair],
     mut execution_commitment: ExecutionCommitment,
     merge_carrier: Option<iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1>,
+    network_id: NetworkId,
+    epoch: u64,
+    epoch_end_height: u64,
+    da_layout: DataAvailabilityLayout,
 ) -> V2FinalityArtifact {
     use crate::zk::kagemusha_v1_recursion::{
         KagemushaMintFinalitySignerV1, build_kagemusha_mint_finality_seal_message_v1,
@@ -798,15 +828,14 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         height,
         "fixture finality artifacts must form a contiguous chain"
     );
-    let network_id = test_network_id(b"kura-v2-finality-test");
     let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, epoch, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height,
-        epoch: 0,
-        epoch_end_height: 100,
+        epoch,
+        epoch_end_height,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
         parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()),
@@ -817,14 +846,7 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
-            data_shards: 1,
-            parity_shards: 1,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 8,
-        },
+        da_layout,
         leader_seed: [0x42; 32],
     };
     let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
@@ -1154,6 +1176,13 @@ fn kagemusha_finality_witness_with_casting(
         reads: Vec::new(),
         writes: vec![
             ExecKv {
+                key: crate::state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY.to_vec(),
+                value: norito::to_bytes(&crate::state::LaneConsensusContextsCommitmentV1::from_contexts(
+                    test_network_id(b"kura-v2-finality-test"), height,
+                    &crate::state::LaneConsensusContextsV1::default(),
+                ).unwrap()).unwrap(),
+            },
+            ExecKv {
                 key: iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
                     .to_vec(),
                 value: norito::to_bytes(&validation_fee_snapshot)
@@ -1430,6 +1459,8 @@ fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("open maximum-casting Kura");
+    kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+        .unwrap();
     kura.establish_or_verify_configured_primary_geometry_anchor(
         lane_config.primary(),
         Hash::prehashed([0xC7; Hash::LENGTH]),
@@ -1563,6 +1594,10 @@ fn kagemusha_borrowed_decode_fixture()
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"codec-only block identity")),
         ordinary_writes_root: commitment.ordinary_writes_root,
         post_state_root: commitment.post_state_root,
+        lane_consensus_contexts_witness:
+            crate::state::LaneConsensusContextsWitnessV1::from_witness(&witness)
+                .unwrap()
+                .0,
         validation_fee_policy_witness,
         parliament_timed_ovn_casting_witness,
         parliament_timed_ovn_casting_bindings: bindings,
@@ -1578,6 +1613,7 @@ fn kagemusha_borrowed_decode_fixture()
             b"codec-only finality identity",
         )),
         validation_fee_policy_witness: staged.validation_fee_policy_witness.clone(),
+        lane_consensus_contexts_witness: staged.lane_consensus_contexts_witness.clone(),
         parliament_timed_ovn_casting_witness: staged.parliament_timed_ovn_casting_witness.clone(),
         parliament_timed_ovn_casting_bindings: staged.parliament_timed_ovn_casting_bindings.clone(),
         kagemusha_reserve_receipts: staged.kagemusha_reserve_receipts.clone(),
@@ -1700,9 +1736,7 @@ fn blank_kura_for_testing_uses_isolated_canonical_primary_storage() {
     let block_store_path = kura.block_store.lock().path_to_blockchain.clone();
     let active_blocks_path = kura.active_blocks_dir.lock().clone();
     let active_merge_path = kura.active_merge_path.lock().clone();
-    let lane_config = RuntimeLaneConfig::default();
-    let expected_blocks = lane_config.primary().blocks_dir(kura.store_root());
-    let expected_merge = lane_config.primary().merge_log_path(kura.store_root());
+    let (expected_blocks, expected_merge) = Kura::canonical_storage_paths(&kura.store_root());
     assert!(
         block_store_path.is_absolute(),
         "test Kura block store must live under an isolated temporary directory"
@@ -1714,15 +1748,15 @@ fn blank_kura_for_testing_uses_isolated_canonical_primary_storage() {
     );
     assert_eq!(
         block_store_path, expected_blocks,
-        "test Kura must use the canonical primary-lane block geometry"
+        "test Kura must use the fixed canonical block namespace"
     );
     assert_eq!(
         active_blocks_path, expected_blocks,
-        "active block storage must match the canonical primary-lane geometry"
+        "active block storage must match the fixed canonical namespace"
     );
     assert_eq!(
         active_merge_path, expected_merge,
-        "test Kura must use the canonical primary-lane merge geometry"
+        "test Kura must use the fixed canonical merge namespace"
     );
     assert!(
         expected_blocks.is_dir(),
@@ -1761,8 +1795,6 @@ fn blank_kura_for_testing_uses_isolated_canonical_primary_storage() {
 }
 #[test]
 fn blank_kura_applies_staged_pre_genesis_nexus_geometry() {
-    let kura = Kura::blank_kura_for_testing();
-    let store_root = kura.store_root().to_path_buf();
     let lane_zero = ModelLaneConfig::default();
     let lane_one = ModelLaneConfig {
         id: LaneId::new(1),
@@ -1772,14 +1804,25 @@ fn blank_kura_applies_staged_pre_genesis_nexus_geometry() {
     let catalog = LaneCatalog::new(nonzero!(2_u32), vec![lane_zero, lane_one])
         .expect("staged two-lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let mut state = State::new_with_chain_for_testing(
+    let ignored_store = PathBuf::from("staged-genesis-temporary");
+    let config = kura_config_for_path(&ignored_store, BLOCKS_IN_MEMORY);
+    let kura = Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &catalog)
+        .expect("open the exact configured startup baseline");
+    let store_root = kura.store_root().to_path_buf();
+    let mut state = State::try_new_with_chain(
         World::default(),
         Arc::clone(&kura),
         LiveQueryStore::start_test(),
         ChainId::from("staged-genesis-geometry"),
-    );
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    )
+    .expect("construct the actual empty startup State");
     state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
+        .prepare_configured_primary_geometry_anchor(&catalog)
+        .expect("authenticate the configured H0 reference before staged Nexus publication");
+    state
+        .set_nexus_from_config(iroha_config::parameters::actual::Nexus {
             lane_catalog: catalog.clone(),
             configured_lane_catalog: catalog,
             lane_config: lane_config.clone(),
@@ -1787,8 +1830,11 @@ fn blank_kura_applies_staged_pre_genesis_nexus_geometry() {
         })
         .expect("fresh staged state must extend authenticated primary geometry");
     for entry in lane_config.entries() {
-        assert!(entry.blocks_dir(&store_root).is_dir());
-        assert!(entry.merge_log_path(&store_root).is_file());
+        let identity = state
+            .lane_storage_identity(entry.lane_id)
+            .expect("published State identity");
+        assert!(identity.blocks_dir(&store_root).is_dir());
+        assert!(identity.merge_log_path(&store_root).is_file());
     }
 }
 #[test]
@@ -1802,8 +1848,11 @@ fn temporary_configured_kura_owns_authenticated_storage_lifetime() {
     let store_root = kura.store_root().to_path_buf();
     assert!(store_root.is_dir());
     assert_ne!(store_root, ignored_store);
-    assert!(lane_config.primary().blocks_dir(&store_root).is_dir());
-    assert!(lane_config.primary().merge_log_path(&store_root).is_file());
+    let (canonical_blocks, canonical_merge) = Kura::canonical_storage_paths(&store_root);
+    assert!(canonical_blocks.is_dir());
+    assert!(canonical_merge.is_file());
+    assert!(kura.lane_storage_entries.lock().is_empty());
+    assert!(!store_root.join("blocks/instances").exists());
     drop(kura);
     assert!(
         !store_root.exists(),
@@ -1946,6 +1995,128 @@ fn v2_finality_artifact_roundtrips_with_unforgeable_receipt() {
             .exists(),
         "successful atomic write must not leave a temporary artifact"
     );
+}
+#[test]
+fn block_store_read_only_finality_verifies_without_mutation() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let path = kura.block_store.lock().path_to_blockchain.clone();
+    let before = snapshot_regular_files_recursively(&path);
+    let mut reader = BlockStore::open_read_only(&path).expect("read-only store");
+    assert_eq!(
+        reader
+            .read_verified_v2_finality(1)
+            .expect("verified finality"),
+        (block.header(), artifact)
+    );
+    assert!(reader.read_verified_v2_finality(0).is_err());
+    assert!(reader.read_verified_v2_finality(2).is_err());
+    assert!(BlockStore::new(&path).read_verified_v2_finality(1).is_err());
+    drop(reader);
+    assert_eq!(snapshot_regular_files_recursively(&path), before);
+}
+#[test]
+fn block_store_read_only_finality_rejects_invalid_signature_and_binding() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let directory = kura.block_store.lock().path_to_blockchain.clone();
+    let finality = kura.v2_finality_artifact_path(1);
+    let original = fs::read(&finality).expect("read finality");
+    let mut forged = artifact.clone();
+    forged.commit_qc.aggregate_signature[0] ^= 0x80;
+    replace_v2_finality_record_artifact(&finality, forged);
+    let before = snapshot_regular_files_recursively(&directory);
+    let mut reader = BlockStore::open_read_only(&directory).expect("read-only store");
+    assert!(matches!(
+        reader.read_verified_v2_finality(1),
+        Err(Error::V2FinalityCryptography(_))
+    ));
+    assert_eq!(snapshot_regular_files_recursively(&directory), before);
+    fs::write(&finality, &original).expect("restore finality");
+    let mut record =
+        KuraV2FinalityRecord::decode_all(&mut original.as_slice()).expect("decode finality");
+    record
+        .block_header
+        .set_view_change_index(record.block_header.view_change_index().saturating_add(1));
+    fs::write(&finality, record.encode()).expect("substitute header");
+    assert!(matches!(
+        reader.read_verified_v2_finality(1),
+        Err(Error::BlockHeightConflict { .. })
+    ));
+    fs::write(&finality, &original).expect("restore finality");
+    let retained_path = kura.retained_block_record_path(1);
+    let retained_bytes = fs::read(&retained_path).expect("read retained record");
+    let mut retained =
+        Kura::decode_canonical_retained_block_record(&retained_path, &retained_bytes)
+            .expect("decode retained record");
+    retained.proposal_wire_hash = Hash::new(b"substituted proposal wire");
+    fs::write(&retained_path, retained.encode()).expect("substitute retained proposal");
+    assert!(reader.read_verified_v2_finality(1).is_err());
+}
+#[test]
+fn block_store_read_only_finality_rejects_noncanonical_and_missing_records() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let directory = kura.block_store.lock().path_to_blockchain.clone();
+    let finality = kura.v2_finality_artifact_path(1);
+    let original = fs::read(&finality).expect("read finality");
+    let mut reader = BlockStore::open_read_only(&directory).expect("read-only store");
+    let mut trailing = original.clone();
+    trailing.push(0);
+    fs::write(&finality, trailing).expect("append invalid trailing bytes");
+    assert!(reader.read_verified_v2_finality(1).is_err());
+    fs::write(&finality, artifact.encode()).expect("replace envelope with artifact");
+    assert!(reader.read_verified_v2_finality(1).is_err());
+    fs::remove_file(&finality).expect("remove finality");
+    let before = snapshot_regular_files_recursively(&directory);
+    assert!(matches!(
+        reader.read_verified_v2_finality(1),
+        Err(Error::MissingV2FinalityArtifact { height: 1 })
+    ));
+    assert_eq!(snapshot_regular_files_recursively(&directory), before);
+}
+#[test]
+fn block_store_read_only_finality_rejects_unpublished_journal_boundary() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let _receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let directory = kura.block_store.lock().path_to_blockchain.clone();
+    let marker = kura.block_store.lock().commit_marker_path();
+    let temporary = marker.with_extension("norito.tmp");
+    fs::copy(&marker, &temporary).expect("stage unpublished marker");
+    let before = snapshot_regular_files_recursively(&directory);
+    let mut reader = BlockStore::open_read_only(&directory).expect("read-only store");
+    assert!(reader.read_verified_v2_finality(1).is_err());
+    assert_eq!(snapshot_regular_files_recursively(&directory), before);
+    fs::remove_file(&temporary).expect("remove test temporary");
+    fs::OpenOptions::new()
+        .append(true)
+        .open(directory.join(INDEX_FILE_NAME))
+        .expect("open index")
+        .write_all(&[0])
+        .expect("partial index entry");
+    let before = snapshot_regular_files_recursively(&directory);
+    assert!(reader.read_verified_v2_finality(1).is_err());
+    assert_eq!(snapshot_regular_files_recursively(&directory), before);
 }
 #[test]
 fn v2_finality_summary_maps_to_public_status_without_regression() {
@@ -2144,6 +2315,8 @@ fn kagemusha_receipt_survives_finality_restart_and_retry() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("open persistent Kura");
+    kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+        .unwrap();
     kura.establish_or_verify_configured_primary_geometry_anchor(
         lane_config.primary(),
         Hash::prehashed([0xC0; Hash::LENGTH]),
@@ -2299,6 +2472,8 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
     let lane_config = RuntimeLaneConfig::default();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("open persistent Kura");
+    kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+        .unwrap();
     kura.establish_or_verify_configured_primary_geometry_anchor(
         lane_config.primary(),
         Hash::prehashed([0xC3; Hash::LENGTH]),
@@ -2432,6 +2607,71 @@ fn kagemusha_finality_stage_rejects_commitment_and_path_substitution() {
     assert!(
         !kura.kagemusha_finality_sidecar_path(1).exists(),
         "mutated witness-derived path must never be promoted"
+    );
+}
+
+#[test]
+fn lane_context_finality_proof_survives_restart_and_rejects_carrier_substitution() {
+    let temp_dir = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
+    kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+        .unwrap();
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        Hash::prehashed([0xC8; Hash::LENGTH]),
+        LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
+    )
+    .unwrap();
+    assert!(kura.lane_consensus_contexts_finality(1).unwrap().is_none());
+    let block = DummyBlocks::new().next();
+    let (witness, mut commitment) = kagemusha_finality_witness(1, 1);
+    commitment.executed_block_wire_len = block.encode_wire().unwrap().len() as u64;
+    commitment.executed_block_wire_hash = block.executed_block_wire_hash().unwrap();
+    let artifact = v2_finality_artifact_for_block_with_execution(&block, commitment);
+    kura.stage_kagemusha_finality_sidecar(1, block.hash(), &witness, commitment, &[])
+        .unwrap();
+    kura.store_block(Arc::clone(&block)).unwrap();
+    let receipt = kura.store_v2_finality_artifact(&artifact).unwrap();
+    assert!(
+        kura.lane_consensus_contexts_finality(1).unwrap().is_none(),
+        "unpublished proof is not authority even when the finality artifact exists"
+    );
+    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
+        .unwrap();
+    let expected = kura.lane_consensus_contexts_finality(1).unwrap().unwrap();
+    assert_eq!(expected.0, artifact);
+    assert!(expected.1.verify(
+        artifact.height_context.network_id,
+        1,
+        commitment.ordinary_writes_root
+    ));
+    drop(kura);
+    let (reopened, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).unwrap();
+    assert_eq!(
+        reopened
+            .lane_consensus_contexts_finality(1)
+            .unwrap()
+            .unwrap(),
+        expected
+    );
+    let path = reopened.kagemusha_finality_sidecar_path(1);
+    let (mut sidecar, _) = reopened
+        .decode_kagemusha_finality_sidecar(&path)
+        .unwrap()
+        .unwrap();
+    let (other_witness, _) = kagemusha_finality_witness(2, 2);
+    sidecar.lane_consensus_contexts_witness =
+        crate::state::LaneConsensusContextsWitnessV1::from_witness(&other_witness)
+            .unwrap()
+            .0;
+    std::fs::write(&path, sidecar.encode()).unwrap();
+    assert!(
+        reopened.lane_consensus_contexts_finality(1).is_err(),
+        "a valid proof from another carrier must not authorize this State projection"
     );
 }
 #[test]
@@ -2660,7 +2900,7 @@ fn v2_finality_crypto_cache_uses_fixed_lru_capacity() {
 }
 #[test]
 fn startup_finality_inventory_reuses_more_than_the_runtime_lru_without_reverification() {
-    let kura = Kura::blank_kura_for_testing();
+    let (_temp_dir, _config, _lane_config, kura) = temporary_kura_fixture();
     let artifact_count = V2_FINALITY_VERIFICATION_CACHE_CAPACITY.saturating_add(1);
     let mut generator = DummyBlocks::new();
     let blocks = (0..artifact_count)
@@ -2735,7 +2975,12 @@ fn startup_finality_inventory_reuses_more_than_the_runtime_lru_without_reverific
 }
 #[test]
 fn startup_lane_geometry_refresh_reuses_authenticated_replay_inventory() {
-    let kura = Kura::blank_kura_for_testing();
+    let directory = TempDir::new().expect("configured startup geometry fixture");
+    let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &two_lane_runtime_config())
+            .expect("retain the exact initial configured catalog");
+    establish_configured_lane_markers_for_test(&kura, &two_lane_runtime_config());
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
         .expect("store startup lane-geometry fixture block");
@@ -2762,16 +3007,17 @@ fn startup_lane_geometry_refresh_reuses_authenticated_replay_inventory() {
         "the authenticated startup audit verifies the fixture exactly once"
     );
     kura.install_v2_startup_finality_verification_inventory(inventory);
-    // Production Kura opens only the authenticated primary lane. State startup then
-    // publishes the remaining configured lane directories before replay planning.
+    // Replay refresh binds the exact journal-published instance without repeating
+    // the finality audit or deriving a physical address from its alias.
     let lane_config = two_lane_runtime_config();
-    let secondary = lane_config
-        .entry(LaneId::from(1))
-        .expect("two-lane fixture contains its secondary lane");
+    let secondary = kura
+        .lane_storage_entry(LaneId::from(1))
+        .expect("two-lane fixture contains its exact secondary identity");
     let secondary_artifacts = Kura::lane_artifact_dir(&secondary.blocks_dir(&kura.store_root()));
     std::fs::create_dir_all(&secondary_artifacts)
         .expect("publish secondary lane artifact directory");
-    kura.replace_lane_storage_entries_for_test(&lane_config);
+    kura.restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact references");
     kura.clear_v2_finality_verification_cache_for_test();
     kura.reset_startup_replay_historical_payload_reads_for_test();
     kura.refresh_v2_startup_replay_auxiliary_binding()
@@ -2792,7 +3038,12 @@ fn startup_lane_geometry_refresh_reuses_authenticated_replay_inventory() {
 }
 #[test]
 fn startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities() {
-    let kura = Kura::blank_kura_for_testing();
+    let directory = TempDir::new().expect("configured startup geometry fixture");
+    let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &two_lane_runtime_config())
+            .expect("retain the exact initial configured catalog");
+    establish_configured_lane_markers_for_test(&kura, &two_lane_runtime_config());
     let block = DummyBlocks::new().next();
     kura.store_block(Arc::clone(&block))
         .expect("store contraction fixture block");
@@ -2809,15 +3060,16 @@ fn startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities()
     )
     .expect("store contraction fixture manifest");
     let configured = two_lane_runtime_config();
-    let retired = configured
-        .entry(LaneId::from(1))
-        .expect("two-lane fixture contains its secondary lane");
+    let retired = kura
+        .lane_storage_entry(LaneId::from(1))
+        .expect("two-lane fixture contains its exact secondary identity");
     let retired_artifacts = Kura::lane_artifact_dir(&retired.blocks_dir(&kura.store_root()));
     let retired_historical =
-        Kura::historical_autonomous_recovery_directory_for_entry(retired, &kura.store_root());
+        Kura::historical_autonomous_recovery_directory_for_entry(&retired, &kura.store_root());
     fs::create_dir_all(&retired_artifacts)
         .expect("publish configured secondary lane artifact directory");
-    kura.replace_lane_storage_entries_for_test(&configured);
+    kura.restore_published_lane_geometry_for_test(&configured)
+        .expect("restore exact references");
     let verified = kura
         .validate_v2_finality_inventory_on_startup(true)
         .expect("audit configured startup topology");
@@ -2868,7 +3120,23 @@ fn startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities()
     let contracted_catalog = LaneCatalog::new(nonzero!(1_u32), vec![ModelLaneConfig::default()])
         .expect("single-lane restored catalog");
     let contracted = RuntimeLaneConfig::from_catalog(&contracted_catalog);
-    kura.replace_lane_storage_entries_for_test(&contracted);
+    let (previous_incarnations, previous_activations) =
+        active_fixture_geometry_maps(&kura, &configured);
+    let incarnations = BTreeMap::from([(LaneId::SINGLE, previous_incarnations[&LaneId::SINGLE])]);
+    let activations = BTreeMap::from([(LaneId::SINGLE, previous_activations[&LaneId::SINGLE])]);
+    kura.apply_lane_geometry_transition(
+        &configured,
+        &contracted,
+        &previous_incarnations,
+        &incarnations,
+        &previous_activations,
+        &activations,
+        &BTreeSet::new(),
+    )
+    .expect("publish exact retirement references");
+    kura.mark_lane_geometry_catalog_published(&contracted, &incarnations, &activations, None)
+        .expect("complete exact retirement reference publication");
+    assert!(kura.lane_storage_entry(retired.lane_id).is_err());
     kura.refresh_v2_startup_replay_auxiliary_binding()
         .expect("replace stale auxiliary identities after topology contraction");
     let current_lane_auxiliary = kura
@@ -2880,13 +3148,13 @@ fn startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities()
             .as_ref()
             .expect("startup inventory remains installed");
         assert!(
-            !inventory
+            inventory
                 .auxiliary_sidecars
                 .contains_key(&retired_artifacts)
-                && !inventory
+                && inventory
                     .auxiliary_sidecars
                     .contains_key(&retired_historical),
-            "a contracted lane must not remain authorized merely because its storage still exists",
+            "retained journal references must remain inventory-bound without authorizing fresh lane work",
         );
         assert_eq!(
             inventory.lane_auxiliary_directories,
@@ -2894,7 +3162,7 @@ fn startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities()
                 .keys()
                 .cloned()
                 .collect::<BTreeSet<_>>(),
-            "the tracked lane-derived subset must exactly match the restored catalog",
+            "the tracked lane-derived subset must exactly match current and retained authenticated references",
         );
         assert!(
             Kura::stable_sidecar_directory_inventory_unchanged(
@@ -2925,16 +3193,21 @@ fn startup_lane_geometry_refresh_replaces_contracted_lane_auxiliary_identities()
         .expect("contracted storage binding matches the restored catalog");
 }
 #[test]
-fn startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities() {
-    let kura = Kura::blank_kura_for_testing();
+fn startup_lane_geometry_refresh_preserves_alias_renamed_lane_auxiliary_identities() {
+    let directory = TempDir::new().expect("configured startup geometry fixture");
+    let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &two_lane_runtime_config())
+            .expect("retain the exact initial configured catalog");
     let configured = two_lane_runtime_config();
-    let previous = configured
-        .entry(LaneId::from(1))
-        .expect("two-lane fixture contains its secondary lane");
+    establish_configured_lane_markers_for_test(&kura, &configured);
+    let previous = kura
+        .lane_storage_entry(LaneId::from(1))
+        .expect("exact secondary identity");
     let previous_blocks = previous.blocks_dir(&kura.store_root());
     let previous_artifacts = Kura::lane_artifact_dir(&previous_blocks);
     let previous_historical =
-        Kura::historical_autonomous_recovery_directory_for_entry(previous, &kura.store_root());
+        Kura::historical_autonomous_recovery_directory_for_entry(&previous, &kura.store_root());
     fs::create_dir_all(&previous_historical)
         .expect("publish pre-relabel historical recovery directory");
     let evidence_name = "durable-lane-evidence.norito";
@@ -2943,7 +3216,7 @@ fn startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities()
         b"relabelled lane evidence",
     )
     .expect("publish pre-relabel lane evidence");
-    kura.replace_lane_storage_entries_for_test(&configured);
+    let (incarnations, activations) = active_fixture_geometry_maps(&kura, &configured);
     let verified = kura
         .validate_v2_finality_inventory_on_startup(true)
         .expect("audit configured startup topology");
@@ -2979,16 +3252,36 @@ fn startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities()
     )
     .expect("relabelled restored catalog");
     let relabelled = RuntimeLaneConfig::from_catalog(&relabelled_catalog);
-    let current = relabelled
-        .entry(LaneId::from(1))
-        .expect("relabelled catalog contains its secondary lane");
+    let journal_before = kura
+        .lane_geometry_journal_state_for_test()
+        .expect("exact prior journal");
+    kura.apply_lane_geometry_transition(
+        &configured,
+        &relabelled,
+        &incarnations,
+        &incarnations,
+        &activations,
+        &activations,
+        &BTreeSet::new(),
+    )
+    .expect("apply alias-only metadata update");
+    kura.mark_lane_geometry_catalog_published(&relabelled, &incarnations, &activations, None)
+        .expect("publish unchanged physical references");
+    assert_eq!(
+        kura.lane_geometry_journal_state_for_test().unwrap(),
+        journal_before
+    );
+    let current = kura
+        .lane_storage_entry(LaneId::from(1))
+        .expect("same exact secondary identity");
+    assert_eq!(current.identity, previous.identity);
     let current_blocks = current.blocks_dir(&kura.store_root());
     let current_artifacts = Kura::lane_artifact_dir(&current_blocks);
     let current_historical =
-        Kura::historical_autonomous_recovery_directory_for_entry(current, &kura.store_root());
-    fs::rename(&previous_blocks, &current_blocks)
-        .expect("move secondary storage to its authenticated relabelled path");
-    kura.replace_lane_storage_entries_for_test(&relabelled);
+        Kura::historical_autonomous_recovery_directory_for_entry(&current, &kura.store_root());
+    assert_eq!(previous_blocks, current_blocks);
+    assert_eq!(previous_artifacts, current_artifacts);
+    assert_eq!(previous_historical, current_historical);
     kura.refresh_v2_startup_replay_auxiliary_binding()
         .expect("replace stale auxiliary identities after lane relabel");
     let current_lane_auxiliary = kura
@@ -3000,13 +3293,13 @@ fn startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities()
             .as_ref()
             .expect("startup inventory remains installed");
         assert!(
-            !inventory
+            inventory
                 .auxiliary_sidecars
                 .contains_key(&previous_artifacts)
-                && !inventory
+                && inventory
                     .auxiliary_sidecars
                     .contains_key(&previous_historical),
-            "pre-relabel paths must not remain authorized after their topology identity moves",
+            "alias metadata must not move or rebind the authenticated namespace",
         );
         assert!(
             inventory
@@ -3024,7 +3317,7 @@ fn startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities()
                 .is_some_and(|lane| lane
                     .files
                     .contains_key(&current_artifacts.join(evidence_name))),
-            "durable lane evidence moved by the relabel must remain identity-bound",
+            "durable lane evidence must remain bound to the unchanged physical identity",
         );
         assert_eq!(
             inventory.lane_auxiliary_directories,
@@ -3064,7 +3357,12 @@ fn startup_lane_geometry_refresh_replaces_relabelled_lane_auxiliary_identities()
 }
 #[test]
 fn startup_replay_binding_covers_the_recognized_historical_recovery_namespace() {
-    let kura = Kura::blank_kura_for_testing();
+    let directory = TempDir::new().expect("configured startup geometry fixture");
+    let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("retain the exact initial configured catalog");
+    establish_configured_lane_markers_for_test(&kura, &RuntimeLaneConfig::default());
     let lane = kura
         .lane_storage_entries
         .lock()
@@ -3153,6 +3451,7 @@ fn startup_replay_auxiliary_capture_rejects_configured_historical_byte_overflow(
     let (tight_kura, _) =
         open_configured_kura_with_pending_limits(&tight_config, &tightened_limits)
             .expect("configure capture's aggregate limit before installing its namespace fixture");
+    establish_dummy_store_primary_anchor(&tight_kura);
     let tight_lane = tight_kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("tight primary lane");
@@ -3213,7 +3512,12 @@ fn startup_replay_auxiliary_capture_rejects_configured_historical_byte_overflow(
 }
 #[test]
 fn startup_replay_binding_rejects_unknown_nested_lane_artifact_directories() {
-    let kura = Kura::blank_kura_for_testing();
+    let directory = TempDir::new().expect("configured startup geometry fixture");
+    let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("retain the exact initial configured catalog");
+    establish_configured_lane_markers_for_test(&kura, &RuntimeLaneConfig::default());
     let lane = kura
         .lane_storage_entries
         .lock()

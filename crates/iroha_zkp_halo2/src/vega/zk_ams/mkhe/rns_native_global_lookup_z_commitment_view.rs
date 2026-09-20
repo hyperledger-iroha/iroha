@@ -1,7 +1,7 @@
 //! Sole-`z` pre/post commitment rendezvous for the 40-limb global lookup.
 //!
 //! This private stage consumes statement 4, authenticates the exact
-//! challenge-independent commitment roles (including distinct global-lookup
+//! challenge-independent commitment roles (including distinct multiplicity
 //! and inverse-product mask commitments), and derives the only lookup
 //! challenge before it touches any inverse commitment.  It then exact-decodes
 //! the 11,696 shared existing-radix inverse commitments and aliases the 20,712
@@ -16,11 +16,18 @@
 //! after the complete post-`z` frame and codec have been checked.
 
 use super::{
+    global_lookup_statement_v1::{
+        GlobalLookupCommitmentPurposeV1, POST_Z_POINT_PURPOSES_V1, PRE_Z_POINT_PURPOSES_V1,
+    },
     rns_native_centering_subtraction_relation::{
         RNS_NATIVE_CENTERING_SUBTRACTION_RESIDUAL_MAX_BYTES_V1,
         RnsNativeCenteringSubtractionPrerequisiteV1,
     },
     rns_native_profile::{ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1},
+    rns_native_proof_hash::{
+        RnsNativeDigestIdentityV1, RnsNativeProofDigestV1, RnsNativeProofHashContextV1,
+        RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+    },
     rns_native_source::ZkAmsMkheRnsNativeSourceSnapshotV1,
     rns_native_transcript::ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1,
 };
@@ -45,8 +52,8 @@ const Q_MASK_BLOCKS_V1: usize =
     ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITIONS_V1 * BLOCKS_PER_Q_MASK_CORE_V1;
 const Q_MASK_DIGITS_V1: usize = 4;
 const SOURCE_COMMITMENTS_V1: usize = 344;
-const PRE_Z_SCALAR_COMMITMENTS_V1: usize = 3;
-const PRE_Z_POINT_ROLE_COUNT_V1: usize = 14;
+const PRE_Z_SCALAR_COMMITMENTS_V1: usize = 2;
+const PRE_Z_POINT_ROLE_COUNT_V1: usize = 13;
 const EXISTING_LOW_PER_ROLE_V1: usize = GROUPS_V1 * LOW_DIGITS_V1;
 const Q_MASK_PER_ROLE_V1: usize = Q_MASK_BLOCKS_V1 * Q_MASK_DIGITS_V1;
 const PRE_Z_PHYSICAL_COMMITMENTS_V1: usize = 3 * EXISTING_LOW_PER_ROLE_V1
@@ -154,17 +161,16 @@ const RESIDUAL_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-global-looku
 const CODEC_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-global-lookup.codec";
 const PREREQUISITE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-global-lookup.post-z-prerequisite";
-const PRE_Z_ORDER_V1: &[u8] = b"physical-points-only:D-low[5848],S-low[5848],D-top[344],S-top[344],Delta[5848],beta[6192],m[344],small-signed[1032],small-negative[1032],q-digit[column-major,6400],q-complement[column-major,6400],multiplicity[1],retired-global-lookup-sumcheck-mask[1;n=1024;702-scalars;retained-not-consumed-by-direct-membership],inverse-product-mask[1;n=16384;87-scalars]";
+const PRE_Z_ORDER_V1: &[u8] = b"physical-points-only:D-low[5848],S-low[5848],D-top[344],S-top[344],Delta[5848],beta[6192],m[344],small-signed[1032],small-negative[1032],q-digit[column-major,6400],q-complement[column-major,6400],multiplicity[1],inverse-product-mask[1;n=16384;87-scalars]";
 const POST_Z_ORDER_V1: &[u8] = b"D-inverse[5848],S-inverse[5848],Delta-inverse[5848],small-positive-inverse[1032],small-negative-inverse[1032],q-digit-inverse[column-major,6400],q-complement-inverse[column-major,6400]";
 const SAFE_AXIS_LANGUAGE_V1: &[u8] = b"pre-z-only=opaque-domain-separated-exact-post-cross-binding-plus-global-seed-commitment,fixed-manifest,source-layout-and-receipt,source-formula-and-mapping,source-opening-bundle,qpcs-fixed-parameters,qpcs-canonical-evaluations,and-role-separated-challenge-independent-point-roots;claimed-pre-global-commitment-precedes-all-local-safe-axes;excluded=prior-context,full-added-inventory-root,all-other-S3/S5/S8/S10-11/S2/S4-proof-and-transcript-roots,residuals,bindings,codec-digests,and-all-inverse-points";
-const SOURCE_POINT_ACCOUNTING_LANGUAGE_V1: &[u8] = b"source-snapshot-commitments=344;bound-by-direct-snapshot/source-binding-digest;not-reencoded-as-pre-z-physical-point-roles;pre-z-physical-role-total=39635";
-const DIRECT_MEMBERSHIP_MASK_STATUS_V1: &[u8] = b"legacy-702-scalar-global-lookup-sumcheck-mask=is-pre-z-authenticated-and-retained-but-retired;direct-membership-consumes-no-legacy-sumcheck-mask;inverse-product-mask-remains-distinct-and-consumed-only-by-compact-inverse";
+const SOURCE_POINT_ACCOUNTING_LANGUAGE_V1: &[u8] = b"source-snapshot-commitments=344;bound-by-direct-snapshot/source-binding-digest;not-reencoded-as-pre-z-physical-point-roles;pre-z-physical-role-total=39634";
+const SCALAR_COMMITMENT_ROLE_LANGUAGE_V1: &[u8] = b"pre-z-scalar-points=multiplicity-under32768-basis,inverse-product-mask-under16384-basis;direct-membership-consumes-multiplicity;compact-inverse-consumes-the-distinct87-scalar-mask";
 const REMAINING_BOUNDARY_V1: &[u8] = b"not-yet-verified:(z-A)*U=1,all-digit-membership,integer-no-wrap,canonical-q-mask,source-and-packing-same-opening,cross-field-q-relation,global-sumcheck,global-lookup,readiness,release";
-const PRODUCT_CAP_BLOCKER_LANGUAGE_V1: &[u8] = b"direct-inverse-product=(z-A[p,v])*U[p,v]=1;accepted-T256-GBP=four-planes-per-65536-gate-core,2045-byte-canonical-record;smallest-role=1032-planes,258-records,527643-byte-envelope-free-minimum;available=114484;forbidden=partial-role-token-or-unaudited-rho-kappa-sumcheck-aggregation;required=separately-audited-succinct-streaming-product-kernel-or-larger-canonical-transport";
+const PRODUCT_CAP_BLOCKER_LANGUAGE_V1: &[u8] = b"direct-inverse-product=(z-A[p,v])*U[p,v]=1;accepted-T256-GBP=four-planes-per-65536-gate-core,2045-byte-canonical-record;smallest-role=1032-planes,258-records,527643-byte-envelope-free-minimum;available=113221;forbidden=partial-role-token-or-unaudited-rho-kappa-sumcheck-aggregation;required=separately-audited-succinct-streaming-product-kernel-or-larger-canonical-transport";
 
 const SOLE_GLOBAL_LOOKUP_Z_DERIVED_V1: bool = true;
 const POST_Z_INVERSE_COMMITMENT_VIEW_AUTHENTICATED_V1: bool = true;
-const LEGACY_GLOBAL_LOOKUP_SUMCHECK_MASK_RETIRED_V1: bool = true;
 const INVERSE_PRODUCT_RELATIONS_VERIFIED_V1: bool = false;
 const GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1: bool = false;
 const CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1: bool = false;
@@ -175,7 +181,7 @@ const _: () = {
     assert!(EXISTING_LOW_PER_ROLE_V1 == 5_848);
     assert!(Q_MASK_BLOCKS_V1 == 1_600);
     assert!(Q_MASK_PER_ROLE_V1 == 6_400);
-    assert!(PRE_Z_PHYSICAL_COMMITMENTS_V1 == 39_635);
+    assert!(PRE_Z_PHYSICAL_COMMITMENTS_V1 == 39_634);
     assert!(EXISTING_INVERSE_POINTS_V1 == 11_696);
     assert!(COMPARATOR_INVERSE_POINTS_V1 == 5_848);
     assert!(SMALL_INVERSE_POINTS_V1 == 2_064);
@@ -184,9 +190,9 @@ const _: () = {
     assert!(GLOBAL_INVERSE_POINTS_V1 == 32_408);
     assert!(EXISTING_INVERSE_BYTES_V1 == 385_968);
     assert!(HEADER_BYTES_V1 == 56);
-    assert!(MIN_WIRE_BYTES_V1 == 386_156);
+    assert!(MIN_WIRE_BYTES_V1 == 386_123);
     assert!(MIN_WIRE_BYTES_V1 <= RNS_NATIVE_CENTERING_SUBTRACTION_RESIDUAL_MAX_BYTES_V1);
-    assert!(RNS_NATIVE_GLOBAL_LOOKUP_POST_Z_RESIDUAL_MAX_BYTES_V1 == 114_484);
+    assert!(RNS_NATIVE_GLOBAL_LOOKUP_POST_Z_RESIDUAL_MAX_BYTES_V1 == 113_221);
     assert!(INVERSE_PRODUCT_GATES_PER_CORE_V1 == 65_536);
     assert!(INVERSE_PRODUCT_COMMITMENTS_PER_CORE_V1 == 8);
     assert!(INVERSE_PRODUCT_FIXED_CORE_POINTS_V1 == 25);
@@ -199,7 +205,7 @@ const _: () = {
     assert!(SMALLEST_COMPLETE_ROLE_CORES_V1 == 258);
     assert!(SMALLEST_COMPLETE_ROLE_RECORD_BYTES_V1 == 527_610);
     assert!(SMALLEST_COMPLETE_ROLE_MIN_BYTES_V1 == 527_643);
-    assert!(SMALLEST_COMPLETE_ROLE_CAP_EXCESS_V1 == 413_159);
+    assert!(SMALLEST_COMPLETE_ROLE_CAP_EXCESS_V1 == 414_422);
     assert!(MAX_FITTING_PARTIAL_CORES_V1 == 55);
     assert!(MAX_FITTING_PARTIAL_PLANES_V1 == 220);
     assert!(MAX_FITTING_PARTIAL_PLANES_V1 < SMALLEST_COMPLETE_ROLE_PLANES_V1);
@@ -208,10 +214,9 @@ const _: () = {
     assert!(ALL_INVERSE_PRODUCT_CORES_V1 == 8_102);
     assert!(ALL_INVERSE_PRODUCT_RECORD_BYTES_V1 == 16_568_590);
     assert!(ALL_INVERSE_PRODUCT_MIN_BYTES_V1 == 16_568_623);
-    assert!(ALL_INVERSE_PRODUCT_CAP_EXCESS_V1 == 16_454_139);
+    assert!(ALL_INVERSE_PRODUCT_CAP_EXCESS_V1 == 16_455_402);
     assert!(SOLE_GLOBAL_LOOKUP_Z_DERIVED_V1);
     assert!(POST_Z_INVERSE_COMMITMENT_VIEW_AUTHENTICATED_V1);
-    assert!(LEGACY_GLOBAL_LOOKUP_SUMCHECK_MASK_RETIRED_V1);
     assert!(!INVERSE_PRODUCT_RELATIONS_VERIFIED_V1);
     assert!(!GLOBAL_LOOKUP_RELATIONS_VERIFIED_V1);
     assert!(!CROSS_FIELD_GLOBAL_LOOKUP_VERIFIED_V1);
@@ -238,85 +243,6 @@ impl core::fmt::Display for RnsNativeGlobalLookupZCommitmentViewErrorV1 {
 
 impl std::error::Error for RnsNativeGlobalLookupZCommitmentViewErrorV1 {}
 
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PhysicalPurposeV1 {
-    ExistingDifferenceLow = 2,
-    ExistingSumLow = 3,
-    ComparatorDifferenceTop = 4,
-    ComparatorSumTop = 5,
-    ComparatorDifferenceDigit = 6,
-    ComparatorBorrow = 7,
-    ComparatorMixedTop = 8,
-    SmallSigned = 9,
-    SmallNegativeMagnitude = 10,
-    QMaskDigit = 11,
-    QMaskComplementDigit = 12,
-    Multiplicity = 13,
-    GlobalLookupSumcheckMask = 14,
-    SharedDifferenceInverse = 15,
-    SharedSumInverse = 16,
-    ComparatorDifferenceInverse = 17,
-    SmallPositiveInverse = 18,
-    SmallNegativeInverse = 19,
-    QMaskDigitInverse = 20,
-    QMaskComplementInverse = 21,
-    InverseProductMask = 22,
-}
-
-impl PhysicalPurposeV1 {
-    const fn count_v1(self) -> usize {
-        match self {
-            Self::ExistingDifferenceLow
-            | Self::ExistingSumLow
-            | Self::ComparatorDifferenceDigit
-            | Self::SharedDifferenceInverse
-            | Self::SharedSumInverse
-            | Self::ComparatorDifferenceInverse => EXISTING_LOW_PER_ROLE_V1,
-            Self::ComparatorDifferenceTop | Self::ComparatorSumTop | Self::ComparatorMixedTop => {
-                GROUPS_V1
-            }
-            Self::ComparatorBorrow => GROUPS_V1 * BORROWS_V1,
-            Self::SmallSigned
-            | Self::SmallNegativeMagnitude
-            | Self::SmallPositiveInverse
-            | Self::SmallNegativeInverse => SMALL_BLOCKS_V1,
-            Self::QMaskDigit
-            | Self::QMaskComplementDigit
-            | Self::QMaskDigitInverse
-            | Self::QMaskComplementInverse => Q_MASK_PER_ROLE_V1,
-            Self::Multiplicity | Self::GlobalLookupSumcheckMask | Self::InverseProductMask => 1,
-        }
-    }
-}
-
-const PRE_Z_POINT_PURPOSES_V1: [PhysicalPurposeV1; PRE_Z_POINT_ROLE_COUNT_V1] = [
-    PhysicalPurposeV1::ExistingDifferenceLow,
-    PhysicalPurposeV1::ExistingSumLow,
-    PhysicalPurposeV1::ComparatorDifferenceTop,
-    PhysicalPurposeV1::ComparatorSumTop,
-    PhysicalPurposeV1::ComparatorDifferenceDigit,
-    PhysicalPurposeV1::ComparatorBorrow,
-    PhysicalPurposeV1::ComparatorMixedTop,
-    PhysicalPurposeV1::SmallSigned,
-    PhysicalPurposeV1::SmallNegativeMagnitude,
-    PhysicalPurposeV1::QMaskDigit,
-    PhysicalPurposeV1::QMaskComplementDigit,
-    PhysicalPurposeV1::Multiplicity,
-    PhysicalPurposeV1::GlobalLookupSumcheckMask,
-    PhysicalPurposeV1::InverseProductMask,
-];
-
-const POST_Z_POINT_PURPOSES_V1: [PhysicalPurposeV1; 7] = [
-    PhysicalPurposeV1::SharedDifferenceInverse,
-    PhysicalPurposeV1::SharedSumInverse,
-    PhysicalPurposeV1::ComparatorDifferenceInverse,
-    PhysicalPurposeV1::SmallPositiveInverse,
-    PhysicalPurposeV1::SmallNegativeInverse,
-    PhysicalPurposeV1::QMaskDigitInverse,
-    PhysicalPurposeV1::QMaskComplementInverse,
-];
-
 fn encode_point_v1(
     point: Point,
 ) -> Result<[u8; POINT_BYTES_V1], RnsNativeGlobalLookupZCommitmentViewErrorV1> {
@@ -334,7 +260,7 @@ struct RoleRootBuilderV1 {
 }
 
 impl RoleRootBuilderV1 {
-    fn new_v1(purpose: PhysicalPurposeV1) -> Self {
+    fn new_v1(purpose: GlobalLookupCommitmentPurposeV1) -> Self {
         let expected = purpose.count_v1();
         let mut hash = Keccak256::new();
         hash.update(ROLE_ROOT_DOMAIN_V1);
@@ -389,16 +315,24 @@ impl PreZRoleRootsV1 {
 struct PreZSafeContextV1 {
     fixed_axes_digest: [u8; DIGEST_BYTES_V1],
     source_binding_digest: [u8; DIGEST_BYTES_V1],
-    qpcs_binding_digest: [u8; DIGEST_BYTES_V1],
+    qpcs_binding_digest: RnsNativeProofDigestV1,
 }
 
 impl PreZSafeContextV1 {
     fn validate_v1(self) -> Result<(), RnsNativeGlobalLookupZCommitmentViewErrorV1> {
-        unique_nonzero_digests_v1(&[
-            self.fixed_axes_digest,
-            self.source_binding_digest,
-            self.qpcs_binding_digest,
-        ])
+        // These public curve axes and the native proof binding have distinct
+        // types and widths; no padded32 alias can stand for a proof digest.
+        let identities = [
+            RnsNativeDigestIdentityV1::Public32(self.fixed_axes_digest),
+            RnsNativeDigestIdentityV1::Public32(self.source_binding_digest),
+            RnsNativeDigestIdentityV1::Proof384(self.qpcs_binding_digest),
+        ];
+        for (index, identity) in identities.iter().enumerate() {
+            if identity.is_zero() || identities[..index].contains(identity) {
+                return Err(RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidContext);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -442,7 +376,7 @@ fn fixed_axes_digest_v1() -> [u8; DIGEST_BYTES_V1] {
         POST_Z_ORDER_V1,
         SAFE_AXIS_LANGUAGE_V1,
         SOURCE_POINT_ACCOUNTING_LANGUAGE_V1,
-        DIRECT_MEMBERSHIP_MASK_STATUS_V1,
+        SCALAR_COMMITMENT_ROLE_LANGUAGE_V1,
         REMAINING_BOUNDARY_V1,
         PRODUCT_CAP_BLOCKER_LANGUAGE_V1,
     ] {
@@ -506,7 +440,7 @@ fn source_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 
 fn qpcs_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeCenteringSubtractionPrerequisiteV1<'_, '_, S>,
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeGlobalLookupZCommitmentViewErrorV1> {
+) -> Result<RnsNativeProofDigestV1, RnsNativeGlobalLookupZCommitmentViewErrorV1> {
     let existing = previous.previous().previous();
     let inventory = existing
         .previous()
@@ -515,29 +449,62 @@ fn qpcs_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         .previous()
         .inventory();
     let parameter_digest = inventory.linked().source().qpcs().parameter_digest();
-    if parameter_digest == [0; DIGEST_BYTES_V1] {
+    qpcs_evaluation_binding_v1(parameter_digest, |limb, repetition| {
+        inventory
+            .qpcs_evaluation(limb, repetition)
+            .ok_or(RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidContext)
+    })
+}
+
+fn qpcs_evaluation_binding_v1(
+    parameter_digest: [u8; DIGEST_BYTES_V1],
+    mut evaluation: impl FnMut(
+        usize,
+        usize,
+    ) -> Result<(u64, u64), RnsNativeGlobalLookupZCommitmentViewErrorV1>,
+) -> Result<RnsNativeProofDigestV1, RnsNativeGlobalLookupZCommitmentViewErrorV1> {
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidContext)?;
+    if parameter_digest != context.parameter_digest() {
         return Err(RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidContext);
     }
-    let mut hash = Keccak256::new();
-    hash.update(QPCS_BINDING_DOMAIN_V1);
-    hash.update(&[VERSION_V1]);
-    hash.update(&parameter_digest);
+    // The verified qPCS evaluations are public proof data. Preserve the exact
+    // fixed column/repetition order in one bounded canonical frame field.
+    const EVALUATION_BYTES_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITIONS_V1 * 26;
+    let mut evaluations = [0_u8; EVALUATION_BYTES_V1];
+    let mut offset = 0;
     for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.into_iter().enumerate() {
         for repetition in 0..REPETITIONS_V1 {
-            let (product, quotient) = inventory
-                .qpcs_evaluation(limb, repetition)
-                .ok_or(RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidContext)?;
+            let (product, quotient) = evaluation(limb, repetition)?;
             if product >= modulus || quotient >= modulus {
                 return Err(RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidContext);
             }
-            hash.update(&[limb as u8, repetition as u8]);
-            hash.update(&modulus.to_be_bytes());
-            hash.update(&product.to_be_bytes());
-            hash.update(&quotient.to_be_bytes());
+            evaluations[offset..offset + 2].copy_from_slice(&[limb as u8, repetition as u8]);
+            offset += 2;
+            for value in [modulus, product, quotient] {
+                evaluations[offset..offset + 8].copy_from_slice(&value.to_be_bytes());
+                offset += 8;
+            }
         }
     }
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
+    let digest = context
+        .hash(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 6,
+                index: 0,
+                counter: 0,
+            },
+            &[
+                QPCS_BINDING_DOMAIN_V1,
+                &[VERSION_V1],
+                &parameter_digest,
+                &evaluations,
+            ],
+        )
+        .map_err(|_| RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidIntegrity)?;
+    if offset != EVALUATION_BYTES_V1 || digest == RnsNativeProofDigestV1::ZERO {
         return Err(RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidIntegrity);
     }
     Ok(digest)
@@ -558,7 +525,6 @@ fn pre_z_safe_context_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
 fn pre_z_role_roots_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     previous: &RnsNativeCenteringSubtractionPrerequisiteV1<'_, '_, S>,
     multiplicity: Point,
-    sumcheck_mask: Point,
     inverse_product_mask: Point,
 ) -> Result<PreZRoleRootsV1, RnsNativeGlobalLookupZCommitmentViewErrorV1> {
     let existing = previous.previous().previous();
@@ -627,8 +593,7 @@ fn pre_z_role_roots_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         }
     }
     builders[11].absorb_v1(multiplicity)?;
-    builders[12].absorb_v1(sumcheck_mask)?;
-    builders[13].absorb_v1(inverse_product_mask)?;
+    builders[12].absorb_v1(inverse_product_mask)?;
 
     let roots: [Result<[u8; DIGEST_BYTES_V1], RnsNativeGlobalLookupZCommitmentViewErrorV1>;
         PRE_Z_POINT_ROLE_COUNT_V1] = core::array::from_fn(|index| {
@@ -701,7 +666,6 @@ impl<'a> DecoderV1<'a> {
 struct PreZEnvelopeViewV1<'a> {
     bytes: &'a [u8],
     multiplicity: Point,
-    sumcheck_mask: Point,
     inverse_product_mask: Point,
     existing_inverse_bytes: &'a [u8],
     residual: &'a [u8],
@@ -778,9 +742,6 @@ impl<'a> PreZEnvelopeViewV1<'a> {
         }
         let multiplicity = Point::from_non_identity_wire_bytes_exact(decoder.take(POINT_BYTES_V1)?)
             .map_err(|_| RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidPoint)?;
-        let sumcheck_mask =
-            Point::from_non_identity_wire_bytes_exact(decoder.take(POINT_BYTES_V1)?)
-                .map_err(|_| RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidPoint)?;
         let inverse_product_mask =
             Point::from_non_identity_wire_bytes_exact(decoder.take(POINT_BYTES_V1)?)
                 .map_err(|_| RnsNativeGlobalLookupZCommitmentViewErrorV1::InvalidPoint)?;
@@ -794,7 +755,6 @@ impl<'a> PreZEnvelopeViewV1<'a> {
         Ok(Self {
             bytes,
             multiplicity,
-            sumcheck_mask,
             inverse_product_mask,
             existing_inverse_bytes,
             residual,
@@ -876,15 +836,24 @@ fn derive_global_z_v1(
     append_frame_v1(
         &mut state,
         CLAIMED_PRE_GLOBAL_LABEL_V1,
-        &claimed_pre_global_digest,
+        claimed_pre_global_digest.as_bytes(),
     )?;
     for (label, digest) in [
-        (b"fixed-axes".as_slice(), context.fixed_axes_digest),
-        (b"source".as_slice(), context.source_binding_digest),
-        (b"qpcs".as_slice(), context.qpcs_binding_digest),
-        (b"pre-z-inventory".as_slice(), inventory_digest),
+        (
+            b"fixed-axes".as_slice(),
+            context.fixed_axes_digest.as_slice(),
+        ),
+        (
+            b"source".as_slice(),
+            context.source_binding_digest.as_slice(),
+        ),
+        (
+            b"qpcs".as_slice(),
+            context.qpcs_binding_digest.as_bytes().as_slice(),
+        ),
+        (b"pre-z-inventory".as_slice(), inventory_digest.as_slice()),
     ] {
-        append_frame_v1(&mut state, label, &digest)?;
+        append_frame_v1(&mut state, label, digest)?;
     }
     for (purpose, root) in PRE_Z_POINT_PURPOSES_V1.into_iter().zip(roots.roots) {
         append_frame_v1(&mut state, &[purpose as u8], &root)?;
@@ -948,7 +917,7 @@ fn point_from_existing_inverse_v1(
 
 fn finish_combined_root_v1(
     domain: &[u8],
-    roles: &[(PhysicalPurposeV1, [u8; DIGEST_BYTES_V1])],
+    roles: &[(GlobalLookupCommitmentPurposeV1, [u8; DIGEST_BYTES_V1])],
     total: usize,
 ) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeGlobalLookupZCommitmentViewErrorV1> {
     let mut hash = Keccak256::new();
@@ -972,7 +941,7 @@ fn post_z_roots_v1<F>(
     mut added_at: F,
 ) -> Result<PostZRootsV1, RnsNativeGlobalLookupZCommitmentViewErrorV1>
 where
-    F: FnMut(PhysicalPurposeV1, usize) -> Option<Point>,
+    F: FnMut(GlobalLookupCommitmentPurposeV1, usize) -> Option<Point>,
 {
     let mut builders: [RoleRootBuilderV1; POST_Z_POINT_PURPOSES_V1.len()] =
         core::array::from_fn(|index| RoleRootBuilderV1 {
@@ -1096,7 +1065,7 @@ fn bind_post_z_v1<F>(
     RnsNativeGlobalLookupZCommitmentViewErrorV1,
 >
 where
-    F: FnMut(PhysicalPurposeV1, usize) -> Option<Point>,
+    F: FnMut(GlobalLookupCommitmentPurposeV1, usize) -> Option<Point>,
 {
     let roots = post_z_roots_v1(view.existing_inverse_bytes, added_at)?;
     if codec_digest_v1(&view.bytes[..view.codec_offset]) != view.codec_digest {
@@ -1191,10 +1160,6 @@ pub(super) struct RnsNativeGlobalLookupPostZPrerequisiteV1<
     residual: &'proof [u8],
     existing_inverse_bytes: &'proof [u8],
     multiplicity: Point,
-    // Authenticated before z and retained for chronology compatibility, but
-    // direct membership retires this legacy 702-scalar mask and exposes no
-    // consumer accessor.
-    _retired_sumcheck_mask: Point,
     inverse_product_mask: Point,
     pre_z_binding_digest: [u8; DIGEST_BYTES_V1],
     post_z_transcript_digest: [u8; DIGEST_BYTES_V1],
@@ -1297,12 +1262,7 @@ where
 {
     let view = PreZEnvelopeViewV1::from_canonical_prefix_v1(previous.residual())?;
     let context = pre_z_safe_context_v1(&previous)?;
-    let roots = pre_z_role_roots_v1(
-        &previous,
-        view.multiplicity,
-        view.sumcheck_mask,
-        view.inverse_product_mask,
-    )?;
+    let roots = pre_z_role_roots_v1(&previous, view.multiplicity, view.inverse_product_mask)?;
     let live = {
         let pre_global_capability = previous.pre_global_lookup_capability_v1();
         derive_global_z_v1(pre_global_capability, context, roots)?
@@ -1334,19 +1294,19 @@ where
         .previous()
         .previous()
         .inventory();
-    let added_at = |purpose: PhysicalPurposeV1, ordinal: usize| match purpose {
-        PhysicalPurposeV1::ComparatorDifferenceInverse => inventory
+    let added_at = |purpose: GlobalLookupCommitmentPurposeV1, ordinal: usize| match purpose {
+        GlobalLookupCommitmentPurposeV1::ComparatorDifferenceInverse => inventory
             .comparator_difference_inverse(ordinal / LOW_DIGITS_V1, ordinal % LOW_DIGITS_V1),
-        PhysicalPurposeV1::SmallPositiveInverse => inventory
+        GlobalLookupCommitmentPurposeV1::SmallPositiveInverse => inventory
             .small_source_lookup_inverses(ordinal)
             .map(|values| values.0),
-        PhysicalPurposeV1::SmallNegativeInverse => inventory
+        GlobalLookupCommitmentPurposeV1::SmallNegativeInverse => inventory
             .small_source_lookup_inverses(ordinal)
             .map(|values| values.1),
-        PhysicalPurposeV1::QMaskDigitInverse => inventory
+        GlobalLookupCommitmentPurposeV1::QMaskDigitInverse => inventory
             .q_mask_lookup_inverses(ordinal % Q_MASK_BLOCKS_V1)
             .map(|values| values.digit_inverses[ordinal / Q_MASK_BLOCKS_V1]),
-        PhysicalPurposeV1::QMaskComplementInverse => inventory
+        GlobalLookupCommitmentPurposeV1::QMaskComplementInverse => inventory
             .q_mask_lookup_inverses(ordinal % Q_MASK_BLOCKS_V1)
             .map(|values| values.complement_inverses[ordinal / Q_MASK_BLOCKS_V1]),
         _ => None,
@@ -1388,7 +1348,6 @@ where
         residual: pre_z.view.residual,
         existing_inverse_bytes: pre_z.view.existing_inverse_bytes,
         multiplicity: pre_z.view.multiplicity,
-        _retired_sumcheck_mask: pre_z.view.sumcheck_mask,
         inverse_product_mask: pre_z.view.inverse_product_mask,
         pre_z_binding_digest,
         post_z_transcript_digest,

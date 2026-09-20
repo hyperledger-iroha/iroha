@@ -266,7 +266,6 @@ fn trigger_refresh(app: &crate::SharedAppState) {
             std::num::NonZeroU64::new(1).expect("nonzero height"),
             None,
             None,
-            None,
             1,
             0,
         ),

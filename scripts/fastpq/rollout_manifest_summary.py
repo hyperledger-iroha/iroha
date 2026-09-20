@@ -13,7 +13,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 # The authenticated release runner preloads this exact captured dependency
 # graph; this helper deliberately never places the repository on ``sys.path``.
-from scripts.fastpq.benchmark_operations import reject_retired_fields, require_filter, require_operation
+from scripts.fastpq.benchmark_operations import reject_retired_fields, require_filter, require_filter_array, require_operation
 from scripts.fastpq.report_projection import (
     project_bundle, project_report, render_evidence, require_matching_report_claims, validate_projection,
 )
@@ -86,10 +86,7 @@ def summarize_bench_entry(
     require_filter(entry.get("operation_filter"))
     matrix_filters = entry.get("matrix_operation_filters")
     if matrix_filters is not None:
-        if not isinstance(matrix_filters, list):
-            raise ValueError("matrix_operation_filters must be an array")
-        for value in matrix_filters:
-            require_filter(value)
+        require_filter_array(matrix_filters)
     manifest_evidence = project_report(entry, flattened=True, producer_schema=entry.get("producer_schema")) if "operations" in entry else None
     manifest_path_value = entry.get("path")
     resolved_path = resolve_bench_path(manifest_path_value, bundle_dir=bundle_dir, repo_root=repo_root)
@@ -270,8 +267,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
             suffix = " (focused capture)" if operation_filter != "all" else ""
             lines.append(f"- Operation filter: `{operation_filter}`{suffix}")
         matrix_filters = bench.get("matrix_operation_filters")
-        if isinstance(matrix_filters, list) and matrix_filters:
-            rendered = ", ".join(f"`{require_filter(item)}`" for item in matrix_filters)
+        if matrix_filters is not None:
+            rendered = ", ".join(f"`{item}`" for item in require_filter_array(matrix_filters))
             lines.append(f"- Matrix filters: {rendered}")
         operations = bench.get("available_operations")
         if isinstance(operations, list) and operations:

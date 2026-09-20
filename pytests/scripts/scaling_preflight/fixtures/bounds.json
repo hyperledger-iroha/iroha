@@ -1,0 +1,5 @@
+{
+  "experiment_timeout_ns": 7000000000000,
+  "manifest_max_bytes": 1048576,
+  "report_max_bytes": 1048576
+}

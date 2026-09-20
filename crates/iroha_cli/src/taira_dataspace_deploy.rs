@@ -38,12 +38,21 @@ use std::{
     fs::{self, File},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[path = "taira_epoch_maintenance.rs"]
+pub(crate) mod epoch_maintenance;
 #[path = "taira_dataspace_deploy_finality.rs"]
 mod finality;
+#[path = "taira_dataspace_deploy_manifest.rs"]
+mod lane_manifest;
+#[path = "taira_dataspace_deploy_profile.rs"]
+mod profile;
 
+pub(crate) use finality::authenticated_height::{
+    AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
+};
 pub(crate) use finality::{PeerV1 as DeploymentPeerV1, TrustV1 as DeploymentTrustV1};
 
 pub(crate) fn validate_deployment_trust(
@@ -55,15 +64,18 @@ pub(crate) fn validate_deployment_trust(
 
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 const PHASES: [&str; 3] = ["catalog", "bootstrap", "aliases"];
+const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
 
 /// Plan, advance, or inspect a single durable dataspace deployment.
 #[derive(Debug, clap::Subcommand)]
 pub(crate) enum Command {
-    /// Generate native deployment intent from public files and current namespace policies.
+    /// Export retained-network expectations from independently selected public inputs.
+    ExportProfile(profile::ExportProfile),
+    /// Generate native deployment intent from signed genesis and current namespace policies.
     Init(InitArgs),
     /// Validate live capabilities and the exact intent, then retain an immutable plan.
     Plan(PlanArgs),
-    /// Advance from the saved plan; uncertain submissions are only observed again.
+    /// Advance the saved plan within one budget; uncertain submissions are only observed again.
     Apply(SavedArgs),
     /// Read the exact saved transactions and current observations without submitting.
     Status(SavedArgs),
@@ -85,8 +97,6 @@ pub(crate) struct InitArgs {
     lane_profile: LaneProfile,
     #[arg(long)]
     account_alias: String,
-    #[arg(long)]
-    lane_manifest: PathBuf,
     #[arg(long)]
     trust: PathBuf,
     #[arg(long)]
@@ -121,6 +131,74 @@ pub(crate) struct SavedArgs {
     journal_dir: PathBuf,
     #[arg(long)]
     operation_id: String,
+    /// Total budget for preflight, retained phases and fresh four-validator verification.
+    #[arg(long, default_value_t = DEFAULT_OPERATION_TIMEOUT_MS,
+          value_parser = clap::value_parser!(u64).range(1..))]
+    timeout_ms: u64,
+}
+
+fn operation_deadline(timeout_ms: u64) -> Result<Instant> {
+    require(timeout_ms > 0, "--timeout-ms must be greater than zero")?;
+    Instant::now()
+        .checked_add(Duration::from_millis(timeout_ms))
+        .ok_or_else(|| eyre!("dataspace deployment deadline overflow"))
+}
+
+fn require_operation_budget(deadline: Instant, stage: &str) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("dataspace deployment deadline elapsed during {stage}"),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn operation_poll_delay(deadline: Instant, now: Instant) -> Duration {
+    Duration::from_millis(500).min(deadline.saturating_duration_since(now))
+}
+
+fn observe_phase_until(
+    apply: bool,
+    deadline: Instant,
+    phase: &str,
+    mut observe_retained: impl FnMut() -> Result<PhaseObservationV1>,
+) -> Result<PhaseObservationV1> {
+    let stage = format!("phase {phase} observation");
+    loop {
+        require_operation_budget(deadline, &stage)?;
+        let observation = observe_retained()?;
+        require_operation_budget(deadline, &stage)?;
+        if !apply || observation.state != "pending" {
+            return Ok(observation);
+        }
+        std::thread::sleep(operation_poll_delay(deadline, Instant::now()));
+    }
+}
+
+fn complete_until(
+    apply: bool,
+    deadline: Instant,
+    report: &mut ReportV1,
+    mut verify: impl FnMut(&mut ReportV1) -> Result<()>,
+) -> Result<()> {
+    loop {
+        require_operation_budget(deadline, "four-validator verification")?;
+        verify(report)?;
+        require_operation_budget(deadline, "four-validator verification")?;
+        if !apply
+            || !matches!(
+                report.state.as_str(),
+                "verification_sync_pending" | "verification_peer_pending"
+            )
+        {
+            return Ok(());
+        }
+        // Only explicit proof-sync or validated peer progress is retryable.
+        // Malformed proofs, changed identities and other verification errors stop.
+        std::thread::sleep(operation_poll_delay(deadline, Instant::now()));
+    }
 }
 
 /// One first-release intent, expressed entirely in maintained native model types.
@@ -268,6 +346,18 @@ impl ManifestV1 {
         }
         self.dataspace.validate_structure()?;
         self.lane_manifest.validate_structure()?;
+        iroha_core::governance::manifest::LaneManifestRegistry::validate_runtime_manifest(
+            &self.lane_manifest,
+            &self.lane,
+            &self.dataspace.descriptor,
+            &iroha_config::parameters::actual::GovernanceCatalog::default(),
+        )
+        .map_err(|error| eyre!("invalid native lane manifest: {error}"))?;
+        require(
+            self.lane_manifest.manifest
+                == lane_manifest::generate(&self.lane.alias, &self.finality)?,
+            "native lane manifest differs from the selected genesis committee and peer endpoints",
+        )?;
         let grant = AliasDataspaceBootstrapGrantV1::try_new(
             &self.dataspace.descriptor.alias,
             self.owner.clone(),
@@ -276,7 +366,8 @@ impl ManifestV1 {
             self.dataspace.descriptor.id == grant.dataspace.dataspace_id
                 && self.dataspace.manifest_hash == grant.name_hash
                 && self.lane.dataspace_id == grant.dataspace.dataspace_id
-                && self.lane.id == self.lane_manifest.lane_id,
+                && self.lane.id == self.lane_manifest.lane_id
+                && self.lane.alias == grant.dataspace.canonical_name.to_string(),
             "dataspace, selector hash, lane and manifest must bind the same native identity",
         )?;
         require(
@@ -466,6 +557,7 @@ fn preflight<C: RunContext>(
     context: &C,
     manifest: &ManifestV1,
     require_write_permissions: bool,
+    native_client: Client,
 ) -> Result<BlockingClient> {
     require(
         !context.input_instructions()
@@ -478,7 +570,7 @@ fn preflight<C: RunContext>(
             && context.config().account == manifest.owner,
         "configured signer or NetworkId differs from the manifest",
     )?;
-    let client = BlockingClient::from_client(context.client_from_config()?)?;
+    let client = BlockingClient::from_client(native_client)?;
     client.refresh_capabilities()?;
     require(
         client
@@ -804,16 +896,14 @@ fn observe(
         peer_status: peer,
         committed: None,
     };
+    let applied_height = matching_applied_height(
+        &prepared.transaction_hash,
+        &result.global_status,
+        &result.peer_status,
+    )?;
     let mut failed = false;
-    for (value, scope) in [
-        (&result.global_status, "global"),
-        (&result.peer_status, "local"),
-    ] {
+    for value in [&result.global_status, &result.peer_status] {
         if let Some(value) = value {
-            require(
-                value.hash == prepared.transaction_hash && value.scope == scope,
-                "transaction observation changed its hash or scope",
-            )?;
             if matches!(value.status.kind.as_str(), "Rejected" | "Expired") {
                 failed = true;
             }
@@ -821,15 +911,25 @@ fn observe(
     }
     if failed {
         result.state = "failed".into();
+        if [&result.global_status, &result.peer_status]
+            .into_iter()
+            .flatten()
+            .any(|value| value.status.kind == "Rejected")
+        {
+            result.committed = retain_rejected_details(
+                transaction,
+                client.get_transaction_details(transaction.hash_as_entrypoint()),
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "deployment phase {} transaction {}: read exact rejection details",
+                    prepared.phase, prepared.transaction_hash
+                )
+            })?;
+        }
         return Ok(result);
     }
-    if matching_applied_height(
-        &prepared.transaction_hash,
-        &result.global_status,
-        &result.peer_status,
-    )?
-    .is_some()
-    {
+    if applied_height.is_some() {
         let details = client
             .get_successful_transaction_details(transaction.hash_as_entrypoint())
             .wrap_err_with(|| {
@@ -851,15 +951,48 @@ fn observe(
     Ok(result)
 }
 
+// A precommit rejection may have no committed details. Only native typed
+// absence permits that result; malformed, unauthorized and unbound reads fail.
+fn retain_rejected_details(
+    transaction: &SignedTransaction,
+    response: std::result::Result<PipelineTransactionDetailsResponse, iroha::query::QueryError>,
+) -> Result<Option<PipelineTransactionDetailsResponse>> {
+    let details = match response {
+        Ok(details) => details,
+        Err(iroha::query::QueryError::Validation(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ),
+        )) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    // The SDK binds entrypoint/result hashes. The deployment additionally binds
+    // the exact retained wire and requires the rejected native result.
+    let TransactionEntrypoint::External(actual) = details.transaction.entrypoint() else {
+        eyre::bail!("rejection details are not an external transaction");
+    };
+    require(
+        actual.encode_wire_v1()? == transaction.encode_wire_v1()?,
+        "rejection details differ from the retained exact signed transaction",
+    )?;
+    require(
+        details.transaction.result().is_err(),
+        "Rejected status resolves to a successful committed transaction",
+    )?;
+    Ok(Some(details))
+}
+
 fn matching_applied_height(
     hash: &str,
     global: &Option<PipelineTransactionStatusResponse>,
     peer: &Option<PipelineTransactionStatusResponse>,
 ) -> Result<Option<u64>> {
     let mut heights = Vec::new();
+    let mut pending = false;
     for (value, scope) in [(global, "global"), (peer, "local")] {
         let Some(value) = value else {
-            return Ok(None);
+            pending = true;
+            continue;
         };
         require(
             value.hash == hash && value.scope == scope,
@@ -872,16 +1005,29 @@ fn matching_applied_height(
             ),
             "unknown native pipeline status kind",
         )?;
-        if value.resolved_from != "state" || value.status.kind != "Applied" {
-            return Ok(None);
-        }
-        heights.push(
-            value
+        require(
+            matches!(value.resolved_from.as_str(), "cache" | "queue" | "state"),
+            "unknown native pipeline status source",
+        )?;
+        if value.status.kind == "Applied" {
+            let height = value
                 .status
                 .block_height
                 .filter(|height| *height > 0)
-                .ok_or_else(|| eyre!("state Applied observation has no nonzero height"))?,
-        );
+                .ok_or_else(|| eyre!("Applied observation has no nonzero height"))?;
+            if value.resolved_from == "state" {
+                heights.push(height);
+            } else {
+                pending = true;
+            }
+        } else {
+            pending = true;
+        }
+    }
+    // A lagging or absent response must never hide a malformed response from
+    // the other scope and turn a fixed binding error into a retryable wait.
+    if pending {
+        return Ok(None);
     }
     require(
         heights[0] == heights[1],
@@ -939,6 +1085,9 @@ impl Run for Command {
         )?;
         let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
         match self {
+            Self::ExportProfile(_) => eyre::bail!(
+                "`taira dataspace-deploy export-profile` must run before client configuration is loaded"
+            ),
             Self::Init(args) => initialize(context, args),
             Self::Plan(args) => plan(context, args),
             Self::Apply(args) => saved(context, args, true),
@@ -964,18 +1113,15 @@ fn initialize<C: RunContext>(context: &mut C, args: InitArgs) -> Result<()> {
                 .ok_or_else(|| eyre!("quote lifetime overflow"))?,
         )
         .ok_or_else(|| eyre!("quote deadline overflow"))?;
-    let raw_manifest = String::from_utf8(read_public_input(&args.lane_manifest)?)?;
-    let inline_manifest = raw_manifest.parse::<iroha_primitives::json::Json>()?;
     let manifest = init_manifest(
         &args,
         context.config().network_id,
         context.config().account.clone(),
         trust,
-        inline_manifest,
         &policies,
         deadline,
     )?;
-    let configured = preflight(context, &manifest, true)?;
+    let configured = preflight(context, &manifest, true, context.client_from_config()?)?;
     let plan = configured
         .client()
         .plan_alias_setup(&manifest.alias_request)?;
@@ -990,7 +1136,6 @@ fn init_manifest(
     network_id: NetworkId,
     owner: AccountId,
     trust: finality::TrustV1,
-    inline_manifest: iroha_primitives::json::Json,
     policies: &[iroha_data_model::sns::SuffixPolicyV1; 2],
     deadline: u64,
 ) -> Result<ManifestV1> {
@@ -1030,6 +1175,7 @@ fn init_manifest(
         })
     };
     let name = grant.dataspace.canonical_name.to_string();
+    let inline_manifest = lane_manifest::generate(&name, &trust)?;
     let alias = AccountAliasName::try_new(&args.account_alias, None::<&str>, &name)?;
     let intents = vec![
         EnsureAlias::new(
@@ -1098,7 +1244,7 @@ fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
     let manifest: ManifestV1 = json::from_slice(&bytes)?;
     let grant = manifest.validate()?;
     let id = manifest.resolved_id()?;
-    let client = preflight(context, &manifest, true)?;
+    let client = preflight(context, &manifest, true, context.client_from_config()?)?;
     let path = args.journal_dir.join(&id);
     if path.try_exists()? {
         let journal = Journal::open(&path, false)?;
@@ -1136,34 +1282,116 @@ fn plan<C: RunContext>(context: &mut C, args: PlanArgs) -> Result<()> {
 
 fn saved<C: RunContext>(context: &mut C, args: SavedArgs, apply: bool) -> Result<()> {
     let report = run_saved(context, args, apply)?;
-    context.print_data(&report)
+    print_saved_report(&report, apply, |report| context.print_data(report))
 }
 
-/// Read-only native entry point for the anchored finality/four-peer verification layer.
-/// The returned request never asserts that those independent verifications succeeded.
-pub(crate) fn verification_request<C: RunContext>(
-    context: &C,
-    journal_dir: &Path,
-    operation_id: &str,
-) -> Result<VerificationRequestV1> {
-    require(
-        context.config().chain.to_string() == "fc56984b-2be7-431d-840e-21514d1883f0"
-            && context.config().account_chain_discriminant == 369,
-        "verification requires the canonical Taira profile",
-    )?;
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    Ok(run_saved(
-        context,
-        SavedArgs {
-            journal_dir: journal_dir.to_owned(),
-            operation_id: operation_id.into(),
-        },
-        false,
-    )?
-    .verification)
+fn print_saved_report(
+    report: &ReportV1,
+    apply: bool,
+    print: impl FnOnce(&ReportV1) -> Result<()>,
+) -> Result<()> {
+    print(report)?;
+    if apply
+        && !(report.state == "completed"
+            && report.deployment_complete
+            && report
+                .completion_receipt
+                .as_deref()
+                .is_some_and(|name| !name.is_empty())
+            && report.verification_error.is_none())
+    {
+        eyre::bail!(
+            "dataspace deployment {} did not complete ({}): {}",
+            report.operation_id,
+            report.state,
+            incomplete_report_detail(report)
+        );
+    }
+    Ok(())
+}
+
+// Render retained observations and authenticated-query rejection details only.
+// Neither is an independently anchored finality or deployment completion claim.
+fn incomplete_report_detail(report: &ReportV1) -> String {
+    let mut details: Vec<String> = report.verification_error.iter().cloned().collect();
+    for phase in &report.verification.transactions {
+        if phase.state != "failed" {
+            continue;
+        }
+        for (status, scope) in [
+            (&phase.global_status, "global"),
+            (&phase.peer_status, "local"),
+        ] {
+            let Some(status) = status else { continue };
+            if phase.transaction_hash.as_deref() != Some(status.hash.as_str())
+                || status.scope != scope
+                || !matches!(status.status.kind.as_str(), "Rejected" | "Expired")
+            {
+                continue;
+            }
+            let height = status
+                .status
+                .block_height
+                .map(|height| format!(", block {height}"))
+                .unwrap_or_default();
+            let reason = if status.status.kind == "Rejected" {
+                match phase
+                    .committed
+                    .as_ref()
+                    .and_then(|details| details.transaction.result().as_ref().err())
+                {
+                    Some(reason) => {
+                        format!("; rejection reason: {}", rejection_error_chain(reason))
+                    }
+                    None => "; committed rejection details unavailable".into(),
+                }
+            } else {
+                String::new()
+            };
+            details.push(format!(
+                "phase {}: observed {} for transaction {} (scope {}, source {}{}){}",
+                phase.phase,
+                status.status.kind,
+                status.hash,
+                scope,
+                status.resolved_from,
+                height,
+                reason
+            ));
+        }
+    }
+    if details.is_empty() {
+        "inspect the retained operation with status".into()
+    } else {
+        details.join("; ")
+    }
+}
+
+// Display/source messages expose the native cause without Debug-formatting
+// instruction or signed transaction payloads. Bound terminal diagnostic size.
+fn rejection_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut next = Some(error);
+    let mut parts = Vec::new();
+    for _ in 0..16 {
+        let Some(error) = next else { break };
+        let message = error.to_string();
+        if !message.is_empty() {
+            parts.push(message);
+        }
+        next = error.source();
+    }
+    let message = parts.join(": ");
+    let mut chars = message.chars();
+    let mut bounded: String = chars.by_ref().take(4096).collect();
+    if chars.next().is_some() || next.is_some() {
+        bounded.push_str(" [truncated]");
+    }
+    bounded
 }
 
 fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result<ReportV1> {
+    let deadline = operation_deadline(args.timeout_ms)?;
+    require_operation_budget(deadline, "open retained operation")?;
     operation_id(&args.operation_id)?;
     let journal = Journal::open(&args.journal_dir.join(&args.operation_id), false)?;
     let plan: PlanV1 = journal
@@ -1171,14 +1399,25 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
         .wrap_err("saved deployment: read plan.json")?;
     plan.verify()
         .wrap_err("saved deployment: verify retained plan")?;
+    require_operation_budget(deadline, "verify retained plan")?;
     require(
         plan.operation_id == args.operation_id,
         "operation directory contains another plan",
     )?;
-    let client = preflight(context, &plan.manifest, apply)
-        .wrap_err("saved deployment: signer and capability preflight")?;
+    let client = preflight(
+        context,
+        &plan.manifest,
+        apply,
+        context
+            .client_from_config()?
+            .with_request_deadline(deadline),
+    )
+    .wrap_err("saved deployment: signer and capability preflight")?;
+    require_operation_budget(deadline, "signer and capability preflight")?;
     let mut observations = Vec::new();
     for (phase_index, phase) in PHASES.into_iter().enumerate() {
+        require_operation_budget(deadline, &format!("phase {phase} preparation"))?;
+        eprintln!("[dataspace-deploy] phase {phase}: preparation");
         let prepared_name = format!("{phase}.prepared.json");
         let claim_name = format!("{phase}.submitted.json");
         let mut prepared: Option<PreparedV1> =
@@ -1222,6 +1461,7 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
             value
                 .verify(&plan, phase)
                 .wrap_err_with(|| format!("deployment phase {phase}: verify new preparation"))?;
+            require_operation_budget(deadline, &format!("phase {phase} retain preparation"))?;
             journal.install_json(&prepared_name, &value)?;
             prepared = Some(value);
         }
@@ -1231,6 +1471,7 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
         let transaction = prepared.verify(&plan, phase).wrap_err_with(|| {
             format!("deployment phase {phase}: verify retained preparation {prepared_name}")
         })?;
+        require_operation_budget(deadline, &format!("phase {phase} verify preparation"))?;
         let claim: Option<String> = journal.optional_json(&claim_name)?;
         if let Some(claim) = &claim {
             require(
@@ -1259,7 +1500,7 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                     .client()
                     .verify_alias_setup_plan(prepared.alias_plan.as_ref().unwrap())?;
             }
-            let deadline = transaction
+            let transaction_expiry = transaction
                 .creation_time()
                 .checked_add(
                     transaction
@@ -1268,9 +1509,10 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 )
                 .ok_or_else(|| eyre!("transaction lifetime overflow"))?;
             require(
-                SystemTime::now().duration_since(UNIX_EPOCH)? < deadline,
+                SystemTime::now().duration_since(UNIX_EPOCH)? < transaction_expiry,
                 "retained transaction expired before dispatch; it will not be replaced",
             )?;
+            require_operation_budget(deadline, &format!("phase {phase} dispatch claim"))?;
             require(
                 record_dispatch_claim(&journal, &claim_name, &prepared)?,
                 "phase was already dispatched",
@@ -1288,10 +1530,38 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
                 accepted: outcome.is_ok(),
                 error: outcome.err().map(|error| format!("{error:#}")),
             };
+            eprintln!(
+                "[dataspace-deploy] phase {phase}: dispatch {}",
+                if receipt.accepted {
+                    "accepted"
+                } else {
+                    "uncertain; observing retained transaction"
+                }
+            );
             journal.install_json(&format!("{phase}.submission-result.json"), &receipt)?;
         }
-        let observation = observe(client.client(), &prepared, &transaction)?;
+        eprintln!(
+            "[dataspace-deploy] phase {phase}: {}",
+            if apply {
+                "waiting for exact Applied"
+            } else {
+                "reading exact retained state"
+            }
+        );
+        // This loop only reads the exact retained transaction. It never re-enters
+        // preparation, signing, the durable dispatch claim, or submission.
+        let observation = observe_phase_until(apply, deadline, phase, || {
+            observe(client.client(), &prepared, &transaction)
+        })?;
         let advance = observation.state == "applied_verification_pending";
+        eprintln!(
+            "[dataspace-deploy] phase {phase}: {}",
+            if advance {
+                "exact Applied"
+            } else {
+                observation.state.as_str()
+            }
+        );
         observations.push(observation);
         if !advance {
             break;
@@ -1299,12 +1569,24 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
     }
     let mut report = phase_report(&plan, observations);
     if report.state == "applied_verification_pending" {
-        if let Err(error) = finality::complete(context, &plan, &journal, &mut report) {
+        eprintln!("[dataspace-deploy] starting fresh four-validator finality verification");
+        let verification: Result<()> = (|| {
+            let mut completion = finality::Completion::new(&plan, &journal, deadline)?;
+            complete_until(apply, deadline, &mut report, |report| {
+                completion.complete(context, report)
+            })
+        })();
+        if let Err(error) = verification {
             report.state = "applied_verification_pending".into();
             report.deployment_complete = false;
+            report.completion_receipt = None;
             report.verification_error = Some(format!("{error:#}"));
         }
     }
+    if report.deployment_complete {
+        require_operation_budget(deadline, "return completed deployment")?;
+    }
+    eprintln!("[dataspace-deploy] result: {}", report.state);
     Ok(report)
 }
 
@@ -1377,7 +1659,8 @@ impl Journal {
             .ok_or_else(|| eyre!("operation directory has no name"))?;
         let parent_path = path
             .parent()
-            .ok_or_else(|| eyre!("operation directory has no parent"))?
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
             .canonicalize()?;
         let parent = File::from(rustix::fs::open(
             &parent_path,
@@ -1438,11 +1721,16 @@ impl Journal {
             actual.dev() == pinned.dev() && actual.ino() == pinned.ino(),
             "operation journal directory was replaced",
         )?;
-        self.revalidate_file("lock", &self._lock, &self.lock_snapshot)
+        self.revalidate_file("lock", &self._lock, &self.lock_snapshot, &[])
     }
 
     #[cfg(unix)]
-    fn revalidate_file(&self, name: &str, file: &File, before: &fs::Metadata) -> Result<()> {
+    fn revalidate_file_metadata(
+        &self,
+        name: &str,
+        file: &File,
+        before: &fs::Metadata,
+    ) -> Result<()> {
         use rustix::fs::{Mode, OFlags};
         let after = file.metadata()?;
         private_metadata(&after, false)?;
@@ -1458,6 +1746,41 @@ impl Journal {
             same_file_snapshot(before, &after) && same_file_snapshot(&after, &named),
             "journal file or held lock changed during custody",
         )
+    }
+
+    #[cfg(unix)]
+    fn revalidate_file(
+        &self,
+        name: &str,
+        file: &File,
+        before: &fs::Metadata,
+        expected: &[u8],
+    ) -> Result<()> {
+        use std::os::unix::fs::FileExt as _;
+        self.revalidate_file_metadata(name, file, before)?;
+        require(
+            before.len() == u64::try_from(expected.len())?,
+            "journal content length differs from its retained snapshot",
+        )?;
+        // Metadata timestamps can collide. Recheck the bytes consumed by this
+        // operation without disturbing offsets shared by cloned descriptors.
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut offset = 0_u64;
+        for chunk in expected.chunks(buffer.len()) {
+            let observed = &mut buffer[..chunk.len()];
+            file.read_exact_at(observed, offset)
+                .map_err(|_| eyre!("journal content revalidation read failed"))?;
+            require(observed == chunk, "journal content changed during custody")?;
+            offset += u64::try_from(chunk.len())?;
+        }
+        let mut extra = [0_u8; 1];
+        require(
+            file.read_at(&mut extra, offset)
+                .map_err(|_| eyre!("journal content revalidation read failed"))?
+                == 0,
+            "journal content grew during custody",
+        )?;
+        self.revalidate_file_metadata(name, file, before)
     }
 
     #[cfg(not(unix))]
@@ -1524,7 +1847,7 @@ impl Journal {
             )
             .read_to_end(&mut bytes)?;
         require(bytes.len() <= maximum, "journal file exceeds bound")?;
-        self.revalidate_file(name, &file, &before)?;
+        self.revalidate_file(name, &file, &before, &bytes)?;
         self.revalidate()?;
         Ok(Some(bytes))
     }
@@ -1638,10 +1961,550 @@ mod tests {
     fn amount(value: u32, scale: u32) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(value, scale)).unwrap()
     }
+
+    fn pending_observation() -> PhaseObservationV1 {
+        PhaseObservationV1 {
+            phase: "aliases".into(),
+            state: "pending".into(),
+            transaction_hash: Some("ab".repeat(32)),
+            instructions: Vec::new(),
+            signed_transaction_wire_sha256: "cd".repeat(32),
+            alias_plan: None,
+            global_status: None,
+            peer_status: None,
+            committed: None,
+        }
+    }
+
+    #[test]
+    fn saved_commands_require_positive_budget_and_default_to_three_minutes() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct Wrapper {
+            #[command(subcommand)]
+            command: Command,
+        }
+        for command in ["apply", "status"] {
+            let arguments = [
+                "test",
+                command,
+                "--journal-dir",
+                "/unused",
+                "--operation-id",
+                "test",
+            ];
+            let parsed = Wrapper::try_parse_from(arguments).unwrap();
+            let (Command::Apply(saved) | Command::Status(saved)) = parsed.command else {
+                panic!("saved command expected")
+            };
+            assert_eq!(saved.timeout_ms, 180_000);
+            let mut explicit = arguments.to_vec();
+            explicit.extend(["--timeout-ms", "1"]);
+            assert!(Wrapper::try_parse_from(&explicit).is_ok());
+            *explicit.last_mut().unwrap() = "0";
+            assert!(Wrapper::try_parse_from(&explicit).is_err());
+        }
+        assert!(operation_deadline(0).is_err());
+    }
+
+    #[test]
+    fn saved_apply_emits_report_before_rejecting_incomplete_success() {
+        let mut completed = phase_report(&fixture_plan(), Vec::new());
+        completed.state = "completed".into();
+        completed.deployment_complete = true;
+        completed.completion_receipt = Some("completion-test.json".into());
+        let mut variants = vec![completed.clone()];
+        for defect in 0..5 {
+            let mut report = completed.clone();
+            match defect {
+                0 => report.state = "applied_verification_pending".into(),
+                1 => report.deployment_complete = false,
+                2 => report.completion_receipt = None,
+                3 => report.completion_receipt = Some(String::new()),
+                _ => report.verification_error = Some("invalid validator proof".into()),
+            }
+            variants.push(report);
+        }
+        for (index, report) in variants.iter().enumerate() {
+            for apply in [false, true] {
+                let mut output = Vec::new();
+                let result = print_saved_report(report, apply, |value| {
+                    output.push(json::to_value(value)?);
+                    Ok(())
+                });
+                assert_eq!(output, vec![json::to_value(report).unwrap()]);
+                assert_eq!(result.is_ok(), !apply || index == 0);
+                if apply && index == 5 {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("invalid validator proof")
+                    );
+                }
+            }
+        }
+        // Both native terminal kinds are rendered for either bound scope. The
+        // machine report stays intact and the status command remains read-only.
+        let hash = "ab".repeat(32);
+        for scope in ["global", "local"] {
+            for kind in ["Rejected", "Expired"] {
+                let mut phase = pending_observation();
+                phase.phase = "catalog".into();
+                phase.state = "failed".into();
+                let status = PipelineTransactionStatusResponse {
+                    hash: hash.clone(),
+                    scope: scope.into(),
+                    resolved_from: "cache".into(),
+                    status: PipelineTransactionStatus {
+                        kind: kind.into(),
+                        block_height: (kind == "Rejected").then_some(10),
+                    },
+                };
+                if scope == "global" {
+                    phase.global_status = Some(status);
+                } else {
+                    phase.peer_status = Some(status);
+                }
+                let report = phase_report(&fixture_plan(), vec![phase.clone()]);
+                let before = json::to_value(&report).unwrap();
+                let mut output = Vec::new();
+                let error = print_saved_report(&report, true, |value| {
+                    output.push(json::to_value(value)?);
+                    Ok(())
+                })
+                .unwrap_err();
+                let height = if kind == "Rejected" { ", block 10" } else { "" };
+                let missing = if kind == "Rejected" {
+                    "; committed rejection details unavailable"
+                } else {
+                    ""
+                };
+                let detail = format!(
+                    "phase catalog: observed {kind} for transaction {hash} (scope {scope}, source cache{height}){missing}"
+                );
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "dataspace deployment {} did not complete (failed): {detail}",
+                        report.operation_id
+                    )
+                );
+                assert_eq!(output, vec![before.clone()]);
+                assert_eq!(json::to_value(&report).unwrap(), before);
+                assert!(print_saved_report(&report, false, |_| Ok(())).is_ok());
+                let mut with_verification_error = report.clone();
+                with_verification_error.verification_error = Some("invalid validator proof".into());
+                assert_eq!(
+                    incomplete_report_detail(&with_verification_error),
+                    format!("invalid validator proof; {detail}")
+                );
+
+                // Unbound, absent, or nonterminal observations cannot be
+                // attributed as the failed transaction's native outcome.
+                for defect in 0..5 {
+                    let mut altered = phase.clone();
+                    match defect {
+                        0 => altered.transaction_hash = Some("ef".repeat(32)),
+                        1 => altered.transaction_hash = None,
+                        2 => {
+                            let value = altered
+                                .global_status
+                                .as_mut()
+                                .or(altered.peer_status.as_mut())
+                                .unwrap();
+                            value.scope = "other".into();
+                        }
+                        3 => {
+                            let value = altered
+                                .global_status
+                                .as_mut()
+                                .or(altered.peer_status.as_mut())
+                                .unwrap();
+                            value.status.kind = "Queued".into();
+                        }
+                        _ => altered.state = "pending".into(),
+                    }
+                    let report = phase_report(&fixture_plan(), vec![altered]);
+                    assert_eq!(
+                        incomplete_report_detail(&report),
+                        "inspect the retained operation with status"
+                    );
+                }
+            }
+        }
+        use iroha_data_model::{
+            ValidationFail,
+            block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+            isi::error::InstructionExecutionError,
+            query::CommittedTransaction,
+            transaction::{
+                DataTriggerSequence, TransactionResult,
+                error::{InstructionExecutionFail, TransactionRejectionReason},
+            },
+        };
+        let plan = fixture_plan();
+        let prepared = prepared(&plan);
+        let transaction = prepared.verify(&plan, "catalog").unwrap();
+        let marker = "lane 6 manifest authority account is not registered";
+        let reason = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::Conversion(marker.into()),
+        ));
+        let make_details = |transaction: SignedTransaction, result: TransactionResult| {
+            let output = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            });
+            PipelineTransactionDetailsResponse {
+                hash: transaction.hash_as_entrypoint().to_string(),
+                transaction: CommittedTransaction {
+                    block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                        b"rejection report test",
+                    )),
+                    entrypoint_hash: transaction.hash_as_entrypoint(),
+                    entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                    entrypoint: TransactionEntrypoint::External(transaction),
+                    output_hash: iroha_crypto::HashOf::new(&output),
+                    output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                    output,
+                },
+            }
+        };
+        let details = make_details(transaction.clone(), TransactionResult::new(Err(reason)));
+        let retained = retain_rejected_details(&transaction, Ok(details.clone()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            json::to_value(&retained).unwrap(),
+            json::to_value(&details).unwrap()
+        );
+        let mut phase = pending_observation();
+        phase.phase = "catalog".into();
+        phase.state = "failed".into();
+        phase.transaction_hash = Some(prepared.transaction_hash.clone());
+        phase.signed_transaction_wire_sha256 = digest(&transaction.encode_wire_v1().unwrap());
+        phase.global_status = Some(PipelineTransactionStatusResponse {
+            hash: prepared.transaction_hash.clone(),
+            scope: "global".into(),
+            resolved_from: "state".into(),
+            status: PipelineTransactionStatus {
+                kind: "Rejected".into(),
+                block_height: Some(10),
+            },
+        });
+        phase.committed = Some(retained);
+        let report = phase_report(&plan, vec![phase]);
+        let error = print_saved_report(&report, true, |_| Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(marker));
+        assert!(
+            error.contains("Validation failed: Instruction execution failed: Conversion Error:")
+        );
+        assert!(error.contains(&prepared.transaction_hash));
+        assert!(!error.contains(&prepared.signed_transaction_wire_hex));
+        assert!(!error.contains("completion receipt"));
+        // The native instruction error owns an instruction, but its Display/source
+        // rendering must expose the reason without dumping that instruction.
+        let private_payload = "instruction-payload-must-not-be-printed";
+        let safe = TransactionRejectionReason::InstructionExecution(InstructionExecutionFail {
+            instruction: iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                private_payload.into(),
+            )
+            .into(),
+            reason: marker.into(),
+        });
+        let summary = rejection_error_chain(&safe);
+        assert!(summary.contains(marker));
+        assert!(!summary.contains(private_payload));
+        let long =
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted("é".repeat(5000)));
+        let bounded = rejection_error_chain(&long);
+        assert!(bounded.ends_with(" [truncated]"));
+        assert_eq!(bounded.chars().count(), 4096 + " [truncated]".len());
+        let absent = iroha::query::QueryError::Validation(ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ));
+        assert!(
+            retain_rejected_details(&transaction, Err(absent))
+                .unwrap()
+                .is_none()
+        );
+        for error in [
+            iroha::query::QueryError::Validation(ValidationFail::NotPermitted(
+                "not authorized".into(),
+            )),
+            iroha::query::QueryError::Other(eyre!("malformed or mismatched exact details")),
+        ] {
+            assert!(retain_rejected_details(&transaction, Err(error)).is_err());
+        }
+        let success = make_details(
+            transaction.clone(),
+            TransactionResult::new(Ok(DataTriggerSequence::default())),
+        );
+        assert!(
+            retain_rejected_details(&transaction, Ok(success))
+                .unwrap_err()
+                .to_string()
+                .contains("successful")
+        );
+        let other = TransactionBuilder::new(
+            plan.manifest.network_id,
+            plan.manifest.owner.clone(),
+            prepared.fee_quote.intent.clone(),
+        )
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "different transaction".into(),
+        )])
+        .try_sign(key().private_key())
+        .unwrap();
+        let mut wrong = details;
+        wrong.hash = other.hash_as_entrypoint().to_string();
+        wrong.transaction.entrypoint_hash = other.hash_as_entrypoint();
+        wrong.transaction.entrypoint = TransactionEntrypoint::External(other);
+        assert!(
+            retain_rejected_details(&transaction, Ok(wrong))
+                .unwrap_err()
+                .to_string()
+                .contains("exact signed transaction")
+        );
+    }
+
+    #[test]
+    fn saved_report_preserves_output_failure() {
+        let report = phase_report(&fixture_plan(), Vec::new());
+        for apply in [false, true] {
+            let error = print_saved_report(&report, apply, |_| {
+                Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "output closed").into())
+            })
+            .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::BrokenPipe
+            );
+        }
+    }
+
+    #[test]
+    fn saved_zero_budget_stops_before_journal_or_client_access() {
+        struct NoIoContext;
+        impl RunContext for NoIoContext {
+            fn config(&self) -> &iroha::config::Config {
+                panic!("expired operation accessed configuration")
+            }
+            fn transaction_metadata(&self) -> Option<&Metadata> {
+                panic!("expired operation accessed metadata")
+            }
+            fn input_instructions(&self) -> bool {
+                panic!("expired operation accessed instructions")
+            }
+            fn output_instructions(&self) -> bool {
+                panic!("expired operation accessed instructions")
+            }
+            fn i18n(&self) -> &iroha_i18n::Localizer {
+                panic!("expired operation accessed localization")
+            }
+            fn print_data<T: JsonSerialize + ?Sized>(&mut self, _: &T) -> Result<()> {
+                panic!("expired operation printed success")
+            }
+            fn println(&mut self, _: impl std::fmt::Display) -> Result<()> {
+                panic!("expired operation printed success")
+            }
+        }
+        for apply in [false, true] {
+            let error = run_saved(
+                &NoIoContext,
+                SavedArgs {
+                    journal_dir: PathBuf::from("/journal-must-not-be-opened"),
+                    operation_id: "deadline-test".into(),
+                    timeout_ms: 0,
+                },
+                apply,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("--timeout-ms must be greater than zero")
+            );
+        }
+    }
+
+    #[test]
+    fn expired_operation_never_observes_or_starts_completion() {
+        let deadline = Instant::now();
+        let error = observe_phase_until(true, deadline, "aliases", || {
+            panic!("expired operation read")
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert!(error.to_string().contains("phase aliases observation"));
+        let mut report = phase_report(&fixture_plan(), Vec::new());
+        assert!(
+            complete_until(true, deadline, &mut report, |_| panic!(
+                "expired completion"
+            ))
+            .is_err()
+        );
+        assert!(!report.deployment_complete);
+    }
+
+    #[test]
+    fn apply_observes_pending_until_applied_without_reentering_dispatch() {
+        let retained = pending_observation();
+        let mut observations = 0;
+        // Submission is deliberately outside the observer callback's API. A
+        // pending read must only repeat this exact retained hash and wire binding.
+        let actual =
+            observe_phase_until(true, operation_deadline(5_000).unwrap(), "aliases", || {
+                observations += 1;
+                let mut next = retained.clone();
+                if observations == 2 {
+                    next.state = "applied_verification_pending".into();
+                }
+                Ok(next)
+            })
+            .unwrap();
+        assert_eq!(observations, 2);
+        assert_eq!(actual.state, "applied_verification_pending");
+        assert_eq!(actual.transaction_hash, retained.transaction_hash);
+        assert_eq!(
+            actual.signed_transaction_wire_sha256,
+            retained.signed_transaction_wire_sha256
+        );
+    }
+
+    #[test]
+    fn status_observes_once_and_terminal_apply_does_not_retry() {
+        for (apply, state) in [(false, "pending"), (true, "failed")] {
+            let mut reads = 0;
+            let observed =
+                observe_phase_until(apply, operation_deadline(5_000).unwrap(), "aliases", || {
+                    reads += 1;
+                    assert_eq!(reads, 1);
+                    Ok(PhaseObservationV1 {
+                        state: state.into(),
+                        ..pending_observation()
+                    })
+                })
+                .unwrap();
+            assert_eq!(observed.state, state);
+            assert_eq!(reads, 1);
+        }
+    }
+
+    #[test]
+    fn phase_deadline_rejects_late_applied_and_clips_pending_sleep() {
+        let now = Instant::now();
+        assert_eq!(
+            operation_poll_delay(now + Duration::from_secs(1), now),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            operation_poll_delay(now + Duration::from_millis(10), now),
+            Duration::from_millis(10)
+        );
+        assert_eq!(operation_poll_delay(now, now), Duration::ZERO);
+        for applied in [false, true] {
+            let deadline = operation_deadline(10).unwrap();
+            let mut reads = 0;
+            let error = observe_phase_until(true, deadline, "aliases", || {
+                reads += 1;
+                if applied {
+                    std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                }
+                Ok(PhaseObservationV1 {
+                    state: if applied {
+                        "applied_verification_pending"
+                    } else {
+                        "pending"
+                    }
+                    .into(),
+                    ..pending_observation()
+                })
+            })
+            .unwrap_err();
+            assert!(reads <= 1);
+            assert_eq!(
+                error.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::TimedOut
+            );
+        }
+    }
+
+    #[test]
+    fn completion_retries_only_explicit_sync_progress_and_status_is_one_attempt() {
+        for progress in ["verification_sync_pending", "verification_peer_pending"] {
+            for apply in [false, true] {
+                let mut report = phase_report(&fixture_plan(), Vec::new());
+                let mut attempts = 0;
+                complete_until(
+                    apply,
+                    operation_deadline(5_000).unwrap(),
+                    &mut report,
+                    |report| {
+                        attempts += 1;
+                        report.state = if attempts == 1 { progress } else { "completed" }.into();
+                        report.deployment_complete = attempts == 2;
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                assert_eq!(attempts, if apply { 2 } else { 1 });
+                assert_eq!(report.deployment_complete, apply);
+            }
+        }
+        let mut report = phase_report(&fixture_plan(), Vec::new());
+        let mut attempts = 0;
+        let error = complete_until(
+            true,
+            operation_deadline(5_000).unwrap(),
+            &mut report,
+            |_| {
+                attempts += 1;
+                eyre::bail!("changed validator authority")
+            },
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert!(error.to_string().contains("changed validator authority"));
+    }
+
+    #[test]
+    fn completion_deadline_rejects_a_late_success() {
+        let mut report = phase_report(&fixture_plan(), Vec::new());
+        let deadline = operation_deadline(10).unwrap();
+        let error = complete_until(true, deadline, &mut report, |report| {
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+            report.state = "completed".into();
+            report.deployment_complete = true;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    }
     fn key() -> KeyPair {
         KeyPair::try_from_seed(vec![37; 32], Algorithm::Ed25519).unwrap()
     }
     fn manifest() -> ManifestV1 {
+        let trust = lane_manifest::test_trust();
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_genesis::decode_signed_genesis(
+                &hex::decode(&trust.genesis_signed_wire_hex).unwrap(),
+            )
+            .unwrap()
+            .hash(),
+        );
+        let native_manifest = lane_manifest::generate("devex", &trust).unwrap();
         let owner = AccountId::new(key().public_key().clone());
         let grant = AliasDataspaceBootstrapGrantV1::try_new("devex", owner.clone()).unwrap();
         let asset: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap();
@@ -1673,10 +2536,10 @@ mod tests {
             guard,
         );
         ManifestV1 {
-            finality: finality::test_trust(),
+            finality: trust,
             schema_version: 1,
             operation_id: None,
-            network_id: finality::test_network_id(),
+            network_id,
             owner,
             dataspace: RuntimeDataSpaceAdditionV1 {
                 descriptor: DataSpaceMetadata {
@@ -1695,7 +2558,7 @@ mod tests {
             },
             lane_manifest: RuntimeLaneManifestV1 {
                 lane_id: LaneId::new(6),
-                manifest: Json::new(norito::json!({"version":1})),
+                manifest: native_manifest,
             },
             alias_request: AliasSetupPlanRequestV1::new(vec![ds, account]),
             spending: SpendingV1 {
@@ -1852,6 +2715,45 @@ mod tests {
         let mut wrong = value.clone();
         wrong.lane_manifest.lane_id = LaneId::new(5);
         assert!(wrong.validate().is_err());
+        for (field, changed) in [
+            ("lane", norito::json!("another-lane")),
+            ("quorum", norito::json!(2)),
+            ("validators", norito::json!([])),
+            ("unknown", norito::json!(true)),
+        ] {
+            let mut wrong = value.clone();
+            let mut native: json::Value =
+                json::from_str(wrong.lane_manifest.manifest.get()).unwrap();
+            native
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), changed);
+            wrong.lane_manifest.manifest = Json::new(native);
+            assert!(wrong.validate().is_err(), "accepted invalid native {field}");
+        }
+        let mut wrong = value.clone();
+        let mut native: json::Value = json::from_str(wrong.lane_manifest.manifest.get()).unwrap();
+        native
+            .as_object_mut()
+            .unwrap()
+            .get_mut("validators")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "torii_url".into(),
+                norito::json!("https://unselected.example/"),
+            );
+        wrong.lane_manifest.manifest = Json::new(native);
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.lane.alias = "another-lane".into();
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.dataspace.descriptor.fault_tolerance = 2;
+        assert!(wrong.validate().is_err());
         let mut wrong = value.clone();
         wrong.alias_request.intents[0].quote_guard.max_amount = amount(6, 1);
         assert!(wrong.validate().is_err());
@@ -1954,6 +2856,52 @@ mod tests {
         assert!(validate_paid_plan(&manifest, &changed).is_err());
     }
     #[test]
+    fn journal_creates_and_reopens_relative_output_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const CHILD_ENV: &str = "IROHA_CLI_TEST_RELATIVE_JOURNAL_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let path = Path::new("fresh-output");
+            let journal = Journal::open(path, true).expect("create relative output journal");
+            assert_eq!(journal.path, std::env::current_dir().unwrap().join(path));
+            journal
+                .install_json("intent.json", &"retained intent")
+                .unwrap();
+            drop(journal);
+
+            let reopened = Journal::open(path, false).expect("reopen relative output journal");
+            assert_eq!(
+                reopened.read_json::<String>("intent.json").unwrap(),
+                "retained intent"
+            );
+            reopened.revalidate().unwrap();
+            return;
+        }
+
+        // Run in an isolated private working directory without changing the
+        // process-global cwd used by concurrently executing tests.
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "taira_dataspace_deploy::tests::journal_creates_and_reopens_relative_output_directory",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "relative journal child failed:\n{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(root.path().join("fresh-output/intent.json").is_file());
+    }
+
+    #[test]
     fn journal_dispatch_claim_is_durable_and_exclusive() {
         let root = tempfile::tempdir().unwrap();
         fs::set_permissions(
@@ -1988,6 +2936,57 @@ mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn journal_content_revalidation_preserves_offset_and_rejects_metadata_collisions() {
+        use std::{
+            io::{Seek as _, SeekFrom},
+            os::unix::fs::PermissionsExt as _,
+        };
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("operation");
+        let journal = Journal::open(&path, true).unwrap();
+        let expected = vec![0xA5; 64 * 1024 + 3];
+        journal.install("custody.nrt", &expected).unwrap();
+        let mut held = File::open(path.join("custody.nrt")).unwrap();
+        held.seek(SeekFrom::Start(7)).unwrap();
+        let before = held.metadata().unwrap();
+        journal
+            .revalidate_file("custody.nrt", &held, &before, &expected)
+            .unwrap();
+        assert_eq!(held.stream_position().unwrap(), 7);
+
+        let mut changed = expected.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        fs::write(path.join("custody.nrt"), &changed).unwrap();
+        // Model a filesystem clock collision deterministically: the retained
+        // content is unchanged while every compared metadata field agrees.
+        let indistinguishable = held.metadata().unwrap();
+        assert!(same_file_snapshot(
+            &indistinguishable,
+            &fs::metadata(path.join("custody.nrt")).unwrap()
+        ));
+        let error = journal
+            .revalidate_file("custody.nrt", &held, &indistinguishable, &expected)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "journal content changed during custody");
+        assert_eq!(held.stream_position().unwrap(), 7);
+        journal
+            .revalidate_file("custody.nrt", &held, &indistinguishable, &changed)
+            .unwrap();
+        assert_eq!(held.stream_position().unwrap(), 7);
+
+        for length in [expected.len() - 1, expected.len() + 1] {
+            fs::write(path.join("custody.nrt"), vec![0xA5; length]).unwrap();
+            assert!(
+                journal
+                    .revalidate_file("custody.nrt", &held, &held.metadata().unwrap(), &expected)
+                    .is_err()
+            );
+            assert_eq!(held.stream_position().unwrap(), 7);
+        }
+    }
+
     #[test]
     fn journal_rejects_links_replacement_and_incomplete_records() {
         use std::os::unix::fs::symlink;
@@ -2033,7 +3032,7 @@ mod tests {
         fs::write(path.join("custody.nrt"), b"edited").unwrap();
         assert!(
             journal
-                .revalidate_file("custody.nrt", &retained, &before)
+                .revalidate_file("custody.nrt", &retained, &before, b"before")
                 .is_err()
         );
         let before = retained.metadata().unwrap();
@@ -2041,7 +3040,7 @@ mod tests {
         fs::copy(path.join("retained-custody.nrt"), path.join("custody.nrt")).unwrap();
         assert!(
             journal
-                .revalidate_file("custody.nrt", &retained, &before)
+                .revalidate_file("custody.nrt", &retained, &before, b"edited")
                 .is_err()
         );
         journal.install("broken.json", b"{ incomplete").unwrap();
@@ -2098,6 +3097,40 @@ mod tests {
         let mut zero = peer;
         zero.as_mut().unwrap().status.block_height = Some(0);
         assert!(matching_applied_height(&hash, &global, &zero).is_err());
+        let mut queued = global.clone();
+        queued.as_mut().unwrap().status.kind = "Queued".into();
+        queued.as_mut().unwrap().status.block_height = None;
+        queued.as_mut().unwrap().resolved_from = "queue".into();
+        for global_pending in [None, queued] {
+            for field in [
+                "kind",
+                "source",
+                "scope",
+                "hash",
+                "height",
+                "missing-height",
+            ] {
+                let mut malformed = status("local");
+                let value = malformed.as_mut().unwrap();
+                match field {
+                    "kind" => value.status.kind = "Unknown".into(),
+                    "source" => value.resolved_from = "untrusted".into(),
+                    "scope" => value.scope = "global".into(),
+                    "hash" => value.hash = "cd".repeat(32),
+                    "height" => value.status.block_height = Some(0),
+                    "missing-height" => value.status.block_height = None,
+                    _ => unreachable!(),
+                }
+                assert!(
+                    matching_applied_height(&hash, &global_pending, &malformed).is_err(),
+                    "{field}"
+                );
+            }
+            assert_eq!(
+                matching_applied_height(&hash, &global_pending, &status("local")).unwrap(),
+                None
+            );
+        }
         let report = phase_report(&fixture_plan(), Vec::new());
         assert!(!report.deployment_complete);
         assert!(
@@ -2112,7 +3145,6 @@ mod tests {
             lane_id: 6,
             lane_profile: LaneProfile::RestrictedFullReplica,
             account_alias: "admin".into(),
-            lane_manifest: PathBuf::from("public.json"),
             trust: PathBuf::from("trust.json"),
             payment_asset: manifest().spending.asset_definition_id,
             alias_create_maximum: amount(5, 1),
@@ -2146,8 +3178,7 @@ mod tests {
             &args,
             reference.network_id,
             reference.owner.clone(),
-            finality::test_trust(),
-            reference.lane_manifest.manifest.clone(),
+            reference.finality.clone(),
             &policies,
             9_000_000_000_000,
         )
@@ -2179,8 +3210,7 @@ mod tests {
             &public,
             reference.network_id,
             reference.owner,
-            finality::test_trust(),
-            reference.lane_manifest.manifest,
+            reference.finality.clone(),
             &policies,
             9_000_000_000_000,
         )
@@ -2204,8 +3234,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner.clone(),
-                finality::test_trust(),
-                reference.lane_manifest.manifest.clone(),
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -2218,8 +3247,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner.clone(),
-                finality::test_trust(),
-                reference.lane_manifest.manifest.clone(),
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -2232,8 +3260,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner,
-                finality::test_trust(),
-                reference.lane_manifest.manifest,
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -2250,8 +3277,6 @@ mod tests {
             "restricted-full-replica",
             "--account-alias",
             "admin",
-            "--lane-manifest",
-            "public.json",
             "--trust",
             "trust.json",
             "--payment-asset",
@@ -2270,5 +3295,8 @@ mod tests {
         assert_eq!(init.alias_create_maximum, amount(5, 1));
         assert_eq!(init.transaction_fee_maximum, amount(1, 0));
         assert!(Wrapper::try_parse_from(&argv[..argv.len() - 2]).is_err());
+        let mut retired = argv.to_vec();
+        retired.extend(["--lane-manifest", "handwritten.json"]);
+        assert!(Wrapper::try_parse_from(retired).is_err());
     }
 }

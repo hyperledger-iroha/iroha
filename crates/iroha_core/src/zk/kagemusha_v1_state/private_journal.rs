@@ -52,6 +52,7 @@ pub(crate) struct PrivateJournal {
     verified_recovery_prefix: Cell<Option<super::KagemushaRecoveryJournalPrefixV1>>,
     poisoned: Cell<bool>,
     // A consumer cannot recursively materialize another record through this same owner.
+    #[cfg(test)]
     scanning: Cell<bool>,
     #[cfg(test)]
     pub(crate) failure: Cell<Option<TestPersistenceFailure>>,
@@ -175,6 +176,7 @@ impl PrivateJournal {
             previous_frame_hash: [0; 32],
             verified_recovery_prefix: Cell::new(None),
             poisoned: Cell::new(false),
+            #[cfg(test)]
             scanning: Cell::new(false),
             #[cfg(test)]
             failure: Cell::new(None),
@@ -358,6 +360,8 @@ impl PrivateJournal {
     /// read/framing/ownership errors, callback errors and unwinding poison the owner and clear
     /// its cached prefix. Success leaves it usable. No path initializes, appends, fsyncs,
     /// truncates or retires journal records; the caller must discard partial callback results.
+    // TODO: connect the held complete scan to its stored-prover consumer before shipping it.
+    #[cfg(test)]
     pub(crate) fn scan_complete(
         &self,
         mut consume: impl FnMut(u64, &[u8]) -> Result<(), PrivateJournalError>,
@@ -563,10 +567,12 @@ impl PrivateJournal {
 }
 
 // Completion is deliberately local to one scan, not a retained authentication receipt.
+#[cfg(test)]
 struct CompleteScanLease<'a> {
     journal: &'a PrivateJournal,
     complete: bool,
 }
+#[cfg(test)]
 impl Drop for CompleteScanLease<'_> {
     fn drop(&mut self) {
         if !self.complete {

@@ -155,7 +155,7 @@ fn replay_sidecar_reads_and_writes_enforce_the_same_hard_byte_limit() {
 }
 #[test]
 fn prune_to_height_removes_wsv_checkpoints_above_new_tip() {
-    let kura = Kura::blank_kura_for_testing();
+    let (kura, _) = blank_kura_with_blocks();
     let blocks = store_dummy_block_arcs(&kura, 3);
     let retained_hash = Hash::new(b"retained checkpoint");
     let pruned_hash = Hash::new(b"pruned checkpoint");
@@ -177,7 +177,7 @@ fn prune_to_height_removes_wsv_checkpoints_above_new_tip() {
 }
 #[test]
 fn prune_to_height_removes_commit_manifests_above_new_tip() {
-    let kura = Kura::blank_kura_for_testing();
+    let (kura, _) = blank_kura_with_blocks();
     let blocks = store_dummy_block_arcs(&kura, 3);
     let retained_hash = Hash::new(b"retained manifest checkpoint");
     let pruned_hash = Hash::new(b"pruned manifest checkpoint");
@@ -541,9 +541,7 @@ fn fast_init_skips_disabled_writer_capacity_validation() {
 fn fast_init_defers_body_validation_without_rewriting_hashes() {
     let temp_dir = TempDir::new().unwrap();
     populate_strict_kura_store(&temp_dir, 3);
-    let merge_path = RuntimeLaneConfig::default()
-        .primary()
-        .merge_log_path(temp_dir.path());
+    let merge_path = Kura::canonical_storage_paths(temp_dir.path()).1;
     std::fs::remove_file(&merge_path).expect("remove deferred merge log");
     let geometry_path = temp_dir.path().join("lane_geometry_journal.norito");
     let invalid_geometry = [0xA5; 1024];
@@ -774,6 +772,7 @@ fn fast_init_keeps_history_sparse_and_rejects_canonical_mutation() {
             &BTreeMap::new(),
             &BTreeMap::new(),
             Hash::new(b"Fast must not checkpoint lane geometry"),
+            None,
             3,
             Some(tip.hash()),
             Hash::new(b"Fast must not publish snapshot geometry"),
@@ -1611,4 +1610,353 @@ fn local_full_wsv_observation_requires_complete_exact_manifest_and_finality_bind
     );
     fs::write(&checkpoint_path, &checkpoint_bytes).unwrap();
     assert_eq!(read(&artifact).unwrap(), Some(state_hash));
+}
+
+// Actual four-validator Kura durability controls. These fixture blocks test
+// storage receipt ownership; they do not claim execution or State authority.
+pub(crate) fn carrier_checkpoint_receipt_fixture() -> (
+    Arc<Kura>,
+    Arc<SignedBlock>,
+    V2FinalityArtifact,
+    KuraV2CommitReceipt,
+) {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store exact body");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("durable exact three-of-four finality");
+    (kura, block, artifact, receipt)
+}
+
+#[test]
+fn carrier_checkpoint_receipt_binds_actual_writer_readback_and_exact_retry() {
+    let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let state_hash = Hash::new(b"exact captured State checkpoint");
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+        .unwrap();
+    let path = kura.wsv_checkpoint_path(1);
+    let bytes = fs::read(&path).unwrap();
+    assert_eq!(
+        kura.wsv_checkpoint(1).unwrap().unwrap().state_hash(),
+        state_hash
+    );
+    assert_eq!(
+        kura.get_durable_block_hash(NonZeroUsize::new(1).unwrap()),
+        Some(block.hash())
+    );
+    let repeated = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    kura.reauthenticate_wsv_checkpoint_receipt(&repeated, &artifact, state_hash)
+        .unwrap();
+    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+        .expect("identical retry retains the original exact object receipt");
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert!(!path.with_extension("norito.tmp").exists());
+}
+
+#[test]
+fn carrier_checkpoint_receipt_rejects_other_kura_even_with_identical_durable_bytes() {
+    let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let other = Kura::blank_kura_for_testing();
+    other.store_block(block).unwrap();
+    let other_finality = other.store_v2_finality_artifact(&artifact).unwrap();
+    let state_hash = Hash::new(b"same bytes distinct Kura owner");
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    let other_receipt = other
+        .persist_wsv_checkpoint_for_v2_commit(&other_finality, state_hash)
+        .unwrap();
+    assert!(
+        other
+            .reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+            .is_err()
+    );
+    assert!(
+        kura.reauthenticate_wsv_checkpoint_receipt(&other_receipt, &artifact, state_hash)
+            .is_err()
+    );
+    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+        .unwrap();
+    other
+        .reauthenticate_wsv_checkpoint_receipt(&other_receipt, &artifact, state_hash)
+        .unwrap();
+}
+
+#[test]
+fn carrier_checkpoint_receipt_rejects_height_and_artifact_substitution_before_writes() {
+    let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let state_hash = Hash::new(b"checkpoint receipt negative scope");
+    let directory = kura.wsv_checkpoint_dir();
+    assert!(!directory.exists());
+    for height in [0, 2, u64::MAX] {
+        // A mutation control on the private representation, not an authority
+        // constructor offered to production or a successful fixture path.
+        let mut wrong = finality.clone();
+        wrong.height = height;
+        assert!(
+            kura.persist_wsv_checkpoint_for_v2_commit(&wrong, state_hash)
+                .is_err()
+        );
+        assert!(!directory.exists());
+    }
+    let mut wrong = finality.clone();
+    wrong.artifact_hash = HashOf::from_untyped_unchecked(Hash::new(b"another exact artifact"));
+    assert!(
+        kura.persist_wsv_checkpoint_for_v2_commit(&wrong, state_hash)
+            .is_err()
+    );
+    assert!(!directory.exists());
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    let bytes = fs::read(kura.wsv_checkpoint_path(1)).unwrap();
+    let mut wrong_artifact = artifact.clone();
+    wrong_artifact.commit_qc.aggregate_signature[0] ^= 1;
+    assert!(
+        kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &wrong_artifact, state_hash)
+            .is_err()
+    );
+    assert_eq!(fs::read(kura.wsv_checkpoint_path(1)).unwrap(), bytes);
+}
+
+#[test]
+fn carrier_checkpoint_receipt_preserves_immutable_state_and_manifest_binding() {
+    let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let state_hash = Hash::new(b"retained immutable checkpoint");
+    let _receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    let manifest = CommitManifest::new(1, block.hash(), None, None, state_hash, None)
+        .with_authenticated_v2_commit_authority(&artifact);
+    kura.store_commit_manifest(manifest.clone()).unwrap();
+    let bytes = fs::read(kura.wsv_checkpoint_path(1)).unwrap();
+    assert!(
+        kura.persist_wsv_checkpoint_for_v2_commit(&finality, Hash::new(b"different State"))
+            .is_err()
+    );
+    assert_eq!(fs::read(kura.wsv_checkpoint_path(1)).unwrap(), bytes);
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+        .unwrap();
+    assert_eq!(
+        kura.commit_manifest_binding_state(&manifest).unwrap(),
+        CommitManifestBindingState::Bound
+    );
+}
+
+#[test]
+fn carrier_checkpoint_receipt_rejects_tampered_or_replaced_original_checkpoint() {
+    let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let state_hash = Hash::new(b"readback original object");
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    let path = kura.wsv_checkpoint_path(1);
+    let bytes = fs::read(&path).unwrap();
+    let retained_path = path.with_extension("original-object");
+    fs::rename(&path, &retained_path).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    assert!(
+        kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+            .is_err(),
+        "byte equality does not substitute the original durable namespace object"
+    );
+    fs::write(&path, b"corrupt checkpoint").unwrap();
+    let corrupt = fs::read(&path).unwrap();
+    assert!(
+        kura.persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        corrupt,
+        "malformed stable input is not overwritten"
+    );
+    assert_eq!(fs::read(&retained_path).unwrap(), bytes);
+}
+
+#[test]
+fn carrier_checkpoint_receipt_refuses_real_write_and_post_sync_readback_failures() {
+    let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let state_hash = Hash::new(b"checkpoint error custody");
+    kura.fail_next_wsv_checkpoint_write
+        .store(true, Ordering::Relaxed);
+    assert!(
+        kura.persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+            .is_err()
+    );
+    assert!(!kura.wsv_checkpoint_path(1).exists());
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+        .unwrap();
+    carrier_checkpoint::corrupt_next_checkpoint_readback_for_test();
+    assert!(
+        kura.persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+            .is_err()
+    );
+    assert!(
+        kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+            .is_err()
+    );
+}
+
+#[test]
+fn carrier_checkpoint_receipt_survives_independent_later_checkpoint_publication() {
+    let (kura, first, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let state_hash = Hash::new(b"first exact checkpoint");
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    let original_bytes = fs::read(kura.wsv_checkpoint_path(1)).unwrap();
+    let mut blocks = DummyBlocks {
+        blocks: vec![first],
+    };
+    let second = blocks.next();
+    let second_artifact = v2_finality_artifact_for_block_with_keys(
+        &second,
+        Some(&artifact),
+        &v2_finality_fixture_keys(),
+        v2_finality_fixture_execution_commitment(),
+    );
+    kura.store_block(second).unwrap();
+    let second_finality = kura.store_v2_finality_artifact(&second_artifact).unwrap();
+    let _second_receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(
+            &second_finality,
+            Hash::new(b"second exact checkpoint"),
+        )
+        .unwrap();
+    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+        .expect("sibling directory timestamps are not checkpoint identity");
+    assert_eq!(
+        fs::read(kura.wsv_checkpoint_path(1)).unwrap(),
+        original_bytes
+    );
+}
+
+#[test]
+fn carrier_checkpoint_receipt_reauthenticates_under_the_original_joint_lease() {
+    let (kura, block, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let state_hash = Hash::new(b"held original durability boundary");
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    let other = Kura::blank_kura_for_testing();
+    other.store_block(block).unwrap();
+    let other_finality = other.store_v2_finality_artifact(&artifact).unwrap();
+    let foreign = other
+        .persist_wsv_checkpoint_for_v2_commit(&other_finality, state_hash)
+        .unwrap();
+    let lease = kura.try_publication_lease().unwrap();
+    for lock in [
+        &kura.prune_lock,
+        &kura.canonical_chain_lock,
+        &kura.lane_geometry_lock,
+        &kura.sidecar_lock,
+    ] {
+        assert!(
+            lock.try_lock().is_none(),
+            "the actual storage fence is retained"
+        );
+    }
+    lease
+        .reauthenticate_checkpoint(&receipt, &artifact, state_hash)
+        .expect("exact read never reacquires its held storage fences");
+    assert!(
+        lease
+            .reauthenticate_checkpoint(&foreign, &artifact, state_hash)
+            .is_err()
+    );
+    assert!(
+        lease
+            .reauthenticate_checkpoint(&receipt, &artifact, Hash::new(b"other State"))
+            .is_err()
+    );
+    let path = kura.wsv_checkpoint_path(1);
+    let bytes = fs::read(&path).unwrap();
+    fs::rename(&path, path.with_extension("retained-original")).unwrap();
+    fs::write(&path, bytes).unwrap();
+    assert!(
+        lease
+            .reauthenticate_checkpoint(&receipt, &artifact, state_hash)
+            .is_err(),
+        "internal exclusion does not excuse checking external file substitution"
+    );
+    drop(lease);
+    assert!(kura.try_publication_lease().is_ok());
+}
+
+#[test]
+fn carrier_checkpoint_receipt_retries_failed_ancestor_sync_without_replacing_the_file() {
+    for target_index in [0, 1] {
+        let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
+        let state_hash = Hash::new(b"actual interrupted checkpoint durability");
+        fail_bound_progress_intent_directory_sync_for_tests(0, target_index);
+        assert!(
+            kura.persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+                .is_err(),
+            "no receipt before every held ancestor durability barrier"
+        );
+        let path = kura.wsv_checkpoint_path(1);
+        let directory = kura.wsv_checkpoint_dir();
+        let before = kura
+            .read_regular_sidecar_snapshot(&path, &directory, MAX_WSV_CHECKPOINT_BYTES)
+            .unwrap()
+            .expect("actual stable file was promoted before the injected failure");
+        let receipt = kura
+            .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+            .unwrap();
+        kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+            .unwrap();
+        let after = kura
+            .read_regular_sidecar_snapshot(&path, &directory, MAX_WSV_CHECKPOINT_BYTES)
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.bytes, after.bytes);
+        assert!(
+            Kura::stable_sidecar_file_binding_unchanged(&before.metadata, &after.metadata),
+            "retry must synchronize the original exact file instead of replacing it"
+        );
+    }
+}
+
+#[test]
+fn carrier_checkpoint_receipt_retains_original_ancestor_objects() {
+    let (kura, _, artifact, finality) = carrier_checkpoint_receipt_fixture();
+    let state_hash = Hash::new(b"original checkpoint ancestor ownership");
+    let receipt = kura
+        .persist_wsv_checkpoint_for_v2_commit(&finality, state_hash)
+        .unwrap();
+    let directory = kura.wsv_checkpoint_dir();
+    let displaced = directory.with_extension("retained-original");
+    let path = kura.wsv_checkpoint_path(1);
+    let bytes = fs::read(&path).unwrap();
+    fs::rename(&directory, &displaced).unwrap();
+    fs::create_dir(&directory).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let lease = kura.try_publication_lease().unwrap();
+    assert!(
+        lease
+            .reauthenticate_checkpoint(&receipt, &artifact, state_hash)
+            .is_err(),
+        "identical bytes below a replacement ancestor cannot replace the held namespace"
+    );
+    drop(lease);
+    fs::remove_file(&path).unwrap();
+    fs::remove_dir(&directory).unwrap();
+    fs::rename(&displaced, &directory).unwrap();
+    kura.reauthenticate_wsv_checkpoint_receipt(&receipt, &artifact, state_hash)
+        .expect("the original live file and ancestor objects are retained");
 }

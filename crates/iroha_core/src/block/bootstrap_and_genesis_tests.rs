@@ -119,18 +119,39 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
         pipeline.workers = 2;
         state.set_pipeline(pipeline.clone());
         let (_genesis_handle, genesis_time_source) = TimeSource::new_mock(Duration::from_millis(1));
-        let genesis = BlockBuilder::new_with_time_source(Vec::new(), genesis_time_source)
-            .chain(0, None)
-            .sign(leader.private_key())
-            .unpack(|_| {});
+        let genesis_account = AccountId::new(leader.public_key().clone());
+        let genesis_transaction = TransactionBuilder::new_genesis_with_time_source(
+            genesis_account.clone(),
+            &genesis_time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "bootstrap fixture genesis".to_owned(),
+        )])
+        .sign(leader.private_key());
+        let genesis = BlockBuilder::new_with_time_source(
+            vec![AcceptedTransaction::new_unchecked(Cow::Owned(
+                genesis_transaction,
+            ))],
+            genesis_time_source,
+        )
+        .chain(0, None)
+        .sign(leader.private_key())
+        .unpack(|_| {});
         let mut genesis_state_block = state.block(genesis.header());
-        let valid_genesis = genesis
-            .validate_and_record_transactions(&mut genesis_state_block)
-            .unpack(|_| {});
+        let mut genesis: SignedBlock = genesis.into();
+        ValidBlock::execute_block_outputs_for_test(
+            &mut genesis,
+            &mut genesis_state_block,
+            Some(&genesis_account),
+        )
+        .expect("configured genesis key authorizes actual genesis execution");
+        let valid_genesis = ValidBlock::new_unverified_for_tests(genesis);
         let genesis_signed = valid_genesis.as_ref().clone();
         genesis_state_block
             .commit()
-            .expect("commit empty genesis block");
+            .expect("commit actual configured-key genesis block");
         let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
         let (_registration_handle, registration_time) =
             TimeSource::new_mock(Duration::from_millis(10));
@@ -163,7 +184,9 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             .unpack(|_| {});
         let registration_errors = valid_registration
             .as_ref()
-            .errors()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
             .map(|(index, error)| format!("{index}: {error:?}"))
             .collect::<Vec<_>>();
         assert!(
@@ -228,7 +251,9 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             .unpack(|_| {});
         let deployment_errors = valid_deployment
             .as_ref()
-            .errors()
+            .output_results()
+            .enumerate()
+            .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
             .map(|(index, error)| format!("{index}: {error:?}"))
             .collect::<Vec<_>>();
         assert!(
@@ -316,7 +341,12 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             .validate_and_record_transactions(&mut rejected_state_block)
             .unpack(|_| {});
         assert_eq!(
-            valid_rejected.as_ref().errors().count(),
+            valid_rejected
+                .as_ref()
+                .output_results()
+                .enumerate()
+                .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
+                .count(),
             4,
             "existing-authority replay, decorated, missing, and malformed self-grants must all reject"
         );
@@ -366,7 +396,17 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             &committed_rejected,
         ] {
             let mut replay_block = replay_state.block(committed.as_ref().header());
-            let _ = replay_block.apply(committed, Vec::new());
+            replay_block
+                .apply_fixture_block(
+                    committed,
+                    Vec::new(),
+                    committed
+                        .as_ref()
+                        .header()
+                        .is_genesis()
+                        .then_some(&genesis_account),
+                )
+                .expect("replay actual phases and compare complete authenticated output metadata");
             replay_block
                 .commit()
                 .expect("committed manager-sponsored registration and upload must replay");

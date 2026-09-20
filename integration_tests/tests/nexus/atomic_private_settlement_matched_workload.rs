@@ -1022,7 +1022,7 @@ mod tests {
     fn matched_business_receipt_requires_complete_intent_and_canonical_carrier() {
         let workload = MatchedBenchmarkWorkloadV1::new(3, 8, 9, false).unwrap();
         let settlement = workload.settlement(network_id(), 1000).unwrap();
-        let carrier = BlockHeader::new(NonZeroU64::new(500).unwrap(), None, None, None, 1234, 0);
+        let carrier = BlockHeader::new(NonZeroU64::new(500).unwrap(), None, None, 1234, 0);
         let receipt = SettlementReceipt {
             authority: ALICE_ID.clone(),
             metadata: Metadata::default(),
@@ -1092,6 +1092,13 @@ mod tests {
                     reason.to_owned().into(),
                 )),
             )));
+            let output = iroha::data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha::data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result,
+                    completions: Vec::new(),
+                },
+            );
             iroha_torii_shared::PipelineTransactionDetailsResponse {
                 hash: replay.hash_as_entrypoint().to_string(),
                 transaction: CommittedTransaction {
@@ -1099,12 +1106,10 @@ mod tests {
                     entrypoint_hash: replay.hash_as_entrypoint(),
                     entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
                     entrypoint: TransactionEntrypoint::External(replay.clone()),
-                    result_hash: result.hash(),
-                    result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-                    result,
-                    merge_inclusion: None,
+                    output_hash: iroha_crypto::HashOf::new(&output),
+                    output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+                    output,
                 },
-                trigger_completions: Vec::new(),
             }
         };
         validate_matched_replay_details(&make(&expected), &replay, &settlement).unwrap();

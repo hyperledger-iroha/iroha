@@ -292,6 +292,7 @@ impl<'registry, 'body> AuthenticatedRecoveredWalValidateParent<'registry, 'body>
             repair,
             validation,
             reservation: RecoveredWalValidateRegistryReservation {
+                child_storage: Box::new_uninit(),
                 registry,
                 parent_address: address,
                 child: None,
@@ -410,7 +411,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             || self
                 .registry_for_test_mut()
                 .entries
-                .insert(address, work)
+                .insert(address, Box::new(work))
                 .is_some()
         {
             return None;
@@ -513,7 +514,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             || self
                 .registry_for_test_mut()
                 .entries
-                .insert(broadcast_address, work)
+                .insert(broadcast_address, Box::new(work))
                 .is_some()
         {
             return None;
@@ -691,9 +692,21 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
 
         let mut registry = Self::empty();
         let entries = &mut registry.registry_for_test_mut().entries;
-        assert!(entries.insert(broadcast_address, broadcast_work).is_none());
-        assert!(entries.insert(paired_address, paired_work).is_none());
-        assert!(entries.insert(unrelated_address, unrelated_work).is_none());
+        assert!(
+            entries
+                .insert(broadcast_address, Box::new(broadcast_work))
+                .is_none()
+        );
+        assert!(
+            entries
+                .insert(paired_address, Box::new(paired_work))
+                .is_none()
+        );
+        assert!(
+            entries
+                .insert(unrelated_address, Box::new(unrelated_work))
+                .is_none()
+        );
         let _ = registry
             .registry_for_test()
             .attest_ready_recovered_lifecycle_signed_broadcast_and_next_vote(
@@ -931,7 +944,7 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
             }),
         };
         self.registry_for_test_mut()
-            .install(address, replacement_digest, work)
+            .install(address, replacement_digest, Box::new(work))
             .unwrap_or_else(|(error, _work)| {
                 panic!("install recovered-WAL Validate fixture: {error:?}")
             });

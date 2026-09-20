@@ -89,7 +89,7 @@ def hash_literal(number: int, *, mark: bool = True) -> str:
     return f"hash:{body}#{crc:04X}"
 
 
-def observation(peer: int, finalized: bool, *, staged: bool = False, baseline_height: int = 302,
+def observation(peer: int, finalized: bool, *, staged: bool = False, local_only: bool = False, baseline_height: int = 302,
                 finalized_height: int = 306) -> dict:
     """Build bound synthetic raw state bytes with the current two-input/three-output counts."""
     counts = {name: 0 for name in M.release_runner.FAULT_STATE_COUNT_FIELDS}
@@ -100,11 +100,11 @@ def observation(peer: int, finalized: bool, *, staged: bool = False, baseline_he
             counts[name] += delta
     if staged:
         counts.update(staged_pool_heads=1, staged_nullifiers=2, staged_output_commitments=3,
-                      staged_locks=6, replicated_staged_locks=28)
+                      staged_locks=6, replicated_staged_locks=0 if local_only else 28)
     response = {"format_version": 1, "height": finalized_height if finalized else baseline_height,
                 "commitment": hash_literal(24 if finalized else 23),
                 "ledger_commitment": hash_literal(12 if finalized else 11),
-                "replicated_staged_lock_commitment": hash_literal(14 if staged else 13),
+                "replicated_staged_lock_commitment": hash_literal(14 if staged and not local_only else 13),
                 "staged_lock_commitment": hash_literal(16 if staged else 15), "counts": counts}
     raw = M.canonical(response)
     return {"peer_index": peer, "response_sha256": M.sha(raw), "response_hex": raw.hex(),
@@ -112,12 +112,13 @@ def observation(peer: int, finalized: bool, *, staged: bool = False, baseline_he
 
 
 def continuous(peer: int, bundle: bytes, *, baseline_height: int = 302,
-               finalized_height: int = 306) -> dict:
+               finalized_height: int = 306, reconciling: bool = False,
+               terminal_staged: bool = False) -> dict:
     """Build an independent response/phase hash-chain fixture with one live baseline poll."""
     observations = [observation(peer, False, baseline_height=baseline_height),
                     observation(peer, False, staged=True, baseline_height=baseline_height),
-                    observation(peer, True, finalized_height=finalized_height),
-                    observation(peer, True, finalized_height=finalized_height)]
+                    observation(peer, True, finalized_height=finalized_height, staged=reconciling, local_only=True),
+                    observation(peer, True, finalized_height=finalized_height, staged=terminal_staged, local_only=True)]
     classes = ["baseline", "baseline", "finalized", "finalized"]
     response_chain = hashlib.sha256(b"iroha:aps-fault-continuous-observation:v1\0" + bundle + struct.pack("<Q", peer))
     for row in observations:
@@ -280,6 +281,33 @@ class SmokeEvidenceTests(unittest.TestCase):
     def test_complete_synthetic_contract_and_live_staged_observation(self) -> None:
         self.assertEqual(self.validate()["continuous_checks"], 64)
         self.assertEqual(len(M.EVIDENCE_NAMES), 80)
+
+    def test_local_reconciliation_preserves_atomic_ledger_and_requires_terminal_cleanup(self) -> None:
+        bundle = bytes(32)
+        before = M.state_identity(observation(0, False), 0, "before")
+        after = M.state_identity(observation(0, True), 0, "after")
+        self.assertEqual(M.validate_continuous(continuous(0, bundle, reconciling=True),
+                                             0, bundle, before, after), 4)
+        for reconciling in (False, True):
+            with self.assertRaises(M.release_runner.RunnerError):
+                M.validate_continuous(continuous(0, bundle, reconciling=reconciling,
+                                                terminal_staged=True),
+                                      0, bundle, before, after)
+        pending = M.state_identity(observation(0, True, staged=True, local_only=True), 0, "pending")
+        local = M.release_runner._validate_finalized_local_reconciliation(pending, after, None)
+        self.assertEqual(local[0], 6)
+        M.release_runner._validate_finalized_local_reconciliation(after, after, local)
+        for invalid in (
+                M.state_identity(observation(0, True, staged=True), 0, "replicated"),
+                (pending[0], pending[1], hash_literal(81), pending[3])):
+            with self.assertRaises(M.release_runner.RunnerError):
+                M.release_runner._validate_finalized_local_reconciliation(invalid, after, local)
+
+    def test_shared_validator_input_layers_retain_unique_process_identity(self) -> None:
+        for name in ("processes-before.json", "processes-after.json"):
+            for row in self.evidence[name]:
+                row["configuration_sha256"] = "9" * 64
+        self.assertEqual(self.validate()["continuous_checks"], 64)
 
     def test_genesis_readiness_height_one_keeps_all_eighty_artifacts_bound(self) -> None:
         self.evidence, self.result = evidence_fixture(
@@ -540,7 +568,7 @@ class SmokeEvidenceTests(unittest.TestCase):
                         if artifact["name"] == "request.json":
                             artifact.update(bytes=len(raw), sha256=M.sha(raw))
                     put(result_path, result)
-                with self.assertRaisesRegex(M.CampaignError, "wrong smoke protocol"):
+                with self.assertRaisesRegex(M.CampaignError, "wrong experiment protocol/kind"):
                     M.validate_run(self.root, request(0), self.sha)
 
     def test_restart_pid_one_is_integer_and_boolean_aliases_are_rejected(self) -> None:

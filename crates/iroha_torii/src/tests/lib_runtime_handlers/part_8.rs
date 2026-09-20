@@ -31,7 +31,10 @@ async fn incoming_verified_query_proxy_rejects_retired_lane_hint() {
 #[cfg(all(feature = "app_api", feature = "connect"))]
 #[tokio::test]
 async fn incoming_verified_query_proxy_rejects_lane_dataspace_mismatch_hint() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
     let response = incoming_verified_query_proxy_response_for_route(app, route).await;
@@ -209,12 +212,34 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
             install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, manifest_bindings)]);
         }
     }
+    // Peer bindings activate at height one. Persist the existing signed block
+    // fixture and its matching State journal before resolving current authority.
+    record_latest_committed_header_for_test(&app, 1, 0);
+    let committed = app
+        .state
+        .view()
+        .canonical_block_by_height(NonZeroUsize::new(1).expect("height one"))
+        .expect("authority fixture has a canonical signed height-one Kura body");
+    assert_eq!(committed.header().height().get(), 1);
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let committee = app
+        .state
+        .resolve_lane_committee(super::lane_authority_route(route))
+        .expect("all four fixture bindings are active at the committed height");
+    assert_eq!(committee.authority_height(), 1);
+    assert_eq!(committee.into_validators().len(), 4);
+    assert_eq!(
+        app.state
+            .manifest_lane_validator_bindings_at_height(LaneId::SINGLE, 1)
+            .len(),
+        4
+    );
     AuthoritativeLaneFixture {
         app,
         local_peer_id,
         authoritative_peer_id,
         fallback_peer_id,
-        route: RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        route,
     }
 }
 
@@ -556,7 +581,6 @@ async fn autoscale_proxy_authority_uses_pinned_committee_not_disjoint_manifest_b
             NonZeroU64::new(1).expect("non-zero authority height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -793,7 +817,6 @@ async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
     }
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
-        None,
         None,
         None,
         0,

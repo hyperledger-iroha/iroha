@@ -21,11 +21,11 @@ pub const AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1: u8 = 1;
 pub const BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1: u8 = 1;
 /// Maximum number of globally ordered queue-plan admission controls in one block.
 pub const MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK: usize = 4_096;
-/// Maximum canonical size of one opaque queue-plan admission certificate.
+/// Maximum canonical size of one complete typed lane admission input.
 pub const MAX_QUEUE_PLAN_ADMISSION_BYTES: usize = 1024 * 1024;
 /// Maximum aggregate queue-plan admission bytes carried by one block.
 pub const MAX_QUEUE_PLAN_ADMISSIONS_BYTES: usize = 4 * 1024 * 1024;
-/// Return whether opaque queue-plan admission bytes fit their block envelope.
+/// Return whether canonical complete lane admission controls fit their block envelope.
 #[must_use]
 pub fn queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool {
     if admissions.len() > MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK {
@@ -353,16 +353,24 @@ pub struct BlockExecutionContextBundle {
     pub autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
     /// Lane-local payload ownership and RBC instance identities aligned by block entrypoint index.
     pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
-    /// Canonical framed queue-plan admission certificates in strict source order.
+    /// Canonical framed [`super::lane_admission::LaneAdmittedInputV1`] controls
+    /// in strict registry-key order, including each exact executable entrypoint.
     ///
-    /// The concrete certificate type belongs to `iroha_core`, so the data
-    /// model retains exact canonical bytes without introducing a dependency
-    /// cycle. Runtime admission decodes, authenticates, and stages the
-    /// certificate bindings through an immutable WSV compare-and-set.
+    /// Each complete control has its own bounded canonical decoding boundary.
+    /// Runtime admission authenticates the certificate and its exact input,
+    /// plan, context and journal claim before the immutable WSV compare-and-set.
+    /// The first finalized carrier is the durable source for replacement committees;
+    /// a certificate-only frame is not a valid admission control.
     pub queue_plan_admissions: Vec<Vec<u8>>,
     /// Merge-committee-certified entry applied before ordinary block entrypoints.
     #[norito(required)]
     pub merge_entry: Option<CertifiedMergeLedgerReference>,
+    /// Exact native Decision sources and applying pre-State binding.
+    /// This required nullable slot has no omitted-field compatibility decoder.
+    /// Heap ownership keeps the large source batch out of every inline carrier copy.
+    /// Shape alone grants no live, historical or application authority.
+    #[norito(required)]
+    pub native_lane_decisions: Option<Box<super::lane_decision_batch::LaneDecisionBatchV1>>,
 }
 impl BlockExecutionContextBundle {
     /// Current supported bundle layout.
@@ -382,6 +390,7 @@ impl BlockExecutionContextBundle {
             lane_payload_ownerships: Vec::new(),
             queue_plan_admissions: Vec::new(),
             merge_entry: None,
+            native_lane_decisions: None,
         }
     }
     /// Attach globally anchored autonomous lane payloads to this bundle.
@@ -402,13 +411,13 @@ impl BlockExecutionContextBundle {
         self.lane_payload_ownerships = lane_payload_ownerships;
         self
     }
-    /// Attach globally ordered queue-plan admission certificate bytes.
+    /// Attach globally ordered complete lane admission input bytes.
     #[must_use]
     pub fn with_queue_plan_admissions(mut self, queue_plan_admissions: Vec<Vec<u8>>) -> Self {
         self.queue_plan_admissions = queue_plan_admissions;
         self
     }
-    /// Return the exact queue-plan admission certificate bytes carried by this bundle.
+    /// Return the exact complete lane admission input bytes carried by this bundle.
     #[must_use]
     pub fn queue_plan_admissions(&self) -> &[Vec<u8>] {
         &self.queue_plan_admissions
@@ -419,6 +428,38 @@ impl BlockExecutionContextBundle {
         self.merge_entry = Some(merge_entry);
         self
     }
+    /// Attach the sole native Decision source batch. Callers must check the full
+    /// carrier shape and authenticate its source before execution or publication.
+    #[must_use]
+    pub fn with_native_lane_decisions(
+        mut self,
+        batch: super::lane_decision_batch::LaneDecisionBatchV1,
+    ) -> Self {
+        self.native_lane_decisions = Some(Box::new(batch));
+        self
+    }
+    /// Reject parallel old/new economic authority in one native carrier.
+    ///
+    /// QueuePlan admissions are independent controls; full block framing and
+    /// execution validation remain the enclosing carrier's responsibility.
+    /// # Errors
+    /// Rejects mixed economic forms, unsupported version or malformed native batch.
+    pub fn validate_native_lane_decisions_shape(&self) -> Result<(), String> {
+        let Some(batch) = &self.native_lane_decisions else {
+            return Ok(());
+        };
+        if !self.has_current_version()
+            || !self.external.is_empty()
+            || !self.autonomous_lane_payloads.is_empty()
+            || !self.lane_payload_ownerships.is_empty()
+            || self.merge_entry.is_some()
+        {
+            return Err(
+                "native decisions cannot coexist with another economic carrier form".into(),
+            );
+        }
+        batch.canonical_hash().map(|_| ())
+    }
     /// Returns true when the bundle carries no execution context.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -427,6 +468,7 @@ impl BlockExecutionContextBundle {
             && self.lane_payload_ownerships.is_empty()
             && self.queue_plan_admissions.is_empty()
             && self.merge_entry.is_none()
+            && self.native_lane_decisions.is_none()
     }
 }
 impl Default for BlockExecutionContextBundle {
@@ -483,7 +525,6 @@ mod tests {
             application_block_header: BlockHeader::new(
                 NonZeroU64::new(2).expect("non-zero block height"),
                 Some(base_state_hash),
-                None,
                 None,
                 7,
                 0,
@@ -784,6 +825,28 @@ mod tests {
             routing_plan_digest: Hash,
             routing_plan_legs: Vec<ExternalExecutionRouteLeg>,
         }
+        #[derive(Encode)]
+        struct PreNativeBlockExecutionContextBundle {
+            version: u8,
+            external: Vec<ExternalExecutionContext>,
+            autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
+            lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+            queue_plan_admissions: Vec<Vec<u8>>,
+            merge_entry: Option<CertifiedMergeLedgerReference>,
+        }
+        let pre_native = PreNativeBlockExecutionContextBundle {
+            version: BlockExecutionContextBundle::VERSION,
+            external: Vec::new(),
+            autonomous_lane_payloads: Vec::new(),
+            lane_payload_ownerships: Vec::new(),
+            queue_plan_admissions: Vec::new(),
+            merge_entry: None,
+        }
+        .encode();
+        assert!(
+            BlockExecutionContextBundle::decode(&mut pre_native.as_slice()).is_err(),
+            "the native carrier slot is required even when empty"
+        );
         #[derive(Encode)]
         struct UnversionedBlockExecutionContextBundle {
             external: Vec<ExternalExecutionContext>,

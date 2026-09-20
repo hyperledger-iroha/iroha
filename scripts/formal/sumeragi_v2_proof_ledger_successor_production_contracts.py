@@ -731,9 +731,522 @@ rejected_lifecycle_decision_apply_sidecars: BTreeMap::new(),
     )
     return errors
 
+
+_RECOVERED_SUCCESSOR_STATUS_OWNER_RELATIONS = (
+    ("ordinary_frontier", "crates/iroha_core/src/sumeragi/status.rs", "", "validate_v2_successor_snapshot", (), (
+        "validate_v2_successor_snapshot_commit_frontier( finalized_height, finalized_height, expected_successor_context_id, successor, )",
+    )),
+    ("checked_frontier", "crates/iroha_core/src/sumeragi/status.rs", "", "validate_v2_successor_snapshot_commit_frontier", (), (
+        "let expected_successor_height = finalized_height.checked_add(1).ok_or(",
+        "if successor.height != expected_successor_height { return Err(V2SuccessorActivationError::SuccessorHeightMismatch",
+        "if successor.last_committed_height != expected_commit_height { return Err(V2SuccessorActivationError::SuccessorParentMismatch",
+        "if successor.height_context_id != expected_successor_context_id { return Err(V2SuccessorActivationError::SuccessorContextMismatch",
+        "if !matches!( successor.liveness.last_progress, Some(marker) if marker.generation == successor.liveness.generation && marker.round.context_id == successor.height_context_id && marker.round.height == successor.height && marker.round.view == successor.view && marker.transition == SumeragiV2ProgressTransition::SuccessorHeightActivated && marker.age_ms == 0 ) { return Err(V2SuccessorActivationError::SuccessorMarkerMismatch); }",
+    )),
+    ("recovered_publish", "crates/iroha_core/src/sumeragi/status.rs", "", "publish_recovered_v2_successor_height_at", (), (
+        "let finalized_height = if authority_kind == SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP { snapshot_height } else { predecessor.height };",
+        "let expected_commit_height = if authority_kind == SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP { finalized_height.checked_add(1).ok_or( V2SuccessorActivationError::SuccessorHeightOverflow(finalized_height), )? } else { finalized_height };",
+        "validate_v2_successor_snapshot_commit_frontier( finalized_height, expected_commit_height, expected_successor_context_id, &successor, )?;",
+        "let published = SUMERAGI_V2_STATUS",
+        "let trace = ProductionRecoveredSuccessorTraceProjection",
+        "let Some(checked_trace) = check_production_recovered_successor_transition(trace) else",
+        "let _authorized_trace = checked_trace.into_projection();",
+        "if let Some(published) = published { return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished( published.height, )); }",
+        "set_v2_status_at(successor, now);",
+    )),
+    ("complete_tip_bridge", "crates/iroha_core/src/sumeragi/status.rs", "", "activate_recovered_complete_tip_v2_height_with_decision_at", (), (
+        "decision: Option<super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,",
+        "if !authority.authorizes_successor_status_with_decision(&successor, decision.as_ref()) { return Err(V2SuccessorActivationError::RecoveredCompleteTipAuthorityMismatch); }",
+        "let predecessor = authority.predecessor().refinement_projection();",
+        "let publication = publish_recovered_v2_successor_height_at( if decision.is_some() { SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP } else { SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP },",
+        "drop(authority); publication",
+    )),
+    ("retired_status", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "RetiredRecoveredCompleteTipActivationAuthorityV1", "authorizes_successor_status_with_decision", (), (
+        "self.authorizes_retained_successor() && self.successor_ledger.context().height() == successor.height && self.complete_tip.successor_context_id() == successor.height_context_id && self.complete_tip.predecessor().height().checked_add(1) == Some(successor.height)",
+        "match decision { Some(decision) => self .complete_tip .authorizes_successor_decision_status(decision, successor), None => successor.last_committed_height == self.complete_tip.predecessor().height(), }",
+    )),
+    ("complete_tip_decision", "crates/iroha_core/src/sumeragi/v2_recovery.rs", "RecoveredCompleteTipActivationAuthority", "authorizes_successor_decision_status", (), (
+        "decision.authorizes( &self.artifact.height_context, &self.artifact.commit_qc, self.activation.successor_context_id(), status, )",
+    )),
+    ("decision_identity", "crates/iroha_core/src/sumeragi/v2_complete_tip_activation.rs", "RecoveredSuccessorDecisionActivationAuthorityV1", "authorizes", (), (
+        "self.wal_identity.is_exact() && self.parent_context == *parent && self.parent_commit_qc == *parent_commit_qc && parent.height.checked_add(1) == Some(self.height) && successor_context_id == self.context_id && status.height_context_id == self.context_id && status.height == self.height && status.last_committed_height == self.height && status.last_committed_subject == Some(self.decision.subject) && status.last_commit_qc.as_ref() == Some(&self.decision_status) && status.phase == wire::SumeragiV2StatusPhase::PendingApply && status.body_state == wire::SumeragiV2BodyState::PendingApply && status.pending_persistence_id.is_none() && !status.restart_required",
+    )),
+    ("decision_mint", "crates/iroha_core/src/sumeragi/v2_complete_tip_activation.rs", "SumeragiV2Adapter", "recovered_successor_decision_activation_authority", (), (
+        "self.ensure_ingress()?;",
+        "let Some(decision) = self.reducer.durable_state().decision() else { return Ok(None); };",
+        "if self.reducer.durable_state().last_id().get() == 0 || self.pending_persistence_id.is_some() || self.reducer.applied_subject().is_some() { return Err(AdapterError::RecoveredSuccessorDecisionActivationMismatch); }",
+        "self.authenticate_recovered_wal_frontier()?;",
+        "let parent = self .parent_verification .as_ref() .ok_or(AdapterError::RecoveredSuccessorDecisionActivationMismatch)?;",
+        "let parent_commit_qc = self .wire_context .parent_commit_qc .as_ref() .ok_or(AdapterError::RecoveredSuccessorDecisionActivationMismatch)?;",
+        "let decision = self .registry .qc_to_wire(decision, self.aggregator.as_ref())?;",
+        "let decision_status = commit_qc_status(&decision, &self.wire_context)?;",
+        "for frame in self.wal.recovered_records().iter().rev() { let (identity, envelope) = self.authenticate_recovered_wal_frame(frame)?; if matches!(envelope.record, WalRecordV2::Decision(candidate) if candidate == decision) { wal_identity = Some(identity); break; } }",
+        "wal_identity.ok_or(AdapterError::RecoveredSuccessorDecisionActivationMismatch)?;",
+        "if parent.context.height.checked_add(1) != Some(self.wire_context.height) || parent_commit_qc.round.context_id != parent.context.id() || parent_commit_qc.round.height != parent.context.height { return Err(AdapterError::RecoveredSuccessorDecisionActivationMismatch); }",
+        "Ok(Some(RecoveredSuccessorDecisionActivationAuthorityV1 { wal_identity, parent_context: parent.context.clone(), parent_commit_qc: parent_commit_qc.clone(), context_id: self.wire_context.id(), height: self.wire_context.height, decision, decision_status, }))",
+    )),
+    ("runner_publish", "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs", "ProductionLifecycleCompleteTipRunnerActivationV1", "open_and_publish_with_decision", (), (
+        "self.ingress_ready.store(false, Ordering::Release);",
+        "if !Arc::ptr_eq(&self.block_ingress, launched_ingress) { self.block_ingress.close(); return Err(V2RunnerError::LifecycleActivationIngressMismatch); }",
+        "if !retirement.authorizes_successor_status_with_decision(&successor, decision.as_ref()) { self.block_ingress.close(); return Err(V2RunnerError::CompleteTipSuccessorAuthorityInvalid",
+        "self.block_ingress.open().map_err(ingress_capacity_error)?;",
+        "if let Err(error) = super::super::status::activate_recovered_complete_tip_v2_height_with_decision( retirement, successor, decision, ) { self.block_ingress.close(); return Err(error.into()); }",
+        "self.ingress_ready.store(true, Ordering::Release);",
+    )),
+    ("retained_floor", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "RetiredRecoveredCompleteTipActivationAuthorityV1", "frame_descends_from_retained_floor", (), (
+        "ledger.context() == self.successor_store.context && if ledger.records.is_empty() { ledger.producer_debts.is_empty() && ledger.high_water == self.retained_high_water } else { ledger.high_water >= self.retained_high_water && ledger.records.iter().all(|record| { record.ordinal() > self.retained_high_water && record.owner().first_admission_ordinal() > self.retained_high_water }) }",
+    )),
+    ("retained_parent", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "RetiredRecoveredCompleteTipActivationAuthorityV1", "predecessor_remains_exact", (), (
+        "self.predecessor_ledger.frame_identity() == self.predecessor_frame_identity && self .predecessor_store .is_authorized_complete_tip_predecessor_target(&self.complete_tip) && self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+    )),
+    ("retained_frame", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "RetiredRecoveredCompleteTipActivationAuthorityV1", "authorizes_owner_open_successor", (), (
+        "successor == &self.successor_ledger && self.successor_descends_from_retirement()",
+    )),
+    ("retained_successor", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "RetiredRecoveredCompleteTipActivationAuthorityV1", "authorizes_retained_successor", (), (
+        "let Some(successor_root) = self.successor_store.path.parent() else { return false; };",
+        "self.predecessor_remains_exact() && self.successor_descends_from_retirement() && self.complete_tip.authorizes_successor_lifecycle_target( successor_root, self.successor_ledger.context(), ) && self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)",
+    )),
+    ("publication_target", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "LifecycleLedgerStoreV1", "same_publication_target", (), (
+        "self.path == other.path && self.directory.same_directory(&other.directory) && self.context == other.context && self.max_records == other.max_records && self.max_frame_bytes == other.max_frame_bytes",
+    )),
+    ("publication_open", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "LifecycleLedgerStoreV1", "open", (), (
+        "owner_open_publications: std::sync::Arc::new(std::sync::Mutex::new(None)),",
+        "let ledger = store.load()?; let frame = ledger.frame_identity(); store.owner_open_publications = std::sync::Arc::new(std::sync::Mutex::new(Some((frame, frame)))); Ok((store, ledger))",
+    )),
+    ("publication_cas", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "LifecycleLedgerStoreV1", "persist_exact_successor", (), (
+        "let guard = self.directory.lock()?; let (loaded, frame_present) = self.load_with_frame_presence_locked(&guard)?; if loaded != *current { return Err(LifecycleLedgerError::InvalidLedger(",
+        "let publication = self .owner_open_publications .lock() .ok() .filter(|lineage| lineage.is_some()) .map(|_| (current.frame_identity(), successor.frame_identity()));",
+        "if current != successor || !frame_present { self.persist_locked(&guard, successor)?; }",
+        "if let Some((current_identity, successor_identity)) = publication { self.record_owner_open_publication(current_identity, successor_identity); }",
+    )),
+    ("publication_record", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "LifecycleLedgerStoreV1", "record_owner_open_publication", (), (
+        "let Ok(mut lineage) = self.owner_open_publications.lock() else { return; };",
+        "if let Some((_, previous)) = lineage.as_mut() { if *previous == current { *previous = successor; } else { *lineage = None; } }",
+    )),
+    ("publication_take", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_store.rs", "LifecycleLedgerStoreV1", "take_owner_open_successor", (), (
+        "self.owner_open_publications.lock().ok()?.take()?;",
+        "(predecessor_frame_identity != successor_frame_identity).then(|| { AuthenticatedRecoveredOwnerOpenSuccessorV1 { store: self.clone(), context: self.context, predecessor_frame_identity, successor_frame_identity, } })",
+    )),
+    ("publication_join", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "AuthenticatedRecoveredOwnerOpenSuccessorV1", "authorizes_complete_tip_owner_join", (), (
+        "self.store.same_publication_target(retirement_store) && self.store.same_publication_target(owner_store) && self.context == retirement_store.context && self.context == owner_store.context && frozen.context() == self.context && loaded.context() == self.context && coordinator.context() == self.context && frozen.frame_identity() == self.predecessor_frame_identity && loaded.frame_identity() == self.successor_frame_identity && coordinator.frame_identity() == self.successor_frame_identity && retirement_store.load().ok().as_ref() == Some(loaded) && owner_store.load().ok().as_ref() == Some(loaded) && self.store.load().ok().as_ref() == Some(loaded)",
+    )),
+    ("publication_bind", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs", "RetiredRecoveredCompleteTipActivationAuthorityV1", "bind_successor_owner",
+     ('#[cfg_attr(not(test), allow(dead_code))]',), (
+        "let Ok(successor_ledger) = self.successor_store.load() else { return Err(CompleteTipSuccessorOwnerBindErrorV1); };",
+        "let retirement_frame_authorizes = self.authorizes_owner_open_successor(&successor_ledger);",
+        "let owner_open_publication_authorizes = if retirement_frame_authorizes { false } else if !self.successor_descends_from_retirement() || !self.frame_descends_from_retained_floor(&successor_ledger) || !self.predecessor_remains_exact() { false } else",
+        "LifecycleLedgerV1::from_coordinator(&owner.coordinator)",
+        "owner .owner_open_successor .as_ref() .is_some_and(|successor| { successor.authorizes_complete_tip_owner_join( &self.successor_store, owner_store, &self.successor_ledger, &successor_ledger, &coordinator_ledger, ) })",
+        "if (!retirement_frame_authorizes && !owner_open_publication_authorizes) || !self.matches_successor_owner_ledger(&mut owner, &successor_ledger) { return Err(CompleteTipSuccessorOwnerBindErrorV1); }",
+        "owner .owner_open_successor .take()",
+        "self.successor_frame_identity = successor_ledger.frame_identity(); self.successor_ledger = successor_ledger; if !self.exactly_matches_successor_owner(&mut owner) { return Err(CompleteTipSuccessorOwnerBindErrorV1); }",
+        "Ok(BoundRecoveredCompleteTipSuccessorOwnerV1 { owner, retirement: self, })",
+    )),
+    ("activation", "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs", "LaunchedProductionLifecycleV1", "activate_with", (), (
+        "if let Some(error) = lifecycle_activation_recovery_blocker( self.pending_kura_apply_replay.is_some(), self.executor .pending_kura_apply_recovery_evidence() .is_some(), self.recovered_local_proposal_attempt.is_some(), ) { self.services .lifecycle_output_guard() .close_admission_for_restart(); return Err(error); }",
+        "let activation = output_guard .begin_fail_stop_operation()",
+        "if !local_proposal.exactly_matches(self.executor.context().id(), current_directive) { return Err(ProductionLifecycleActivationErrorV1::LocalProposalPreparationMismatch); }",
+        "let recovered_decision = if matches!( publication, ProductionLifecycleActivationPublicationV1::RecoveredCompleteTip { .. } ) { self.executor .recovered_successor_decision_activation_authority() .map_err(ProductionLifecycleActivationErrorV1::Status)? } else { None };",
+        "self.executor .arm_live_clocks(clock_activation, now)",
+        ".successor_activation_status_snapshot()",
+        "self.completion_observer_activation.take()",
+        ".activate_effect_completion_observer(observer)",
+        "let runner_activation = publication.open_and_publish( &self.leader_wire_ingress_binding.ingress, status, recovered_decision, )?; activation.complete();",
+        "Ok(ActivatedProductionLifecycleV1 { runner_activation, local_proposal, launched: self, })",
+    )),
+    ("publication_variant", "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs", "ProductionLifecycleActivationPublicationV1", "open_and_publish", (), (
+        "self, ingress: &Arc<FairV2Ingress>, status: wire::SumeragiV2Status, decision: Option<super::super::v2::RecoveredSuccessorDecisionActivationAuthorityV1>,",
+        "Self::Runner(runner) => { if decision.is_some() { return Err(ProductionLifecycleActivationErrorV1::Status( super::super::v2::AdapterError::RecoveredSuccessorDecisionActivationMismatch, )); } runner.open_and_publish(ingress, status) }",
+        "Self::RecoveredCompleteTip { runner, retirement } => { runner.open_and_publish_with_decision(ingress, retirement, status, decision) }",
+    )),
+    ("ordinary_publication", "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs", "ProductionLifecycleRunnerActivationV1", "open_and_publish", (), (
+        "self.ingress_ready.store(false, Ordering::Release); if !Arc::ptr_eq(&self.block_ingress, launched_ingress) { self.block_ingress.close(); return Err(V2RunnerError::LifecycleActivationIngressMismatch); } self.block_ingress.open().map_err(ingress_capacity_error)?;",
+        "ProductionLifecycleRunnerStatusAuthorityV1::CurrentHeight => { super::super::status::set_v2_status(successor); Ok(()) }",
+        "super::super::status::activate_v2_successor_height( expected_predecessor, authority, successor, )",
+        "super::super::status::activate_snapshot_bootstrap_v2_height(authority, successor)",
+        "if let Err(error) = publication { self.block_ingress.close(); return Err(error); } self.ingress_ready.store(true, Ordering::Release);",
+    )),
+    ("ready_validate_install", "crates/iroha_core/src/sumeragi/v2_ready_durable_validate_adapter_preview.rs", "PreparedReadyDurableValidatePersistedSign<'_>", "install_registry_and_commit_adapter", ("#[inline(never)]",), (
+        "mut self: Box<Self>, reservation: Box<LiveValidateSignRegistryReservation<'_>>",
+        "let work = self .registry_work .take()",
+        "let reservation = *reservation; work.install_into(reservation); self.commit_after_standalone_admission();",
+    )),
+    ("ready_validate_commit", "crates/iroha_core/src/sumeragi/v2_ready_durable_validate_adapter_preview.rs", "PreparedReadyDurableValidatePersistedSign<'_>", "commit_after_standalone_admission", ("#[inline(never)]",), (
+        "assert!(self.armed && self.persisted_sign.is_none() && self.registry_work.is_none());",
+        "let next_reducer = self .next_reducer .take()",
+        "let next_registry = self .next_registry .take()",
+        "let committed_status = self .committed_status .take()",
+        "self.adapter.reducer = next_reducer; self.adapter.registry = next_registry; self.adapter.pending_persistence_id = None; self.adapter.reducer_fence_generation = self.next_fence_generation;",
+        "self.armed = false; if self.adapter.status_publication_enabled { super::status::set_v2_status(committed_status); }",
+    )),
+)
+
+
+def _reviewed_recovery_owner_item(path, source, owner, name, attributes, errors):
+    expected_context = (tuple(rust_code_tokens("impl " + owner)),) if owner else ()
+    items = [item for item in rust_items(source, name) if item.brace_context == expected_context]
+    if len(items) != 1:
+        errors.append(f"{path}: recovered successor status requires exactly one {owner}::{name}; found {len(items)}")
+        return None
+    item = items[0]
+    _require_rust_item_context(path, item, expected_context, "recovered successor status", errors,
+                               expected_attributes=attributes)
+    return item
+
+
+def _reviewed_recovery_owner_relation_errors(repo_root, relations, label) -> list[str]:
+    """Bind executable defining-owner sequences without masking authority or order."""
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for key, relative, owner, name, attributes, sequences in relations:
+        path = repo_root / relative
+        if relative not in sources:
+            try:
+                sources[relative] = path.read_text(encoding="utf-8")
+            except OSError as error:
+                errors.append(f"{path}: {label} source unreadable: {error}")
+                continue
+        item = _reviewed_recovery_owner_item(path, sources[relative], owner, name, attributes, errors)
+        if item is None:
+            continue
+        tokens = rust_code_tokens(item.source)
+        cursor = 0
+        for sequence in sequences:
+            expected = rust_code_tokens(sequence)
+            found = next((position for position in range(cursor, len(tokens) - len(expected) + 1)
+                          if tokens[position:position + len(expected)] == expected), None)
+            if found is None:
+                errors.append(f"{path}: {label} {key} must preserve exact owner/order {sequence!r}")
+                break
+            cursor = found + len(expected)
+    return errors
+
+
+
+def _recovered_successor_status_owner_errors(repo_root: Path) -> list[str]:
+    return _reviewed_recovery_owner_relation_errors(
+        repo_root, _RECOVERED_SUCCESSOR_STATUS_OWNER_RELATIONS, "recovered successor status",
+    )
+
+
+
+_TERMINAL_VALIDATE_OWNER_RELATIONS = (
+    ("bound_only", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "DurableValidateRetrySealV1", "lifecycle_ordinal", (), (
+        "match self.lifecycle_state() { DurableValidateRetryLifecycleStateV1::Bound(ordinal) => Some(*ordinal), DurableValidateRetryLifecycleStateV1::PendingAdmission | DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_) => None, }",
+    )),
+    ("bind", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "DurableValidateRetrySealV1", "bind_lifecycle_ordinal", (), (
+        "if ordinal == 0 { return Err(",
+        "DurableValidateRetryLifecycleStateV1::PendingAdmission => { *state = DurableValidateRetryLifecycleStateV1::Bound(ordinal); Ok(()) }",
+        "DurableValidateRetryLifecycleStateV1::Bound(existing) if *existing == ordinal => Ok(())",
+        "DurableValidateRetryLifecycleStateV1::Bound(_) => { Err(",
+        "DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_) => Err(",
+    )),
+    ("release", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "DurableValidateRetrySealV1", "release_lifecycle_ordinal", (), (
+        "outcome: Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,",
+        "if self.lifecycle_state() != &DurableValidateRetryLifecycleStateV1::Bound(outcome.ordinal()) { return Err(",
+        "Self::Live { lifecycle_state, .. } | Self::Recovered { lifecycle_state, .. } => { *lifecycle_state = DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(outcome) }",
+    )),
+    ("protected_readmission", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "DurableValidateRetrySealV1", "permits_resolved_readmission", (), (
+        "if !matches!( self.lifecycle_state(), DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_) ) { return Ok(false); } current_protected_body_occurrence(effect, incoming, frontier)",
+    )),
+    ("incoming_authority", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "", "current_protected_body_occurrence", (), (
+        "if frontier.tag != Some(*tag) { return Ok(false); }",
+        "let binding = incoming .exact_pending_adapter_effect_binding(effect)",
+        "let statement = binding.candidate_statement().ok_or_else",
+        "if statement.context_id() != round.context_id || statement.proposal_round() != *round || statement.subject() != Some(*subject) { return Err(",
+        "None => false,",
+        "Some(wire::GlobalPhase::Prepare) => { frontier.decision.is_none() && frontier.lock_is_authoritative && (frontier.locked_body == Some((*round, *subject)) || current_prepare_statement_matches_frontier(statement, *tag, frontier)) && statement.execution_commitment().is_some() }",
+        "Some(wire::GlobalPhase::Commit) => frontier.decision.is_some_and(|decision| { statement.round() == decision.0 && statement.proposal_round() == decision.1 && statement.subject() == Some(decision.2) && statement.execution_commitment() == Some(decision.3) })",
+    )),
+    ("current_prepare", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "", "current_prepare_statement_matches_frontier", (), (
+        "frontier.tag == Some(tag) && frontier.decision.is_none() && frontier.highest_prepare.is_some_and(|certificate| { certificate.phase == wire::GlobalPhase::Prepare && certificate.round.view == tag.view() && statement.phase() == Some(wire::GlobalPhase::Prepare) && certificate.round == statement.round() && certificate.proposal_round == statement.proposal_round() && Some(certificate.subject) == statement.subject() && Some(certificate.execution_commitment) == statement.execution_commitment() })",
+    )),
+    ("cold_mint", "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs", "ResolvedLifecycleValidateOutcomeV1", "from_cold_claim", (), (
+        "claim.matches_outcome(&outcome).then_some(Self { origin: ResolvedValidateOriginV1::Cold(claim), outcome, })",
+    )),
+    ("durable_mint", "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs", "<'coordinator, 'registry, 'adapter> PreparedSealedValidateNoSuccessorTransition<'coordinator, 'registry, 'adapter>", "persist_and_publish", ("#[allow(clippy::result_large_err)]",), (
+        "let terminal = staged.records[&parent_ordinal].clone(); let metadata = staged.durable_records[&parent_ordinal].clone();",
+        "let pending = preview .prepare_terminal_pending_fingerprint()",
+        "if let Err(error) = coordinator.persist_exact_staged_successor(&staged)",
+        "coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure); return Err(SealedValidateNoSuccessorPublicationError { _coordinator: coordinator, _preview: preview, _staged: staged, _error: error, });",
+        "*coordinator = staged; let outcome = preview.publish_no_successor_after_ledger_fsync(terminal, metadata, pending); assert!(outcome.matches_terminal(coordinator)); Ok(outcome)",
+    )),
+    ("original_outcome", "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs", "<'registry> PreparedReadyDurableValidateAdapterPreview<'registry, '_>", "publish_no_successor_after_ledger_fsync", (), (
+        "assert_eq!(lease.ordinal(), address.ordinal); assert_eq!(lease.owner(), address.owner);",
+        "registry .entries .remove(&address)",
+        "assert!(work.validates_at(address));",
+        "let ConcreteLifecycleWorkKind::DurableValidateCompletion(completion) = work.kind",
+        "assert_eq!(terminal.ordinal, address.ordinal); assert_eq!(terminal.owner, address.owner); assert_eq!(terminal.key, lease.key()); assert_eq!(terminal.work_class, LifecycleWorkClass::Validate);",
+        "assert_eq!( terminal.state, super::LifecycleState::Terminal(super::TerminalOutcome::Advanced) );",
+        "assert_eq!( metadata.continuation, super::schema::DurableContinuation::AdvancedNoSuccessor );",
+        "let outcome = ResolvedLifecycleValidateOutcomeV1 { origin: ResolvedValidateOriginV1::Live { terminal, metadata, effect: completion.incumbent.effect, pending, }, outcome: completion.outcome, }; adapter.commit_no_successor_after_durable_ledger(); outcome",
+    )),
+    ("original_occurrence", "crates/iroha_core/src/sumeragi/v2_effects.rs", "<R: EffectRuntime> V2EffectExecutor<R>", "retain_effect_batch_at_frontier", (), (
+        "if let AdapterEffect::ValidateBody { round, subject, .. } = effect && self .cold_resolved_validate_outcomes .contains_key(&(*round, *subject))",
+        "if retained_validate_retry_seals.contains_key(&key) || retained_published_validate_retry_markers.contains_key(&key) || self.pending_durable_validate_admissions.contains_key(&key)",
+        "current_protected_body_occurrence(effect, evidence, frontier)",
+        "let projected = seal .project_retry(effect, evidence)",
+        "let readmit_resolved = seal .permits_resolved_readmission(effect, evidence, frontier)",
+        "if readmit_resolved { if self.pending_durable_validate_admissions.contains_key(&key)",
+        "retained_validate_retry_seals.insert(key, projected.seal); retain_effect.push(true); continue;",
+    )),
+    ("replay_before_admission", "crates/iroha_core/src/sumeragi/v2_effects_lifecycle_admission_settlement.rs", "<R: EffectRuntime> V2EffectExecutor<R>", "validate_body", (), (
+        "let terminal = self.resolved_validate_outcome(key)?.cloned(); if let Some(terminal) = terminal",
+        "self.durable_bodies.get(&key).cloned().ok_or_else",
+        "self .exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?",
+        "self.recovered_bodies.get(&key).cloned().ok_or_else",
+        "if recovered != receipt { return Err(",
+        "if let Some(previous) = self.pending_resolved_validate_replay.as_ref() && previous.terminal().as_ref() != terminal.as_ref() { return Err(",
+        "PendingResolvedValidateReplayV1::seal_exact_protected_body( effect, ownership, manifest, receipt, certificate, terminal, )",
+        "let previous = self.pending_resolved_validate_replay.replace(pending); assert_eq!(previous.is_some(), replacing_resolved); return Ok(None);",
+        "if let Some(marker) = self .published_lifecycle_validate_retry_markers .get_mut(&key)",
+    )),
+)
+
+
+def _terminal_validate_owner_errors(repo_root: Path) -> list[str]:
+    return _reviewed_recovery_owner_relation_errors(
+        repo_root, _TERMINAL_VALIDATE_OWNER_RELATIONS, "terminal Validate owner",
+    )
+
+
+_CHUNK_SIGNING_OWNER_RELATIONS = (
+    ("canonical_encoder", "crates/iroha_core/src/sumeragi/v2_chunks.rs", "", "encode_payload", (), (
+        "context.validate()?;",
+        "if round.context_id != context.id() || round.height != context.height || Hash::new(payload) != subject.payload_hash { return Err(V2ChunkError::PayloadMismatch); }",
+        "if payload.is_empty() || payload_len > context.da_layout.max_payload_size_bytes { return Err(V2ChunkError::PayloadTooLarge); }",
+        "let chunks = wire::encode_payload_chunks(context.da_layout, payload)?; let manifest = wire::PayloadManifest::derive(context, round, subject, payload_len, &chunks)?; Ok(EncodedV2Payload { manifest, chunks })",
+    )),
+    ("original_parts", "crates/iroha_core/src/sumeragi/v2_chunks.rs", "EncodedV2Payload", "into_parts", (), (
+        "fn into_parts(self) -> (wire::PayloadManifest, Vec<Vec<u8>>) { (self.manifest, self.chunks) }",
+    )),
+    ("sign_encoded", "crates/iroha_core/src/sumeragi/v2_worker_services_impl.rs", "ProductionV2Services", "sign_payload_chunks", (), (
+        "payload: EncodedV2Payload, sender: wire::ValidatorIndex,",
+        "let (manifest, chunks) = payload.into_parts(); let validated = wire::ValidatedPayloadManifest::new(&self.context, manifest)",
+        "if chunks.len() != validated.manifest().chunk_hashes.len() { return Err(",
+        "let manifest_hash = validated.manifest_hash(); let signed = chunks .into_iter() .enumerate() .map(|(index, bytes)|",
+        "let index = u32::try_from(index)",
+        "let mut chunk = wire::PayloadChunk { manifest_hash, index, bytes, sender, signature: Vec::new(), };",
+        "let preimage = validated .committed_chunk_signature_payload(index, sender)",
+        ".signature_preimage(); chunk.signature = Signature::try_new(self.key_pair.private_key(), &preimage)",
+        "Ok((validated, signed))",
+    )),
+    ("validate_manifest", "crates/iroha_data_model/src/block/consensus_v2.rs", "ValidatedPayloadManifest", "new", (), (
+        "manifest.validate(context)?;",
+        "let manifest_hash = HashOf::new(&manifest);",
+        "let roster = context .roster .iter() .map(|entry| entry.validator.clone()) .collect::<Vec<_>>() .into();",
+        "Ok(Self { manifest, manifest_hash, total_chunks, chunk_size_bytes, epoch: context.epoch, roster, })",
+    )),
+    ("committed_preimage", "crates/iroha_data_model/src/block/consensus_v2.rs", "ValidatedPayloadManifest", "committed_chunk_signature_payload", (), (
+        "let manifest = self.manifest(); let chunk_hash = self.chunk_hash(index)?; self.validator(sender)?;",
+        "Ok(PayloadChunkSignaturePayload { protocol_version: PROTOCOL_VERSION, context_id: manifest.round.context_id, epoch: self.epoch, height: manifest.round.height, view: manifest.round.view, subject: manifest.subject, manifest_hash: self.manifest_hash, encoding: manifest.layout.encoding, index, total_chunks: self.total_chunks, chunk_hash, sender, })",
+    )),
+)
+
+
+def _recovered_chunk_signing_owner_errors(repo_root: Path) -> list[str]:
+    errors = _reviewed_recovery_owner_relation_errors(
+        repo_root, _CHUNK_SIGNING_OWNER_RELATIONS, "recovered chunk signing owner",
+    )
+    path = repo_root / "crates/iroha_core/src/sumeragi/v2_chunks.rs"
+    source = path.read_text(encoding="utf-8")
+    declaration = "pub(crate) struct EncodedV2Payload { manifest: wire::PayloadManifest, chunks: Vec<Vec<u8>>, }"
+    if _token_sequence_count(rust_code_tokens(source), rust_code_tokens(declaration)) != 1:
+        errors.append(f"{path}: encoded chunk authority must retain private immutable manifest and chunks")
+    # Private fields make the canonical encoder the only production constructor.
+    if _token_sequence_count(rust_code_tokens(source), rust_code_tokens("EncodedV2Payload { manifest, chunks }")) != 1:
+        errors.append(f"{path}: encoded chunk authority requires its sole canonical constructor")
+    return errors
+
+
+_FIXTURE_DELEGATION_OWNER_RELATIONS = (
+    ("factory_root", "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs", "", "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout", ("#[test]",), (
+        "run_lifecycle_fixture_on_large_stack(",
+        "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body, );",
+    )),
+    ("complete_tip_root", "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs", "", "production_genesis_complete_tip_adopts_control_repair_and_launches", ("#[cfg(feature = \"bls\")]", "#[test]", "#[allow(clippy::too_many_lines)]"), (
+        "run_lifecycle_fixture_on_large_stack(",
+        "production_genesis_complete_tip_adopts_control_repair_and_launches_body, );",
+    )),
+    ("marker_root", "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs", "", "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies", ("#[cfg(feature = \"bls\")]", "#[test]"), (
+        "if std::thread::current().name() != Some(",
+        ") { return run_marker_replay_test_on_stack(); }",
+        "exercise_production_marker_replay_cases(&[ (0xB1_u8, true, false, false, None), (0xB2_u8, false, false, false, None), (0xB3_u8, true, true, false, None), (0xB4_u8, true, false, true, None), (0xB5_u8, true, false, false, Some(false)), (0xB6_u8, true, false, false, Some(true)), (0xB7_u8, true, false, false, Some(true)), ]);",
+    )),
+    ("marker_thread", "crates/iroha_core/src/sumeragi/tests/v2_adapter_main_00.rs", "", "run_marker_replay_test_on_stack", ("#[cfg(feature = \"bls\")]",), (
+        ".spawn(production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies)",
+        "if let Err(payload) = handle.join() { std::panic::resume_unwind(payload); }",
+    )),
+    ("fixture_thread", "crates/iroha_core/src/sumeragi/tests/v2_adapter_main_01.rs", "", "run_lifecycle_fixture_on_large_stack", (), (
+        "name: &'static str, run: fn()",
+        ".spawn(run)",
+        "if let Err(payload) = handle.join() { std::panic::resume_unwind(payload); }",
+    )),
+    ("decision_root", "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery_decision_classifier_cases.rs", "", "recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources", ('#[cfg(feature = "bls")]', "#[test]"), (
+        "run_lifecycle_fixture_on_large_stack(",
+        "recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources_body, );",
+    )),
+)
+
+
+def _fixture_delegation_owner_errors(repo_root: Path) -> list[str]:
+    return _reviewed_recovery_owner_relation_errors(
+        repo_root, _FIXTURE_DELEGATION_OWNER_RELATIONS, "reviewed fixture delegation",
+    )
+
+
+_CONSUMER_ELIGIBILITY_OWNER_RELATIONS = (
+    ("adapter_mint", "crates/iroha_core/src/sumeragi/v2.rs", "SumeragiV2Adapter", "leader_wire_recovery_authority", (), (
+        "LeaderWireRecoveryAuthority::from_adapter(self)",
+    )),
+    ("wal_mint", "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs", "LeaderWireRecoveryAuthority", "from_adapter", (), (
+        "adapter.ensure_ingress()?; let durable = adapter.reducer.durable_state(); let tag = adapter.reducer.current_tag();",
+        "let protected_lock = durable .locked()",
+        "adapter.registry.round_to_wire(certificate.proposal_round()), adapter.registry.subject(certificate.subject())?",
+        "let protected_commit_statement = durable .locked() .filter(|locked| { locked.round().view() == tag.view() || durable.commit_intent_for_lock(locked).is_some() })",
+        "vote_statement_hash( adapter.registry.round_to_wire(locked.proposal_round()), adapter.registry.subject(locked.subject())?, &adapter .registry .execution_commitment(locked.round(), locked.subject())?, )",
+        "Ok(Self { context_id: adapter.frozen_wire_context_id(), height: adapter.wire_context.height, owner: adapter.fingerprints.node.into(), consumer_tag: tag, wal_id: durable.last_id(), decision_durable: durable.decision().is_some(), highest_prepare_view: durable.highest_prepare().map(|qc| qc.round().view()), installed_timeout_view: durable.last_timeout().map(|tc| tc.round().view()), protected_lock, protected_commit_statement,",
+    )),
+    ("authority_hash", "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs", "LeaderWireRecoveryAuthority", "projection_hash", (), (
+        "bytes.extend(self.context_id.encode()); bytes.extend(self.height.to_le_bytes()); bytes.extend(self.owner);",
+        "bytes.extend(self.consumer_tag.height().to_le_bytes()); bytes.extend(self.consumer_tag.view().to_le_bytes()); bytes.extend(self.consumer_tag.generation().get().to_le_bytes()); bytes.extend(self.wal_id.get().to_le_bytes());",
+        "bytes.push(u8::from(self.decision_durable)); bytes.extend(self.highest_prepare_view.encode()); bytes.extend(self.installed_timeout_view.encode()); bytes.extend(self.protected_lock.encode()); bytes.extend(self.protected_commit_statement.encode());",
+    )),
+    ("accepts", "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs", "LeaderWireRecoveryAuthority", "consumer_accepts", (), (
+        "if phase.source_class() != FairV2IngressLeaderWireSourceClass::Control { return true; } if self.decision_durable { return false; } let current_view = self.consumer_tag.view();",
+        "Phase::Proposal | Phase::PrepareVote => view == current_view, Phase::CommitVote => exact_commit,",
+        "Phase::PrepareQc => { view <= current_view && self .highest_prepare_view .is_none_or(|highest| view >= highest) }",
+        "Phase::CommitQc => true, Phase::TimeoutVote => reducer::timeout_vote_view_is_admissible(current_view, view),",
+        "view.checked_add(1).is_some() && (view >= current_view || reducer::strict_same_round_timeout_upgrade_is_allowed( reducer::StrictSameRoundTimeoutUpgradeProjection { current_view, timeout_view: view, installed_same_round: self.installed_timeout_view == Some(view), selected_prepare_present: timeout_prepare_view.is_some(), selected_prepare_view: timeout_prepare_view.unwrap_or(0), highest_prepare_present: self.highest_prepare_view.is_some(), highest_prepare_view: self.highest_prepare_view.unwrap_or(0), locked_prepare_present: self.protected_lock.is_some(), locked_prepare_view: self .protected_lock .map_or(0, |lock| lock.0.view), }, ))",
+    )),
+    ("retains", "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs", "LeaderWireRecoveryAuthority", "retains", (), (
+        "if phase.source_class() != FairV2IngressLeaderWireSourceClass::Control { return true; } if self.decision_durable { return false; } let current_view = self.consumer_tag.view();",
+        "Phase::Proposal | Phase::PrepareVote | Phase::TimeoutVote => view >= current_view, Phase::CommitVote => view >= current_view || exact_commit, Phase::PrepareQc => self .highest_prepare_view .is_none_or(|highest| view >= highest), Phase::CommitQc => true,",
+        "Phase::TimeoutCertificate => { self.consumer_accepts(phase, view, exact_commit, timeout_prepare_view) }",
+    )),
+    ("waiting", "crates/iroha_core/src/sumeragi/v2_leader_wire_consumer.rs", "LeaderWireRecoveryAuthority", "consumer_waits_for", (), (
+        "let exact_commit = position.commit_statement.is_some() && position.commit_statement == self.protected_commit_statement;",
+        "position.context_id == self.context_id && position.height == self.height && self.retains( position.phase, position.view, exact_commit, position.timeout_prepare_view, ) && !self.consumer_accepts( position.phase, position.view, exact_commit, position.timeout_prepare_view, )",
+    )),
+    ("driver", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "RuntimeDriver for SumeragiV2Adapter", "leader_wire_consumer_authority", (), (
+        "self.leader_wire_recovery_authority().map(Some)",
+    )),
+    ("refresh", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "<D: RuntimeDriver> SerializedV2Runtime<D>", "refresh_ingress_consumer_eligibility", (), (
+        "let authority = self .driver .leader_wire_consumer_authority() .map_err(|error| self.close(error))?;",
+        "#[cfg(not(test))] if authority.is_none() { self.latch_fail_closed(",
+        "return Err(RuntimeError::FailClosed); }",
+        "if authority.is_some_and(|authority| authority.consumer_tag() != self.driver.current_tag())",
+        "return Err(RuntimeError::FailClosed);",
+        "self.ingress .refresh_consumer_authority(authority)",
+    )),
+    ("ingress_refresh", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "<C: ExactRuntimeCommandIdentity> BoundedIngress<C>", "refresh_consumer_authority", (), (
+        "let _ = self.oldest_lifecycle_ordinal()?; for queued in &self.commands { let owner = queued .cached_queue_occurrence_owner(&self.selection_source_identity) .ok_or(EnqueueError::FailClosed)?;",
+        "if !queued.validate_cached_admission_identity() || !owner.validate_exact() || owner.class != queued.class.service_code() || owner.consumer_position != queued.command.leader_wire_consumer_position() { return Err(EnqueueError::FailClosed); } } self.consumer_authority = authority;",
+    )),
+    ("ingress_wait", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "<C: ExactRuntimeCommandIdentity> BoundedIngress<C>", "consumer_waits", (), (
+        "self.consumer_authority.is_some_and(|authority| { queued .cached_queue_occurrence_owner(&self.selection_source_identity) .and_then(|owner| owner.consumer_position) .is_some_and(|position| authority.consumer_waits_for(position)) })",
+    )),
+    ("ready", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "<C: ExactRuntimeCommandIdentity> BoundedIngress<C>", "class_readiness", (), (
+        "self.commands .iter() .any(|queued| queued.class == class && !self.consumer_waits(queued))",
+    )),
+    ("minimum", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "<C: ExactRuntimeCommandIdentity> BoundedIngress<C>", "minimum_lifecycle_for_class", (), (
+        "self.commands .iter() .filter(|queued| queued.class == class && !self.consumer_waits(queued)) .filter_map(|queued| queued.lifecycle_ordinal) .min()",
+    )),
+    ("snapshot_hash", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "", "runtime_queue_ownership_snapshot_projection_hash", (), (
+        "&(Arc::as_ptr(&snapshot.source_identity) as usize).to_le_bytes()",
+        "for owner in &snapshot.occurrence_owners",
+        "owner.projection_hash.as_ref()",
+        "match snapshot.consumer_authority { None => projection.push(0), Some(authority) => { projection.push(1); append_runtime_identity_field(&mut projection, authority.projection_hash().as_ref()); } } append_runtime_identity_u64(&mut projection, snapshot.consumer_pending_count);",
+    )),
+    ("snapshot_partition", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "RuntimeQueueOwnershipSnapshot", "validate_identity", (), (
+        "self.occurrence_scan_complete && u64::try_from(self.occurrence_owners.len()) == Ok(self.projection.len)",
+        "owner.validate_exact() && Arc::ptr_eq(&owner.source_identity, &self.source_identity)",
+        "owner.class == class && !self.consumer_waits_at(*index)",
+        "let pending_count = self .occurrence_owners .iter() .enumerate() .filter(|(index, _)| self.consumer_waits_at(*index)) .count();",
+        "self.projection_hash == runtime_queue_ownership_snapshot_projection_hash(self)",
+        "u64::try_from(pending_count) == Ok(self.consumer_pending_count)",
+        "count.checked_add(self.consumer_pending_count) == Some(self.projection.len)",
+    )),
+    ("select", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "<C: ExactRuntimeCommandIdentity> BoundedIngress<C>", "pop_next_with_selection_kind", (), (
+        "(RuntimeQueueSelectionKind::Ordinary, None) => true,",
+        "let queue_before = self.ownership_snapshot();",
+        "let (completion_ready, progress_ready, normal_ready) = self.class_readiness(); let selection = select_bounded_service_class( cursor_before, completion_ready, progress_ready, normal_ready, );",
+        "check_production_body_service_effective_lock_transition(service_trace)",
+        ".minimum_lifecycle_for_class(class) .ok_or(EnqueueError::FailClosed)?;",
+        "queued.class == class && !self.consumer_waits(queued) && queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)",
+        "if !selected.identity_deep_validated || !identity.validate_exact() || !ingress_exact || !selected.causal_origin.validate_exact() || selected.causal_origin.root_lifecycle_ordinal != Some(lifecycle_ordinal)",
+        "self.mint_selection_seal( selection_kind, lifecycle_upper_bound, &queue_before,",
+        "if !runtime_fifo_candidate_ingress_is_exact(&candidate)",
+        "let _authorized_service = checked_service.into_projection(); self.next_class = next;",
+        "queued.class == skipped_class && queued.lifecycle_ordinal == skipped_minimum && !self.consumer_waits(queued)",
+        "oldest.eligible_skips = oldest .eligible_skips .checked_add(1)",
+        "let command = self .commands .remove(index)",
+        "Ok(Some((command, candidate)))",
+    )),
+    ("selected_seal", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "RuntimeQueueSelectionSeal", "matches_scheduler_occurrence", (), (
+        "self.validate_identity() && self.scheduler_handoff_is_claimed() && Arc::ptr_eq(&self.source_identity, &before.source_identity) && Arc::ptr_eq(&self.source_identity, &after.source_identity)",
+        "self.queue_before_snapshot_hash == before.projection_hash",
+        "self.consumer_pending_count == before.consumer_pending_count && before.consumer_authority == after.consumer_authority && !before.consumer_waits_at(self.selected_position as usize)",
+        "self.selected_identity == candidate.identity && self.selected_tag == candidate.tag && self.selected_causal_origin_hash == candidate.causal_origin.projection_hash",
+        "if retry_retained { after.projection.len == before.projection.len && after.occurrence_owners == before.occurrence_owners && after.occurrence_lifecycle_ordinals == before.occurrence_lifecycle_ordinals } else { after.projection.len.checked_add(1) == Some(before.projection.len)",
+    )),
+    ("step", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "<D: RuntimeDriver> SerializedV2Runtime<D>", "step", (), (
+        "self.refresh_ingress_consumer_eligibility()?;",
+        "self.reconcile_fence_retry_blocked_fifo_owners()",
+        "self.freeze_due_clock_owners(now, external)",
+        "let (work, next_schedule) = self.schedule.select( arbitration.timeout_due, arbitration.periodic_timer_due, arbitration.fifo_ready, ); self.schedule = next_schedule;",
+        "ScheduledWork::Fifo => { return self.dispatch_selected_fifo( now, selected_round_tag, schedule_before, queue_before, arbitration, next_schedule, RuntimeQueueSelectionKind::Ordinary, RuntimeSelectedOwnerKind::Fifo, RuntimeSelectedOwnerKind::FifoRetryRetained, None, external, ); }",
+    )),
+    ("dispatch", "crates/iroha_core/src/sumeragi/v2_runtime.rs", "<D: RuntimeDriver> SerializedV2Runtime<D>", "dispatch_selected_fifo", ("#[allow(clippy::too_many_arguments)]",), (
+        ".pop_next_with_selection_kind(queue_selection_kind, lifecycle_upper_bound)",
+        "owner.lifecycle_ordinal() == candidate.lifecycle_ordinal && owner.causal_origin() == &candidate.causal_origin",
+        "let retry_command = command.clone();",
+        "match self.driver.dispatch(command)",
+        "if retry_unadmitted { if self .ingress .restore_selected_command(retry_command, &candidate) .is_err()",
+        "self.retain_scheduler_ownership( retry_selected_kind, selected_round_tag, RuntimeSelectedCandidateOwnership::Exact(candidate), queue_before, queue_after, arbitration, schedule_before, next_schedule, )?; return Ok(RuntimeStep::Advanced(Vec::new()));",
+        "self.retain_scheduler_ownership( selected_kind, selected_round_tag, RuntimeSelectedCandidateOwnership::Exact(candidate), queue_before, queue_after, arbitration, schedule_before, next_schedule, )?;",
+        "self.finish_dispatched_step( now, effects, RuntimeEffectSource::Fifo, owner, parent_statement, producer_handoff, retained_deferred_ingress, )",
+    )),
+    ("regression", "crates/iroha_core/src/sumeragi/tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs", "", "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc", ("#[test]",), (
+        "Ok(RuntimeStep::Idle)",
+        "assert_eq!(retained.selected, RuntimeSelectedOwnerKind::Idle); assert_eq!(retained.validate_exact(), Ok(()));",
+        "Some(&certificate_receipt)",
+        "wire::ConsensusMessageV2Payload::QuorumCertificate( intervening_certificate.clone(), )",
+        "signed_runtime_proposal(&context, &keys, 0xC2)",
+        "wire::ConsensusMessageV2Payload::TimeoutCertificate( timeout_certificate, )",
+        "runtime.schedule.fifo_owed = true; runtime.ingress.next_class = CommandClass::Progress;",
+        "assert_eq!(tc_scheduler.selected, RuntimeSelectedOwnerKind::Fifo); assert!(tc_scheduler.fifo_owed_before); assert!(!tc_scheduler.fifo_owed_after);",
+        "assert_eq!(normal_debt_after, normal_debt_before + 1);",
+        "tc_candidate.selection_seal.kind, RuntimeQueueSelectionKind::Ordinary",
+        "forged_partition .queue_before_snapshot .consumer_pending_count -= 1;",
+        "forged_partition.projection_hash = runtime_scheduler_projection_hash(&forged_partition);",
+        "forged_partition.validate_exact().is_err()",
+        ".leader_wire_recovery_authority()",
+        ".advance_leader_wire_recovery_cut(entered_authority)",
+        "assert_eq!(runtime.queued_commands(), 3);",
+        "assert_eq!(normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo);",
+        "assert!(runtime.take_leader_wire_runtime_terminals().is_empty()); assert_eq!(runtime.queued_commands(), 2);",
+        "AdapterEffect::FetchBody",
+        "assert_eq!(runtime.queued_commands(), 1);",
+        "remaining == &intervening_certificate",
+    )),
+)
+
+
+def _consumer_eligibility_owner_errors(repo_root: Path) -> list[str]:
+    """Bind retained physical ingress to the WAL consumer and ordinary fair FIFO."""
+    return _reviewed_recovery_owner_relation_errors(
+        repo_root, _CONSUMER_ELIGIBILITY_OWNER_RELATIONS, "consumer eligibility owner",
+    )
+
+
 def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Bind indexed successor and exact-recovery actions to production order."""
-    errors: list[str] = []
+    errors: list[str] = _recovered_successor_status_owner_errors(repo_root)
+    errors.extend(_terminal_validate_owner_errors(repo_root))
+    errors.extend(_recovered_chunk_signing_owner_errors(repo_root))
+    errors.extend(_fixture_delegation_owner_errors(repo_root))
+    errors.extend(_consumer_eligibility_owner_errors(repo_root))
     def load(relative: str) -> tuple[Path, str]:
         return _read_reviewed_rust_source(
             repo_root,
@@ -1318,8 +1831,9 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             "validate_v2_successor_snapshot",
             validate,
             (
+                "validate_v2_successor_snapshot_commit_frontier( finalized_height, finalized_height, expected_successor_context_id, successor, )",
                 "finalized_height.checked_add(1)",
-                "successor.last_committed_height != finalized_height",
+                "successor.last_committed_height != expected_commit_height",
                 "successor.height_context_id != expected_successor_context_id",
                 "marker.round.context_id == successor.height_context_id",
                 "marker.transition == SumeragiV2ProgressTransition::SuccessorHeightActivated",
@@ -1397,7 +1911,7 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             "publish_recovered_v2_successor_height_at",
             recovered,
             (
-                "validate_v2_successor_snapshot(",
+                "validate_v2_successor_snapshot_commit_frontier(",
                 "let published = SUMERAGI_V2_STATUS",
                 "ProductionRecoveredSuccessorTraceProjection",
                 "let Some(checked_trace) = check_production_recovered_successor_transition(trace) else",
@@ -1460,7 +1974,7 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             status_path,
             status_source,
             "activate_recovered_complete_tip_v2_height",
-            "fn activate_recovered_complete_tip_v2_height_at(",
+            "fn activate_recovered_complete_tip_v2_height_with_decision_at(",
             "\nfn activate_snapshot_bootstrap_v2_height_at(",
         )
         require_tokens(
@@ -1468,15 +1982,15 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             "activate_recovered_complete_tip_v2_height",
             complete_tip_activation,
             (
-                "authority.authorizes_successor_status(&successor)",
+                "authority.authorizes_successor_status_with_decision(&successor, decision.as_ref())",
                 "V2SuccessorActivationError::RecoveredCompleteTipAuthorityMismatch",
                 "let predecessor = authority.predecessor().refinement_projection();",
                 "let expected_successor_context_id = successor.height_context_id;",
                 "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
                 "CanonicalIdentityProjection::zero()",
                 "drop(authority);",
-                "pub(in crate::sumeragi) fn activate_recovered_complete_tip_v2_height(",
-                "activate_recovered_complete_tip_v2_height_at(authority, successor, Instant::now())",
+                "pub(in crate::sumeragi) fn activate_recovered_complete_tip_v2_height_with_decision(",
+                "activate_recovered_complete_tip_v2_height_with_decision_at( authority, successor, decision, Instant::now(), )",
             ),
         )
         require_order(
@@ -1484,7 +1998,7 @@ let discovery_was_outstanding = if terminal_finalization_fenced {
             "activate_recovered_complete_tip_v2_height",
             complete_tip_activation,
             (
-                "authority.authorizes_successor_status(&successor)",
+                "authority.authorizes_successor_status_with_decision(&successor, decision.as_ref())",
                 "authority.predecessor().refinement_projection()",
                 "publish_recovered_v2_successor_height_at(",
                 "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
@@ -2043,7 +2557,7 @@ if publish_initial_status {
         )
         ready_validate_publications = tuple(
             item
-            for item in rust_items(adapter_source, "install_registry_and_commit_adapter")
+            for item in rust_items(adapter_source, "commit_after_standalone_admission")
             if item.brace_context == ready_validate_context
         )
         if len(ready_validate_publications) != 1:
@@ -2454,7 +2968,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                     "complete_certified_fetch_for_test(",
                     "RestartRequiredBeforeLedger(",
                     "assert_eq!(failure.work_id(), work_id)",
-                    "assert_eq!( failure.failure(), CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken, )",
+                    "assert_eq!( failure.productive_ingress_failure(), Some(CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken), )",
                     "fixture.executor.output_guard.restart_required()",
                     "owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source)",
                     "owner.fetch_registry_snapshot_for_test()",
@@ -2526,18 +3040,38 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             "certified Fetch pre-Ledger restart owner",
             preledger_restart,
             (
-                "failure: CertifiedFetchPreLedgerProductiveIngressErrorV1",
+                "failure: CertifiedFetchBodyPersistencePreLedgerFailure",
                 "completion: PreparedCertifiedFetchBodyPersistenceCompletion",
-                "pub(crate) const fn failure(&self)",
-                "self.failure",
-                "match self.failure",
-                "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingOwnership",
-                "CertifiedFetchPreLedgerProductiveIngressErrorV1::InvalidOwnership",
-                "CertifiedFetchPreLedgerProductiveIngressErrorV1::MissingLeaderWireToken",
-                "CertifiedFetchPreLedgerProductiveIngressErrorV1::RuntimeAlreadyBound",
+                "pub(crate) const fn productive_ingress_failure(",
+                "match &self.failure",
+                "CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error) => Some(*error)",
+                "_ => None",
+                "pub(crate) const fn reason(&self)",
+                "self.failure.reason()",
+                "pub(crate) fn detail(&self)",
+                "self.failure.detail()",
                 "pub(crate) const fn work_id(&self)",
                 "self.completion.work_id()",
             ),
+        )
+        retry_classifier = _require_qualified_rust_item(
+            lifecycle_selector_path, lifecycle_selector_source,
+            "CertifiedFetchBodyPersistencePreLedgerFailure", "permits_fresh_queue_retry",
+            errors, "certified Fetch changing-queue retry classifier",
+        )
+        _require_rust_token_sequence(
+            lifecycle_selector_path, retry_classifier,
+            """fn permits_fresh_queue_retry(&self) -> bool { matches!(self,
+                Self::FreshSelector(LifecycleIngressSelectorError::QueueCutChanged)
+                | Self::FreshSelector(LifecycleIngressSelectorError::QueueCutCapture(
+                    FairIngressQueueCutError::QueueCutChanged))
+                | Self::Queue(FairIngressQueueCutError::QueueCutChanged)
+            ) }""",
+            "certified Fetch retry requires exactly a changed queue cut", errors,
+        )
+        reject_tokens(
+            lifecycle_selector_path, "certified Fetch permanent rejection is not retry authority",
+            preledger_restart, ("fn into_completion",),
         )
         preledger_error = region(
             lifecycle_selector_path,
@@ -2697,17 +3231,24 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
             "complete_certified_fetch_body_persistence",
             certified_fetch_persistence,
             (
+                "let output_guard = services.lifecycle_output_guard()",
+                "macro_rules! reject_before_ledger",
+                "let failure = $failure",
+                "PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(",
+                "if failure.permits_fresh_queue_retry()",
+                "CertifiedFetchBodyPersistenceCompletionError::Retry(",
+                "output_guard.close_admission_for_restart()",
+                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
                 ".prepare_selected_certified_fetch_completion(",
                 ".bind_durable_body_receipt(receipt)",
                 "executor.prepare_lifecycle_certified_fetch_completion( candidate, &authenticated, durable_registry.durable_body_receipt(), )",
-                "let output_guard = services.lifecycle_output_guard()",
-                "output_guard.close_admission_for_restart()",
-                "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(",
-                "failure: $failure",
+                "let decision_exclusion = executor_prepared.decision_exclusion().copied()",
+                "if let Some(exclusion) = decision_exclusion.as_ref()",
+                "staged.cancel_excluded_decision(exclusion, durable_registry.durable_body_receipt())",
                 "certified_fetch_preledger_ingress_mode(family.inbound.as_ref())",
                 "Err(error)",
                 "durable_registry.abort_before_dequeue()",
-                "restart_invalid_leader_wire!(error, receipt)",
+                "reject_before_ledger!(CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error), receipt)",
                 ".into_exact_certified_fetch_dequeue(executor, id, &authenticated)",
                 "exact_dequeue.lock(ingress)",
                 "let Some(operation) = output_guard.begin_fail_stop_operation()",
@@ -2717,6 +3258,8 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "dequeued.inbound()",
                 "&selected_ingress_mode",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterDequeue(",
+                "if let Some(exclusion) = decision_exclusion.as_ref()",
+                "durable_registry.commit_cancelled_after_exact_dequeue(dequeued, exclusion)",
                 "durable_registry.commit_after_exact_dequeue(dequeued)",
                 "PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit()",
                 "executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated)",
@@ -2725,11 +3268,59 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 "if let Some(runtime_receipt) = runtime_receipt",
                 "mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(",
+                "if decision_exclusion.is_none()",
                 "services.retry_locked_candidate_after_durable_body(subject)",
                 "CertifiedFetchBodyPersistenceCompletionError::RestartRequiredAfterCommit(format!(",
                 "operation.complete()",
             ),
         )
+        cancellation = _require_rust_item(
+            lifecycle_selector_path, lifecycle_selector_source, "cancel_excluded_decision", errors,
+        )
+        if cancellation is not None:
+            require_order(
+                lifecycle_selector_path, "certified Fetch native Decision cancellation",
+                cancellation.source,
+                ("!exclusion.matches_durable_body(receipt)",
+                 "self.location.ordinal()", "self.next.records.get(&ordinal)",
+                 "record.work_class != LifecycleWorkClass::Fetch",
+                 "record.state != LifecycleState::Ready",
+                 "self.next.finish_terminal(ordinal, super::TerminalOutcome::Cancelled)"),
+            )
+        require_order(
+            lifecycle_selector_path, "certified Fetch Ready and cancellation authority split",
+            certified_fetch_persistence,
+            ("let durable_registry = if decision_exclusion.is_none()",
+             "check_production_historical_body_pipeline_transition(historical_trace)",
+             "retain_historical_body_pipeline_owner(checked_transition, durable_registry)",
+             "checked_transition.into_projection()", "let exact_dequeue = match exact_dequeue.lock(ingress)"),
+        )
+        registry_execution_path, registry_execution_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_execution.rs"
+        )
+        cancelled_commit = _require_rust_item(
+            registry_execution_path, registry_execution_source,
+            "commit_cancelled_after_exact_dequeue", errors,
+        )
+        if cancelled_commit is not None:
+            require_order(
+                registry_execution_path, "certified Fetch cancelled registry exact receipt",
+                cancelled_commit.source,
+                ("assert!(exclusion.matches_durable_body(self.durable_receipt.durable_body()))",
+                 "self.commit_response_dequeue(dequeued, true)"),
+            )
+        registry_commit = _require_rust_item(
+            registry_execution_path, registry_execution_source, "commit_response_dequeue", errors,
+        )
+        if registry_commit is not None:
+            require_order(
+                registry_execution_path, "certified Fetch cancellation preserves exact dequeue checks",
+                registry_commit.source,
+                ("assert_eq!(dequeued.ingress_identity(), self.ingress_identity)",
+                 "assert!(incumbent.validates_at(address))", "assert!(exact_selected_response_matches(",
+                 ".remove(&address)", "if cancelled { return; }",
+                 "let completion = CertifiedFetchCompletion", "self.registry.entries.insert(address, row)"),
+            )
         dequeue_marker = "let dequeued = exact_dequeue.commit()"
         dequeue_offset = certified_fetch_persistence.find(dequeue_marker)
         if dequeue_offset < 0:
@@ -2751,7 +3342,7 @@ Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied)
                 lifecycle_selector_path,
                 "certified Fetch pre-dequeue invalid-owner fail-stop",
                 pre_dequeue,
-                "restart_invalid_leader_wire!(error, receipt)",
+                "reject_before_ledger!(CertifiedFetchBodyPersistencePreLedgerFailure::ProductiveIngress(error), receipt)",
                 1,
             )
             reject_tokens(

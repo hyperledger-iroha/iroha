@@ -181,3 +181,29 @@ def test_wire_release_invariant_rejects_semantic_source_mutation(
         relative in error and "missing source-binding token" in error
         for error in errors
     ), errors
+
+
+@pytest.mark.parametrize("mutation", ("source", "ledger"))
+def test_api_authority_separation_requires_async_diagnostics_owner(
+    tmp_path: Path, mutation: str,
+) -> None:
+    module = load_checker()
+    ledger = canonical_binding_ledger()
+    api = api_authority_separation_invariant(ledger)
+    token = "pub async fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus>"
+    retired = "pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus>"
+    if mutation == "ledger":
+        check = next(check for check in api["source_checks"] if check["path"] == "crates/iroha/src/client.rs")
+        assert check["required_tokens"].count(token) == 1
+        check["required_tokens"][check["required_tokens"].index(token)] = retired
+        errors = validate_closure_mutations(ROOT_DIR, module, ledger)
+        assert any("semantic source checks differ from the exact reviewed contract" in error for error in errors)
+    else:
+        for check in api["source_checks"]:
+            relative = Path(check["path"])
+            destination = tmp_path / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / relative, destination)
+        replace_once(tmp_path / "crates/iroha/src/client.rs", token, retired)
+        errors = validate_closure_mutations(tmp_path, module, ledger)
+        assert any("crates/iroha/src/client.rs" in error and token in error for error in errors)

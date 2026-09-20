@@ -822,7 +822,7 @@ mod transaction_ingress_decode_tests {
         assert!(prechecks[0].precheck_rejection.is_none());
     }
     #[tokio::test]
-    async fn transaction_batch_rate_limit_rejects_same_authority_atomically() {
+    async fn transaction_authority_reservation_rejects_same_authority_atomically() {
         let keypair =
             checked_transaction_batch_test_keypair(0xa4, iroha_crypto::Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
@@ -854,7 +854,11 @@ mod transaction_ingress_decode_tests {
             .map(|transaction| transaction.authority().clone())
             .collect::<Vec<_>>();
         let authority_key = transaction_verified_authority_key(&authority);
-        assert!(!allow_transaction_batch_rate_limit(&limiter, &verified_authorities).await);
+        assert!(
+            reserve_verified_transaction_authorities(&limiter, &verified_authorities)
+                .await
+                .is_err()
+        );
         assert!(
             limiter.allow(&authority_key).await,
             "a rejected aggregate must leave the authority's first token available"
@@ -869,7 +873,7 @@ mod transaction_ingress_decode_tests {
         );
     }
     #[tokio::test]
-    async fn transaction_batch_rate_limit_rolls_back_nonadjacent_authorities() {
+    async fn transaction_authority_reservation_rolls_back_nonadjacent_authorities() {
         let keypair_a =
             checked_transaction_batch_test_keypair(0xa5, iroha_crypto::Algorithm::Ed25519);
         let keypair_b =
@@ -909,7 +913,11 @@ mod transaction_ingress_decode_tests {
             .iter()
             .map(|transaction| transaction.authority().clone())
             .collect::<Vec<_>>();
-        assert!(!allow_transaction_batch_rate_limit(&limiter, &verified_authorities).await);
+        assert!(
+            reserve_verified_transaction_authorities(&limiter, &verified_authorities)
+                .await
+                .is_err()
+        );
         assert!(
             limiter
                 .allow(&transaction_verified_authority_key(&authority_a))

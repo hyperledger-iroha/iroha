@@ -74,7 +74,7 @@ const GLOBAL_BEACON_PUBLIC_INVENTORY_SCHEMA_NAME_V1: &str =
 #[cfg(test)]
 const PARLIAMENT_TLE_PUBLIC_INVENTORY_SCHEMA_NAME_V1: &str =
     "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory";
-const MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1: usize = 16 * 1024 * 1024;
 const MAX_CONSENSUS_THRESHOLD_CREDENTIAL_SESSIONS_V1: usize = 64;
 const CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     16_384,
@@ -386,6 +386,19 @@ pub fn global_beacon_partial_signer_inventory_digest_v1(
             .iter()
             .map(|session| (session.public_session.clone(), session.signer_index)),
     )?;
+    canonical_public_inventory_digest_v1(&inventory)
+}
+
+/// Compute the same beacon inventory binding from public sessions and seats only.
+///
+/// # Errors
+///
+/// Rejects empty, excessive, or cross-network inventories and encoding failure.
+pub fn global_beacon_partial_signer_public_inventory_digest_v1(
+    network_id: NetworkId,
+    sessions: &[(GlobalThresholdBeaconKeySessionV1, u16)],
+) -> Result<[u8; 32], RuntimeConsensusThresholdSignerCredentialErrorV1> {
+    let inventory = global_beacon_public_inventory_wire_v1(network_id, sessions.iter().cloned())?;
     canonical_public_inventory_digest_v1(&inventory)
 }
 
@@ -978,6 +991,19 @@ fn decode_global_beacon_credential_v1(
     }))
 }
 
+/// Resolve consumed launcher bytes through the complete native credential validator.
+pub(crate) fn decode_global_beacon_runtime_signer_v1(
+    bytes: &[u8],
+    network_id: &NetworkId,
+    configured: &IrohaRuntimeProviderBindingV1,
+) -> Result<
+    Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
+    RuntimeConsensusThresholdSignerCredentialErrorV1,
+> {
+    let backend = decode_global_beacon_credential_v1(bytes, network_id, configured)?;
+    Ok(backend.custody.clone())
+}
+
 fn decode_parliament_tle_credential_v1(
     bytes: &[u8],
     network_id: &NetworkId,
@@ -1082,6 +1108,27 @@ impl GlobalBeaconPartialSignerBrokerBackendV1 for RuntimeGlobalBeaconPartialSign
     ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>
     {
         Ok(self.qualification)
+    }
+
+    fn attest_partial_signing_capability(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<
+        iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    > {
+        self.custody
+            .attest_partial_signing_capability(session, expected_signer_index)
+            .map_err(|error| match error {
+                iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::Unavailable => {
+                    GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable
+                }
+                iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::NotOwned
+                | iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::InvalidRequest => {
+                    GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected
+                }
+            })
     }
 
     fn sign_partial(
@@ -1292,6 +1339,8 @@ pub(crate) mod tests {
         pub(crate) backends: RuntimeProviderBrokerBackendsV1,
         /// Independently validated public session used to verify partials.
         pub(crate) session: ValidatedGlobalThresholdBeaconSessionV1,
+        /// Synthetic canonical credential retained only for consumed-descriptor tests.
+        pub(crate) credential: Zeroizing<Vec<u8>>,
     }
 
     /// Fully resolved TLE signer fixture used by authenticated broker tests.
@@ -1650,6 +1699,7 @@ pub(crate) mod tests {
             catalog,
             backends,
             session,
+            credential,
         }
     }
 

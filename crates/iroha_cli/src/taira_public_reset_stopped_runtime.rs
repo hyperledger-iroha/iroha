@@ -33,7 +33,7 @@ pub(super) fn reconcile(admitted: &HostAdmission, cleanup: bool) -> Result<()> {
         return Ok(());
     };
     let slot = owner_slot(&validator.slug)?;
-    let vacant = || require_vacant_unit(admitted, true);
+    let vacant = || require_stopped_owner_absence(admitted);
     // The candidate scope cannot erase ownership left by the admitted old runtime.
     // A core-only candidate never starts Inrou, so a vacant/disabled prior runtime
     // needs no guest tooling. Still prove absence of the reserved worker identity

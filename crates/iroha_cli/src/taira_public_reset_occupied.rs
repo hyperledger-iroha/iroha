@@ -4,7 +4,7 @@
 //! artifact path is never reconstructed from another role's source revision.
 
 use super::super::{
-    OccupiedArtifactV1, VALIDATOR_ARTIFACT_ROLES, artifact_role_policy,
+    OCCUPIED_VALIDATOR_ARTIFACT_ROLES, OccupiedArtifactV1, artifact_role_policy,
     validate_absolute_normal_path, validate_lower_hex,
 };
 use super::*;
@@ -15,14 +15,32 @@ const UNIT_ROLLBACK_INTENT: &str = "validator-unit-rollback.intent.json";
 const UNIT_BACKUP: &str = "validator-unit.before";
 
 pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Result<()> {
-    let prior = validator.admitted_release()?;
-    if prior.artifacts.len() != VALIDATOR_ARTIFACT_ROLES.len() {
+    validate_prior_binding(
+        validator.admitted_release()?,
+        &validator.service_root,
+        &validator.systemd_unit,
+    )
+}
+
+/// Validate the current typed prior binding without admitting an old candidate revision.
+pub(super) fn validate_prior_binding(
+    prior: &super::super::ValidatorAdmittedReleaseV1,
+    service_root: &str,
+    systemd_unit: &str,
+) -> Result<()> {
+    prior.service_state.validate()?;
+    if prior.artifacts.len() != OCCUPIED_VALIDATOR_ARTIFACT_ROLES.len() {
         return Err(eyre!(
-            "occupied runtime requires exactly seven artifact roles"
+            "occupied runtime requires exactly {} artifact roles",
+            OCCUPIED_VALIDATOR_ARTIFACT_ROLES.len()
         ));
     }
     let mut paths = BTreeSet::new();
-    for (entry, role) in prior.artifacts.iter().zip(VALIDATOR_ARTIFACT_ROLES) {
+    for (entry, role) in prior
+        .artifacts
+        .iter()
+        .zip(OCCUPIED_VALIDATOR_ARTIFACT_ROLES)
+    {
         if entry.role != role || !paths.insert(&entry.path) {
             return Err(eyre!(
                 "occupied artifact roles/paths are not exact, ordered and unique"
@@ -40,12 +58,8 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
             return Err(eyre!("occupied artifact size or mode violates its role"));
         }
         match role {
-            "iroha3d" | "iroha_cli" | "sorafs_node" => {
-                let basename = match role {
-                    "iroha3d" => "iroha3d_taira",
-                    "iroha_cli" => "iroha",
-                    _ => "sorafs-node",
-                };
+            "iroha3d" => {
+                let basename = "iroha3d_taira";
                 let path = Path::new(&entry.path);
                 let root = path
                     .parent()
@@ -54,10 +68,7 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
                 if path != root.join("bin").join(basename) {
                     return Err(eyre!("occupied executable has the wrong role basename"));
                 }
-                let service_release = format!(
-                    "{}/releases/{}",
-                    validator.service_root, entry.source_commit
-                );
+                let service_release = format!("{}/releases/{}", service_root, entry.source_commit);
                 let private_parent = Path::new("/private/runtime/taira-public-reset");
                 let prefix = format!("release-{}-", entry.source_commit);
                 let private_release = root.parent() == Some(private_parent)
@@ -95,7 +106,7 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
                 };
                 let path = Path::new(&entry.path);
                 if path.file_name() != Some(OsStr::new(basename))
-                    || !(path.starts_with(Path::new(&validator.service_root).join("releases"))
+                    || !(path.starts_with(Path::new(&service_root).join("releases"))
                         || path.starts_with("/private/runtime/taira-public-reset"))
                 {
                     return Err(eyre!(
@@ -104,7 +115,7 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
                 }
             }
             "validator_unit" => {
-                if entry.path != format!("/etc/systemd/system/{}", validator.systemd_unit) {
+                if entry.path != format!("/etc/systemd/system/{}", systemd_unit) {
                     return Err(eyre!(
                         "occupied validator unit is not its exact systemd fragment"
                     ));
@@ -114,13 +125,13 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
         }
     }
     let daemon = prior.artifact("iroha3d")?;
-    let stable = format!("{}/current/bin/iroha3d_taira", validator.service_root);
+    let stable = format!("{}/current/bin/iroha3d_taira", service_root);
     let stable_resolves_to_daemon =
         daemon.path == format!("{}/bin/iroha3d_taira", prior.release_root);
     if prior.argv.len() != 4
         || !(prior.argv[0] == daemon.path || (prior.argv[0] == stable && stable_resolves_to_daemon))
         || prior.argv[1] != "--config"
-        || prior.argv[2] != format!("{}/current/config/config.toml", validator.service_root)
+        || prior.argv[2] != format!("{}/current/config/config.toml", service_root)
         || prior.argv[3] != "--sora"
     {
         return Err(eyre!(
@@ -181,6 +192,13 @@ pub(super) fn process_binding(
             .join("releases")
             .join(&admitted.inventory.revision.commit);
         let stable = Path::new(&validator.service_root).join("current");
+        let active = beacon::active_binding(admitted, validator)?;
+        let initial_config = artifact(&validator.artifacts, "config")?;
+        let config_name = if active.is_some() {
+            "beacon.toml"
+        } else {
+            "config.toml"
+        };
         Ok(ProcessBinding {
             release_root: root.clone(),
             executable: root.join("bin/iroha3d_taira"),
@@ -191,16 +209,25 @@ pub(super) fn process_binding(
                     .into_owned(),
                 "--config".to_owned(),
                 stable
-                    .join("config/config.toml")
+                    .join("config")
+                    .join(config_name)
                     .to_string_lossy()
                     .into_owned(),
                 "--sora".to_owned(),
             ],
-            config: PathBuf::from(&artifact(&validator.artifacts, "config")?.remote_path),
-            config_sha256: artifact(&validator.artifacts, "config")?.sha256.clone(),
+            config: active
+                .as_ref()
+                .map(|binding| binding.config.clone())
+                .unwrap_or_else(|| PathBuf::from(&initial_config.remote_path)),
+            config_sha256: active
+                .as_ref()
+                .map(|binding| binding.config_sha256.clone())
+                .unwrap_or_else(|| initial_config.sha256.clone()),
             genesis: PathBuf::from(&artifact(&validator.artifacts, "genesis")?.remote_path),
             genesis_sha256: artifact(&validator.artifacts, "genesis")?.sha256.clone(),
-            unit_sha256: validator.systemd_unit_sha256.clone(),
+            unit_sha256: active
+                .map(|binding| binding.unit_sha256)
+                .unwrap_or_else(|| validator.systemd_unit_sha256.clone()),
         })
     } else {
         validate_occupied_binding(validator)?;
@@ -368,10 +395,66 @@ pub(super) fn verify_unit_fragment(path: &Path, expected_sha256: &str) -> Result
     Ok(())
 }
 
+/// Bind the loaded unit during stopped-owner cleanup to its exact admitted publication phase.
+/// The prior fragment is valid before Install; a successor requires its retained native intent.
+pub(super) fn stopped_unit_hash(
+    admitted: &HostAdmission,
+    validator: &ValidatorV1,
+) -> Result<String> {
+    let destination = Path::new("/etc/systemd/system").join(&validator.systemd_unit);
+    let actual = current_unit_hash(&destination)?;
+    let prior = if validator.is_vacant() {
+        None
+    } else {
+        Some(validator.admitted_release()?.artifact("validator_unit")?)
+    };
+    admit_stopped_unit_hash(
+        &actual,
+        prior.map(|entry| entry.sha256.as_str()),
+        &validator.systemd_unit_sha256,
+        || {
+            let prior = prior.ok_or_else(|| eyre!("vacant unit has no prior transition"))?;
+            let directory = Path::new(&validator.reset_guard)
+                .join("rollback")
+                .join(&admitted.inventory.authorization_nonce);
+            require_root_directory(&directory, true, "retained validator unit transition")?;
+            verify_generated_marker(&directory, admitted, "rollback")?;
+            load_unit_intent(&directory, &unit_intent(admitted, validator, false)?)?;
+            verify_occupied_artifact_at(prior, &directory.join(UNIT_BACKUP), 0o600)
+        },
+        || beacon::prepared_unit_hash(admitted, validator),
+    )?;
+    Ok(actual)
+}
+
+fn admit_stopped_unit_hash(
+    actual: &str,
+    prior: Option<&str>,
+    initial: &str,
+    verify_forward: impl FnOnce() -> Result<()>,
+    verified_beacon: impl FnOnce() -> Result<Option<String>>,
+) -> Result<()> {
+    if actual == prior.unwrap_or(initial) {
+        return Ok(());
+    }
+    if prior.is_some() {
+        verify_forward()?;
+        if actual == initial {
+            return Ok(());
+        }
+    }
+    if verified_beacon()?.as_deref() != Some(actual) {
+        return Err(eyre!(
+            "stopped validator unit is outside its exact admitted publication phases"
+        ));
+    }
+    Ok(())
+}
+
 /// Publish one exact unit while retaining both source and destination descriptors
 /// through the final rename. The caller has authenticated the phase intent and
 /// root-owned parents; this function also rejects intervening inode/byte drift.
-fn publish_unit_bytes_with(
+pub(super) fn publish_unit_bytes_with(
     source: &Path,
     destination: &Path,
     desired: &ArtifactV1,
@@ -512,7 +595,19 @@ pub(super) fn restore_validator_unit(admitted: &HostAdmission) -> Result<()> {
     verify_occupied_artifact_at(prior, &backup, 0o600)?;
     require_unit_stopped(&validator.systemd_unit, admitted.action_deadline)?;
     publish_unit_intent(&directory, &unit_intent(admitted, validator, true)?)?;
-    let published = classify_unit_publication(&current_unit_hash(destination)?, &forward)?;
+    let current_hash = current_unit_hash(destination)?;
+    let published =
+        if current_hash == forward.prior_sha256 || current_hash == forward.candidate_sha256 {
+            classify_unit_publication(&current_hash, &forward)?
+        } else if beacon::prepared_unit_hash(admitted, validator)?.as_deref()
+            == Some(current_hash.as_str())
+        {
+            true
+        } else {
+            return Err(eyre!(
+                "rollback unit is outside both exact signed publication phases"
+            ));
+        };
     if published {
         let restored = ArtifactV1 {
             role: prior.role.clone(),
@@ -528,7 +623,7 @@ pub(super) fn restore_validator_unit(admitted: &HostAdmission) -> Result<()> {
             &backup,
             destination,
             &restored,
-            &validator.systemd_unit_sha256,
+            &current_hash,
             true,
             || ensure_action_deadline(admitted),
             sync_directory,
@@ -581,23 +676,16 @@ mod tests {
         let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
             unreachable!()
         };
-        for role in ["iroha3d", "iroha_cli"] {
-            let entry = prior
-                .artifacts
-                .iter_mut()
-                .find(|entry| entry.role == role)
-                .unwrap();
-            entry.source_commit = "5".repeat(40);
-            let basename = if role == "iroha3d" {
-                "iroha3d_taira"
-            } else {
-                "iroha"
-            };
-            entry.path = format!(
-                "/private/runtime/taira-public-reset/release-{}-update-0123456789abcdef/bin/{basename}",
-                entry.source_commit
-            );
-        }
+        let daemon = prior
+            .artifacts
+            .iter_mut()
+            .find(|entry| entry.role == "iroha3d")
+            .unwrap();
+        daemon.source_commit = "5".repeat(40);
+        daemon.path = format!(
+            "/private/runtime/taira-public-reset/release-{}-update-0123456789abcdef/bin/iroha3d_taira",
+            daemon.source_commit
+        );
         prior.argv[0] = prior.artifact("iroha3d").unwrap().path.clone();
         for role in ["genesis", "genesis_hash"] {
             let entry = prior
@@ -620,6 +708,9 @@ mod tests {
     #[test]
     fn occupied_runtime_accepts_split_source_and_configuration_binding() {
         let inventory = sample_inventory_fixture();
+        // Admit all current occupied roles in a single release before checking
+        // independent executable and configuration source revisions.
+        validate_occupied_binding(&inventory.validators[0]).unwrap();
         let validator = split_validator();
         validate_validator(
             &validator,
@@ -629,13 +720,25 @@ mod tests {
         )
         .unwrap();
         let prior = validator.admitted_release().unwrap();
+        assert_eq!(
+            prior
+                .artifacts
+                .iter()
+                .map(|entry| entry.role.as_str())
+                .collect::<Vec<_>>(),
+            OCCUPIED_VALIDATOR_ARTIFACT_ROLES
+        );
         assert_ne!(
             prior.artifact("iroha3d").unwrap().source_commit,
             prior.commit
         );
         assert_eq!(
-            prior.artifact("sorafs_node").unwrap().source_commit,
+            prior.artifact("config").unwrap().source_commit,
             prior.commit
+        );
+        assert_eq!(
+            inventory.validators[0].artifacts.len(),
+            super::super::super::VALIDATOR_ARTIFACT_ROLES.len()
         );
         assert_ne!(
             prior.artifact("genesis").unwrap().source_commit,
@@ -655,38 +758,122 @@ mod tests {
 
     #[test]
     fn occupied_runtime_rejects_incomplete_or_foreign_artifact_custody() {
-        for change in 0..14 {
+        for change in 0..17 {
             let mut validator = split_validator();
             let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state
             else {
                 unreachable!()
             };
+            let role_index = |role: &str| {
+                prior
+                    .artifacts
+                    .iter()
+                    .position(|entry| entry.role == role)
+                    .unwrap()
+            };
+            let daemon = role_index("iroha3d");
+            let config = role_index("config");
+            let unit = role_index("validator_unit");
+            let genesis = role_index("genesis");
             match change {
                 0 => {
                     prior.artifacts.pop();
                 }
-                1 => prior.artifacts.swap(0, 1),
-                2 => prior.artifacts[0].role = "iroha_cli".to_owned(),
-                3 => prior.artifacts[0].source_commit = "7".repeat(40),
-                4 => prior.artifacts[0].path = prior.artifacts[1].path.clone(),
-                5 => prior.artifacts[0].sha256 = "xyz".to_owned(),
-                6 => prior.artifacts[0].size = 0,
-                7 => prior.artifacts[3].mode = 0o644,
-                8 => prior.artifacts[3].source_commit = "7".repeat(40),
-                9 => prior.artifacts[6].path = "/etc/systemd/system/foreign.service".to_owned(),
+                1 => prior.artifacts.swap(daemon, config),
+                2 => prior.artifacts[daemon].role = "iroha_cli".to_owned(),
+                3 => prior.artifacts[daemon].source_commit = "7".repeat(40),
+                4 => prior.artifacts[daemon].path = prior.artifacts[config].path.clone(),
+                5 => prior.artifacts[daemon].sha256 = "xyz".to_owned(),
+                6 => prior.artifacts[daemon].size = 0,
+                7 => prior.artifacts[config].mode = 0o644,
+                8 => prior.artifacts[config].source_commit = "7".repeat(40),
+                9 => prior.artifacts[unit].path = "/etc/systemd/system/foreign.service".to_owned(),
                 10 => {
                     prior.argv[0] = format!("{}/current/bin/iroha3d_taira", validator.service_root)
                 }
                 11 => prior.argv[2] = prior.artifact("config").unwrap().path.clone(),
                 12 => prior.argv.push("--extra".to_owned()),
-                13 => prior.artifacts[4].path = "/tmp/genesis.json".to_owned(),
+                13 => prior.artifacts[genesis].path = "/tmp/genesis.json".to_owned(),
+                14 => {
+                    prior.artifacts[daemon].path = Path::new(&prior.artifacts[daemon].path)
+                        .with_file_name("iroha")
+                        .to_string_lossy()
+                        .into_owned();
+                }
+                15 => prior.artifacts[daemon].source_commit = prior.commit.clone(),
+                16 => prior.artifacts[daemon].role = "sorafs_node".to_owned(),
                 _ => unreachable!(),
             }
-            assert!(
-                validate_occupied_binding(&validator).is_err(),
+            let error = validate_occupied_binding(&validator).expect_err(&format!(
                 "change {change} escaped the native occupied closure"
+            ));
+            let expected = match change {
+                14 => Some("occupied executable has the wrong role basename"),
+                15 => Some("occupied executable path does not bind its exact role source revision"),
+                16 => Some("occupied artifact roles/paths are not exact, ordered and unique"),
+                _ => None,
+            };
+            if let Some(expected) = expected {
+                assert!(
+                    error.to_string().contains(expected),
+                    "change {change}: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn occupied_runtime_rejects_builder_tools_and_each_missing_runtime_role() {
+        for role in OCCUPIED_VALIDATOR_ARTIFACT_ROLES {
+            let mut validator = split_validator();
+            let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state
+            else {
+                unreachable!()
+            };
+            prior.artifacts.retain(|entry| entry.role != role);
+            assert!(
+                validate_occupied_binding(&validator)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exactly 5 artifact roles"),
+                "missing {role}"
             );
         }
+        let mut validator = split_validator();
+        let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
+            unreachable!()
+        };
+        let daemon = prior.artifact("iroha3d").unwrap().clone();
+        for (offset, (role, name)) in [
+            ("iroha_cli", "iroha"),
+            ("kagami", "kagami"),
+            ("sorafs_node", "sorafs-node"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut tool = daemon.clone();
+            tool.role = role.into();
+            tool.path = Path::new(&daemon.path)
+                .with_file_name(name)
+                .display()
+                .to_string();
+            prior.artifacts.insert(offset + 1, tool);
+        }
+        assert_eq!(
+            prior
+                .artifacts
+                .iter()
+                .map(|entry| entry.role.as_str())
+                .collect::<Vec<_>>(),
+            super::super::super::VALIDATOR_ARTIFACT_ROLES
+        );
+        assert!(
+            validate_occupied_binding(&validator)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly 5 artifact roles")
+        );
     }
 
     #[test]
@@ -770,12 +957,97 @@ mod tests {
                 entry.role
             );
         }
+        let prior = validator.admitted_release().unwrap();
+        let daemon_root = Path::new(&prior.artifact("iroha3d").unwrap().path)
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        // The source42 CLI is a daemon sibling; retained SoraFS is within the
+        // selected configuration release. Neither is a validator dependency.
+        for retained_tool in [
+            daemon_root.join("bin/iroha"),
+            Path::new(&prior.release_root).join("bin/sorafs-node"),
+        ] {
+            let release = retained_tool.parent().unwrap().parent().unwrap();
+            assert!(
+                protects_prior_artifact(&target, release),
+                "{}",
+                retained_tool.display()
+            );
+        }
         assert!(!protects_prior_artifact(
             &target,
             Path::new(
                 "/srv/taira/taira-validator-1/releases/ffffffffffffffffffffffffffffffffffffffff"
             )
         ));
+    }
+
+    #[test]
+    fn stopped_unit_admission_requires_the_exact_prior_or_durable_successor() {
+        let prior = "1".repeat(64);
+        let initial = "2".repeat(64);
+        let beacon = "3".repeat(64);
+        admit_stopped_unit_hash(
+            &prior,
+            Some(&prior),
+            &initial,
+            || panic!("old unit before Install requires no candidate transition"),
+            || panic!("old unit must not require a new beacon"),
+        )
+        .unwrap();
+        admit_stopped_unit_hash(
+            &initial,
+            None,
+            &initial,
+            || panic!("vacant target has no previous unit"),
+            || panic!("initial vacant unit needs no beacon"),
+        )
+        .unwrap();
+        assert!(
+            admit_stopped_unit_hash(
+                &initial,
+                Some(&prior),
+                &initial,
+                || Err(eyre!("missing exact forward intent or prior backup")),
+                || panic!("failed transition cannot fall back to a beacon")
+            )
+            .is_err()
+        );
+        let authenticated = std::cell::Cell::new(false);
+        admit_stopped_unit_hash(
+            &initial,
+            Some(&prior),
+            &initial,
+            || {
+                authenticated.set(true);
+                Ok(())
+            },
+            || panic!("initial candidate is not a beacon unit"),
+        )
+        .unwrap();
+        assert!(authenticated.get());
+        admit_stopped_unit_hash(
+            &beacon,
+            Some(&prior),
+            &initial,
+            || Ok(()),
+            || Ok(Some(beacon.clone())),
+        )
+        .unwrap();
+        for observed in [None, Some(initial.clone()), Some("4".repeat(64))] {
+            assert!(
+                admit_stopped_unit_hash(
+                    &beacon,
+                    Some(&prior),
+                    &initial,
+                    || Ok(()),
+                    || Ok(observed)
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

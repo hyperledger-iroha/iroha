@@ -98,7 +98,7 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
         pending_kura_apply,
         leader_wire_launch_prepared,
         ..
-    } = &mut runtime_startup.state
+    } = runtime_startup.state.as_mut()
     else {
         panic!("pending Kura startup must remain a recovered adapter")
     };
@@ -145,7 +145,7 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
     let ProductionLifecycleAdapterStartupStateV1::Recovered {
         leader_wire_launch_prepared,
         ..
-    } = &mut install_runtime_startup.state
+    } = install_runtime_startup.state.as_mut()
     else {
         panic!("pending Kura install fixture must remain recovered")
     };

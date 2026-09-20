@@ -12,9 +12,14 @@ fn authenticated_proposal_store_retains_root_after_fetch_or_queued_completion_up
             let now = Instant::now();
             runtime.arm_live_clocks(now).expect("arm the real runtime");
             runtime
-                .enqueue_network(signed_runtime_proposal(&context, &keys, 0xB7))
+                .enqueue_network(
+                    signed_runtime_proposal(&context, &keys, 0xB7),
+                    &RuntimeExternalLifecycleCensus::empty_for_test(),
+                )
                 .expect("admit the signed Proposal through authenticated ingress");
-            let RuntimeStep::Advanced(effects) = runtime.step(now).expect("dispatch Proposal")
+            let RuntimeStep::Advanced(effects) = runtime
+                .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+                .expect("dispatch Proposal")
             else {
                 panic!("authenticated Proposal unexpectedly idled")
             };
@@ -110,7 +115,7 @@ fn authenticated_proposal_store_retains_root_after_fetch_or_queued_completion_up
                     .expect("the upgraded completion retains its one FIFO slot");
             }
             let RuntimeStep::Advanced(store_effects) = runtime
-                .step(now)
+                .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
                 .expect("dispatch the retained BodyAvailable")
             else {
                 panic!("BodyAvailable unexpectedly idled")

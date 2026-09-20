@@ -81,7 +81,7 @@ state_test! { sync confidential_registry_delta_cap_limits_transitions
     let query = LiveQueryStore::start_test();
     let mut state = State::new(world, kura, query);
     state.zk.registry_max_delta_per_block = 1;
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let block = state.block(header);
     let_row! { alpha_status = block .world .verifying_keys .get(&ids[0]) .map(|rec| rec.status) .expect("alpha vk present") };
     let_row! { beta_status = block .world .verifying_keys .get(&ids[1]) .map(|rec| rec.status) .expect("beta vk present") };
@@ -99,20 +99,28 @@ fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBl
     let peer_id = PeerId::new(leader_public_key);
     let topology = Topology::new(vec![peer_id]);
     let mut block = ValidBlock::new_dummy_and_modify_header(&leader_private_key, f);
-    block.as_mut().set_transaction_results_with_transcripts(
-        Vec::new(), &[], Vec::new(), BTreeMap::new(), Vec::new(),
-        AxtPolicySnapshot::default(),
-    ).expect("empty fixture block has complete execution metadata");
-    block.as_mut().set_committed_fragment_count(0);
+    block
+        .as_mut()
+        .set_execution_outputs(
+            Vec::new(),
+            0,
+            BTreeMap::new(),
+            Vec::new(),
+            AxtPolicySnapshot::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+        .expect("empty fixture block has complete execution metadata");
     let signature = iroha_data_model::block::BlockSignature::new(
         0,
         SignatureOf::from_hash(&leader_private_key, block.as_ref().hash()),
     );
-    block.as_mut().replace_signatures(BTreeSet::from([signature]))
+    block
+        .as_mut()
+        .replace_signatures(BTreeSet::from([signature]))
         .expect("replace signature after completing fixture execution metadata");
-    block.commit(&topology)
-        .unpack(|_| {})
-        .unwrap()
+    block.commit(&topology).unpack(|_| {}).unwrap()
 }
 fn new_dummy_block() -> CommittedBlock {
     new_dummy_block_with_payload(|_| {})
@@ -136,7 +144,7 @@ fn dummy_merge_qc() -> MergeQuorumCertificate {
 }
 state_test! { sync malformed_merge_execution_batch_rejects_empty_lane_set
     let state = blank_test_state();
-    let application_block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let application_block_header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
     let_row! { batch = MergeExecutionBatch { version: 1, base_state_height: 0, base_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"execution-base")), application_block_header, execution_root: Hash::new(b"execution-root"), lanes: Vec::new(), entrypoint_count: 0, entrypoint_merkle_root: HashOf::from_untyped_unchecked(Hash::new(b"execution-entrypoints")), result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(b"execution-results")), application_write_set_root: Hash::new(b"application-write-set"), write_set_root: Hash::new(b"write-set"), expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"post-state")), batch_hash: Hash::new(b"batch"), } };
     assert!(matches!(
         state.validate_merge_execution_batch(
@@ -386,11 +394,9 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
         assert_eq!(state.committed_height(), durable_count);
         return;
     }
-    let_row! { mut parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
-    parent
-        .as_mut()
-        .set_transaction_results(Vec::new(), &[], Vec::new())
-        .expect("attach canonical empty execution results to merge-carrier parent");
+    let_row! { parent = new_dummy_block_with_payload(|header| { header.set_height(nonzero!(1_u64)); header.set_prev_block_hash(None); header.set_view_change_index(0); }) };
+    assert!(parent.as_ref().execution_outputs().is_empty());
+    assert_eq!(parent.as_ref().committed_fragment_count(), Some(0));
     let parent_hash = parent.as_ref().hash();
     state
         .kura
@@ -424,6 +430,9 @@ fn store_merge_carrier_without_state_publication_for_test(
     carrier
         .as_mut()
         .set_execution_context(Some(execution_context));
+    // Attaching the exact relay reference invalidates result metadata. Finish
+    // this empty structural carrier before binding its durable finality.
+    finish_autoscale_fixture(carrier.as_mut(), 0);
     state
         .kura
         .store_block_with_merge_entry(Arc::new(carrier.as_ref().clone()), entry)
@@ -510,16 +519,25 @@ fn record_commit_ready_merge_candidate_with_lanes(
     install_lane_manifest_registry(state, &registry_entries);
     let commit_keypairs = configure_commit_topology_preserving_world_peers(state, 1);
     let mut envelopes = (0..lane_count)
-        .map(|idx| sample_lane_relay_envelope_for_state(
-            state, first_height, LaneId::new(idx), &validator_keypairs,
-        ))
+        .map(|idx| {
+            sample_lane_relay_envelope_for_state(
+                state,
+                first_height,
+                LaneId::new(idx),
+                &validator_keypairs,
+            )
+        })
         .collect::<Vec<_>>();
     finalize_lane_relay_batch_for_state_test(
-        state, &mut envelopes.iter_mut().collect::<Vec<_>>(), &validator_keypairs,
+        state,
+        &mut envelopes.iter_mut().collect::<Vec<_>>(),
+        &validator_keypairs,
     );
     for envelope in envelopes {
         let envelope = seed_effect_authenticated_relay_for_merge_test(state, envelope);
-        state.record_lane_relay(&envelope).expect("commit-ready relay accepted");
+        state
+            .record_lane_relay(&envelope)
+            .expect("commit-ready relay accepted");
     }
     // Every source header was persisted above. Publish that exact prefix before
     // selecting the next global carrier, including successive direct-merge fixtures.
@@ -555,6 +573,35 @@ fn merge_carrier_finality_artifact_with_network(
     parent: Option<&V2FinalityArtifact>,
     network_id: iroha_data_model::NetworkId,
 ) -> V2FinalityArtifact {
+    merge_carrier_finality_artifact_with_genesis_layout(
+        block,
+        parent,
+        network_id,
+        DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 1024,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 4096,
+            max_chunk_count: 8,
+        },
+        Hash::new(b"state merge finality execution policy"),
+    )
+}
+
+// Select the signed geometry at genesis; every successor inherits its exact
+// authenticated parent layout. Existing fixture defaults remain unchanged.
+fn merge_carrier_finality_artifact_with_genesis_layout(
+    block: &SignedBlock,
+    parent: Option<&V2FinalityArtifact>,
+    network_id: iroha_data_model::NetworkId,
+    genesis_layout: DataAvailabilityLayout,
+    genesis_execution_policy_hash: Hash,
+) -> V2FinalityArtifact {
+    let da_layout = parent.map_or(genesis_layout, |artifact| artifact.height_context.da_layout);
+    let execution_policy_hash = parent.map_or(genesis_execution_policy_hash, |artifact| {
+        artifact.height_context.execution_policy_hash
+    });
     let mut keypairs = vec![merge_carrier_finality_fixture_keypair()];
     keypairs.extend((0xD4_u8..=0xD6).map(|seed| {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -570,7 +617,7 @@ fn merge_carrier_finality_artifact_with_network(
     );
     let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
         crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
-    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash: Hash::new(b"state merge finality execution policy"), da_layout: DataAvailabilityLayout { encoding: PayloadEncoding::ReedSolomon16, chunk_size_bytes: 1024, data_shards: 1, parity_shards: 1, max_payload_size_bytes: 4096, max_chunk_count: 8, }, leader_seed: [0xD3; 32], } };
+    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash, da_layout, leader_seed: [0xD3; 32], } };
     let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
     let_row! { mut execution_commitment = ExecutionCommitment::new_without_merge_carrier( Hash::new(b"state merge finality parent state"), Hash::new(b"state merge finality post state"), Hash::new(b"state merge finality ordinary writes"), None, 0, 1, Hash::new(&executed_block_wire), ) .expect("canonical merge-carrier finality execution commitment") };
     execution_commitment.executed_block_wire_len =
@@ -627,6 +674,11 @@ fn certified_merge_carrier_after(previous: &SignedBlock, entry: &MergeLedgerEntr
 }
 fn commit_block_metadata_to_state(state: &State, block: &SignedBlock) {
     let mut state_block = state.block(block.header().clone());
+    // Structural history still owns an exact height/hash sample and its actual
+    // predecessor. Do not reconstruct earlier runtime policy at snapshot time.
+    state_block
+        .stage_autoscale_sample_record_for_count(block, 0)
+        .expect("empty metadata carrier retains its runtime sample");
     state_block.block_hashes.push(block.hash());
     insert_empty_transaction_block_for_state_commit(&mut state_block, block);
     state_block
@@ -640,6 +692,9 @@ fn commit_exact_merge_carrier_to_state(
 ) {
     persist_merge_carrier_finality_for_state_test(&state.kura, carrier);
     let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), entry, ConsensusMode::Permissioned) .expect("certified merge entry must stage on its exact carrier") };
+    state_block
+        .stage_autoscale_sample_record_for_count(carrier, 0)
+        .expect("certified relay carrier retains its exact runtime sample and predecessor");
     state_block.block_hashes.push(carrier.hash());
     insert_empty_transaction_block_for_state_commit(&mut state_block, carrier);
     state_block
@@ -650,9 +705,20 @@ fn commit_exact_merge_carrier_to_state(
         .expect("exact certified merge carrier must publish its merge cache");
 }
 fn configured_single_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock) {
+    configured_single_lane_merge_state_with_network(*DEFAULT_TEST_NETWORK_ID)
+}
+fn configured_single_lane_merge_state_with_network(
+    network_id: iroha_data_model::NetworkId,
+) -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let mut state = State::new_with_chain_and_network_id_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        query,
+        (*DEFAULT_TEST_CHAIN_ID).clone(),
+        network_id,
+    );
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     nexus.fees.base_fee = Quantity::zero();
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -787,23 +853,26 @@ fn queue_plan_admission_certificate_for_entrypoint_state_test(
     let_row! { predecessor_block_hash = if authority_height == 0 { None } else { usize::try_from(authority_height) .ok() .and_then(|height| height.checked_sub(1)) .and_then(|index| state.block_hashes.view().get(index).copied()) } };
     let_row! { route_incarnations = routing_plan .legs() .into_iter() .map(|leg| { let validator_set = crate::queue::queue_plan_authoritative_peers_in_view_at_height( &state.view(), leg.route, proposal_height, ) .expect("fixture route authority"); assert!( !validator_set.is_empty(), "fixture route must have authoritative validators" ); crate::queue::QueuePlanRouteIncarnationV1 { leg, lane_incarnation: state .lane_incarnation(leg.route.lane_id) .expect("fixture route has an active incarnation"), validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: u16::try_from(validator_set.len()) .expect("fixture validator count"), durability_threshold: u16::try_from(validator_set.len().div_ceil(3)) .expect("fixture durability threshold"), validator_set, } }) .collect::<Vec<_>>() };
     let_row! { admission_context = crate::queue::QueuePlanAdmissionContextV1 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1, authority_height, proposal_height, predecessor_block_hash, routing_plan_digest: routing_plan.digest(), route_incarnations, } };
-    let_row! { binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new( &state.network_id, entrypoint, &routing_plan, admission_context, u64::from(tag).saturating_add(100), ) .expect("canonical QueuePlan admission binding") };
-    let_row! { certificate = queue_plan_admission_certificate_bytes_for_state_test(&binding, validator_keypairs) };
+    let_row! { binding = crate::torii_proxy::new_queue_plan_admission_binding( &state.network_id, entrypoint, &routing_plan, admission_context, u64::from(tag).saturating_add(100), ) .expect("canonical QueuePlan admission binding") };
+    let_row! { certificate = queue_plan_admission_certificate_bytes_for_state_test(entrypoint, &binding, validator_keypairs) };
     (binding, certificate)
 }
 fn queue_plan_admission_certificate_bytes_for_state_test(
+    entrypoint: &TransactionEntrypoint,
     binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     validator_keypairs: &[KeyPair],
 ) -> Vec<u8> {
     let coordinator = &binding.admission_context.route_incarnations[0];
     let validator_indices = (0..coordinator.durability_threshold).collect::<Vec<_>>();
     queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        entrypoint,
         binding,
         validator_keypairs,
         &validator_indices,
     )
 }
 fn queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+    entrypoint: &TransactionEntrypoint,
     binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     validator_keypairs: &[KeyPair],
     validator_indices: &[u16],
@@ -812,5 +881,19 @@ fn queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
     let coordinator = &binding.admission_context.route_incarnations[0];
     let_row! { attestations = validator_indices .iter() .map(|&validator_index| { let validator = coordinator .validator_set .get(usize::from(validator_index)) .expect("fixture validator index is in bounds"); let keypair = validator_keypairs .iter() .find(|keypair| keypair.public_key() == validator.public_key()) .expect("fixture retains every authoritative validator key"); let signing_bytes = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1( binding_hash, validator_index, ) .expect("QueuePlan attestation preimage"); crate::torii_proxy::QueuePlanAdmissionAttestationV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, validator_index, signature: Signature::try_new(keypair.private_key(), &signing_bytes) .expect("QueuePlan attestation signature"), } }) .collect() };
     let_row! { certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1, binding: binding.clone(), attestations, } };
-    norito::to_bytes(&certificate).expect("canonical QueuePlan admission certificate")
+    norito::encode_canonical(
+        &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+            entrypoint: entrypoint.clone(),
+            certificate,
+        },
+    )
+    .expect("canonical complete QueuePlan admission input")
+}
+
+fn validated_queue_plan_input_certificate_for_state_test(
+    network_id: &NetworkId,
+    bytes: &[u8],
+) -> Result<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1, String> {
+    crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(network_id, bytes)
+        .map(|input| input.certificate().clone())
 }

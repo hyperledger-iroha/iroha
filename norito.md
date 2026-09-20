@@ -486,6 +486,176 @@ Admission does not assume shared rosters; exact encoded-size checks still apply.
 See [`specs/merge_ledger.md`](specs/merge_ledger.md) for finalized carrier binding
 and the distinction between historical read authority and live write authority.
 
+## Native lane Decision carrier field
+
+The first-release `BlockExecutionContextBundle` encodes these required fields
+in order: `version`, `external`, `autonomous_lane_payloads`,
+`lane_payload_ownerships`, `queue_plan_admissions`, `merge_entry`, and
+`native_lane_decisions`. The final two fields are explicit nullable slots.
+The native slot is `Option<Box<LaneDecisionBatchV1>>`, with Norito's canonical
+owned-value length prefix. Omitted slots, the old field name, and output-bearing
+native batch layouts are rejected; there is no compatibility decoder.
+
+`block::lane_decision_batch::LaneDecisionBatchV1` encodes exactly
+`base_state_height`, `base_state_hash`, and `groups` in that order. The hash is
+an exact canonical WSV snapshot identity, not a global block hash. Groups are
+strictly ordered by actual first-admission priority, have distinct route slots,
+and do not repeat outer entrypoint, inner signed, or sealed commitment owners.
+Each group contains its complete input once and the route-ordered native
+CommitQCs. Batch hashing covers `iroha:lane-consensus:decision-batch:v1\0`
+followed by its complete canonical Norito encoding. Shape, signature, actual
+first-carrier inclusion, current membership, and pre-State authentication remain
+distinct checks; decoding supplies no execution or finality authority.
+
+No economic result, settlement, replay alias, FASTPQ output claim, applying
+header copy, or execution-prefix write root belongs in this proposal field.
+Execution uses the actual carrier header; proposal construction cannot depend
+on outputs that themselves persist that header's hash. `BlockHeader` no longer
+carries the generic result Merkle root. Attaching outputs preserves its bytes,
+hash and signatures; global CommitQC `ExecutionCommitment` authenticates the
+complete executed wire and state transition. State's private execution seals
+are not additional proposal claims or a second finality authority.
+
+The header still carries an SCCP commitment root. Existing Core SCCP staging is
+outcome-dependent and remains an unqualified proposal/metadata owner; the model's
+unchanged-header attachment test does not establish that path free of output/hash
+cycles. Native scratch currently rejects SCCP roots. Resolve the actual producer,
+validation and bridge proof boundary before enabling native SCCP delivery.
+
+The complete network-input projection comes from physical external inputs or
+native `groups`, with no synthetic Time inputs. Physical `external_*` APIs keep
+their named payload-field semantics. The header input Merkle root remains
+physical external only (absent for a native-only carrier); native membership is
+bound by `execution_context_hash`. Network input and execution-output counts
+are independent. A SealedReveal's outer entrypoint owns its network input proof,
+while the actual transcript key and each `TransferTranscript.batch_hash` retain
+the inner execution-call hash.
+
+`BlockResult` contains, in order, `outputs`, `output_merkle`,
+`committed_fragment_count`, `fastpq_transcripts`, `axt_envelopes`,
+`axt_policy_snapshot`, `axt_transitioned_dataspaces`, and
+`lane_finality_statements`. All fields are required. `outputs` is the sole
+`Vec<ExecutionOutputV1>`: Network rows precede Pipeline rows, followed by Time
+rows. Each owns its complete `TransactionResult` (including independent-batch
+receipts) and its actual callback completions. Network rows explicitly join an input
+index; Pipeline and Time rows carry invocation descriptors and no input leaf.
+An internal trigger-use descriptor contains only the bounded trigger ID, its
+registration height and the canonical action hash. That hash commits to the
+actual use-time authority together with the persistent action; authority is not
+copied into the descriptor. Execution must authenticate and use the same action
+under its exclusive State owner. The retired parallel authority field is rejected
+in both JSON and binary decoding. Authority size therefore does not enlarge a
+terminal descriptor; hashing/allocation of the action still requires its own bound.
+Rejected Network inputs retain no callback completions. Rejected internal
+invocations retain exactly one callback-zero Failure naming the root, representing
+the whole invocation; rolled-back nested successes cannot survive as completions.
+The output Merkle cache covers each complete typed row, including its source.
+The actual committed-fragment count remains execution-owned; leaf counts do not
+infer how many State fragments applied. Old parallel input/result/completion
+vectors and `TransactionEntrypoint::Time` have no compatibility decoder.
+
+`set_execution_outputs` receives the complete outputs and all execution metadata
+in one operation. It checks immutable proposal commitments, source/phase order,
+exact Network coverage, transcript structure, policy, row and aggregate costs,
+and complete canonical SignedBlockWire length before mutation. No result-metadata
+setter can enlarge a checked candidate afterward. Signatures remain mutable;
+`validate_execution_outputs` must check final complete bytes before publication.
+These structural checks cannot infer which outputs execution should produce or
+authenticate transcript source custody. Core must verify its actual capture
+inventory, including legitimate nested/protocol owners.
+
+`BlockParameters` now encodes, in order, `max_transactions`, the independent
+`max_time_trigger_invocations`, and the atomic `execution_output` policy. Both
+new JSON fields are required whenever the block object is present; the retired
+one-field payload has no compatibility decoder. `BlockParameter` adds the
+`MaxTimeTriggerInvocations` and `ExecutionOutput` variants. The latter carries
+seven ordered fields: `max_outputs`, `max_output_bytes`,
+`max_total_output_bytes`, `max_executed_wire_bytes`, `max_pipeline_triggers`,
+`max_time_triggers`, and `max_time_invocations`. Core permits replacing this
+capacity envelope only during genesis; later active Time-count changes must fit
+that envelope. Total Pipeline/Time registrations include disabled and depleted
+actions. Zero Pipeline capacity disables registration, while Time capacities
+remain positive. These are consensus parameters, with no node-local override.
+
+The ordinary candidate selector caps Network count using terminal capacity under
+the maximum permitted future Pipeline/Time growth before queue selection/signing.
+State captures actual policy, active Time count and total Pipeline registrations
+after its constructor's start effects, then retains one terminal plan bound to
+the applying source before ordinary/native Network execution. One complete native
+group occupies one Network row regardless of route count. State retains a
+Reserved, Running, Retained or Poisoned owner throughout its private producer
+continuation; none of these states yet authorizes publication. Its private
+Network owner freezes routes, validation instants and reveal order before work,
+then runs actual admission, execution and callback capture. Successful business
+changes apply only after the complete receipt/trace/completion row fits. Healthy
+output overflow rolls back State, events, witness and ZK deduplication while
+retaining accountable completed work. Actual rejection drops the business
+attempt, applies any prevalidated rejection penalty, then settles eligible fees;
+a later fee failure does not roll back the penalty. Economic eligibility uses
+the original typed error before bounded diagnostic projection. Output slots are
+allocated before work and retain original source order independently of execution
+order. The actual callback journal owns nested by-call and data-trigger traces.
+Actual Pipeline and Time invocations share the same pre-apply row-fit and rollback
+owner. Pipeline derives signed-input events from retained Network dispositions and
+frozen routes, then BlockApproved; original source/candidate positions survive
+skips. Event route data does not authorize callback write routing. A real Pipeline
+failure rolls back its business effects and disables the same authenticated action
+in a separate transaction; Time failure preserves the existing retry/removal policy.
+Healthy output overflow does neither. Root-repeat ordering remains Pipeline-before-DFS
+and Time-after-DFS, guarded against self-replacement. The sole canonical driver,
+genesis, source/host admission and complete common sealing tail still need integration. This
+isolated migration does not enable a production native path. Registration
+and parameter instruction guards do not yet qualify privileged mutation,
+restoration predecode or complete source/host admission.
+
+`ExecutionOutputLimits` is the explicit non-wire projection of the agreed policy,
+with no default or unlimited values. Internally derived terminal ceilings use
+canonical encoding of bounded maximum descriptors, never caller byte estimates. The linear `ExecutionOutputBudget` reserves bounded terminal
+rows for every prospective invocation before phase execution. Unused slots can
+be released only by the execution owner after eligibility checks. An oversized
+actual output selects its already-reserved typed OutputLimit terminal; the
+execution owner must first roll back the invocation and every side channel.
+Actual rejected Network execution uses `finish_network_rejection` after its
+independent economic disposition. If its full error does not fit, the reserved
+string storage retains `execution rejected; diagnostic omitted` in a `LimitCheck`
+rejection. This fixed diagnostic is distinct from healthy OutputLimit and carries
+no callback completions or business receipts. It cannot determine fee eligibility,
+misconduct, or work charges; deterministic replay must execute the original source.
+Actual rejected Pipeline/Time rows use `finish_internal_rejection`; an oversized
+failure diagnostic reuses both reserved reason strings for `callback failed;
+diagnostic omitted` and `TriggerFailureRootV1::OmittedAfterRejection`. The exact
+row has no business receipts and one callback-zero root Failure completion.
+`DeclaredInstructionProjection` means the root failed; `ReturnedBeforeRollback`
+means the root returned before a chained failure. Both describe rolled-back work.
+Core bounds diagnostic formatting and checks program payload sizes before copying
+oversized failure projections. The original execution outcome determines quarantine
+or retry; this bounded wire diagnostic cannot change that policy.
+Allocator/encoding failures remain local refusals, not canonical execution
+errors. Model arithmetic does not reserve host memory, authenticate the plan,
+or bound source, signature and execution-metadata growth. Complete Core admission,
+mutation coverage and producer integration remain open in this isolated migration;
+late attachment refusal alone does not establish liveness.
+
+`CommittedTransaction` and execution receipt proofs carry the full typed Network
+output, its hash and its output-tree proof, separately from the input proof.
+Finality anchors require an independently trusted target HeightContextId, checked
+before BLS verification. A context copied from an unverified artifact cannot
+establish trust; an authenticated successor uses its own target context rather
+than the initial predecessor pin. Anchors verify exact executed-wire hash and length, recompute the
+complete input/output commitments and validate the Network index join. Internal
+Pipeline/Time outputs use an output-only finality anchor. No synthetic input or
+old merge-query fallback grants authority. A structurally valid replacement row
+still fails the original finalized executed-wire commitment. The existing
+32-MiB full-proof carrier cap and 256-MiB consensus wire ceiling are unchanged;
+admission/proof delivery policy must reconcile them before activation.
+
+The native field remains inactive in production until the sole consumer and
+Apply cutover are complete. It cannot coexist with another economic carrier
+form (external execution context, autonomous envelope, lane ownership, or merge
+entry). Other State-changing controls require deliberate one-overlay composition
+and enclosing capacity checks; model shape alone does not authorize that work.
+Historical inclusion additionally requires exact applying pre-State replay.
+
 ## Sumeragi v2 Consensus Evidence Layout
 
 Sumeragi v2 votes and quorum certificates carry both `round` and
@@ -564,6 +734,16 @@ height, Commit phase, subject, and execution commitment. Consequently nodes
 that decide an unchanged body in different reproposal rounds derive one
 successor context, while body- or execution-distinct parent decisions cannot
 alias.
+
+## Kura Native AMX publication locator
+
+`NativeAmxPublicationIndexRecordV1` carries a required `origin` enum and
+`selection_marker` in its sole first-release canonical layout. `CanonicalWrite`
+admits an exact append or tip replacement; `CompletedRepair` binds repair of the
+complete already committed carrier within the selected frontier and forbids
+`replaced`. Repair records never infer that a missing or different carrier was
+uncommitted. Frames remain bounded at 4,096 bytes and require exact canonical
+decoding; layouts without the explicit origin are rejected.
 
 ## Hardware Acceleration Validation
 
@@ -931,3 +1111,11 @@ caller remain unread. Nested fields and complete-frame/exact-slice APIs still
 reject trailing bytes. The advertised layout, validation hook, field/count
 bounds and enclosing allocation budget apply to the prefix operation. This
 changes no wire bytes, frame identities or protocol version.
+
+### Fixed JSON object schema metadata
+
+`FastJsonWrite::json_object_field_order()` reports the exact field order for
+derived named structs with a value-independent object shape, applying the same
+renaming and skipped-field rules as serialization. Conditional omissions and
+flattened objects return `None`. Snapshot readers use this metadata without
+constructing a default World or serializing its stores; this changes no bytes.

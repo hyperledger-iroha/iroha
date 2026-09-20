@@ -1,7 +1,7 @@
 //! Generate canonical JSON fixtures for parity tests.
 //!
 //! Run with:
-//!   cargo run -p `iroha_core` --example `generate_parity_fixtures`
+//!   cargo run -p iroha_core --features iroha-core-tests --example generate_parity_fixtures
 //!
 //! It writes fixtures under `crates/iroha_core/tests/fixtures/`.
 use iroha_core::{
@@ -148,7 +148,7 @@ fn run_block_and_events(
     // Execute and commit
     let mut sb = state.block(block.header());
     let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
-    let errors: Vec<_> = vb.as_ref().errors().collect();
+    let errors: Vec<_> = vb.as_ref().failed_outputs().collect();
     assert!(
         errors.is_empty(),
         "parity fixture transactions failed: {errors:?}"

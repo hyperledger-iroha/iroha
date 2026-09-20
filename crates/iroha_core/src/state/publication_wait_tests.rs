@@ -12,7 +12,7 @@ fn state() -> State {
 }
 
 fn header(height: u64) -> BlockHeader {
-    BlockHeader::new(NonZeroU64::new(height).unwrap(), None, None, None, 0, 0)
+    BlockHeader::new(NonZeroU64::new(height).unwrap(), None, None, 0, 0)
 }
 
 #[tokio::test]

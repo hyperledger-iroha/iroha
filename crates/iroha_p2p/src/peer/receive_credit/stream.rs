@@ -455,7 +455,7 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
                     return Err(Error::Format);
                 }
                 let decoded =
-                    run::receive_credit_decode::<T, E>(plaintext, reservation.class, self.caps)?;
+                    run::receive_credit_decode::<T>(plaintext, reservation.class, self.caps)?;
                 Some(reservation.delivered(self.peer.clone(), decoded, self.connection))
             }
         };

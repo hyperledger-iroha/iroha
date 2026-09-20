@@ -1883,7 +1883,7 @@ mod tests {
     #[test]
     fn fx_corridor_settles_exact_rate_atomically_and_rejects_replay() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -1973,7 +1973,7 @@ mod tests {
     #[test]
     fn fx_corridor_debits_only_the_signing_source_account() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2021,7 +2021,7 @@ mod tests {
     #[test]
     fn fx_corridor_recipient_alias_domain_is_required_and_unambiguous() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2061,7 +2061,7 @@ mod tests {
     #[test]
     fn fx_corridor_rejects_recipient_bound_only_to_non_allowed_destination_domain() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2093,7 +2093,7 @@ mod tests {
     #[test]
     fn fx_corridor_rejects_policy_and_signed_intent_mismatches() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2211,7 +2211,7 @@ mod tests {
     #[test]
     fn fx_corridor_protocol_escrow_rejects_generic_manager_drain_and_supply_changes() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2287,7 +2287,7 @@ mod tests {
     #[test]
     fn fx_corridor_requires_fresh_oracle_evidence_and_enforces_exposure_velocity() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 60_001, 60_001);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 60_001, 60_001);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2306,7 +2306,7 @@ mod tests {
         let (state, mut policy) = fx_corridor_state(10, 1_000, 76, true);
         policy.max_source_amount_per_settlement = Quantity::one();
         policy.max_settlements_per_window = 1;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2363,7 +2363,7 @@ mod tests {
     #[test]
     fn fx_corridor_preflight_preserves_source_on_non_exact_or_unfunded_payout() {
         let (state, policy) = fx_corridor_state(10, 1, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2412,7 +2412,7 @@ mod tests {
     #[test]
     fn fx_corridor_rejects_wrong_dataspace_and_frozen_reserve_without_partial_effects() {
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2438,7 +2438,7 @@ mod tests {
             Quantity::from(10_u32),
         );
         let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
@@ -2607,7 +2607,7 @@ mod tests {
     #[test]
     fn dvp_rejects_unilateral_counterparty_debit() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = DvpIsi::new(
@@ -2645,7 +2645,7 @@ mod tests {
     #[test]
     fn pvp_rejects_unilateral_counterparty_debit() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = PvpIsi::new(
@@ -2683,7 +2683,7 @@ mod tests {
     #[test]
     fn failed_bilateral_attempts_do_not_grow_consensus_state_or_pin_entities() {
         let (state, _delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let victim_account = CARPENTER_ID.clone();
@@ -2763,7 +2763,7 @@ mod tests {
     fn dvp_consent_is_bound_to_exact_terms_and_settlement_id_is_one_shot() {
         let (state, delivery_def_id, payment_def_id) =
             settlement_state_with_balances(Quantity::from(20_u32), Quantity::from(2_000_u32));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = DvpIsi::new(
@@ -2829,7 +2829,7 @@ mod tests {
     #[test]
     fn dvp_respects_counterparty_outgoing_freeze() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = DvpIsi::new(
@@ -2875,7 +2875,7 @@ mod tests {
     #[test]
     fn dvp_moves_assets_after_exact_counterparty_consent() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let settlement_id: SettlementId = "dvp_trade".parse().unwrap();
@@ -2987,7 +2987,7 @@ mod tests {
     #[test]
     fn dvp_persists_balances_after_commit_on_universal_coordinator() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
         let dataspace = DataSpaceId::UNIVERSAL;
@@ -3058,7 +3058,7 @@ mod tests {
     fn dvp_persists_partial_debits_after_commit() {
         let (state, delivery_def_id, payment_def_id) =
             settlement_state_with_balances(Quantity::from(100u32), Quantity::from(200u32));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
         stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -3196,7 +3196,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.current_dataspace_id = Some(ds1);
@@ -3329,7 +3329,7 @@ mod tests {
     fn dvp_commit_first_is_rejected_without_moving_assets() {
         let (state, delivery_def_id, payment_def_id) =
             settlement_state_with_payment_spec(NumericSpec::fractional(2));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let settlement_id: SettlementId = "dvp_commit_first".parse().unwrap();
@@ -3387,7 +3387,7 @@ mod tests {
     fn dvp_commit_second_is_rejected_without_moving_assets() {
         let (state, delivery_def_id, payment_def_id) =
             settlement_state_with_payment_spec(NumericSpec::fractional(2));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let alice_delivery = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
@@ -3481,7 +3481,7 @@ mod tests {
     #[test]
     fn dvp_holding_limit_rejects_first_leg_without_mutation() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         set_test_holding_limit(&mut stx, &BOB_ID, &delivery_def_id, Quantity::zero());
@@ -3541,7 +3541,7 @@ mod tests {
     fn dvp_holding_limit_rolls_back_first_leg_for_atomic_plans() {
         for atomicity in [SettlementAtomicity::AllOrNothing] {
             let (state, delivery_def_id, payment_def_id) = settlement_state();
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             set_test_holding_limit(&mut stx, &ALICE_ID, &delivery_def_id, Quantity::zero());
@@ -3620,7 +3620,7 @@ mod tests {
     #[test]
     fn dvp_failure_preserves_balances() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let alice_bond_id = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
@@ -3696,7 +3696,7 @@ mod tests {
     #[test]
     fn pvp_swaps_currencies_after_exact_counterparty_consent() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let settlement_id: SettlementId = "pvp_fx".parse().unwrap();
@@ -3797,7 +3797,7 @@ mod tests {
     #[test]
     fn pvp_failure_preserves_balances() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let alice_primary_id = AssetId::new(primary_def_id.clone(), ALICE_ID.clone());
@@ -3867,7 +3867,7 @@ mod tests {
     #[test]
     fn pvp_holding_limit_rejects_first_leg_without_mutation() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         set_test_holding_limit(&mut stx, &BOB_ID, &primary_def_id, Quantity::zero());
@@ -3919,7 +3919,7 @@ mod tests {
     #[test]
     fn pvp_commit_first_is_rejected_without_moving_assets() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         set_test_holding_limit(&mut stx, &ALICE_ID, &counter_def_id, Quantity::zero());
@@ -3977,7 +3977,7 @@ mod tests {
     #[test]
     fn admission_validate_dvp_rejects_insufficient_funds() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = DvpIsi {
@@ -4011,7 +4011,7 @@ mod tests {
     #[test]
     fn admission_validate_dvp_allows_funded_trade() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = DvpIsi {
@@ -4038,7 +4038,7 @@ mod tests {
     #[test]
     fn admission_validate_pvp_rejects_insufficient_funds() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = PvpIsi {
@@ -4072,7 +4072,7 @@ mod tests {
     #[test]
     fn admission_validate_pvp_allows_funded_fx() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = PvpIsi {

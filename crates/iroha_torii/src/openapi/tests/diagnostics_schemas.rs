@@ -63,7 +63,86 @@ fn pipeline_status_openapi_exposes_only_the_exact_first_release_scope() {
             .keys()
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["200", "404"])
+        BTreeSet::from(["200", "404", "503"])
+    );
+    for status in ["404", "503"] {
+        let content = operation["responses"][status]["content"]
+            .as_object()
+            .expect("typed pipeline error representations");
+        assert_eq!(
+            content.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["application/json", "application/x-norito"])
+        );
+        for media in ["application/json", "application/x-norito"] {
+            assert_eq!(content[media]["schema"], schema_ref("ErrorEnvelope"));
+        }
+    }
+    let missing_description = operation["responses"]["404"]["description"]
+        .as_str()
+        .expect("exact pipeline absence semantics");
+    for detail in [
+        "pipeline_transaction_status_not_found",
+        "details.pipeline_transaction_status_not_found",
+        "exact requested",
+        "404 alone",
+    ] {
+        assert!(
+            missing_description.contains(detail),
+            "missing distinction: {detail}"
+        );
+    }
+    assert!(
+        operation["responses"]["503"]["description"]
+            .as_str()
+            .expect("incomplete global observation semantics")
+            .contains("route_unavailable")
+    );
+    let detail = &schemas["PipelineTransactionStatusNotFoundV1"];
+    assert_eq!(detail["type"], Value::from("object"));
+    assert_eq!(detail["additionalProperties"], Value::from(false));
+    let absence = iroha_torii_shared::PipelineTransactionStatusNotFoundV1 {
+        hash: "ab".repeat(32),
+        scope: "global".to_owned(),
+    };
+    assert!(absence.is_valid());
+    let encoded = norito::json::to_vec(&absence).expect("native scoped absence");
+    let native: Value = norito::json::from_slice(&encoded).expect("native fields");
+    let native_fields = native
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        detail["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field.as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        native_fields
+    );
+    let detail_properties = component_properties(schemas, "PipelineTransactionStatusNotFoundV1");
+    assert_eq!(
+        detail_properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        native_fields
+    );
+    for constraint in ["type", "minLength", "maxLength", "pattern"] {
+        assert_eq!(
+            detail_properties["hash"][constraint],
+            properties["hash"][constraint]
+        );
+    }
+    assert_eq!(
+        detail_properties["scope"]["enum"],
+        properties["scope"]["enum"]
+    );
+    assert_eq!(
+        component_properties(schemas, "ErrorDetails")["pipeline_transaction_status_not_found"],
+        schema_ref("PipelineTransactionStatusNotFoundV1")
     );
     let parameters = operation["parameters"]
         .as_array()
@@ -595,7 +674,7 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
                 .as_str()
                 .is_some_and(|description| {
                     description.contains("operator_auth_state_capacity_exhausted")
-            })
+                })
         );
     }
 
@@ -677,9 +756,7 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
             "delete",
             "operatorAuthCredentialDelete",
             "OperatorWebAuthnCredentialDeleteResponse",
-            BTreeSet::from([
-                "200", "400", "401", "403", "404", "409", "429", "500",
-            ]),
+            BTreeSet::from(["200", "400", "401", "403", "404", "409", "429", "500"]),
         ),
     ];
     for (path, method, operation_id, response_schema, expected_responses) in credential_routes {
@@ -693,7 +770,10 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
             .as_object()
             .unwrap_or_else(|| panic!("{path} responses"));
         assert_eq!(
-            responses.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            responses
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
             expected_responses
         );
         for response in responses.values() {
@@ -737,8 +817,9 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
     assert!(
         deletion["responses"]["404"]["description"]
             .as_str()
-            .is_some_and(|description| description
-                .contains("operator_webauthn_credential_not_found"))
+            .is_some_and(
+                |description| description.contains("operator_webauthn_credential_not_found")
+            )
     );
     assert!(
         deletion["responses"]["409"]["description"]
@@ -752,5 +833,195 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
                 description.contains("operator_webauthn_state_unavailable")
                     && description.contains("operator_webauthn_persist_failed")
             })
+    );
+}
+
+#[test]
+fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
+    use iroha_torii_shared::{
+        bridge_attestation::{
+            FinalityAttestationFailure, FinalityAttestationFailureReason as Reason,
+        },
+        bridge_finality::BridgeFinalityAttestationTipMismatchV1,
+    };
+    let document = generate_spec();
+    let path = "/v1/bridge/finality/attestation/{height}";
+    let operation = openapi_operation(&document, path, "get");
+    let progress_response = &operation["responses"]["409"];
+    let description = progress_response["description"].as_str().unwrap();
+    for distinction in [
+        "FinalityAttestationFailure",
+        "tip_mismatch",
+        "existing deadline",
+        "not finality proof",
+        "missing/corrupt proofs",
+        "CommitQC",
+        "not all equal",
+    ] {
+        assert!(
+            description.contains(distinction),
+            "missing progress distinction: {distinction}"
+        );
+    }
+    let content = response_content(operation, "409", path);
+    assert_eq!(
+        content.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from(["application/json", "application/x-norito"])
+    );
+    for media in ["application/json", "application/x-norito"] {
+        assert_eq!(content[media]["schema"], schema_ref("ErrorEnvelope"));
+    }
+    assert!(
+        operation["responses"]["404"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("fixed failure")
+    );
+    let schemas = component_schemas(&document);
+    let schema = &schemas["BridgeFinalityAttestationTipMismatchV1"];
+    assert_eq!(schema["additionalProperties"], Value::Bool(false));
+    let key =
+        iroha_crypto::KeyPair::try_from_seed(vec![71; 32], iroha_crypto::Algorithm::BlsNormal)
+            .unwrap();
+    let payload = BridgeFinalityAttestationTipMismatchV1 {
+        requested_height: 10,
+        applied_height: 9,
+        status_height: 10,
+        challenge: [7; 32],
+        node_id: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+        network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                b"OpenAPI progress",
+            )),
+        ),
+    };
+    assert!(payload.is_valid());
+    let bytes = norito::json::to_vec(&payload).unwrap();
+    let value: Value = norito::json::from_slice(&bytes).unwrap();
+    let native_fields = value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field.as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        native_fields
+    );
+    let properties = component_properties(schemas, "BridgeFinalityAttestationTipMismatchV1");
+    assert_eq!(
+        properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        native_fields
+    );
+    for height in ["requested_height", "applied_height", "status_height"] {
+        assert_eq!(properties[height]["minimum"].as_u64(), Some(1));
+        assert_eq!(properties[height]["format"].as_str(), Some("uint64"));
+    }
+    for field in ["challenge", "network_id"] {
+        assert_eq!(
+            properties[field],
+            component_properties(schemas, "BridgeFinalityAttestationBodyV1")[field]
+        );
+    }
+    assert!(
+        component_properties(schemas, "ErrorDetails")
+            .get("bridge_finality_attestation_tip_mismatch")
+            .is_none()
+    );
+    assert_eq!(
+        component_properties(schemas, "ErrorDetails")["finality_attestation_failure"],
+        schema_ref("FinalityAttestationFailure")
+    );
+    assert_eq!(
+        component_properties(schemas, "FinalityAttestationFailure")["tip_mismatch"]["anyOf"][0],
+        schema_ref("BridgeFinalityAttestationTipMismatchV1")
+    );
+    let failure = FinalityAttestationFailure {
+        challenge: payload.challenge,
+        height: payload.requested_height,
+        reason: Reason::TipChanged,
+        tip_mismatch: Some(payload),
+    };
+    let failure_json: Value =
+        norito::json::from_slice(&norito::json::to_vec(&failure).unwrap()).unwrap();
+    assert_eq!(failure_json["reason"].as_str(), Some("TipChanged"));
+    assert_eq!(
+        component_properties(schemas, "FinalityAttestationFailure")["reason"],
+        schema_ref("FinalityAttestationFailureReason")
+    );
+    assert_eq!(
+        schemas["FinalityAttestationFailureReason"]["type"].as_str(),
+        Some("string")
+    );
+    let failure_fields = failure_json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        component_properties(schemas, "FinalityAttestationFailure")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        failure_fields
+    );
+    assert_eq!(
+        schemas["FinalityAttestationFailure"]["additionalProperties"],
+        Value::Bool(false)
+    );
+    for status in ["409", "503", "500"] {
+        let content = response_content(operation, status, path);
+        for media in ["application/json", "application/x-norito"] {
+            assert_eq!(content[media]["schema"], schema_ref("ErrorEnvelope"));
+        }
+    }
+    assert_eq!(
+        schemas["FinalityAttestationFailureReason"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "ConsensusUninitialized",
+            "GenesisUncommitted",
+            "RestartRequired",
+            "TipChanged",
+            "ConflictingState",
+            "FinalityUnavailable",
+            "InternalFailure"
+        ])
+    );
+    let native_reason_labels = [
+        Reason::ConsensusUninitialized,
+        Reason::GenesisUncommitted,
+        Reason::RestartRequired,
+        Reason::TipChanged,
+        Reason::ConflictingState,
+        Reason::FinalityUnavailable,
+        Reason::InternalFailure,
+    ]
+    .map(|reason| {
+        let json: Value =
+            norito::json::from_slice(&norito::json::to_vec(&reason).unwrap()).unwrap();
+        json.as_str().expect("reason is a scalar string").to_owned()
+    });
+    assert_eq!(
+        schemas["FinalityAttestationFailureReason"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>(),
+        native_reason_labels.into_iter().collect::<BTreeSet<_>>()
     );
 }

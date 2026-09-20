@@ -113,6 +113,8 @@ mod direct_rkg_ephemeral_membership;
 )]
 #[path = "mkhe/exact_eight_chunk_membership.rs"]
 mod exact_eight_chunk_membership;
+#[path = "mkhe/global_lookup_statement_v1.rs"]
+mod global_lookup_statement_v1;
 #[path = "mkhe/manifest.rs"]
 mod manifest;
 #[path = "mkhe/noise.rs"]
@@ -137,6 +139,8 @@ mod phase23_ingress;
 mod phase23_mask_proof;
 #[path = "mkhe/phase23_materialized_wire.rs"]
 mod phase23_materialized_wire;
+#[path = "mkhe/phase23_rns_link.rs"]
+mod phase23_rns_link;
 #[allow(
     dead_code,
     reason = "the verified-receipt audit remains fail-closed until every opaque handoff is wired"
@@ -185,18 +189,30 @@ mod rns_native_existing_radix_commitment_view;
 mod rns_native_global_lookup_z_commitment_view;
 #[path = "mkhe/rns_native_profile.rs"]
 mod rns_native_profile;
+#[path = "mkhe/rns_native_proof_hash.rs"]
+mod rns_native_proof_hash;
+#[path = "mkhe/rns_native_proof_sampling.rs"]
+mod rns_native_proof_sampling;
 #[path = "mkhe/rns_native_public_polynomial_publisher.rs"]
 mod rns_native_public_polynomial_publisher;
 #[path = "mkhe/rns_native_public_polynomial_reader.rs"]
 mod rns_native_public_polynomial_reader;
 #[path = "mkhe/rns_native_q_mask_linear_relations.rs"]
 mod rns_native_q_mask_linear_relations;
+#[path = "mkhe/rns_native_qpcs_field_wire.rs"]
+mod rns_native_qpcs_field_wire;
 #[path = "mkhe/rns_native_qpcs_fri_complete.rs"]
 mod rns_native_qpcs_fri_complete;
 #[path = "mkhe/rns_native_qpcs_initial.rs"]
 mod rns_native_qpcs_initial;
+#[path = "mkhe/rns_native_qpcs_leaf.rs"]
+mod rns_native_qpcs_leaf;
 #[path = "mkhe/rns_native_qpcs_prefix.rs"]
 mod rns_native_qpcs_prefix;
+// Prototype tree construction is exercised by internal fixtures; production uses the verifier.
+#[path = "mkhe/rns_native_qpcs_tree.rs"]
+#[cfg(test)]
+mod rns_native_qpcs_tree;
 #[path = "mkhe/rns_native_radix_complement_linear_relation.rs"]
 mod rns_native_radix_complement_linear_relation;
 #[allow(
@@ -233,8 +249,6 @@ mod rns_native_terminal_cross_basis;
 mod rns_native_transcript;
 #[path = "mkhe/rns_native_wire.rs"]
 mod rns_native_wire;
-#[path = "mkhe/rns_native_zero_padding_commitment.rs"]
-mod rns_native_zero_padding_commitment;
 #[path = "mkhe/security.rs"]
 mod security;
 #[path = "mkhe/terminal.rs"]
@@ -522,11 +536,11 @@ pub use rns_native_profile::{
     ZkAmsMkheRnsNativeTopologyV1, zk_ams_mkhe_rns_native_profile_manifest_v1,
     zk_ams_mkhe_rns_native_profile_v1, zk_ams_mkhe_rns_native_topology_v1,
 };
+pub use rns_native_proof_hash::RnsNativeProofDigestV1;
 pub use rns_native_section_codec::{
     ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1,
     ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1, ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1,
     ZkAmsMkheRnsNativeSectionCodecErrorV1, ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
-    ZkAmsMkheRnsNativeZeroPaddingSectionV1,
 };
 pub use rns_native_source::{
     ZK_AMS_MKHE_RNS_NATIVE_SOURCE_MAIN_BLOCKS_PER_OPENING_V1,
@@ -560,8 +574,7 @@ pub use rns_native_wire::{
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_VERSION_V1,
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1,
     ZK_AMS_MKHE_RNS_NATIVE_RNS_RELATION_QPCS_SECTION_MAX_BYTES_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_ZERO_PADDING_SECTION_MAX_BYTES_V1, ZkAmsMkheRnsNativeProofEnvelopeV1,
+    ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1, ZkAmsMkheRnsNativeProofEnvelopeV1,
     ZkAmsMkheRnsNativeProofSectionDescriptorV1, ZkAmsMkheRnsNativeProofSectionKindV1,
 };
 pub use security::{

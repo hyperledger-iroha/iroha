@@ -231,13 +231,16 @@ struct NexusRoutingFixture {
     authority_keypair: KeyPair,
 }
 fn nexus_routing_fixture() -> NexusRoutingFixture {
+    nexus_routing_fixture_with_nexus(Nexus::default())
+}
+fn nexus_routing_fixture_with_nexus(nexus: Nexus) -> NexusRoutingFixture {
     let (authority_id, authority_keypair) = gen_account_in("wonderland");
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(&authority_id);
     let authority = Account::new(authority_id.clone()).build(&authority_id);
-    let state = State::new(
+    let state = State::new_with_nexus_for_testing(
         World::with([domain], [authority], []),
-        Kura::blank_kura_for_testing(),
+        nexus,
         LiveQueryStore::start_test(),
     );
     NexusRoutingFixture {
@@ -351,16 +354,15 @@ fn route_plan_with_state_syncs_queue_router_to_fresh_default_lane() {
 }
 #[test]
 fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
-    let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new(world_with_test_domains(), kura, query_handle);
+
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let fresh = RoutingDecision::new(LaneId::new(3), DataSpaceId::UNIVERSAL);
     let (fresh_lanes, fresh_dataspaces) = Queue::test_catalogs_for_routes(&[
         (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
         (fresh.lane_id, fresh.dataspace_id),
     ]);
-    let mut nexus = state.nexus_snapshot();
+    let mut nexus = Nexus::default();
     nexus.autoscale.enabled = false;
     nexus.lane_catalog = (*fresh_lanes).clone();
     nexus.lane_config =
@@ -372,7 +374,7 @@ fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
     nexus.fees.per_gas_unit_fee = Quantity::zero();
     nexus.routing_policy.default_lane = fresh.lane_id;
     nexus.routing_policy.default_dataspace = fresh.dataspace_id;
-    *state.nexus.get_mut() = nexus;
+    let state = State::new_with_nexus_for_testing(world_with_test_domains(), nexus, query_handle);
     let queue = Queue::test(config_factory(), &time_source);
     assert_eq!(
         queue.routing_policy.read().default_lane,

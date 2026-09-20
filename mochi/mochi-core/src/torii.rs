@@ -11,7 +11,10 @@ use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     Identifiable,
     asset::{AssetDefinitionId, AssetId},
-    block::{SignedBlock, consensus::SumeragiDiagnosticsStatus, consensus_v2::SumeragiV2Status},
+    block::{
+        SignedBlock, consensus::SumeragiDiagnosticsStatus, consensus_v2::SumeragiV2Status,
+        execution_output::ExecutionOutputV1,
+    },
     events::{
         EventBox, EventFilterBox,
         data::{DataEvent, DataEventFilter, prelude::*, sorafs},
@@ -886,18 +889,21 @@ fn smoke_transaction_result_in_block(
         return None;
     }
     block
-        .entrypoint_results()
-        .find_map(|(_, entrypoint, result)| {
-            let is_match = match &entrypoint {
+        .network_entrypoints()
+        .enumerate()
+        .find_map(|(input_index, entrypoint)| {
+            let is_match = match entrypoint {
                 TransactionEntrypoint::External(transaction) => transaction.hash() == *tx_hash,
                 TransactionEntrypoint::SealedReveal(reveal) => {
                     reveal.signed_transaction().hash() == *tx_hash
                 }
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                    false
-                }
+                TransactionEntrypoint::SealedCommitment(_) => false,
             };
-            is_match.then(|| match result.as_ref() {
+            if !is_match {
+                return None;
+            }
+            let (_, output) = block.network_output_at(u32::try_from(input_index).ok()?)?;
+            Some(match output.result.as_ref() {
                 Ok(_) => Ok(block.header().height().get()),
                 Err(reason) => Err(ToriiError::SmokeRejected {
                     hash: encode_lower_hex(tx_hash.as_ref()),
@@ -3209,11 +3215,11 @@ pub struct BlockSummary {
     pub height: u64,
     /// Hex-encoded block hash.
     pub hash_hex: String,
-    /// Number of external transactions in the block.
+    /// Number of ordinary or native network transaction inputs in the block.
     pub transaction_count: usize,
     /// Number of rejected transactions recorded in the block results.
     pub rejected_transaction_count: usize,
-    /// Number of time-triggered entrypoints executed in the block.
+    /// Number of scheduled invocations recorded in the block's typed outputs.
     pub time_trigger_count: usize,
     /// Number of validator signatures attached to the block.
     pub signature_count: usize,
@@ -3227,16 +3233,19 @@ pub struct BlockSummary {
 impl BlockSummary {
     fn from_block(block: &SignedBlock) -> Self {
         let header = block.header();
-        let transaction_count = block.external_entrypoint_count();
-        let (time_trigger_count, rejected_transaction_count) = if block.has_results() {
-            let time_triggers = block.time_triggers();
-            let rejected = (0..transaction_count)
-                .filter(|idx| block.error(*idx).is_some())
-                .count();
-            (time_triggers.len(), rejected)
-        } else {
-            (0, 0)
-        };
+        let transaction_count = block.network_entrypoint_count();
+        let time_trigger_count = block
+            .execution_outputs()
+            .iter()
+            .filter(|output| matches!(output, ExecutionOutputV1::Time(_)))
+            .count();
+        let rejected_transaction_count = block
+            .execution_outputs()
+            .iter()
+            .filter(|output| {
+                matches!(output, ExecutionOutputV1::Network(row) if row.result.as_ref().is_err())
+            })
+            .count();
         let signature_count = block.signatures().len();
         Self {
             height: header.height().get(),

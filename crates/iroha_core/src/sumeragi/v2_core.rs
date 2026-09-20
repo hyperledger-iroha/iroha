@@ -462,21 +462,22 @@ pub(crate) use scheduler::{ScheduleState, ScheduledWork};
 #[cfg(test)]
 pub(crate) use types::FUTURE_TIMEOUT_VOTE_LOOKAHEAD;
 pub(crate) use types::{
-    CertificateRef, ConsensusMessageV2, ContextId, Digest, EventTag, Generation, HeightContext,
-    HeightContextError, MAX_VOTING_ROSTER_LEN, NetworkId, OpaqueSignature, PayloadManifest, Phase,
-    Proposal, ProposalJustification, QuorumCertificate, Round, SignatureShare, SignedProposal,
-    SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
-    Validator, ValidatorId, Vote, VotingMode, VotingPower, timeout_vote_view_is_admissible,
+    CertificateRef, ConsensusMessageV2, ContextId, Digest, EventTag, FinalizedStateAnchor,
+    Generation, HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, NetworkId,
+    OpaqueSignature, PayloadManifest, Phase, Proposal, ProposalJustification, QuorumCertificate,
+    Round, SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject,
+    TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote,
+    VotingMode, VotingPower, timeout_vote_view_is_admissible,
 };
 pub(crate) use wal::{
-    DurableState, PersistenceId, ReplayError, SAFETY_WAL_FILE_HEADER_LEN,
+    DurableState, PersistenceId, RecoveredWalRecord, ReplayError, SAFETY_WAL_FILE_HEADER_LEN,
     SAFETY_WAL_FRAME_HEADER_LEN, SAFETY_WAL_FRAME_MAGIC, SAFETY_WAL_HASH_LEN,
     SAFETY_WAL_MAX_RECORD_BYTES, WalAppendError, WalAppendIo, WalAppendState, WalCodecError,
     WalEntry, WalFileIdentity, WalFrameCorruption, WalHeaderCorruption, WalIdentityField,
     WalIoStage, WalRecord, WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,
 };
 #[cfg(test)]
-pub(crate) use wal::{SAFETY_WAL_FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION};
+pub(crate) use wal::{SAFETY_WAL_FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION, encode_wal_frame};
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

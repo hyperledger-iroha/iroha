@@ -41,6 +41,13 @@ RETIRED_PK2_MULTILANE_COMPATIBILITY_SOURCES = (
 )
 
 
+RETIRED_ALIAS_ROUTING_ACTIVATION_SOURCES = (
+    f"pub struct {'AliasRegistryRouting' + 'ActivationV1'} {{}}\n",
+    f'const RETIRED_PARAMETER: &str = "{"alias_registry_routing_" + "activation_v1"}";\n',
+    f"fn {'alias_registry_routing_' + 'active'}() {{}}\n",
+)
+
+
 def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -95,6 +102,7 @@ def test_guard_allows_clean_root_and_crate_manifests(tmp_path: Path) -> None:
     assert "No retired Native AMX V1 consensus codecs found." in result.stdout
     assert "No retired lane executable payload handoff codecs found." in result.stdout
     assert "No retired PK2 multilane compatibility paths found." in result.stdout
+    assert "No retired alias registry routing activation found." in result.stdout
 
 
 def test_guard_uses_fail_closed_grep_fallback_without_ripgrep(tmp_path: Path) -> None:
@@ -255,3 +263,62 @@ def test_guard_rejects_retired_pk2_multilane_compatibility_path(
     assert result.returncode == 1
     assert "retired PK2 multilane compatibility path detected in:" in result.stderr
     assert str(source) in result.stderr
+
+
+@pytest.mark.parametrize("retired_source", RETIRED_ALIAS_ROUTING_ACTIVATION_SOURCES)
+@pytest.mark.parametrize("directory", ("crates/demo/src", "integration_tests/tests"))
+@pytest.mark.parametrize("backend", ("auto", "grep"))
+def test_guard_rejects_retired_alias_routing_activation(
+    tmp_path: Path, retired_source: str, directory: str, backend: str
+) -> None:
+    repo = _init_repo(tmp_path)
+    source = repo / directory / "retired.rs"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(retired_source, encoding="utf-8")
+    tool_bin = tmp_path / "tool-bin"
+    tool_bin.mkdir()
+    tools = ("bash", "find", "git", "grep")
+    if backend == "auto" and shutil.which("rg") is not None:
+        tools += ("rg",)
+    for tool in tools:
+        executable = shutil.which(tool)
+        assert executable is not None
+        (tool_bin / tool).symlink_to(executable)
+    env = os.environ.copy()
+    env["PATH"] = str(tool_bin)
+
+    result = _run_guard(repo, env=env)
+
+    assert result.returncode == 1
+    assert "retired alias registry routing activation detected in:" in result.stderr
+    assert str(source) in result.stderr
+    assert "command not found" not in result.stderr
+
+
+@pytest.mark.parametrize("backend", ("auto", "grep"))
+def test_guard_allows_alias_retirement_history_and_unconditional_routing(
+    tmp_path: Path, backend: str
+) -> None:
+    repo = _init_repo(tmp_path)
+    history = repo / "docs" / "history" / "alias-routing-retirement.md"
+    history.parent.mkdir(parents=True)
+    history.write_text("".join(RETIRED_ALIAS_ROUTING_ACTIVATION_SOURCES), encoding="utf-8")
+    source = repo / "crates" / "demo" / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text("fn instruction_uses_universal_alias_registry() {}\n", encoding="utf-8")
+    tool_bin = tmp_path / "tool-bin"
+    tool_bin.mkdir()
+    tools = ("bash", "find", "git", "grep")
+    if backend == "auto" and shutil.which("rg") is not None:
+        tools += ("rg",)
+    for tool in tools:
+        executable = shutil.which(tool)
+        assert executable is not None
+        (tool_bin / tool).symlink_to(executable)
+    env = os.environ.copy()
+    env["PATH"] = str(tool_bin)
+
+    result = _run_guard(repo, env=env)
+
+    assert result.returncode == 0
+    assert "No retired alias registry routing activation found." in result.stdout

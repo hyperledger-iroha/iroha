@@ -17,7 +17,11 @@ use iroha_data_model::{
         ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
         QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
     },
-    block::{BlockHeader, BlockSignature, SignedBlock},
+    block::{
+        BlockHeader, BlockSignature, SignedBlock,
+        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+        output_budget::ExecutionOutputLimits,
+    },
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeSccpDestinationProofV1,
         SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
@@ -39,12 +43,22 @@ use iroha_data_model::{
     isi::{InstructionBox, bridge::RecordSccpMessage},
     transaction::{
         DataTriggerSequence, Executable, IvmBytecode, IvmProved, TransactionBuilder,
-        TransactionEntrypoint, TransactionResult, TransactionResultInner,
+        TransactionEntrypoint, TransactionResult,
     },
 };
 use iroha_model_base::peer::PeerId;
 use norito::to_bytes;
 use std::collections::BTreeSet;
+
+// These finite limits belong only to bounded public test fixtures, never runtime policy.
+fn exact_fixture_output_limits() -> ExecutionOutputLimits {
+    ExecutionOutputLimits {
+        max_outputs: 64,
+        max_output_bytes: 1024 * 1024,
+        max_total_output_bytes: 4 * 1024 * 1024,
+        max_executed_wire_bytes: 8 * 1024 * 1024,
+    }
+}
 
 const TEST_MAX_OUTSTANDING_LIABILITY: u128 = 1_000_000_000_000;
 const fn test_max_wrapped_supply(multiplier: u64) -> u128 {
@@ -175,8 +189,8 @@ impl SccpExactOutboundTestFixtureV1 {
 
     /// Rebuild this exact fixture around one complete finalized signed block.
     ///
-    /// The caller must first attach the block's transactions and results so
-    /// both Merkle roots are present. A height-two block must also receive the
+    /// The caller must first attach the complete typed outputs with exact Network source
+    /// joins and a valid output Merkle cache. A height-two block must also receive the
     /// typed complete parent fixture whose exact `CommitQC` becomes the frozen
     /// successor context. This method then signs the canonical block wire with
     /// the deterministic test-only Taira roster and regenerates every
@@ -194,14 +208,9 @@ impl SccpExactOutboundTestFixtureV1 {
         parent: Option<&SccpFinalizedBlockTestFixtureV1>,
     ) -> Self {
         let block_header = block.header();
-        assert!(
-            block_header.merkle_root().is_some(),
-            "an SCCP finalized-header fixture must commit its external entrypoints"
-        );
-        assert!(
-            block_header.result_merkle_root().is_some(),
-            "an SCCP finalized-header fixture must commit its transaction results"
-        );
+        block
+            .validate_output_merkle_cache()
+            .expect("an SCCP finalized-header fixture must carry exact full outputs");
         assert_eq!(
             block_header.sccp_commitment_root(),
             Some(self.bundle.commitment_root),
@@ -266,8 +275,9 @@ impl SccpExactTonOutboundTestFixtureV1 {
         parent: Option<&SccpFinalizedBlockTestFixtureV1>,
     ) -> Self {
         let block_header = block.header();
-        assert!(block_header.merkle_root().is_some());
-        assert!(block_header.result_merkle_root().is_some());
+        block
+            .validate_output_merkle_cache()
+            .expect("an exact TON fixture must carry exact full outputs");
         assert_eq!(
             block_header.sccp_commitment_root(),
             Some(self.bundle.commitment_root)
@@ -770,55 +780,59 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
         external_root,
         "the finalized header must commit the exact external entrypoint order"
     );
-    let entrypoint_hashes = block
-        .entrypoints_cloned()
-        .map(|entrypoint| entrypoint.hash())
-        .collect::<Vec<_>>();
+    block
+        .validate_output_merkle_cache()
+        .expect("the full typed outputs, source joins and retained cache must be canonical");
+    let network = block.network_entrypoints().collect::<Vec<_>>();
     assert_eq!(
-        block.entrypoint_hashes().collect::<Vec<_>>(),
-        entrypoint_hashes,
-        "the attached full-entrypoint Merkle tree must match the canonical entrypoints"
+        block.network_input_hashes().collect::<Vec<_>>(),
+        network
+            .iter()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>(),
+        "the complete Network input tree must match actual sources"
     );
-    let results = block.results().collect::<Vec<_>>();
-    assert_eq!(
-        results.len(),
-        entrypoint_hashes.len(),
-        "every canonical entrypoint must have exactly one committed result"
-    );
-    let result_hashes = results
+    let output_hashes = block
+        .execution_outputs()
         .iter()
-        .map(|result| result.hash())
+        .map(iroha_crypto::HashOf::new)
         .collect::<Vec<_>>();
+    assert_eq!(block.output_hashes().collect::<Vec<_>>(), output_hashes);
     assert_eq!(
-        block.result_hashes().collect::<Vec<_>>(),
-        result_hashes,
-        "the attached result Merkle tree must match the exact result vector"
+        block.output_merkle_commitment(),
+        output_hashes
+            .into_iter()
+            .collect::<MerkleTree<ExecutionOutputV1>>()
+            .commitment(),
+        "the retained output tree must match all actual typed outputs, including internal rows"
     );
-    let result_root = result_hashes
-        .iter()
-        .copied()
-        .collect::<MerkleTree<TransactionResult>>()
-        .root();
     assert_eq!(
-        block.header().result_merkle_root(),
-        result_root,
-        "the finalized header must commit the exact transaction-result vector"
+        block
+            .execution_outputs()
+            .iter()
+            .filter(|row| matches!(row, ExecutionOutputV1::Network(_)))
+            .count(),
+        network.len(),
+        "each Network source has exactly one explicitly joined Network output"
     );
     let mut commitments = Vec::new();
     let mut seen = BTreeSet::new();
-    for (entrypoint_index, entrypoint) in external_entrypoints.iter().enumerate() {
-        if results
-            .get(entrypoint_index)
-            .is_none_or(|result| result.as_ref().is_err())
-        {
+    for (input_index, entrypoint) in network.into_iter().enumerate() {
+        let (output_index, output) = block
+            .network_output_at(u32::try_from(input_index).expect("fixture input index"))
+            .expect("exact Network source/output join");
+        assert_eq!(output.input_index as usize, input_index);
+        assert_eq!(
+            &block.execution_outputs()[output_index as usize],
+            &ExecutionOutputV1::Network(output.clone())
+        );
+        if output.result.is_err() {
             continue;
         }
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                continue;
-            }
+            TransactionEntrypoint::SealedCommitment(_) => continue,
         };
         let instructions: Vec<&InstructionBox> = match transaction.instructions() {
             Executable::Instructions(instructions) => instructions.iter().collect(),
@@ -875,8 +889,8 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
 /// # Panics
 ///
 /// Panics if `block` is outside the exact two-height fixture corridor, has an
-/// invalid or non-exact parent, carries an SCCP root without both transaction
-/// Merkle roots, or cannot be bound to a cryptographically valid artifact.
+/// invalid or non-exact parent, has malformed source/output joins or a stale output cache,
+/// or cannot be bound to a cryptographically valid artifact.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
@@ -892,16 +906,6 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         (1..=2).contains(&height),
         "the exact SCCP finality signer supports fixture heights one and two only"
     );
-    if block_header.sccp_commitment_root().is_some() {
-        assert!(
-            block_header.merkle_root().is_some(),
-            "an SCCP-finalized block must commit its external entrypoints"
-        );
-        assert!(
-            block_header.result_merkle_root().is_some(),
-            "an SCCP-finalized block must commit its transaction results"
-        );
-    }
     assert_exact_fixture_block_body(block);
     let mut keypairs = [
         KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal).expect("BLS fixture key 1"),
@@ -1098,12 +1102,12 @@ fn exact_sccp_fixture_block(
             gas_policy_commitment: Hash::new(b"exact SCCP fixture gas policy"),
         }))
         .sign(transaction_key.private_key());
-    let entrypoint_hash = transaction.hash_as_entrypoint();
+    let input_root =
+        MerkleTree::root_from_typed_leaves(std::iter::once(transaction.hash_as_entrypoint()));
     let mut header = BlockHeader::new(
         NonZeroU64::new(height).expect("exact SCCP fixture height is nonzero"),
         previous,
-        None,
-        None,
+        input_root,
         1_700_000_000_002,
         0,
     );
@@ -1128,12 +1132,28 @@ fn exact_sccp_fixture_block(
         )],
     }));
     block
-        .set_transaction_results(
+        .validate_proposal_commitments()
+        .expect("exact SCCP fixture proposal commits every actual input and attachment");
+    let proposal_header = block.header();
+    let proposal = block.canonical_resultless_proposal();
+    block
+        .set_execution_outputs(
+            vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 0,
+                result: TransactionResult::new(Ok(DataTriggerSequence::default())),
+                completions: Vec::new(),
+            })],
+            1,
+            Default::default(),
             Vec::new(),
-            &[entrypoint_hash],
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &exact_fixture_output_limits(),
         )
         .expect("exact SCCP fixture block results match its transaction");
+    assert_eq!(block.header(), proposal_header);
+    assert_eq!(block.canonical_resultless_proposal(), proposal);
     let final_signature = BlockSignature::new(
         0,
         SignatureOf::try_from_hash(block_key.private_key(), block.hash())
@@ -1659,16 +1679,31 @@ mod tests {
         let fixture = sccp_exact_outbound_test_fixture_v1();
         let mut tampered = fixture.finalized_block.block().clone();
         let canonical_header = tampered.header();
-        assert!(tampered.update_transaction_result(
-            0,
-            &TransactionResultInner::Err(
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::NotPermitted(
-                        "adversarial SCCP result envelope".to_owned(),
-                    ),
+        let mut outputs = tampered.execution_outputs().to_vec();
+        let ExecutionOutputV1::Network(row) = &mut outputs[0] else {
+            unreachable!()
+        };
+        row.result = TransactionResult::new(Err(
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted(
+                    "adversarial SCCP result envelope".to_owned(),
                 ),
             ),
         ));
+        row.completions.clear();
+        tampered
+            .set_execution_outputs(
+                outputs,
+                0,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &exact_fixture_output_limits(),
+            )
+            .expect("a rejected Network result is structurally valid but changes the SCCP root");
+        tampered.validate_output_merkle_cache().unwrap();
         tampered.replace_header_for_testing(canonical_header);
         assert_eq!(tampered.header(), canonical_header);
         assert!(
@@ -1676,7 +1711,7 @@ mod tests {
                 sccp_finalize_taira_block_test_fixture_v1(&tampered, None)
             }))
             .is_err(),
-            "the test signer must reject a result envelope whose Merkle root does not match its fixed header"
+            "the test signer must reject a successful SCCP root after its exact Network output was changed to rejection"
         );
     }
     #[test]
@@ -1718,8 +1753,8 @@ mod tests {
             alternate_header.merkle_root()
         );
         assert_eq!(
-            tampered.header().result_merkle_root(),
-            alternate_header.result_merkle_root()
+            tampered.output_merkle_commitment(),
+            alternate.finalized_block.block().output_merkle_commitment()
         );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1728,5 +1763,189 @@ mod tests {
             .is_err(),
             "the test signer must reject a complete, internally consistent body whose SCCP root was replaced by a stale root"
         );
+    }
+    #[test]
+    fn exact_finality_binds_full_outputs_with_distinct_network_and_internal_counts() {
+        use iroha_data_model::{
+            block::{
+                execution_output::{TimeExecutionOutputV1, TimeInvocationV1, TriggerUseV1},
+                proofs::{TrustedBlockProofAnchor, TrustedExecutionOutputAnchor},
+            },
+            events::time::{TimeEvent, TimeInterval},
+            transaction::signed::ExecutionStep,
+            trigger::DataTriggerStep,
+        };
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        // Pin the independently constructed fixture context before signing the candidate body.
+        let pinned_context = fixture
+            .finalized_block
+            .proof()
+            .finality_artifact
+            .height_context
+            .id();
+        let mut block = fixture.finalized_block.block().clone();
+        let proposal = block.canonical_resultless_proposal();
+        let id: iroha_data_model::trigger::TriggerId = "sccp_fixture_timer".parse().unwrap();
+        let mut outputs = block.execution_outputs().to_vec();
+        outputs.push(ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+            invocation: TimeInvocationV1 {
+                schedule_index: 3,
+                event: TimeEvent {
+                    interval: TimeInterval {
+                        since_ms: 1_700_000_000_001,
+                        length_ms: 1,
+                    },
+                },
+                trigger: TriggerUseV1 {
+                    trigger_id: id.clone(),
+                    registered_at_height: 0,
+                    action_hash: Hash::new(b"structural SCCP fixture action, not State authority"),
+                },
+            },
+            result: TransactionResult::new(Ok(vec![DataTriggerStep {
+                id,
+                instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
+            }])),
+            failure_root: None,
+            completions: Vec::new(),
+        }));
+        block
+            .set_execution_outputs(
+                outputs,
+                2,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &exact_fixture_output_limits(),
+            )
+            .unwrap();
+        assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_eq!(block.network_entrypoint_count(), 1);
+        assert_eq!(block.execution_outputs().len(), 2);
+        assert_eq!(
+            block
+                .network_input_merkle_commitment()
+                .unwrap()
+                .leaf_count()
+                .get(),
+            1
+        );
+        assert_eq!(
+            block.output_merkle_commitment().unwrap().leaf_count().get(),
+            2
+        );
+        let finalized = sccp_finalize_taira_block_test_fixture_v1(&block, None);
+        assert_exact_finalized_block_fixture(&finalized);
+        let artifact = &finalized.proof().finality_artifact;
+        let source = block.network_entrypoint_at(0).unwrap().hash();
+        TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            &block,
+            artifact,
+            pinned_context,
+            &source,
+        )
+        .unwrap();
+        TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+            &block,
+            artifact,
+            pinned_context,
+            1,
+        )
+        .unwrap();
+        let mut changed = block.clone();
+        let mut rows = changed.execution_outputs().to_vec();
+        let ExecutionOutputV1::Time(time) = &mut rows[1] else {
+            unreachable!()
+        };
+        time.invocation.schedule_index += 1;
+        changed
+            .set_execution_outputs(
+                rows,
+                2,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &exact_fixture_output_limits(),
+            )
+            .unwrap();
+        assert_eq!(changed.header(), block.header());
+        assert_eq!(changed.canonical_resultless_proposal(), proposal);
+        assert_ne!(
+            exact_fixture_executed_wire_hash(&changed),
+            exact_fixture_executed_wire_hash(&block)
+        );
+        assert!(
+            TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                &changed,
+                artifact,
+                pinned_context,
+                &source
+            )
+            .is_err()
+        );
+        assert!(
+            TrustedExecutionOutputAnchor::from_untrusted_finality_artifact(
+                &changed,
+                artifact,
+                pinned_context,
+                1
+            )
+            .is_err()
+        );
+        let mut wrong_length = artifact.clone();
+        wrong_length
+            .commit_qc
+            .execution_commitment
+            .executed_block_wire_len += 1;
+        assert!(
+            wrong_length.verify().is_err(),
+            "exact signed execution length remains in the BLS transcript"
+        );
+    }
+
+    #[test]
+    fn exact_finality_signer_rejects_foreign_network_join_and_stale_output_cache() {
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        let block = fixture.finalized_block.block();
+        for mutation in 0..3 {
+            let mut json = norito::json::to_value(block).unwrap();
+            let result = json
+                .as_object_mut()
+                .unwrap()
+                .get_mut("result")
+                .unwrap()
+                .as_object_mut()
+                .unwrap();
+            if mutation == 2 {
+                result.insert(
+                    "output_merkle".into(),
+                    norito::json::to_value(&MerkleTree::<ExecutionOutputV1>::default()).unwrap(),
+                );
+            } else {
+                let mut rows = block.execution_outputs().to_vec();
+                let ExecutionOutputV1::Network(row) = &mut rows[0] else {
+                    unreachable!()
+                };
+                row.input_index = 1;
+                if mutation == 1 {
+                    rows.clear();
+                }
+                result.insert("outputs".into(), norito::json::to_value(&rows).unwrap());
+            }
+            let changed: SignedBlock = norito::json::from_value(json).unwrap();
+            assert_eq!(changed.header(), block.header());
+            assert!(changed.validate_output_merkle_cache().is_err());
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    sccp_finalize_taira_block_test_fixture_v1(&changed, None)
+                }))
+                .is_err(),
+                "mutation {mutation}"
+            );
+        }
     }
 }

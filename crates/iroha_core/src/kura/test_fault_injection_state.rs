@@ -28,9 +28,11 @@ std::thread_local! {
     static FAIL_AFTER_BOUND_PROGRESS_APPEND_BUILD_CALLS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_BOUND_PROGRESS_APPEND_INDEX_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_BOUND_PROGRESS_INTENT_DIRECTORY_SYNC: std::cell::Cell<Option<ProgressIntentDirectorySyncFault>> = const { std::cell::Cell::new(None) };
     static FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT: std::cell::Cell<Option<ProgressAncestorSyncFault>> = const { std::cell::Cell::new(None) };
+    static CERTIFIED_ARTIFACT_VALIDATION_COUNT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER_NEXT_CERTIFIED_FRONTIER_BUILD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER_NEXT_AUTONOMOUS_CERTIFIED_FRONTIER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -108,7 +110,7 @@ fn set_latest_certified_frontier_post_validation_hook_for_tests(hook: impl FnOnc
     });
 }
 #[cfg(test)]
-fn fail_next_certified_lane_block_artifact_validation_for_tests() {
+pub(crate) fn fail_next_certified_lane_block_artifact_validation_for_tests() {
     FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.set(true));
 }
 #[cfg(test)]
@@ -153,3 +155,27 @@ fn fail_after_next_autonomous_merge_bundle_pair_for_tests() {
 }
 const CANONICAL_HASH_READER_OBSERVED: usize = 1 << 0;
 const CANONICAL_BLOCK_READER_OBSERVED: usize = 1 << 1;
+
+#[cfg(test)]
+pub(crate) fn count_certified_artifact_validations_for_tests<T>(
+    run: impl FnOnce() -> T,
+) -> (T, usize) {
+    struct RestoreValidationCount;
+    impl Drop for RestoreValidationCount {
+        fn drop(&mut self) {
+            CERTIFIED_ARTIFACT_VALIDATION_COUNT.with(|count| count.set(None));
+        }
+    }
+    CERTIFIED_ARTIFACT_VALIDATION_COUNT.with(|count| {
+        assert!(
+            count.get().is_none(),
+            "certificate validation probe already active"
+        );
+        count.set(Some(0));
+    });
+    let _restore = RestoreValidationCount;
+    let value = run();
+    let count = CERTIFIED_ARTIFACT_VALIDATION_COUNT
+        .with(|count| count.get().expect("certificate validation probe active"));
+    (value, count)
+}

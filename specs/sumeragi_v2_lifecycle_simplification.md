@@ -6,9 +6,12 @@ deterministic lifecycle coordinator. It is not proof-ledger promotion evidence
 and must not be refreshed merely because the replacement changes a sealed
 source.
 
-Completion of this architectural replacement is explicitly outside the current
-`ML-*` Production Multilane Finish scope; see the closure ledger's
-[TODO classification](sumeragi_v2_multilane_closure_ledger.md#explicitly-out-of-scope).
+The [2026-09-16 liveness redesign](sumeragi_liveness_redesign_goals.md) makes
+completion of this replacement active work and a prerequisite for runtime
+qualification. It remains a generic consensus obligation rather than an
+`ML-*` feature row. The frozen measurements and source identities below are
+historical; the new goal does not promote their evidence or erase their
+replacement/deletion obligations.
 The production runner now gives every height to the sealed lifecycle
 coordinator/ledger stack. `PendingKuraApply` uses a dedicated no-clock state
 whose verified successor and lifecycle-storage authority enter the ordinary
@@ -372,6 +375,16 @@ The two Apply barriers cannot mint that permit. They use the separately sealed
 decided-lane recovery authority, which alone may classify current or historical
 Serve, Kura adverts, lane-local traffic, and obsolete leader-wire retirement
 while the exact Apply output is settling.
+
+An authenticated ordinary lane message receives a bounded lane-output dispatch
+at the end of its own post-dequeue consumer, before the next ingress message
+or the outer retransmission cadence. The runner supplies its existing control
+queue capacity. The exact prepared handoff and output fail-stop scope remain
+armed until this dispatch succeeds and the final output admission is reacquired.
+Network backpressure retains an exact source or worker owner for a later attempt; it
+does not authorize dropping the output or bypassing the guard. Global V2 and
+other non-lane consumers keep their own existing output paths. Apply barriers
+and the separate decided-lane recovery selector remain unchanged.
 
 `ProductionV2Services::capture_lifecycle_capacity_rank` consumes the complete
 selector. Under one locked transaction it either retains the physical I/O FIFO
@@ -779,6 +792,14 @@ logical coordinator still stores only the resulting physical slot and digest.
 Complete process-local `AdapterEffect` values live in a sibling deterministic
 registry keyed by `(OwnerId, record ordinal, PhysicalSlotId)`, never by digest
 alone, because two inherited body authorities may share one concrete carrier.
+The registry stores heap-owned work values so B-tree operations do not place
+complete retained carriers in tree-node stack temporaries. Publication tails
+reuse incumbent allocations or consume storage reserved before durable
+publication; boxing must not introduce an allocation after that boundary.
+Installation and publication failures retain the same heap-owned work. Cold
+startup also keeps authenticated certified-body census entries heap-owned
+through Fetch-to-Store-to-Validate reconstruction; these opaque process-local
+carriers do not change the durable replay schema.
 Registry installation consumes both the effect and pending binding, rejects
 overwrite, digest drift, or disagreement between the pending causal lifecycle
 key and the admitted `OwnerId`, resolves only an exact lease-advertised slot,

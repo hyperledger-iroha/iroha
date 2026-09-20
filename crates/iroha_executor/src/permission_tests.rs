@@ -53,7 +53,6 @@ fn make_context(authority: &AccountId, height: u64) -> Context {
         NonZeroU64::new(height).expect("height must be non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );

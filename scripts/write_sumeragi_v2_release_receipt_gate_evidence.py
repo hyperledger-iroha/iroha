@@ -578,7 +578,7 @@ def _prebuilt_directory_inventory(
                         f"{name} contains more entries than its exact closed inventory"
                     )
                 if (
-                    _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
+                    _EVIDENCE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
                     and entry.name != _PREBUILT_MANIFEST_NAME
                 ):
                     raise ReceiptError(f"{name} does not have its exact closed inventory")
@@ -796,7 +796,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"iroha3d", "iroha", "kagami", "iroha3d_taira"},
         "prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -1072,7 +1072,7 @@ def _corridor_artifacts(
         expected_path = expected_tool_paths.get(tool)
         path_is_exact = (
             tool_path.parent == runtime_root / "swift-toolchain" / "bin"
-            and _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(tool_path.name)
+            and _EVIDENCE_PATH_COMPONENT_RE.fullmatch(tool_path.name)
             is not None
             if tool == "swift"
             else tool_path == expected_path
@@ -1280,6 +1280,7 @@ def _corridor_artifacts(
         "lane-certificate-rust": (_DATA_LANE_CERTIFICATE_TEST,),
         "cross-sdk-rust": _CROSS_SDK_TESTS,
         "sumeragi-diagnostics-rust": _RUST_SDK_DIAGNOSTICS_TESTS,
+        **_RUST_ASYNC_GATE_TESTS,
     }
     # The exact-length equality above provides the same fail-closed guarantee
     # as ``zip(strict=True)`` while retaining the repository's Python 3.9
@@ -1353,6 +1354,17 @@ def _corridor_artifacts(
                     raise ReceiptError(
                         f"corridor exact Cargo leg {leg_id} lacks its named test"
                     )
+            passing_tests = [
+                match.group(1)
+                for line in lines
+                if (match := re.fullmatch(
+                    r"test (.+) \.\.\. ok", line
+                )) is not None
+            ]
+            if sorted(passing_tests) != sorted(exact_cargo_tests[leg_id]):
+                raise ReceiptError(
+                    f"corridor exact Cargo leg {leg_id} contains an unexpected named result"
+                )
         if kind == "native-amx-sdk":
             surface = leg_id.removeprefix("native-amx-grouped-")
             expected_marker = (
@@ -1482,6 +1494,7 @@ def _seed_run_logs(
             f"TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL={message_control_irohad} "
             f"TEST_NETWORK_BIN_IROHA={iroha} "
             f"KAGAMI_BIN={kagami} "
+            f"TEST_NETWORK_BIN_IROHAD_TAIRA={program_target_dir / 'release' / 'iroha3d_taira'} "
             "CARGO_NET_OFFLINE=true "
             "IROHA_TEST_REQUIRE_NETWORK=1 "
             "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
@@ -1656,251 +1669,12 @@ def _seed_localnet_manifests(
     return _snapshot_contract(index_snapshot), manifests
 
 
-def _scan_scaling_bundle(
-    root: Path,
-) -> tuple[list[tuple[str, Path, os.stat_result]], list[str], int]:
-    try:
-        root_metadata = root.lstat()
-    except OSError as error:
-        raise ReceiptError("scaling evidence bundle root is unavailable") from error
-    if (
-        root.resolve(strict=True) != root
-        or stat.S_ISLNK(root_metadata.st_mode)
-        or not stat.S_ISDIR(root_metadata.st_mode)
-        or root_metadata.st_uid != os.geteuid()
-    ):
-        raise ReceiptError(
-            "scaling evidence bundle root must be an owner-owned resolved "
-            "non-symlink directory"
-        )
-
-    files: list[tuple[str, Path, os.stat_result]] = []
-    directories: list[str] = []
-    inodes: dict[tuple[int, int], str] = {}
-    total_bytes = 0
-
-    def visit(directory: Path, prefix: PurePosixPath | None) -> None:
-        nonlocal total_bytes
-        try:
-            with os.scandir(directory) as iterator:
-                entries = sorted(iterator, key=lambda entry: entry.name)
-        except OSError as error:
-            raise ReceiptError(
-                "scaling evidence bundle directory cannot be enumerated"
-            ) from error
-        for entry in entries:
-            component = entry.name
-            if _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(component) is None:
-                raise ReceiptError(
-                    "scaling evidence bundle contains an unsafe path component"
-                )
-            relative_path = (
-                PurePosixPath(component)
-                if prefix is None
-                else prefix / component
-            )
-            relative = relative_path.as_posix()
-            path = directory / component
-            try:
-                metadata = entry.stat(follow_symlinks=False)
-            except OSError as error:
-                raise ReceiptError(
-                    f"scaling evidence bundle entry is unavailable: {relative}"
-                ) from error
-            if stat.S_ISLNK(metadata.st_mode):
-                raise ReceiptError(
-                    f"scaling evidence bundle contains a symlink: {relative}"
-                )
-            if stat.S_ISDIR(metadata.st_mode):
-                directories.append(relative)
-                if len(directories) > _MAX_SCALING_BUNDLE_DIRECTORY_COUNT:
-                    raise ReceiptError(
-                        "scaling evidence bundle exceeds its directory-count limit"
-                    )
-                visit(path, relative_path)
-                continue
-            if not stat.S_ISREG(metadata.st_mode):
-                raise ReceiptError(
-                    f"scaling evidence bundle contains a nonregular entry: {relative}"
-                )
-            if metadata.st_uid != os.geteuid():
-                raise ReceiptError(
-                    f"scaling evidence bundle file has an untrusted owner: {relative}"
-                )
-            if metadata.st_nlink != 1:
-                raise ReceiptError(
-                    f"scaling evidence bundle file has a hard-link alias: {relative}"
-                )
-            inode = (metadata.st_dev, metadata.st_ino)
-            alias = inodes.get(inode)
-            if alias is not None:
-                raise ReceiptError(
-                    "scaling evidence bundle files are hard-link aliases: "
-                    f"{alias} and {relative}"
-                )
-            inodes[inode] = relative
-            if metadata.st_size > _MAX_SCALING_BUNDLE_FILE_BYTES:
-                raise ReceiptError(
-                    f"scaling evidence bundle file exceeds its size limit: {relative}"
-                )
-            total_bytes += metadata.st_size
-            if total_bytes > _MAX_SCALING_BUNDLE_TOTAL_BYTES:
-                raise ReceiptError(
-                    "scaling evidence bundle exceeds its aggregate size limit"
-                )
-            files.append((relative, path, metadata))
-            if len(files) > _MAX_SCALING_BUNDLE_FILE_COUNT:
-                raise ReceiptError(
-                    "scaling evidence bundle exceeds its file-count limit"
-                )
-
-    visit(root, None)
-    files.sort(key=lambda item: item[0])
-    directories.sort()
-    return files, directories, total_bytes
 
 
-def _capture_scaling_bundle(
-    root: Path,
-) -> tuple[list[tuple[str, PathContract]], list[str], int]:
-    scanned, directories, _ = _scan_scaling_bundle(root)
-    directory_contracts = [
-        _capture_directory_contract(root, "scaling evidence bundle root")
-    ]
-    directory_contracts.extend(
-        _capture_directory_contract(
-            root.joinpath(*PurePosixPath(relative).parts),
-            f"scaling evidence bundle directory {index}",
-        )
-        for index, relative in enumerate(directories)
-    )
-    files: list[tuple[str, PathContract]] = []
-    for index, (relative, path, metadata) in enumerate(scanned):
-        contract = _capture_path_contract(
-            path,
-            f"scaling evidence bundle file {index}",
-            expected_sha256=None,
-            expected_owner=os.geteuid(),
-            expected_nlink=1,
-            expected_size=metadata.st_size,
-        )
-        files.append((relative, contract))
-
-    final_scan, final_directories, final_total = _scan_scaling_bundle(root)
-    if [item[0] for item in final_scan] != [item[0] for item in scanned]:
-        raise ReceiptError("scaling evidence bundle file inventory changed while read")
-    if final_directories != directories:
-        raise ReceiptError(
-            "scaling evidence bundle directory inventory changed while read"
-        )
-    for index, ((_, contract), (_, _, metadata)) in enumerate(
-        zip(files, final_scan)
-    ):
-        observed = (
-            metadata.st_dev,
-            metadata.st_ino,
-            stat.S_IMODE(metadata.st_mode),
-            metadata.st_uid,
-            metadata.st_nlink,
-            metadata.st_size,
-            metadata.st_mtime_ns,
-            metadata.st_ctime_ns,
-        )
-        expected = (
-            contract.device,
-            contract.inode,
-            contract.mode,
-            contract.owner,
-            contract.nlink,
-            contract.size,
-            contract.mtime_ns,
-            contract.ctime_ns,
-        )
-        if observed != expected:
-            raise ReceiptError(
-                f"scaling evidence bundle file {index} changed after hashing"
-            )
-    for index, contract in enumerate(directory_contracts):
-        if (
-            _capture_directory_contract(
-                contract.path, f"scaling evidence stable directory {index}"
-            )
-            != contract
-        ):
-            raise ReceiptError(
-                "scaling evidence bundle directory changed while files were hashed"
-            )
-    if final_total != sum(contract.size for _, contract in files):
-        raise ReceiptError("scaling evidence bundle size changed while read")
-    return files, directories, final_total
 
 
-def _load_scaling_json(path: Path, name: str) -> tuple[bytes, dict[str, Any]]:
-    snapshot = _read_evidence_snapshot(
-        path,
-        name,
-        maximum_bytes=_MAX_SCALING_JSON_BYTES,
-        allowed_owners={os.geteuid()},
-    )
-
-    def reject_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        value: dict[str, Any] = {}
-        for key, item in pairs:
-            if key in value:
-                raise ReceiptError(f"{name} contains a duplicate JSON field")
-            value[key] = item
-        return value
-
-    def reject_constant(value: str) -> None:
-        raise ReceiptError(f"{name} contains a nonfinite JSON value: {value}")
-
-    try:
-        value = json.loads(
-            snapshot.data.decode("utf-8"),
-            object_pairs_hook=reject_pairs,
-            parse_constant=reject_constant,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ReceiptError(f"{name} is not strict UTF-8 JSON") from error
-    if not isinstance(value, dict):
-        raise ReceiptError(f"{name} must contain one JSON object")
-    return snapshot.data, value
 
 
-def _scaling_ref_path(
-    value: Any,
-    *,
-    root: Path,
-    contracts: dict[str, PathContract],
-    name: str,
-) -> tuple[str, PathContract]:
-    if not isinstance(value, dict) or set(value) != {"path", "sha256"}:
-        raise ReceiptError(f"{name} is not one canonical scaling artifact reference")
-    relative = value.get("path")
-    digest = value.get("sha256")
-    if not isinstance(relative, str) or not isinstance(digest, str):
-        raise ReceiptError(f"{name} scaling artifact reference is malformed")
-    pure = PurePosixPath(relative)
-    if (
-        relative != pure.as_posix()
-        or pure.is_absolute()
-        or not pure.parts
-        or any(
-            part in {"", ".", ".."}
-            or _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(part) is None
-            for part in pure.parts
-        )
-    ):
-        raise ReceiptError(f"{name} is not a safe normalized in-bundle path")
-    contract = contracts.get(relative)
-    if contract is None:
-        raise ReceiptError(f"{name} is absent from the scaling bundle inventory")
-    if _require_digest(digest, f"{name} digest") != contract.sha256:
-        raise ReceiptError(f"{name} digest does not match the scaling bundle")
-    expected_path = root.joinpath(*pure.parts)
-    if contract.path != expected_path:
-        raise ReceiptError(f"{name} resolves outside the scaling evidence bundle")
-    return relative, contract
 
 
 def _path_contract_artifact(contract: PathContract) -> dict[str, Any]:
@@ -2783,326 +2557,6 @@ def _validate_sdk_dependency_evidence(
     }
 
 
-def _validate_scaling_evidence(
-    *,
-    manifest_path: Path,
-    sealed: dict[str, Any],
-    repo_root: Path,
-    checker_environment: dict[str, str],
-    expected_trial_harness_sha256: str,
-    expected_configuration_sha256: str,
-    expected_irohad_sha256: str,
-    expected_iroha_cli_sha256: str,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    expected_trial_harness_sha256 = _require_digest(
-        expected_trial_harness_sha256,
-        "expected scaling trial harness digest",
-    )
-    expected_configuration_sha256 = _require_digest(
-        expected_configuration_sha256,
-        "expected scaling configuration digest",
-    )
-    expected_irohad_sha256 = _require_digest(
-        expected_irohad_sha256,
-        "expected scaling irohad digest",
-    )
-    expected_iroha_cli_sha256 = _require_digest(
-        expected_iroha_cli_sha256,
-        "expected scaling iroha CLI digest",
-    )
-    if (
-        not manifest_path.is_absolute()
-        or Path(os.path.abspath(manifest_path)) != manifest_path
-        or manifest_path.name != "scaling_evidence.json"
-    ):
-        raise ReceiptError(
-            "scaling evidence manifest must be the absolute normalized "
-            "scaling_evidence.json bundle root file"
-        )
-    root = manifest_path.parent
-    files, directories, total_bytes = _capture_scaling_bundle(root)
-    contracts = dict(files)
-    manifest_contract = contracts.get("scaling_evidence.json")
-    report_contract = contracts.get("validation_report.json")
-    if manifest_contract is None:
-        raise ReceiptError("scaling evidence manifest is absent from its bundle")
-    if report_contract is None:
-        raise ReceiptError(
-            "scaling evidence bundle lacks canonical validation_report.json"
-        )
-    if manifest_contract.path != manifest_path:
-        raise ReceiptError("scaling evidence manifest path is not its exact bundle file")
-
-    manifest_data, manifest = _load_scaling_json(
-        manifest_path, "scaling evidence manifest"
-    )
-    report_data, report = _load_scaling_json(
-        report_contract.path, "scaling validation report"
-    )
-    if set(report) != {
-        "schema",
-        "result",
-        "manifest_sha256",
-        "errors",
-        "metrics",
-    }:
-        raise ReceiptError("scaling validation report fields are not canonical")
-    if (
-        report.get("schema") != _SCALING_REPORT_SCHEMA
-        or report.get("result") != "pass"
-        or report.get("errors") != []
-        or not isinstance(report.get("metrics"), dict)
-        or report.get("manifest_sha256") != manifest_contract.sha256
-    ):
-        raise ReceiptError(
-            "scaling validation report is not an exact pass for this manifest"
-        )
-    canonical_report = (
-        json.dumps(report, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
-    if report_data != canonical_report:
-        raise ReceiptError("scaling validation report is not canonical JSON")
-    if hashlib.sha256(report_data).hexdigest() != report_contract.sha256:
-        raise ReceiptError("scaling validation report changed while decoded")
-
-    _, identity_contract = _scaling_ref_path(
-        manifest.get("identity"),
-        root=root,
-        contracts=contracts,
-        name="scaling identity",
-    )
-    identity_data, identity = _load_scaling_json(
-        identity_contract.path, "scaling identity"
-    )
-    if hashlib.sha256(identity_data).hexdigest() != identity_contract.sha256:
-        raise ReceiptError("scaling identity changed while decoded")
-    software = identity.get("software")
-    if not isinstance(software, dict):
-        raise ReceiptError("scaling identity lacks its software binding")
-    if software.get("source_revision") != sealed["head_commit"]:
-        raise ReceiptError(
-            "scaling identity source_revision is not the sealed head_commit"
-        )
-    if (
-        software.get("workspace_source_sha256")
-        != sealed["workspace_source_manifest_sha256"]
-    ):
-        raise ReceiptError(
-            "scaling identity workspace_source_sha256 is not the sealed "
-            "workspace manifest"
-        )
-    if software.get("irohad_sha256") != expected_irohad_sha256:
-        raise ReceiptError(
-            "scaling identity irohad_sha256 is not the authenticated digest"
-        )
-    if software.get("iroha_cli_sha256") != expected_iroha_cli_sha256:
-        raise ReceiptError(
-            "scaling identity iroha_cli_sha256 is not the authenticated digest"
-        )
-
-    _, configuration_contract = _scaling_ref_path(
-        manifest.get("configuration"),
-        root=root,
-        contracts=contracts,
-        name="scaling configuration",
-    )
-    if configuration_contract.sha256 != expected_configuration_sha256:
-        raise ReceiptError(
-            "scaling configuration is not the authenticated digest"
-        )
-    _, trial_harness_contract = _scaling_ref_path(
-        manifest.get("trial_harness"),
-        root=root,
-        contracts=contracts,
-        name="scaling trial harness",
-    )
-    if trial_harness_contract.sha256 != expected_trial_harness_sha256:
-        raise ReceiptError(
-            "scaling trial harness is not the authenticated digest"
-        )
-
-    tooling = manifest.get("tooling")
-    if (
-        not isinstance(tooling, list)
-        or len(tooling) != len(_SCALING_REQUIRED_TOOLING)
-    ):
-        raise ReceiptError(
-            "scaling tooling does not contain the exact retained tool set"
-        )
-    retained_tooling: list[tuple[str, str, PathContract]] = []
-    for index, ((role, source_path), entry) in enumerate(
-        zip(_SCALING_REQUIRED_TOOLING, tooling)
-    ):
-        if (
-            not isinstance(entry, dict)
-            or set(entry) != {"role", "source_path", "artifact"}
-            or entry.get("role") != role
-            or entry.get("source_path") != source_path
-        ):
-            raise ReceiptError(
-                f"scaling tooling entry {index} is not the retained {role} tool"
-            )
-        _, archived_tool = _scaling_ref_path(
-            entry.get("artifact"),
-            root=root,
-            contracts=contracts,
-            name=f"scaling archived {role} tool",
-        )
-        retained_path = repo_root.joinpath(*PurePosixPath(source_path).parts)
-        retained_tool = _capture_path_contract(
-            retained_path,
-            f"retained scaling {role} tool",
-            expected_sha256=None,
-            expected_owner=os.geteuid(),
-            expected_nlink=1,
-        )
-        if archived_tool.sha256 != retained_tool.sha256:
-            raise ReceiptError(
-                f"scaling archived {role} tool is not the retained sealed tool"
-            )
-        retained_tooling.append((role, source_path, retained_tool))
-
-    retained_validator = (
-        repo_root
-        / "scripts"
-        / "nexus"
-        / "validate_multilane_scaling_evidence.py"
-    )
-    retained_contract = _capture_path_contract(
-        retained_validator,
-        "retained scaling evidence validator",
-        expected_sha256=None,
-        expected_owner=os.geteuid(),
-        expected_nlink=1,
-    )
-    _, archived_validator = _scaling_ref_path(
-        manifest.get("validator"),
-        root=root,
-        contracts=contracts,
-        name="archived scaling validator",
-    )
-    if archived_validator.sha256 != retained_contract.sha256:
-        raise ReceiptError(
-            "archived scaling validator is not the retained sealed validator"
-        )
-
-    with tempfile.TemporaryDirectory(prefix="sumeragi-v2-scaling-replay-") as temporary:
-        replay_report = Path(temporary).resolve(strict=True) / "validation_report.json"
-        status, _, _ = _run_bounded_python_validator(
-            retained_validator,
-            [
-                str(manifest_path),
-                "--expected-source-revision",
-                sealed["head_commit"],
-                "--expected-workspace-source-sha256",
-                sealed["workspace_source_manifest_sha256"],
-                "--expected-validator-sha256",
-                retained_contract.sha256,
-                "--expected-trial-harness-sha256",
-                expected_trial_harness_sha256,
-                "--expected-configuration-sha256",
-                expected_configuration_sha256,
-                "--expected-irohad-sha256",
-                expected_irohad_sha256,
-                "--expected-iroha-cli-sha256",
-                expected_iroha_cli_sha256,
-                "--expected-repository-root",
-                str(repo_root),
-                "--report",
-                str(replay_report),
-                "--quiet",
-            ],
-            cwd=repo_root,
-            environment=checker_environment,
-            name="retained scaling evidence validator",
-        )
-        if status != 0:
-            raise ReceiptError(
-                "scaling evidence bundle failed retained-validator revalidation"
-            )
-        replay_data, replay = _load_scaling_json(
-            replay_report, "recomputed scaling validation report"
-        )
-        if replay != report or replay_data != report_data:
-            raise ReceiptError(
-                "scaling validation report does not match retained revalidation"
-            )
-
-    final_files, final_directories, final_total = _capture_scaling_bundle(root)
-    if (
-        final_files != files
-        or final_directories != directories
-        or final_total != total_bytes
-    ):
-        raise ReceiptError(
-            "scaling evidence bundle changed during retained revalidation"
-        )
-    final_retained = _capture_path_contract(
-        retained_validator,
-        "retained scaling evidence validator after replay",
-        expected_sha256=retained_contract.sha256,
-        expected_mode=retained_contract.mode,
-        expected_owner=retained_contract.owner,
-        expected_nlink=retained_contract.nlink,
-        expected_size=retained_contract.size,
-    )
-    if final_retained != retained_contract:
-        raise ReceiptError("retained scaling evidence validator changed during replay")
-    for role, _, retained_tool in retained_tooling:
-        final_tool = _capture_path_contract(
-            retained_tool.path,
-            f"retained scaling {role} tool after replay",
-            expected_sha256=retained_tool.sha256,
-            expected_mode=retained_tool.mode,
-            expected_owner=retained_tool.owner,
-            expected_nlink=retained_tool.nlink,
-            expected_size=retained_tool.size,
-        )
-        if final_tool != retained_tool:
-            raise ReceiptError(
-                f"retained scaling {role} tool changed during replay"
-            )
-    if hashlib.sha256(manifest_data).hexdigest() != manifest_contract.sha256:
-        raise ReceiptError("scaling evidence manifest changed while decoded")
-
-    bundle = {
-        "archive_id": "release-scaling.bundle.v1",
-        "file_count": len(files),
-        "total_size_bytes": total_bytes,
-        "directories": directories,
-        "files": [
-            {
-                "archive_id": "release-scaling.file.v1:" + relative,
-                "relative_path": relative,
-                "sha256": contract.sha256,
-                "size_bytes": contract.size,
-                "mode": f"{contract.mode:04o}",
-            }
-            for relative, contract in files
-        ],
-    }
-    trust_anchors = {
-        "trial_harness_sha256": expected_trial_harness_sha256,
-        "configuration_sha256": expected_configuration_sha256,
-        "irohad_sha256": expected_irohad_sha256,
-        "iroha_cli_sha256": expected_iroha_cli_sha256,
-        "retained_tooling": [
-            {
-                "role": role,
-                "archive_id": f"release-scaling.retained-tool.{role}.v1",
-                "sha256": contract.sha256,
-                "size_bytes": contract.size,
-                "mode": f"{contract.mode:04o}",
-            }
-            for role, _, contract in retained_tooling
-        ],
-    }
-    return bundle, {
-        "archive_id": "release-scaling.retained-validator.v1",
-        "sha256": retained_contract.sha256,
-        "size_bytes": retained_contract.size,
-        "mode": f"{retained_contract.mode:04o}",
-    }, trust_anchors
 
 
 def _read_g12_snapshot(
@@ -3192,7 +2646,7 @@ def _require_g12_directory_inventory(
     actual_names: set[str] = set()
     for entry in entries:
         if (
-            _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
+            _EVIDENCE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
             or entry.name in actual_names
         ):
             raise ReceiptError(f"{name} directory contains an unsafe entry")
@@ -3758,3 +3212,240 @@ def _runtime_tool_probe_evidence(
         ),
     }
     return record, contracts
+
+
+_SCALING_VERIFIER_CONTEXT = None
+
+
+def _scaling_record_support(repo_root: Path, *, execution_record_path,
+        expected_execution_sha256, bootstrap_evidence):
+    """Admit record-bound verifier bytes before importing canonical owners."""
+    global _SCALING_VERIFIER_CONTEXT
+    root = _release_root(repo_root)
+    directory = root / 'scripts' / 'nexus'
+    if directory.resolve(strict=True) != directory or directory.is_symlink():
+        raise ReceiptError('fixed scaling source directory is not exact')
+    sources = {path.stem: path for path in directory.glob('*.py')}
+    if not {'scaling_release_record', 'scaling_cli_bootstrap', 'scaling_preflight_archive'} <= sources.keys():
+        raise ReceiptError('fixed scaling record support is absent')
+    def check_modules():
+        for name, path in sources.items():
+            module = sys.modules.get(name)
+            if module is not None and Path(getattr(module, '__file__', '')).resolve() != path:
+                raise ReceiptError('fixed scaling imported source identity differs')
+    check_modules()
+    supports = tuple(_bounded_path_contract(sources[name],
+        'fixed scaling support source', maximum_bytes=_MAX_HELPER_BYTES,
+        allowed_owners={os.geteuid()}, require_single_link=True)
+        for name in ('scaling_release_record', 'scaling_cli_bootstrap', 'scaling_preflight_archive'))
+    previous = list(sys.path)
+    try:
+        sys.path[:0] = [str(directory), str(root / 'scripts')]
+        bootstrap = importlib.import_module('scaling_cli_bootstrap')
+        if execution_record_path != bootstrap_evidence / 'scaling-execution.json':
+            raise ReceiptError('scaling execution record path is not exact')
+        expected_execution_sha256 = _require_digest(expected_execution_sha256, 'scaling execution digest')
+        snapshot = _read_evidence_snapshot(execution_record_path, 'parent scaling execution envelope',
+            maximum_bytes=bootstrap.MAX_PARENT_EXECUTION_BYTES, expected_mode=0o400,
+            allowed_owners={os.geteuid()})
+        bootstrap.parent_execution_dependency_binding(snapshot.data, expected_execution_sha256)
+        context = _SCALING_VERIFIER_CONTEXT
+        if context is None:
+            owner = bootstrap.prepare_record_verifier(snapshot.data, expected_execution_sha256,
+                bootstrap_evidence / 'scaling-verifier-python', Path('/private/tmp'))
+            try:
+                module = importlib.import_module('scaling_release_record')
+                check_modules()
+                owner.verify()
+                import atexit
+                atexit.register(owner.close)
+                _SCALING_VERIFIER_CONTEXT = (root, snapshot, owner, module)
+            except BaseException:
+                owner.close()
+                raise
+        else:
+            expected_root, original, owner, module = context
+            if root != expected_root or snapshot != original or snapshot.sha256 != expected_execution_sha256:
+                raise ReceiptError('scaling verifier context differs from original admission')
+            owner.verify()
+            check_modules()
+    except ValueError:
+        raise ReceiptError('fixed scaling verifier admission failed') from None
+    finally:
+        sys.path[:] = previous
+    for support in supports:
+        if _bounded_path_contract(support.path, 'fixed scaling support after import',
+                maximum_bytes=_MAX_HELPER_BYTES, allowed_owners={os.geteuid()},
+                require_single_link=True) != support:
+            raise ReceiptError('fixed scaling source changed during import')
+    return module
+
+
+def _verify_scaling_record_runtime():
+    """Keep the current original dependency owner through publication fences."""
+    if _SCALING_VERIFIER_CONTEXT is not None:
+        _, snapshot, owner, _ = _SCALING_VERIFIER_CONTEXT
+        owner.verify()
+        current = _read_evidence_snapshot(snapshot.path, 'parent scaling execution after verification',
+            maximum_bytes=max(snapshot.size, 1), expected_mode=0o400,
+            allowed_owners={os.geteuid()})
+        if current != snapshot:
+            raise ReceiptError('parent scaling execution changed during verification')
+
+
+def _scaling_execution_record(api, path, expected_sha256, bootstrap_evidence):
+    """Read the protected parent publication; the original parent owns attribution."""
+    if path != bootstrap_evidence / 'scaling-execution.json':
+        raise ReceiptError('scaling execution record path is not exact')
+    expected_sha256 = _require_digest(expected_sha256, 'scaling execution digest')
+    snapshot = _read_evidence_snapshot(path, 'scaling execution record',
+        maximum_bytes=api.MAX_RECORD_BYTES, expected_mode=0o400,
+        allowed_owners={os.geteuid()})
+    if snapshot.sha256 != expected_sha256:
+        raise ReceiptError('scaling execution record digest differs')
+    try:
+        record = api.decode_parent_execution(snapshot.data)
+    except ValueError:
+        raise ReceiptError('scaling execution record is invalid') from None
+    return record, snapshot
+
+
+def _fixed_scaling_root(repo_root: Path) -> Path:
+    """Use the retained source relationship already checked by bootstrap replay."""
+    source = _release_root(repo_root)
+    if source.name != 'source':
+        raise ReceiptError('scaling source is not the retained invocation source')
+    _private_evidence_directory(source.parent, 'scaling retained invocation root')
+    output, _ = _private_evidence_directory(source.parent / 'output', 'scaling output root')
+    root, _ = _private_evidence_directory(output / 'scaling', 'fixed scaling archive root')
+    return root
+
+
+def _replay_fixed_scaling_native(api, checked, record, root, kagami, checker_environment):
+    """Use the existing bounded replay process owner and canonical native command.
+
+    This fresh offline allocation verifies cryptographic archive data. It never
+    extends or reinterprets the recorded original experiment's deadline.
+    """
+    from scaling_canonical_proof import (AppliedObservation, ReplayPlan, ReplayBindings,
+        _plan_snapshot, _bindings_snapshot, _ProjectionJoiner, MAX_CHUNK_BYTES)
+    from scaling_measurements import _schedule
+    expected = record.document['execution']['native_replays']
+    for run, original in zip(checked.native_runs, expected, strict=True):
+        data = run.measurement
+        _, load, accounts, counts, _ = _schedule(data)
+        plan = ReplayPlan(load.seed, data.plan.generator.lane_count, accounts,
+            counts[0], counts[1], max(row.block_height for row in data.requests),
+            tuple(AppliedObservation(row.transaction_hash, row.block_height,
+                                    row.local_block_height) for row in data.requests))
+        files = {row.role: row for row in run.files}
+        request, proof = files['native_request'], files['canonical_proof']
+        bindings = ReplayBindings(root / request.binding.path, request.binding.sha256,
+            request.max_bytes, root / proof.binding.path, proof.binding.sha256,
+            original['proof_iroha_hash'], proof.bytes, proof.max_bytes,
+            data.plan.replay_reply_max_bytes)
+        inputs = _bindings_snapshot(bindings)
+        request_path, request_sha, request_cap, proof_path, proof_sha, proof_hash, _, proof_cap, reply_cap = inputs
+        watched = []
+        for path, cap, digest in ((Path(request_path), request_cap, request_sha),
+                                  (Path(proof_path), proof_cap, proof_sha)):
+            snapshot = _bounded_path_contract(path, 'scaling native archive input',
+                maximum_bytes=cap, allowed_owners={os.geteuid()}, require_single_link=True)
+            if snapshot.sha256 != digest or snapshot.mode not in {0o400, 0o600}:
+                raise ReceiptError('scaling native archive input differs')
+            watched.append(snapshot)
+        invocation = secrets.token_hex(32)
+        if invocation == '0' * 64:
+            raise ReceiptError('scaling native replay invocation is invalid')
+        joiner = _ProjectionJoiner(_plan_snapshot(plan), inputs, invocation)
+        arguments = ['--ui-mode', 'plain', 'advanced', 'kura', 'scaling-evidence', 'replay',
+            '--invocation-id', invocation, '--request', request_path,
+            '--request-sha256', request_sha, '--request-max-bytes', str(request_cap),
+            '--input', proof_path, '--input-sha256', proof_sha,
+            '--input-max-bytes', str(proof_cap), '--reply-max-bytes', str(reply_cap),
+            '--proof-iroha-hash', proof_hash]
+        status, stdout, stderr = _run_bounded_replay(kagami.path, arguments,
+            cwd=root, environment=checker_environment, name='fixed scaling canonical native replay',
+            maximum_output_bytes=reply_cap, executable_contract=kagami,
+            watched_contracts=tuple(watched))
+        if type(status) is not int or status != 0 or type(stdout) is not bytes or type(stderr) is not bytes:
+            raise ReceiptError('fixed scaling native replay failed')
+        if len(stdout) + len(stderr) > reply_cap:
+            raise ReceiptError('fixed scaling native replay exceeds its reply allocation')
+        for offset in range(0, len(stdout), MAX_CHUNK_BYTES):
+            joiner.consume(stdout[offset:offset + MAX_CHUNK_BYTES])
+        count, size, digest, joined = joiner.finish()
+        if (count != original['row_count'] or size != len(stdout)
+                or digest != hashlib.sha256(stdout).hexdigest()
+                or joined != original['joined_rows_sha256']):
+            raise ReceiptError('fixed scaling native rows differ from the parent record')
+
+
+def _validate_fixed_scaling_archive(*, execution_record_path, expected_execution_sha256,
+        bootstrap_evidence, sealed, repo_root, checker_environment, prebuilt_bundle,
+        prebuilt_bundle_dir, bootstrap_authentication):
+    api = _scaling_record_support(repo_root, execution_record_path=execution_record_path,
+        expected_execution_sha256=expected_execution_sha256, bootstrap_evidence=bootstrap_evidence)
+    record, snapshot = _scaling_execution_record(api, execution_record_path,
+        expected_execution_sha256, bootstrap_evidence)
+    root = _fixed_scaling_root(repo_root)
+    try:
+        selected = _validate_scaling_parent_inputs(api, record, bootstrap_evidence, bootstrap_authentication)
+        preflight_root = bootstrap_evidence / 'scaling-preflight'
+        runner = bootstrap_authentication['runner']
+        preflight_context = dict(source_root=_release_root(repo_root), candidate_identity=sealed,
+            invocation_sha256=runner['scaling_handoff']['IROHA_RELEASE_SCALING_INVOCATION_SHA256'],
+            timeout_seconds=runner['scaling_preflight_timeout_seconds'])
+        preflight = api.inspect_preflight_archive(preflight_root, record, **preflight_context)
+        preflight_before = api.capture_preflight_archive(preflight_root, record, **preflight_context)
+        checked = api.inspect_parent_archive(root, record, sealed)
+        before = api.capture_public_archive(root, record)
+        binaries = [row for row in prebuilt_bundle['binaries'] if row.get('role') == 'kagami']
+        if len(binaries) != 1 or binaries[0]['relative_path'] != 'release/kagami':
+            raise ReceiptError('fixed scaling retained Kagami selection is not exact')
+        binary = binaries[0]
+        kagami = _bounded_path_contract(prebuilt_bundle_dir / 'release' / 'kagami',
+            'fixed scaling retained Kagami', maximum_bytes=_MAX_TOOL_BYTES,
+            allowed_owners={os.geteuid()}, require_single_link=True, executable=True)
+        if (kagami.sha256 != binary['sha256'] or kagami.size != binary['size_bytes']
+                or kagami.sha256 != record.document['execution']['kagami_sha256']
+                or f'{kagami.mode:04o}' != binary['mode']):
+            raise ReceiptError('fixed scaling retained Kagami digest differs')
+        _replay_fixed_scaling_native(api, checked, record, root, kagami, checker_environment)
+        if api.inspect_parent_archive(root, record, sealed) != checked or api.capture_public_archive(root, record) != before:
+            raise ReceiptError('fixed scaling archive changed during native replay')
+        if (api.inspect_preflight_archive(preflight_root, record, **preflight_context) != preflight
+                or api.capture_preflight_archive(preflight_root, record, **preflight_context) != preflight_before):
+            raise ReceiptError('complete scaling preflight changed during native replay')
+        _, final_snapshot = _scaling_execution_record(api, execution_record_path,
+            expected_execution_sha256, bootstrap_evidence)
+        if final_snapshot != snapshot:
+            raise ReceiptError('scaling execution record changed during replay')
+        if _validate_scaling_parent_inputs(api, record, bootstrap_evidence, bootstrap_authentication) != selected:
+            raise ReceiptError('original scaling inputs changed during replay')
+        return api.receipt_projection(record)
+    except ValueError:
+        raise ReceiptError('fixed scaling archive or native replay is invalid') from None
+
+
+def _validate_scaling_parent_inputs(api, record, bootstrap_evidence, authentication):
+    """Join the fixed record to the authenticated original parent selection."""
+    pins = authentication['trusted_input_digests']
+    selected = []
+    for name in ('plan', 'budget'):
+        snapshot = _read_evidence_snapshot(bootstrap_evidence / ('scaling-' + name + '.json'),
+            'original scaling ' + name, maximum_bytes=api.MAX_CONFIG_BYTES,
+            expected_mode=0o400, allowed_owners={os.geteuid()})
+        if snapshot.sha256 != pins['scaling_' + name]:
+            raise ReceiptError('original scaling selection digest differs')
+        selected.append(snapshot)
+    plan, budget, canonical = api.decode_fixed_inputs(selected[0].data, selected[1].data)
+    if plan != record.plan or budget != record.budget:
+        raise ReceiptError('scaling record policy differs from original selection')
+    handoff = authentication['runner']['scaling_handoff']
+    if record.document['execution']['invocation_sha256'] != handoff['IROHA_RELEASE_SCALING_INVOCATION_SHA256']:
+        raise ReceiptError('scaling record invocation differs from original handoff')
+    timeout = authentication['runner']['scaling_preflight_timeout_seconds']
+    if type(timeout) is not int or record.document['preflight']['scope']['timeout_seconds'] != timeout:
+        raise ReceiptError('scaling preflight timeout differs from original runner')
+    return tuple(selected)

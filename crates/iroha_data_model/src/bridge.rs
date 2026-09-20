@@ -1550,7 +1550,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -1767,7 +1766,6 @@ mod tests {
         let header = crate::block::BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero successor height"),
             Some(parent_artifact.block_hash),
-            None,
             None,
             0,
             0,
@@ -2920,7 +2918,6 @@ mod tests {
             NonZeroU64::new(2).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -2934,9 +2931,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            Some(HashOf::from_untyped_unchecked(Hash::new(
-                b"different result root",
-            ))),
             0,
             0,
         );

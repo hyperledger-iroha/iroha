@@ -11,7 +11,14 @@ use iroha_model_base::topology::DataSpaceId;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 /// Public account-bootstrap network and signing policy.
 pub mod account_capabilities;
+/// Public faucet identity and exact issuance policy.
 pub mod account_faucet_policy;
+/// Typed account-alias absence selectors and planning error codes.
+pub mod aliases;
+/// Typed non-success observations for challenge-bound bridge finality.
+pub mod bridge_attestation;
+/// Exact progress bindings for challenge-bound finality attestation reads.
+pub mod bridge_finality;
 /// Canonical bounded signing preimage shared by request-witness signers and verifiers.
 pub mod canonical_request_witness;
 /// Canonical node configuration snapshots and operator update records.
@@ -711,6 +718,14 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
+    /// Exact scoped pipeline-status absence for its named HTTP 404 error.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pipeline_transaction_status_not_found: Option<PipelineTransactionStatusNotFoundV1>,
+    /// Closed request-bound failure from the finality attestation endpoint.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub finality_attestation_failure: Option<bridge_attestation::FinalityAttestationFailure>,
     /// Last observed transaction status when a finality wait failed.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -727,6 +742,18 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fee: Option<FeeErrorDetails>,
+    /// Native alias planning report for a rejected or pending plan.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub alias_setup_report: Option<iroha_data_model::alias_setup::AliasSetupReportV1>,
+    /// Exact alias selector that was absent from authoritative ledger state.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub account_alias_not_found: Option<aliases::AccountAliasNotFoundV1>,
+    /// Exact account and optional scope filters whose account lookup was absent.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub account_aliases_by_account_not_found: Option<aliases::AccountAliasesByAccountNotFoundV1>,
     /// Exact missing SNS registration selector for `sns_registration_not_found` HTTP 404.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -755,10 +782,15 @@ impl ErrorDetails {
             && self.chain_discriminant.is_none()
             && self.entrypoint_hash.is_none()
             && self.tx_hash.is_none()
+            && self.pipeline_transaction_status_not_found.is_none()
+            && self.finality_attestation_failure.is_none()
             && self.last_status.is_none()
             && self.hint.is_none()
             && self.axt.is_none()
             && self.fee.is_none()
+            && self.alias_setup_report.is_none()
+            && self.account_alias_not_found.is_none()
+            && self.account_aliases_by_account_not_found.is_none()
             && self.sns_registration_not_found.is_none()
             && self.query_asset_not_found.is_none()
     }
@@ -813,6 +845,56 @@ pub fn network_profile_names() -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+/// Stable code for exact scoped pipeline transaction status absence.
+pub const PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE: &str =
+    "pipeline_transaction_status_not_found";
+/// Maximum complete scoped pipeline status absence envelope size.
+pub const PIPELINE_TRANSACTION_STATUS_NOT_FOUND_MAX_BYTES: usize = 4096;
+/// Exact lookup identity for absent pipeline status; not proof of ledger non-inclusion.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::PipelineTransactionStatusNotFoundV1")]
+pub struct PipelineTransactionStatusNotFoundV1 {
+    /// Canonical lowercase signed-transaction hash requested by the caller.
+    pub hash: String,
+    /// Exact lookup scope: `local` or `global`.
+    pub scope: String,
+}
+impl PipelineTransactionStatusNotFoundV1 {
+    /// Construct the exact public lookup identity.
+    #[must_use]
+    pub fn new(
+        hash: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        scope: &str,
+    ) -> Self {
+        Self {
+            hash: hash.to_string(),
+            scope: scope.to_owned(),
+        }
+    }
+    /// Require a canonical native hash and one supported scope.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        matches!(self.scope.as_str(), "local" | "global")
+            && self
+                .hash
+                .parse::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>()
+                .is_ok_and(|hash| hash.to_string() == self.hash)
+    }
+    /// Bind this observation to the caller's exact hash and scope.
+    #[must_use]
+    pub fn matches(
+        &self,
+        hash: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        scope: &str,
+    ) -> bool {
+        matches!(scope, "local" | "global") && self.scope == scope && self.hash == hash.to_string()
+    }
+}
+
 /// Canonical Torii error envelope returned for HTTP API failures.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 #[norito(deny_unknown_fields)]
@@ -1036,13 +1118,14 @@ pub struct PipelineTransactionStatus {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_torii_shared::PipelineTransactionDetailsResponse")]
+#[norito(deny_unknown_fields)]
 pub struct PipelineTransactionDetailsResponse {
-    /// Canonical signed transaction hash requested by the caller.
+    /// Exact requested network entrypoint hash, including the outer sealed-reveal identity.
     pub hash: String,
-    /// Exact committed transaction, including its entrypoint, result, and batch receipts.
+    /// Exact Network input and sole full typed output, including its result, receipts,
+    /// and owned callback completions. Separate Pipeline/Time outputs require their own
+    /// authenticated output proofs; this response never infers their association.
     pub transaction: CommittedTransaction,
-    /// Trigger completions associated with the exact committed entrypoint.
-    pub trigger_completions: Vec<TriggerCompletionSummary>,
 }
 impl PipelineTransactionStatusResponse {
     /// Construct a public status-only response.
@@ -2328,6 +2411,57 @@ mod tests {
     }
     #[test]
     fn pipeline_transaction_status_roundtrip_is_status_only() {
+        use crate::{
+            PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE, PipelineTransactionStatusNotFoundV1,
+        };
+        let hash=iroha_crypto::HashOf::<iroha_data_model::transaction::SignedTransaction>::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xab;iroha_crypto::Hash::LENGTH]));
+        for scope in ["local", "global"] {
+            let absence = PipelineTransactionStatusNotFoundV1::new(&hash, scope);
+            assert!(absence.is_valid());
+            assert!(absence.matches(&hash, scope));
+            assert!(!absence.matches(&hash, if scope == "local" { "global" } else { "local" }));
+            let envelope = ErrorEnvelope::new(
+                PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                "Missing status.",
+            )
+            .with_details(ErrorDetails {
+                pipeline_transaction_status_not_found: Some(absence.clone()),
+                ..ErrorDetails::default()
+            });
+            assert!(!envelope.details.as_ref().unwrap().is_empty());
+            let json = norito::json::to_vec(&envelope).expect("JSON");
+            let wire = norito::to_bytes(&envelope).expect("native");
+            for decoded in [
+                norito::json::from_slice::<ErrorEnvelope>(&json).expect("JSONdecode"),
+                norito::decode_from_bytes::<ErrorEnvelope>(&wire).expect("native decode"),
+            ] {
+                assert_eq!(decoded.code(), PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE);
+                assert_eq!(
+                    decoded
+                        .details
+                        .unwrap()
+                        .pipeline_transaction_status_not_found,
+                    Some(absence.clone())
+                );
+            }
+        }
+        for invalid in [
+            r#"{}"#,
+            r#"{"hash":"abc","scope":"global","extra":0}"#,
+            r#"{"hash":"abc","scope":"global","scope":"local"}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<PipelineTransactionStatusNotFoundV1>(invalid).is_err()
+            );
+        }
+        assert!(
+            !PipelineTransactionStatusNotFoundV1 {
+                hash: hash.to_string().to_uppercase(),
+                scope: "global".to_owned()
+            }
+            .is_valid()
+        );
+        assert!(!PipelineTransactionStatusNotFoundV1::new(&hash, "other").is_valid());
         let payload = PipelineTransactionStatusResponse::new(
             "ab".repeat(32),
             PipelineTransactionStatus {
@@ -2359,6 +2493,168 @@ mod tests {
             );
         }
     }
+    fn canonical_details_fixture(rejected: bool) -> super::PipelineTransactionDetailsResponse {
+        use iroha_data_model::{
+            block::execution_output::{
+                ExecutionOutputV1, InvocationCompletionV1, NetworkExecutionOutputV1,
+            },
+            events::trigger_completed::TriggerCompletedOutcome,
+            transaction::{
+                TransactionEntrypoint, TransactionResult, error::TransactionRejectionReason,
+            },
+        };
+        let key = checked_test_keypair(0x48);
+        let entrypoint = TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                    b"details fixture network",
+                ))),
+                AccountId::new(key.public_key().clone()),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .try_sign(key.private_key())
+            .unwrap(),
+        );
+        let result = if rejected {
+            TransactionResult::new(Err(TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted("fixture refusal".into()),
+            )))
+        } else {
+            TransactionResult::new(Ok(Vec::new()))
+        };
+        let output = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result,
+            completions: if rejected {
+                Vec::new()
+            } else {
+                vec![InvocationCompletionV1 {
+                    callback_index: 0,
+                    trigger_id: "owned-completion".parse().unwrap(),
+                    outcome: TriggerCompletedOutcome::Success,
+                }]
+            },
+        });
+        let block_hash = HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"details fixture carrier"),
+        );
+        let entrypoint_proof =
+            iroha_crypto::MerkleProof::<TransactionEntrypoint>::from_audit_path(0, Vec::new());
+        let output_proof =
+            iroha_crypto::MerkleProof::<ExecutionOutputV1>::from_audit_path(0, Vec::new());
+        // Exercise the public decoder without relying on another crate's transparent_api feature.
+        let transaction: iroha_data_model::query::CommittedTransaction =
+            norito::json::from_value(norito::json!({
+                "block_hash": block_hash,
+                "entrypoint_hash": (entrypoint.hash()),
+                "entrypoint": entrypoint,
+                "entrypoint_proof": entrypoint_proof,
+                "output_hash": (HashOf::new(&output)),
+                "output": output,
+                "output_proof": output_proof,
+            }))
+            .expect("public canonical committed transaction fixture");
+        super::PipelineTransactionDetailsResponse {
+            hash: transaction.entrypoint_hash().to_string(),
+            transaction,
+        }
+    }
+
+    #[test]
+    fn transaction_details_roundtrip_has_one_full_network_output_owner() {
+        for rejected in [false, true] {
+            let details = canonical_details_fixture(rejected);
+            let bytes = norito::to_bytes(&details).unwrap();
+            assert_eq!(
+                norito::core::Header::read(bytes.as_slice()).unwrap().schema,
+                norito::schema::identity::frame_hash::<super::PipelineTransactionDetailsResponse>()
+            );
+            let decoded: super::PipelineTransactionDetailsResponse =
+                norito::decode_from_bytes(&bytes).unwrap();
+            assert_eq!(decoded, details);
+            assert_eq!(decoded.transaction.result().is_err(), rejected);
+            assert_eq!(
+                decoded.transaction.output().completions().len(),
+                usize::from(!rejected)
+            );
+            decoded
+                .transaction
+                .output()
+                .validate_structure(1, std::slice::from_ref(decoded.transaction.entrypoint()))
+                .expect("details fixture obeys the canonical Network rollback contract");
+            let json = norito::json::to_value(&details).unwrap();
+            assert_eq!(json.as_object().unwrap().len(), 2);
+            assert!(
+                !json
+                    .as_object()
+                    .unwrap()
+                    .contains_key("trigger_completions")
+            );
+            assert_eq!(
+                norito::json::from_value::<super::PipelineTransactionDetailsResponse>(json)
+                    .unwrap(),
+                details
+            );
+            for end in 0..bytes.len() {
+                assert!(
+                    norito::decode_from_bytes::<super::PipelineTransactionDetailsResponse>(
+                        &bytes[..end]
+                    )
+                    .is_err()
+                );
+            }
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert!(
+                norito::decode_from_bytes::<super::PipelineTransactionDetailsResponse>(&trailing)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn transaction_details_rejects_retired_parallel_completion_layout() {
+        #[derive(norito::NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_torii_shared::PipelineTransactionDetailsResponse")]
+        struct RetiredDetails {
+            hash: String,
+            transaction: iroha_data_model::query::CommittedTransaction,
+            trigger_completions: Vec<super::TriggerCompletionSummary>,
+        }
+        let details = canonical_details_fixture(false);
+        for completions in [
+            Vec::new(),
+            vec![super::TriggerCompletionSummary {
+                trigger_id: "retired-completion".into(),
+                trigger_execution_hash: details.hash.clone(),
+                step_index: 0,
+                outcome: "Success".into(),
+                message: None,
+            }],
+        ] {
+            let retired = RetiredDetails {
+                hash: details.hash.clone(),
+                transaction: details.transaction.clone(),
+                trigger_completions: completions.clone(),
+            };
+            assert!(
+                norito::decode_from_bytes::<super::PipelineTransactionDetailsResponse>(
+                    &norito::to_bytes(&retired).unwrap()
+                )
+                .is_err()
+            );
+            let mut json = norito::json::to_value(&details).unwrap();
+            json.as_object_mut().unwrap().insert(
+                "trigger_completions".into(),
+                norito::json::to_value(&completions).unwrap(),
+            );
+            assert!(
+                norito::json::from_value::<super::PipelineTransactionDetailsResponse>(json)
+                    .is_err()
+            );
+        }
+    }
+
     #[test]
     fn account_read_response_fixture_uses_checked_key_derivation() {
         let key_pair = checked_test_keypair(0x23);

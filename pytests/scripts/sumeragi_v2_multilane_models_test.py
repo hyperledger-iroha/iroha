@@ -36,6 +36,55 @@ def load_checker():
     return module
 
 
+@pytest.mark.parametrize("parameters", [
+    "Config { capacity, nested: Nested { limit } }: Config",
+    "(Config { capacity }, [first, second]): (Config, [usize; 2])",
+    "Config { capacity }: Config, callback: fn([u8; { LIMIT }]) -> ()",
+    "Config { capacity }: Config, borrowed: &'a &'b Config",
+    'Config /* { ignored } */ { capacity }: Config, label: Label<"{(">',
+    'Config { capacity }: Config, label: Label<r###"{)]}"###>',
+    "Config { capacity }: Config, label: Label<'{'>",
+])
+def test_rust_item_parser_binds_body_after_destructured_parameters(parameters):
+    checker = load_checker()
+    source = f"""impl Owner {{
+    pub fn construct({parameters}) -> Self {{
+        let original_owner = PublicationMutex::default();
+        Self {{ original_owner }}
+    }}
+    fn sibling() {{ unrelated_owner(); }}
+}}
+"""
+    (item,) = checker._extract_rust_binding_items(
+        source, "method", "Owner::construct",
+    )
+    assert item.rstrip().endswith("Self { original_owner }\n    }")
+    assert "PublicationMutex::default()" in item
+    assert "unrelated_owner" not in item
+
+
+@pytest.mark.parametrize("declaration", [
+    "fn absent(Config { capacity }: Config);",
+    "fn absent(Config { capacity }: Config, broken: [T));",
+    "fn absent(Config { capacity: Nested { limit } }: Config",
+])
+def test_rust_item_parser_does_not_borrow_sibling_after_missing_body(declaration):
+    checker = load_checker()
+    source = declaration + "\nfn sibling() { unrelated_owner(); }\n"
+    assert checker._extract_rust_binding_items(source, "fn", "absent") == ()
+
+
+def test_rust_item_parser_binds_actual_queue_constructor_body():
+    checker = load_checker()
+    source = (ROOT_DIR / "crates/iroha_core/src/queue.rs").read_text()
+    (item,) = checker._extract_rust_binding_items(
+        source, "method", "Queue::from_config_with_router_limits_and_catalogs",
+    )
+    assert "Config {" in item
+    assert "lane_reservation_transition_lock: PublicationMutex::default()," in item
+    assert "Self {" in item
+
+
 def copy_reviewed_rust_source_fixture(
     tmp_path: Path, module, relative: str
 ) -> Path:
@@ -80,6 +129,132 @@ def test_reviewed_rust_include_manifest_is_pinned_and_current() -> None:
     errors: list[str] = []
     module._validate_reviewed_rust_include_manifest(ROOT_DIR, errors)
     assert errors == []
+
+
+# Current split owners retain their production or regression role in the exact
+# recursive source closure; nested catalog tests have explicit owners as well.
+CURRENT_REVIEWED_INCLUDE_COMPONENTS = (
+    ("crates/iroha_core/src/state.rs", (
+        ("state/runtime_catalog.rs", "stage_consensus_catalog_transition"),
+        ("state/runtime_catalog_startup.rs", "lane_manifests_with_committed_catalog"),
+        ("state/runtime_catalog_commit.rs", "validate_runtime_catalog_block_overlay"),
+        ("state/merge_runtime_effects.rs", "validate_merge_runtime_catalog_effects"),
+    )),
+    ("crates/iroha_core/src/state/runtime_catalog.rs", (
+        ("runtime_catalog_tests.rs", "runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops"),
+    )),
+    ("crates/iroha_core/src/state/runtime_catalog_tests.rs", (
+        ("runtime_catalog_commit_tests.rs", "runtime_catalog_final_overlay_rechecks_late_validator_invalidation"),
+    )),
+    ("crates/iroha_core/src/kura.rs", (
+        ("kura/native_amx_publication_capacity.rs", "rebuild_native_amx_publication_capacity_on_startup"),
+        ("kura/native_amx_publication_index.rs", "read_native_amx_publication_index_for_store"),
+        ("kura/native_amx_publication_startup_pins.rs", "native_amx_publication_pins_before_storage_recovery"),
+        ("kura/tests/01b_startup_replay_geometry_binding.rs", "startup_replay_geometry_transition_rejects_restored_lane_sidecar_drift"),
+        ("kura/tests/10d_native_amx_publication_capacity.rs", "native_amx_indexed_publication_survives_no_snapshot_rewind_cold_restart_and_completion"),
+    )),
+    ("crates/iroha_core/src/kura/lane_geometry.rs", (
+        ("startup_replay_geometry_binding.rs", "begin_startup_replay_geometry_transition"),
+    )),
+    ("crates/iroha_core/src/block.rs", (
+        ("block/replay_proposal_authority_tests.rs", "authenticated_replay_authority_rejects_different_proposal_wire_and_state_prefix"),
+        ("block/parallel_account_profile_tests.rs", "parallel_account_profile_rejects_foreign_permission_payloads"),
+    )),
+    ("crates/iroha_core/src/sumeragi/v2_lane_work.rs", (
+        ("tests/v2_lane_work_ordinary_dispatch.rs", "ordinary_lane_consumer_retains_exact_commit_under_real_actor_backpressure"),
+    )),
+    ("crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs", (
+        ("v2_effects_proposal_fetch_store_refinement.rs", "proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates"),
+    )),
+    ("crates/iroha_core/src/sumeragi/v2.rs", (
+        ("v2_cold_body_pipeline_origin.rs", "restore_authenticated_cold_body_origin"),
+        ("v2_retained_incident_diagnostic.rs", "retained_wal_incident_metadata_for_test"),
+        ("tests/v2_adapter_complete_tip_decision_activation_cases.rs", "production_complete_tip_activates_recovered_unapplied_decision"),
+        ("tests/v2_adapter_complete_tip_decision_authority_cases.rs", "complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cache"),
+    )),
+)
+
+
+@pytest.mark.parametrize(("relative", "components"), CURRENT_REVIEWED_INCLUDE_COMPONENTS)
+def test_current_reviewed_include_components_have_exact_owner_and_source(
+    relative: str, components: tuple[tuple[str, str], ...]
+) -> None:
+    module = load_checker()
+    errors: list[str] = []
+    closure = module.reviewed_source._resolve_reviewed_rust_source(
+        ROOT_DIR, relative, "current reviewed split owner", errors
+    )
+    assert errors == []
+    assert closure is not None
+    expanded = module._expanded_source_manifest_paths({Path(relative)}, ROOT_DIR, errors)
+    assert errors == []
+    for component, symbol in components:
+        provider = Path(relative).parent / component
+        assert component in module._REVIEWED_RUST_INCLUDE_MANIFESTS[relative]
+        assert closure.providers.count(provider) == 1
+        assert provider in expanded
+        edges = [edge for edge in closure.provenance if edge.provider == provider]
+        assert len(edges) == 1
+        assert edges[0].root_parent == Path(relative)
+        assert edges[0].parent == Path(relative)
+        assert closure.source.count(f"fn {symbol}(") == 1
+        assert (ROOT_DIR / provider).read_text(encoding="utf-8").count(f"fn {symbol}(") == 1
+
+
+@pytest.mark.parametrize(("relative", "components"), CURRENT_REVIEWED_INCLUDE_COMPONENTS)
+def test_current_reviewed_include_closure_rejects_missing_duplicate_and_extra_source(
+    tmp_path: Path, relative: str, components: tuple[tuple[str, str], ...]
+) -> None:
+    module = load_checker()
+    parent = copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    original = parent.read_text(encoding="utf-8")
+    component = components[0][0]
+    provider = parent.parent / component
+    provider_bytes = provider.read_bytes()
+    errors: list[str] = []
+    invocations = module.reviewed_source._rust_provider_invocations(
+        original, parent, module._REVIEWED_RUST_INCLUDE_MANIFESTS[relative], errors
+    )
+    assert errors == []
+    selected = [item for item in invocations if item.relative == component]
+    assert len(selected) == 1
+    invocation = selected[0]
+    binding = original[invocation.start:invocation.end]
+    extra = parent.parent / "unreviewed_extra_source.rs"
+    extra.write_text("fn unreviewed_extra_source() {}\n", encoding="utf-8")
+    initialize_git_fixture(tmp_path)
+
+    # Missing bytes, a removed owner edge, a duplicate edge, and an otherwise
+    # valid tracked extra provider must each fail for its own closure reason.
+    for mutation in ("missing-file", "missing-edge", "duplicate-edge", "extra-edge"):
+        parent.write_text(original, encoding="utf-8")
+        provider.write_bytes(provider_bytes)
+        if mutation == "missing-file":
+            provider.unlink()
+        elif mutation == "missing-edge":
+            parent.write_text(
+                original[:invocation.start] + original[invocation.end:], encoding="utf-8"
+            )
+        elif mutation == "duplicate-edge":
+            parent.write_text(original + "\n" + binding + "\n", encoding="utf-8")
+        else:
+            parent.write_text(
+                original + '\ninclude!("unreviewed_extra_source.rs");\n', encoding="utf-8"
+            )
+        errors = []
+        _path, source = module._read_reviewed_rust_source(
+            tmp_path, relative, f"current include closure {mutation}", errors
+        )
+        assert source is None, (relative, mutation)
+        if mutation == "missing-file":
+            assert any(
+                str(provider) in error and "provider is missing or unreadable" in error
+                for error in errors
+            ), errors
+        elif mutation == "duplicate-edge":
+            assert any("duplicate reviewed Rust include provider" in error for error in errors), errors
+        else:
+            assert any("reviewed Rust include inventory must equal" in error for error in errors), errors
 
 
 def test_reviewed_rust_source_expands_daemon_runtime_dependency_contract() -> None:
@@ -658,6 +833,10 @@ def copy_reviewed_source_fixture_with_includes(
     reviewed_source = importlib.util.module_from_spec(helper_spec)
     sys.modules[helper_spec.name] = reviewed_source
     helper_spec.loader.exec_module(reviewed_source)
+    # Authenticate the production allowlist before copying any source. Parsing
+    # its mapping alone does not establish the pinned canonical-manifest digest.
+    manifest_errors = reviewed_source._CANONICAL_REVIEWED_RUST_INCLUDE_MANIFEST_ERRORS
+    assert not manifest_errors, "\n".join(manifest_errors)
     pending = list(relatives)
     copied: set[Path] = set()
     while pending:
@@ -689,6 +868,28 @@ def copy_reviewed_source_fixture_with_includes(
     initialize_git_fixture(tmp_path)
 
 
+def test_reviewed_fixture_rejects_raw_file_hash_as_manifest_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive fixture must not hide a wrong production manifest pin."""
+    module = load_checker()
+    isolated_root = tmp_path / "source"
+    helper = isolated_root / module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE
+    inventory = isolated_root / module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE
+    helper.parent.mkdir(parents=True)
+    inventory.write_bytes((ROOT_DIR / module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE).read_bytes())
+    source = (ROOT_DIR / module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE).read_text()
+    raw_digest = hashlib.sha256(inventory.read_bytes()).hexdigest()
+    assert raw_digest != module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256
+    assert source.count(module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256) == 1
+    helper.write_text(source.replace(module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256, raw_digest))
+    monkeypatch.setitem(globals(), "ROOT_DIR", isolated_root)
+    destination = tmp_path / "fixture"
+    with pytest.raises(AssertionError, match="manifest digest must equal"):
+        copy_reviewed_source_fixture_with_includes(destination, module, set())
+    assert not destination.exists(), "unauthenticated inventory must fail before fixture creation"
+
+
 def copy_native_prepublication_fixture(
     tmp_path: Path, module
 ) -> list[dict]:
@@ -706,7 +907,8 @@ def copy_native_prepublication_fixture(
     relatives.update(
         Path(relative)
         for relative, _, _, _ in (
-            module.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS
+            *module.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS,
+            *module.native_merge_manifest.NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS,
         )
     )
     copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
@@ -1074,7 +1276,7 @@ def test_native_prepublication_contract_rejects_apply_order_drift(
         ),
         (
             "state_ref.apply_committed_autoscale_lane_geometry(",
-            "transactions.commit()",
+            "transactions.publish()",
         ),
     ),
 )
@@ -1247,6 +1449,50 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
     assert validate_fixture(tmp_path, module, contract) == ()
+    runner_path = tmp_path / module.INFLIGHT_LAYOUT_RUNNER
+    runner_source = runner_path.read_text(encoding="utf-8")
+    count_argument = "--expected-cases 26"
+    assert runner_source.count(count_argument) == 1
+    assert len(module.INFLIGHT_LAYOUT_MUTATIONS) == 25
+    count_mutations = [
+        (replacement, runner_source.replace(count_argument, replacement, 1))
+        for replacement in (
+            "--expected-cases 23",
+            "--expected-cases 25",
+            "--expected-cases 27",
+            "",
+            '--expected-cases "${INFLIGHT_CASE_COUNT:-26}"',
+            "--expected-cases 26 --expected-cases 25",
+            "--expected-cases=26",
+        )
+    ]
+    without_count = runner_source.replace(count_argument, "", 1)
+    count_mutations.extend((
+        ("comment-only", without_count + "\n# " + count_argument + "\n"),
+        ("relocated", without_count + '\nreadonly RECORDER_COUNT_NOTE="'
+         + count_argument + '"\n'),
+    ))
+    try:
+        for label, mutated_source in count_mutations:
+            runner_path.write_text(mutated_source, encoding="utf-8")
+            errors = []
+            module._validate_inflight_recorder_inventory(
+                runner_path, runner_path.read_text(encoding="utf-8"), errors
+            )
+            assert any(
+                "recorder must declare exactly 26 cases" in error
+                for error in errors
+            ), (label, errors)
+            if label == "--expected-cases 23":
+                # Prove the same predicate is reached through the full actual
+                # validator, without reparsing every Rust owner for each case.
+                errors = validate_fixture(tmp_path, module, contract)
+                assert any(
+                    "recorder must declare exactly 26 cases" in error
+                    for error in errors
+                ), errors
+    finally:
+        runner_path.write_text(runner_source, encoding="utf-8")
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs"
     constructor = "Some(CheckedProductionTransition::unwitnessed(projection))"
     symbol = "check_production_in_flight_reservation_transition"
@@ -2046,6 +2292,30 @@ def test_inflight_layout_contract_rejects_execution_provider_releasing_pending_a
             "super::v2_npos::validate_candidate_context_unchecked(",
             "candidate_attachments",
             "validate_candidate_context(",
+        ),
+        (
+            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
+            "!effects.penalty_actions.is_empty()",
+            "candidate_attachments",
+            "certified_merge_selection_for_npos",
+        ),
+        (
+            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
+            "!effects.v2_evidence_admissions.is_empty()",
+            "candidate_attachments",
+            "certified_merge_selection_for_npos",
+        ),
+        (
+            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
+            "!effects.v2_evidence_admissions.is_empty() && !effects.penalty_actions.is_empty()",
+            "candidate_attachments",
+            "certified_merge_selection_for_npos",
+        ),
+        (
+            "certified_merge_selection_for_npos(\n        npos_consensus_effects.as_ref().is_some_and(|effects| {\n            !effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()\n        }),\n    )",
+            "certified_merge_selection_for_npos(npos_consensus_effects.is_some())",
+            "candidate_attachments",
+            "certified_merge_selection_for_npos",
         ),
         (
             "!selection.allows_execution() && entry.execution_batch.is_some()",
@@ -3036,3 +3306,167 @@ def test_stable_generation_diagnostics_rejects_unwrapped_projection(
         and "derive_diagnostics_at_stable_state_generation" in error
         for error in errors
     ), errors
+
+
+_QUEUE_BINDING_OWNER_SYMBOLS = (
+    "Queue::complete_lane_reservation_startup_reconciliation",
+    "Queue::revalidate_complete_live_pre_kura_group_locked",
+    "Queue::replica_group_has_byte_exact_ordinary_fifo_ownership_locked",
+)
+
+
+def test_inflight_queue_binding_owners_accept_current_production(tmp_path, monkeypatch):
+    module = load_checker()
+    copy_inflight_repair_fixture(tmp_path, module, monkeypatch, _QUEUE_BINDING_OWNER_SYMBOLS)
+
+
+@pytest.mark.parametrize(("symbol", "old", "new"), (
+    (_QUEUE_BINDING_OWNER_SYMBOLS[0],
+     "|| !reconciliation_pending",
+     "|| (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)"),
+    (_QUEUE_BINDING_OWNER_SYMBOLS[1],
+     "&record.key,\n            )", "&keys[0],\n            )"),
+    (_QUEUE_BINDING_OWNER_SYMBOLS[1],
+     "validate_queue_plan_binding_for_lane_reservation_commit(",
+     "validate_unrelated_binding("),
+    (_QUEUE_BINDING_OWNER_SYMBOLS[2],
+     "&binding, key,", "&binding, &ordered_keys[0],"),
+    (_QUEUE_BINDING_OWNER_SYMBOLS[2],
+     "validate_queue_plan_binding_for_lane_reservation_commit(",
+     "validate_unrelated_binding("),
+))
+def test_inflight_queue_binding_owners_reject_weakened_authority(
+    tmp_path, monkeypatch, symbol, old, new,
+):
+    module = load_checker()
+    contract = copy_inflight_repair_fixture(
+        tmp_path, module, monkeypatch, _QUEUE_BINDING_OWNER_SYMBOLS,
+    )
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    replace_once_after(path, "fn " + symbol.split("::")[-1] + "(", old, new)
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any(symbol in error and "token" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(("symbol", "old", "new"), (
+    ("validate_native_amx_evidence_prune_intent_locked",
+     "if preimage_heights != removal_heights", "if false"),
+    ("validate_native_amx_evidence_prune_intent_locked",
+     "Self::validate_native_amx_settlement_chain_links(&original_links)",
+     "Self::validate_unrelated_links(&original_links)"),
+    ("validate_native_amx_evidence_prune_intent_locked",
+     "receipt.participant_settlement != *settlement", "false"),
+    ("plan_native_amx_evidence_pair_prune_locked",
+     "&manifests,\n            &receipts,", "&manifests,\n            &BTreeMap::new(),"),
+    ("plan_native_amx_evidence_pair_prune_locked",
+     "intent.protected_latest != protected_latest", "false"),
+    ("plan_native_amx_evidence_pair_prune_locked",
+     "Hash::new(bytes) != removal.artifact_hash", "false"),
+    ("plan_native_amx_evidence_prune_intent_from_artifacts",
+     "let fits = !stopped", "let fits = true"),
+    ("plan_native_amx_evidence_prune_intent_from_artifacts",
+     "bytes <= stable_byte_limit", "true"),
+    ("plan_native_amx_evidence_prune_intent_from_artifacts",
+     "if !kept_complete.contains(&protected_height)", "if false"),
+    ("collect_native_amx_prune_settlement_preimages",
+     "if next_bytes > byte_limit", "if false"),
+    ("collect_native_amx_prune_settlement_preimages",
+     "retained_bytes = next_bytes", "retained_bytes = 0"),
+    ("prune_native_amx_evidence_pairs_locked",
+     "self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;",
+     "validate_unrelated_intent(&intent)?;"),
+))
+def test_native_exact_object_prune_contract_rejects_planner_or_replay_weakening(
+    tmp_path: Path, symbol: str, old: str, new: str,
+) -> None:
+    """Bind live pruning, prospective budgeting and interrupted-prefix authentication."""
+    module = load_checker()
+    models = copy_native_exact_object_prune_fixture(tmp_path, module)
+    suffix = "<F>(" if symbol == "collect_native_amx_prune_settlement_preimages" else "("
+    replace_once_after(tmp_path / "crates/iroha_core/src/kura.rs", f"fn {symbol}{suffix}", old, new)
+    errors = validate_native_exact_object_prune_fixture(tmp_path, module, models)
+    assert any("exact-object" in error and symbol in error for error in errors), errors
+
+
+def test_native_exact_object_prune_contract_rejects_removed_planner_ledger_owner(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_native_exact_object_prune_fixture(tmp_path, module)
+    native = next(model for model in models if model["module"] == module.NATIVE_PREPUBLICATION_MODULE)
+    native["production_symbols"] = [binding for binding in native["production_symbols"]
+        if binding["symbol"] != "plan_native_amx_evidence_prune_intent_from_artifacts"]
+    errors = validate_native_exact_object_prune_fixture(tmp_path, module, models)
+    assert any("exactly once" in error and "plan_native_amx_evidence_prune_intent_from_artifacts" in error
+        for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    [
+        (None, None, None),
+        ("pending_autoscale_lane_drain_body", "self.pending_autoscale_lane_drain_body_with_frontier(", "self.unchecked_drain_body("),
+        ("pending_autoscale_lane_drain_body", "Self::evidence_aware_lane_drain_frontier_from_world(", "Self::unchecked_frontier("),
+        ("pending_autoscale_lane_drain_body_with_frontier", "if !autoscale_lane_drain_state_matches_context(", "if !unchecked_context("),
+        ("pending_autoscale_lane_drain_body_with_frontier", "state.intent.close_global_height > committed_height", "false"),
+        ("pending_autoscale_lane_drain_body_with_frontier", "state.intent.validator_set_hash != HashOf::new(&committee)", "false"),
+        ("pending_autoscale_lane_drain_body_with_frontier", "state.intent.min_quorum != min_quorum", "false"),
+        ("pending_autoscale_lane_drain_body_with_frontier", "frontier(lane.id, lane.dataspace_id, incarnation)?", "unchecked_frontier()"),
+        ("pending_autoscale_lane_drain_body_with_frontier", "crate::lane_consensus::validate_lane_drain_certificate_body(&body)", "unchecked_body(&body)"),
+        ("apply_autoscale_lane_lifecycle", "self.lane_incarnations = lifecycle_update.updated_lane_incarnations.clone();", "self.lane_incarnations.clear();"),
+        ("apply_autoscale_lane_lifecycle", "self.lane_incarnation_lineage = lifecycle_update.updated_lane_incarnation_lineage.clone();", "self.lane_incarnation_lineage.clear();"),
+        ("apply_autoscale_lane_lifecycle", "self.refresh_canonical_runtime();", "self.skip_refresh();"),
+        ("PreparedLaneLifecycleEffects::publish", "state.reset_lane_scoped_runtime_indexes(", "state.skip_reset("),
+        ("PreparedLaneLifecycleEffects::publish", ".mark_lanes_canonically_reset(", ".skip_watermarks("),
+    ],
+)
+def test_autoscale_current_publication_and_drain_owners(
+    tmp_path: Path, symbol: str | None, old: str | None, new: str | None
+) -> None:
+    """Follow delegated validation and bind the sole staged identity publisher."""
+    module = load_checker()
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, {
+        Path("crates/iroha_core/src/state.rs"),
+        Path("crates/iroha_core/src/state/carrier_lifecycle_effects.rs"),
+    })
+    model = next(m for m in canonical_models() if m["module"] == "SumeragiV2AutoscaleLifecycle")
+    owners = {
+        "apply_autoscale_lane_lifecycle",
+        "PreparedLaneLifecycleEffects::prepare",
+        "PreparedLaneLifecycleEffects::publish",
+        "LaneLifecyclePostPublication::publish",
+        "pending_autoscale_lane_drain_body",
+        "pending_autoscale_lane_drain_body_with_frontier",
+    }
+    model["production_symbols"] = [b for b in model["production_symbols"] if b["symbol"] in owners]
+    assert len(model["production_symbols"]) == len(owners)
+    if symbol is not None:
+        assert old is not None and new is not None
+        binding = next(row for row in model["production_symbols"] if row["symbol"] == symbol)
+        path = tmp_path / binding["path"]
+        source = path.read_text()
+        (item,) = module._extract_rust_binding_items(source, binding["kind"], symbol)
+        assert item.count(old) == 1
+        replace_once(path, item, item.replace(old, new, 1))
+    errors: list[str] = []
+    module._validate_model(tmp_path, ROOT_DIR / "formal/sumeragi_v2", model, errors)
+    if symbol is None:
+        assert errors == [], errors
+    else:
+        assert any(symbol in error and "missing source-binding token" in error for error in errors), errors
+
+
+def test_reviewed_rust_source_expands_immutable_instance_owners(tmp_path: Path) -> None:
+    """The tracked closure includes the new identity, recovery and collection modules."""
+    module = load_checker()
+    for relative, symbols in (
+        ("crates/iroha_core/src/kura.rs", ("immutable_paths_commit_every_identity_component",)),
+        ("crates/iroha_core/src/kura/lane_geometry.rs", ("recover_journal_owned_lane_instances_on_startup", "collect_released_lane_instances_locked")),
+    ):
+        copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+        errors: list[str] = []
+        _, source = module._read_reviewed_rust_source(tmp_path, relative, "immutable instance owner closure", errors)
+        assert errors == [], errors
+        assert source is not None
+        for symbol in symbols:
+            assert source.count(f"fn {symbol}(") == 1

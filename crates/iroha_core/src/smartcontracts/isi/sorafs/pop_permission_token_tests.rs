@@ -13,7 +13,6 @@ fn pop_permission_tokens_require_canonical_direct_and_role_grants() {
         nonzero!(2_u64),
         None,
         None,
-        None,
         NOW * 1_000,
         0,
     ));

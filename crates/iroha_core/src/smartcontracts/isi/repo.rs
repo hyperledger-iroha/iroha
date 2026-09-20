@@ -1155,7 +1155,7 @@ mod tests {
     #[test]
     fn repo_open_requires_exact_consents_for_unchanged_terms() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
@@ -1198,7 +1198,7 @@ mod tests {
     #[test]
     fn repo_open_is_atomic_when_second_leg_cannot_settle() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let mut instruction =
@@ -1284,7 +1284,7 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let wrong_id: RepoAgreementId = "wrong_scope_repo".parse().expect("agreement id");
@@ -1356,7 +1356,7 @@ mod tests {
     #[test]
     fn repo_initiation_transfers_assets_and_records_agreement() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let repo_instruction =
@@ -1437,7 +1437,7 @@ mod tests {
     #[test]
     fn find_repo_agreements_uses_id_predicate_lookup() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         execute_repo_with_consents(
@@ -1474,7 +1474,7 @@ mod tests {
     fn find_repo_agreements_uses_participant_indexes() {
         let (state, agreement_id, cash_def_id, collateral_def_id, custodian_id) =
             setup_state_with_custodian();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = RepoIsi::new(
@@ -1541,7 +1541,7 @@ mod tests {
             0
         );
         drop(view);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.world.remove_repo_agreement_entry(&agreement_id);
@@ -1571,7 +1571,7 @@ mod tests {
     fn repo_agreement_candidates_intersect_participant_indexes() {
         let (state, target_id, cash_def_id, collateral_def_id, custodian_id) =
             setup_state_with_custodian();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let make_agreement =
@@ -1621,7 +1621,7 @@ mod tests {
     #[test]
     fn repo_instruction_box_executes_via_instruction_dispatch() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let repo_instruction =
@@ -1640,7 +1640,7 @@ mod tests {
     fn repo_initiation_with_custodian_routes_collateral() {
         let (state, agreement_id, cash_def_id, collateral_def_id, custodian_id) =
             setup_state_with_custodian();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let repo_instruction = RepoIsi::new(
@@ -1700,7 +1700,7 @@ mod tests {
         let initiation_ms = 1_704_000_000_000_u64;
         let maturity_ms = initiation_ms + super::MS_PER_DAY;
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, initiation_ms, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             execute_repo_with_consents(
@@ -1716,7 +1716,7 @@ mod tests {
             stx.apply();
             block.commit_world_overlay_for_testing().expect("commit");
         }
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms - 1, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, maturity_ms - 1, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let alice_cash = AssetId::new(cash_def_id, ALICE_ID.clone());
@@ -1739,7 +1739,7 @@ mod tests {
     #[test]
     fn repo_open_respects_counterparty_cash_freeze() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let instruction = repo_setup_instruction(&agreement_id, &cash_def_id, &collateral_def_id);
@@ -1776,7 +1776,7 @@ mod tests {
         let initiation_ms = 1_704_000_000_000_u64;
         let maturity_ms = initiation_ms + super::MS_PER_DAY;
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, initiation_ms, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let mut instruction = repo_setup_instruction_with_maturity(
@@ -1790,7 +1790,7 @@ mod tests {
             stx.apply();
             block.commit_world_overlay_for_testing().expect("commit");
         }
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, maturity_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let mut control = AssetTransferControlRecord::new(collateral_def_id.clone());
@@ -1826,7 +1826,7 @@ mod tests {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         {
             let initiation_ms: u64 = 1_704_000_000_000;
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, initiation_ms, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let repo_instruction =
@@ -1844,7 +1844,7 @@ mod tests {
                 .cloned()
                 .expect("agreement snapshot")
         };
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, settlement_ms, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, settlement_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let cash_spec = stx
@@ -1971,7 +1971,7 @@ mod tests {
         let initiation_ms: u64 = 1_704_000_000_000;
         let maturity_ms = initiation_ms + MS_PER_DAY;
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, initiation_ms, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let mut instruction = repo_setup_instruction_with_maturity(
@@ -1994,7 +1994,7 @@ mod tests {
                 .commit_world_overlay_for_testing()
                 .expect("commit open agreement");
         }
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, maturity_ms, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, maturity_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let outsider = checked_account_id();
@@ -2037,7 +2037,7 @@ mod tests {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         let initiation_ms: u64 = 1_704_500_000_000;
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, initiation_ms, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             execute_repo_with_consents(
@@ -2062,7 +2062,7 @@ mod tests {
                 .cloned()
                 .expect("agreement snapshot")
         };
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, settlement_ms, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, settlement_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let cash_spec = stx
@@ -2191,7 +2191,7 @@ mod tests {
             setup_state_with_custodian();
         let initiation_ms: u64 = 1_705_000_000_000;
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, initiation_ms, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, initiation_ms, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let instruction = RepoIsi::new(
@@ -2221,7 +2221,7 @@ mod tests {
                 .cloned()
                 .expect("agreement snapshot")
         };
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, settlement_ms, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, settlement_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let cash_spec = stx
@@ -2321,7 +2321,7 @@ mod tests {
     fn repo_margin_call_updates_schedule_and_emits_events() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             execute_repo_with_consents(
@@ -2338,7 +2338,7 @@ mod tests {
             block.commit_world_overlay_for_testing().expect("commit");
         }
         let margin_timestamp_ms = super::MS_PER_DAY;
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, margin_timestamp_ms, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, margin_timestamp_ms, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         RepoMarginCallIsi::new(agreement_id.clone())
@@ -2373,7 +2373,7 @@ mod tests {
     fn repo_margin_call_rejected_when_not_due() {
         let (state, agreement_id, cash_def_id, collateral_def_id) = setup_state();
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             execute_repo_with_consents(
@@ -2384,7 +2384,7 @@ mod tests {
             stx.apply();
             block.commit_world_overlay_for_testing().expect("commit");
         }
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, super::MS_PER_DAY / 2, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, super::MS_PER_DAY / 2, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let err = RepoMarginCallIsi::new(agreement_id.clone())
@@ -2558,7 +2558,7 @@ mod tests {
         ];
         let mut frames = Vec::new();
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, BASE_TIMESTAMP_MS, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, BASE_TIMESTAMP_MS, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             execute_repo_with_consents(
@@ -2583,7 +2583,7 @@ mod tests {
         ));
         {
             let margin_timestamp = BASE_TIMESTAMP_MS + super::MS_PER_DAY;
-            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, margin_timestamp, 0);
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, margin_timestamp, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             RepoMarginCallIsi::new(agreement_id.clone())
@@ -2608,7 +2608,7 @@ mod tests {
                 .get(&agreement_id)
                 .cloned()
                 .expect("agreement snapshot");
-            let header = BlockHeader::new(nonzero!(3_u64), None, None, None, unwind_timestamp, 0);
+            let header = BlockHeader::new(nonzero!(3_u64), None, None, unwind_timestamp, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             let cash_spec = stx

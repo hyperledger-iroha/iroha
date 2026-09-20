@@ -88,7 +88,7 @@ pub(crate) fn exact_signed_transaction_hash(
     match entrypoint {
         TransactionEntrypoint::External(signed) => Some(signed.hash()),
         TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
-        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+        TransactionEntrypoint::SealedCommitment(_) => None,
     }
 }
 /// Return every identity that must be checked for replay before executing entrypoints.
@@ -148,7 +148,8 @@ pub(crate) fn authenticated_signed_replay_alias(
     sealed_reveal_authenticated_at_block_start(state_block, reveal)
         .then(|| reveal.signed_transaction().hash_as_entrypoint())
 }
-fn rejected_live_execution_fee_eligible(
+/// Decide fee eligibility from the actual rejection before diagnostic projection.
+pub(crate) fn rejected_live_execution_fee_eligible(
     executable: &Executable,
     result: &TransactionResultInner,
 ) -> bool {
@@ -163,7 +164,22 @@ fn rejected_live_execution_fee_eligible(
                 if crate::executor::is_live_batch_overlay_limit_rejection(error)
         )
 }
-fn rejected_transaction_gas_is_accountable(gas_used: u64, result: &TransactionResultInner) -> bool {
+/// Signed metadata key selecting restricted quarantine admission.
+pub(crate) const QUARANTINE_METADATA_KEY: &str = "quarantine";
+
+/// Only an exact authenticated Norito JSON boolean opts into quarantine.
+pub(crate) fn is_quarantine_transaction(tx: &SignedTransaction) -> bool {
+    tx.metadata()
+        .get(QUARANTINE_METADATA_KEY)
+        .and_then(|value| value.clone().try_into_any_norito::<bool>().ok())
+        .unwrap_or(false)
+}
+
+/// Retain completed rejection gas unless an internal settlement failure forbids it.
+pub(crate) fn rejected_transaction_gas_is_accountable(
+    gas_used: u64,
+    result: &TransactionResultInner,
+) -> bool {
     gas_used > 0
         && !matches!(
             result,
@@ -171,6 +187,51 @@ fn rejected_transaction_gas_is_accountable(gas_used: u64, result: &TransactionRe
                 ValidationFail::InternalError(_)
             ))
         )
+}
+
+/// Project envelope admission failures into the canonical Network rejection type.
+pub(crate) fn execution_rejection_from_admission_failure(
+    fail: AcceptTransactionFail,
+) -> TransactionRejectionReason {
+    match fail {
+        AcceptTransactionFail::TransactionLimit(err) => TransactionRejectionReason::LimitCheck(err),
+        AcceptTransactionFail::SignatureVerification(sig_fail) => {
+            TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+                format!("signature verification failed: {}", sig_fail.detail),
+            ))
+        }
+        AcceptTransactionFail::UnexpectedGenesisAccountSignature => {
+            TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+                "unexpected genesis account signature".to_owned(),
+            ))
+        }
+        AcceptTransactionFail::TransactionDomainMismatch(mismatch) => {
+            TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+                format!(
+                    "transaction domain mismatch: expected {:?} got {:?}",
+                    mismatch.expected, mismatch.actual
+                ),
+            ))
+        }
+        AcceptTransactionFail::TransactionInTheFuture { .. } => {
+            TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+                "transaction creation time is in the future".to_owned(),
+            ))
+        }
+        AcceptTransactionFail::TransactionExpired {
+            expires_at_ms,
+            now_ms,
+        } => {
+            TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+                format!("transaction expired: expires_at_ms={expires_at_ms} now_ms={now_ms}"),
+            ))
+        }
+        AcceptTransactionFail::NetworkTimeUnhealthy { reason } => {
+            TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
+                format!("network time service unhealthy: {reason}"),
+            ))
+        }
+    }
 }
 
 /// Enforce the signature-bound payer and admission intent of every native KAGEMUSHA V1 top-up.
@@ -1267,7 +1328,7 @@ fn enforce_nts_health_for_entrypoint(
         TransactionEntrypoint::SealedReveal(reveal) => {
             enforce_nts_health_for_time_sensitive(reveal.signed_transaction(), snapshot)
         }
-        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => Ok(()),
+        TransactionEntrypoint::SealedCommitment(_) => Ok(()),
     }
 }
 fn validate_proof_attachment_shapes(tx: &SignedTransaction) -> Result<(), AcceptTransactionFail> {
@@ -1326,9 +1387,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                 TransactionEntrypoint::SealedReveal(reveal) => {
                     state.has_entrypoint(reveal.signed_transaction().hash_as_entrypoint())
                 }
-                TransactionEntrypoint::External(_)
-                | TransactionEntrypoint::SealedCommitment(_)
-                | TransactionEntrypoint::Time(_) => false,
+                TransactionEntrypoint::External(_) | TransactionEntrypoint::SealedCommitment(_) => {
+                    false
+                }
             }
     }
     fn from_external_with_cached_bytes(
@@ -1424,7 +1485,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                 Self::framed_encoded_len(entrypoint)
             }
             TransactionEntrypoint::SealedReveal(entrypoint) => Self::framed_encoded_len(entrypoint),
-            TransactionEntrypoint::Time(entrypoint) => Self::framed_encoded_len(entrypoint),
         }
     }
     fn signed_encoded_len_for_limit(tx: &SignedTransaction) -> u64 {
@@ -2381,7 +2441,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 Some(entrypoint.signed_transaction())
             }
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) => None,
         }
     }
     /// Return the canonical hash of the wrapped transaction.
@@ -2515,13 +2575,32 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionEntrypoint::SealedReveal(entrypoint) => {
                 entrypoint.signed_transaction().creation_time()
             }
-            TransactionEntrypoint::Time(_) => Duration::ZERO,
         }
     }
     /// Entry-point TTL when one exists.
     #[must_use]
     pub fn time_to_live(&self) -> Option<Duration> {
         self.external().and_then(SignedTransaction::time_to_live)
+    }
+    /// Borrow a source after the same explicit-time envelope/signature admission.
+    /// The applying owner separately authenticates any historical time authority.
+    pub(crate) fn accept_borrowed_entrypoint_at_time(
+        tx: &'tx TransactionEntrypoint,
+        expected_network_id: &NetworkId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        validation_time: Duration,
+    ) -> Result<Self, AcceptTransactionFail> {
+        AcceptedTransaction::<'static>::validate_entrypoint_with_now(
+            tx,
+            expected_network_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            validation_time,
+        )?;
+        Ok(Self::from_entrypoint(Cow::Borrowed(tx)).with_validation_time(validation_time))
     }
 }
 impl AcceptedTransaction<'static> {
@@ -2557,13 +2636,6 @@ impl AcceptedTransaction<'static> {
                     crypto,
                     now,
                 )?;
-            }
-            TransactionEntrypoint::Time(_) => {
-                return Err(AcceptTransactionFail::TransactionLimit(
-                    TransactionLimitError {
-                        reason: "direct time entrypoints are not accepted on ingress".into(),
-                    },
-                ));
             }
         }
         Ok(())
@@ -2846,9 +2918,6 @@ impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
             TransactionEntrypoint::SealedCommitment(_) => {
                 panic!("sealed commitment entrypoints are not signed transactions")
             }
-            TransactionEntrypoint::Time(_) => {
-                panic!("time entrypoints are not signed transactions")
-            }
         }
     }
 }
@@ -2904,10 +2973,18 @@ impl StateBlock<'_> {
         penalty_tx.current_entrypoint_index = entrypoint_index;
         penalty_tx.tx_call_hash = Some(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
         penalty_tx.current_tx_hash = Some(tx.hash());
-        for penalty in &penalties {
+        Self::stage_rejected_governance_ballot_penalties_v1(&mut penalty_tx, &penalties)?;
+        penalty_tx.apply();
+        Ok(())
+    }
+    /// Stage the original prevalidated penalties without choosing an apply owner.
+    pub(crate) fn stage_rejected_governance_ballot_penalties_v1(
+        penalty_tx: &mut StateTransaction<'_, '_>,
+        penalties: &[crate::state::DeferredGovernanceBallotPenaltyV1],
+    ) -> Result<(), TransactionRejectionReason> {
+        for penalty in penalties {
             crate::smartcontracts::isi::world::isi::apply_deferred_governance_ballot_penalty_v1(
-                penalty,
-                &mut penalty_tx,
+                penalty, penalty_tx,
             )
             .map_err(|error| {
                 TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
@@ -2915,7 +2992,6 @@ impl StateBlock<'_> {
                 )))
             })?;
         }
-        penalty_tx.apply();
         Ok(())
     }
     /// Validate stateful admission rules that must hold before transaction execution.
@@ -3119,6 +3195,7 @@ impl StateBlock<'_> {
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
     }
+    #[cfg(test)]
     /// Validate and apply a transaction with both its original block entrypoint index and routing context.
     ///
     /// Returns the hash and the result of the transaction.
@@ -3225,7 +3302,6 @@ impl StateBlock<'_> {
                         return Err("execution input contains duplicate sealed commitments");
                     }
                 }
-                TransactionEntrypoint::Time(_) => {}
             }
         }
         Ok(())
@@ -3242,7 +3318,7 @@ impl StateBlock<'_> {
             TransactionEntrypoint::SealedReveal(reveal) => {
                 Some(reveal.signed_transaction().clone())
             }
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            TransactionEntrypoint::SealedCommitment(_) => None,
         };
         // Capture gas accounting inputs up front to avoid borrowing conflicts.
         let gas_total_before = self.gas_used_in_block;
@@ -3255,7 +3331,7 @@ impl StateBlock<'_> {
             state_transaction.world.current_dataspace_id = Some(routing.dataspace_id);
         }
         let hash = tx.hash_as_entrypoint();
-        let mut result = Self::validate_transaction_internal(
+        let mut result = Self::execute_accepted_transaction_in_overlay(
             tx,
             &mut state_transaction,
             ivm_cache,
@@ -3376,11 +3452,13 @@ impl StateBlock<'_> {
         }
         (hash, result)
     }
-    /// Validate the transaction, staging its state changes.
+    /// Execute admission, business logic and callbacks in the caller's overlay.
     ///
-    /// Returns the trigger sequence on success, or the rejection reason on failure.
+    /// The caller owns rollback, rejection penalties/fees and the output fit check
+    /// before applying any successful business changes. This method never applies
+    /// the overlay. Returns the trigger sequence or the actual typed rejection.
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
-    fn validate_transaction_internal(
+    pub(crate) fn execute_accepted_transaction_in_overlay(
         tx: AcceptedTransaction<'_>,
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
@@ -3396,13 +3474,6 @@ impl StateBlock<'_> {
                 ivm_cache,
                 routing_decision,
             );
-        }
-        if matches!(tx.entrypoint(), TransactionEntrypoint::Time(_)) {
-            return Err(TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(
-                    "time entrypoints cannot be executed via transaction admission".into(),
-                ),
-            ));
         }
         let admission =
             Self::validate_stateful_admission(tx.as_ref(), state_transaction, routing_decision)?;
@@ -3570,7 +3641,7 @@ impl StateBlock<'_> {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(signed));
         // The outer entrypoint's route was authenticated before the reveal was opened. Preserve it
         // for the inner signed transaction so policy drift cannot replace the committed lane.
-        Self::validate_transaction_internal(
+        Self::execute_accepted_transaction_in_overlay(
             accepted,
             state_transaction,
             ivm_cache,
@@ -5771,7 +5842,7 @@ pub mod tests {
         )
         .with_instructions([PublishSpaceDirectoryManifest { manifest }])
         .sign(keypair.private_key());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
@@ -6265,7 +6336,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission must accept the signature shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -6312,7 +6383,7 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         state_tx
@@ -6402,7 +6473,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission must accept the signature shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -6448,7 +6519,7 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let setup_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let setup_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut setup_block = state.block(setup_header);
         let mut setup_tx = setup_block.transaction();
         crate::executor::Executor::Initial
@@ -6490,7 +6561,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission must accept the signature shape");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -6544,7 +6615,7 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let setup_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let setup_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut setup_block = state.block(setup_header);
         let mut setup_tx = setup_block.transaction();
         crate::executor::Executor::Initial
@@ -6606,7 +6677,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission must accept the signature shape");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -6676,7 +6747,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -6720,7 +6791,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
@@ -6770,7 +6841,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
@@ -6820,7 +6891,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let tx = runtime_upgrade_transaction(authority.clone(), &keypair);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
@@ -6890,7 +6961,7 @@ pub mod tests {
 
         let static_tx = runtime_upgrade_transaction(static_validator, &static_keypair);
         let elastic_tx = runtime_upgrade_transaction(elastic_validator, &elastic_keypair);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let static_assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
@@ -6955,7 +7026,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
@@ -7003,7 +7074,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
@@ -7040,7 +7111,7 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
@@ -7078,7 +7149,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -7160,7 +7231,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -7201,7 +7272,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let account_before = block.world.accounts.get(&authority).cloned();
         let mut ivm_cache = IvmCache::new();
@@ -7252,7 +7323,7 @@ pub mod tests {
             &time_source,
         )
         .expect("admission should accept transaction shape");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -7464,7 +7535,7 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
         state_block
             .transactions
@@ -8013,43 +8084,79 @@ pub mod tests {
         );
         assert_eq!(
             AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
-                TransactionEntrypoint::External(signed)
+                TransactionEntrypoint::External(signed.clone())
             ))
             .encoded_len(),
             signed_expected_len
         );
-        let time_entrypoint = TimeTriggerEntrypoint {
-            id: "accepted-entrypoint-len-trigger".parse().unwrap(),
-            instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
-            authority,
-        };
-        // Time is a payload-only variant. Its accounting includes the existing
-        // framing overhead without declaring a standalone Time frame owner.
-        let time_accounted_len = AcceptedTransaction::framed_encoded_len(&time_entrypoint);
-        let time = TransactionEntrypoint::Time(time_entrypoint.clone());
-        let time_frame = norito::encode_canonical(&time).expect("canonical Time entrypoint frame");
-        assert_eq!(
-            norito::decode_canonical::<TransactionEntrypoint>(&time_frame)
-                .expect("current Time entrypoint roundtrip"),
-            time,
+        let salt = [0x46; 32];
+        let deadline = 9;
+        let commitment_hash =
+            compute_sealed_transaction_commitment(&test_network_id(), &signed, salt, deadline);
+        let commitment = SignedSealedTransactionCommitment::sign(
+            SealedTransactionCommitmentPayload::new(
+                test_network_id(),
+                authority,
+                commitment_hash,
+                2,
+                deadline,
+                None,
+            ),
+            keypair.private_key(),
         );
-        assert_eq!(
-            AcceptedTransaction::framed_encoded_len(&time),
-            time_frame.len()
-        );
-        let view = norito::core::from_bytes_view(&time_frame).expect("Time frame envelope");
-        let (time_payload_len, prefix_len) =
-            norito::core::read_len_from_slice_with_flags(&view.as_bytes()[4..], view.flags())
-                .expect("Time variant field length");
-        assert_eq!(4 + prefix_len + time_payload_len, view.as_bytes().len());
-        assert_eq!(
-            AcceptedTransaction::bare_encoded_len(&time_entrypoint),
-            time_payload_len
-        );
-        assert_eq!(
-            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(time)).encoded_len(),
-            time_accounted_len,
-        );
+        commitment
+            .verify_signature()
+            .expect("real commitment signature");
+        let reveal = SealedTransactionReveal::new(commitment_hash, signed.clone(), salt);
+        let cases = [
+            (
+                TransactionEntrypoint::SealedCommitment(commitment.clone()),
+                AcceptedTransaction::bare_encoded_len(&commitment),
+                AcceptedTransaction::framed_encoded_len(&commitment),
+            ),
+            (
+                TransactionEntrypoint::SealedReveal(reveal.clone()),
+                AcceptedTransaction::bare_encoded_len(&reveal),
+                AcceptedTransaction::framed_encoded_len(&reveal),
+            ),
+        ];
+        for (entrypoint, payload_len, accounted_len) in cases {
+            let frame = norito::encode_canonical(&entrypoint).expect("sealed Network frame");
+            assert_eq!(
+                norito::decode_canonical::<TransactionEntrypoint>(&frame)
+                    .expect("current sealed entrypoint roundtrip"),
+                entrypoint,
+            );
+            assert_eq!(
+                AcceptedTransaction::framed_encoded_len(&entrypoint),
+                frame.len()
+            );
+            let view = norito::core::from_bytes_view(&frame).expect("sealed frame envelope");
+            let (child_len, prefix_len) =
+                norito::core::read_len_from_slice_with_flags(&view.as_bytes()[4..], view.flags())
+                    .expect("sealed variant field length");
+            assert_eq!(4 + prefix_len + child_len, view.as_bytes().len());
+            assert_eq!(payload_len, child_len);
+            let accepted =
+                AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(&entrypoint));
+            assert_eq!(accepted.encoded_len(), accounted_len);
+            assert_eq!(accepted.hash_as_entrypoint(), entrypoint.hash());
+            let authenticated = AcceptedTransaction::accept_entrypoint_at_time(
+                entrypoint.clone(),
+                &test_network_id(),
+                Duration::ZERO,
+                TransactionParameters::default(),
+                &iroha_config::parameters::actual::Crypto::default(),
+                signed.creation_time(),
+            )
+            .expect("the supported sealed source passes real stateless admission");
+            assert_eq!(authenticated.encoded_len(), accounted_len);
+            assert_eq!(authenticated.hash_as_entrypoint(), entrypoint.hash());
+            assert_eq!(
+                authenticated.validation_time(),
+                Some(signed.creation_time())
+            );
+        }
     }
     #[test]
     fn signed_encoded_len_matches_norito_for_optional_metadata_shapes() {
@@ -8157,7 +8264,7 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "external frame length".into())])
         .sign(keypair.private_key());
         let signed_frame = norito::encode_canonical(&signed).expect("signed frame");
-        let frame = norito::encode_canonical(&TransactionEntrypoint::External(signed))
+        let frame = norito::encode_canonical(&TransactionEntrypoint::External(signed.clone()))
             .expect("external entrypoint frame");
         let length = AcceptedTransaction::signed_encoded_len_from_external_entrypoint_frame;
         assert_eq!(
@@ -8183,14 +8290,51 @@ pub mod tests {
             length(&truncated_child),
             Err(norito::Error::LengthMismatch)
         ));
-        let time = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
-            id: "signed-length-time-trigger".parse().expect("trigger id"),
+        let salt = [0x47; 32];
+        let commitment_hash =
+            compute_sealed_transaction_commitment(&test_network_id(), &signed, salt, 9);
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment_hash,
+            signed,
+            salt,
+        ));
+        let reveal_frame = norito::encode_canonical(&reveal).expect("current non-external frame");
+        assert!(matches!(
+            length(&reveal_frame),
+            Err(norito::Error::Message(message))
+                if message == "gossip entrypoint frame does not contain an external signed transaction"
+        ));
+    }
+    #[test]
+    fn retired_time_entrypoint_frame_is_rejected_before_identity_or_admission() {
+        // Negative bytes only: internal invocations have no Network ingress type.
+        #[derive(norito::Encode, norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::trigger::time::TimeTriggerEntrypoint")]
+        struct RetiredTimeEntrypoint {
+            id: TriggerId,
+            instructions: ExecutionStep,
+            authority: AccountId,
+        }
+        #[derive(norito::Encode, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_data_model::transaction::signed::model::TransactionEntrypoint"
+        )]
+        enum RetiredNetworkTime {
+            #[codec(index = 3)]
+            Time(RetiredTimeEntrypoint),
+        }
+        let (authority, _) = gen_account_in("retired-time-network-frame");
+        let frame = norito::encode_canonical(&RetiredNetworkTime::Time(RetiredTimeEntrypoint {
+            id: "retired-time-network-frame".parse().expect("trigger id"),
             instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
             authority,
-        });
-        let time_frame = norito::encode_canonical(&time).expect("current non-external frame");
+        }))
+        .expect("encode retired fixture bytes");
+        norito::core::from_bytes_view(&frame).expect("valid envelope and current owner identity");
+        assert!(norito::decode_canonical::<TransactionEntrypoint>(&frame).is_err());
+        assert!(entrypoint_hash_from_framed_bytes(&frame).is_err());
         assert!(matches!(
-            length(&time_frame),
+            AcceptedTransaction::signed_encoded_len_from_external_entrypoint_frame(&frame),
             Err(norito::Error::Message(message))
                 if message == "gossip entrypoint frame does not contain an external signed transaction"
         ));
@@ -9188,8 +9332,7 @@ pub mod tests {
         .sign(kp.private_key());
         // Height one is the fee-exempt genesis bootstrap boundary. Exercise
         // ordinary admission so the signed PipelineGas limit is mandatory.
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let accepted = super::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9434,7 +9577,7 @@ pub mod tests {
             metadata: Option<Metadata>,
             prepare_block: impl FnOnce(&mut StateBlock<'_>),
         ) -> Result<(), TransactionRejectionReason> {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = self.state.block(header);
             prepare_block(&mut block);
             let builder = TransactionBuilder::new(
@@ -9546,8 +9689,7 @@ pub mod tests {
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
         // Seed block 1 with a correct manifest for the program.
-        let header1 =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
         let prog = minimal_ivm_contract_program();
@@ -9574,8 +9716,7 @@ pub mod tests {
         let _ = block1.commit_world_overlay_for_testing();
         // Block 2: metadata manifest advertises the wrong abi_hash; admission must reject even
         // though the stored manifest matches.
-        let header2 =
-            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block2 = fixture.state.block(header2);
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x55;
@@ -9626,8 +9767,7 @@ pub mod tests {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut state_tx = block.transaction();
         // Build minimal program with abi_version=1 (current baseline)
@@ -9754,8 +9894,7 @@ pub mod tests {
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
         // Seed block 1 with a manifest that has the right code_hash but wrong abi_hash.
-        let header1 =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
         let prog = minimal_ivm_contract_program();
@@ -9784,8 +9923,7 @@ pub mod tests {
         let _ = block1.commit_world_overlay_for_testing();
         // Block 2: attach a correct manifest in metadata; validation should still reject
         // because the stored manifest ABI hash mismatches the computed one.
-        let header2 =
-            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block2 = fixture.state.block(header2);
         let manifest = ContractManifest {
             seiyaku_name: None,
@@ -9946,8 +10084,7 @@ pub mod tests {
         use nonzero_ext::nonzero;
         let fixture = IvmAdmissionFixture::new();
         // Seed block 1: insert a manifest into WSV directly via state tx
-        let header1 =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
         // Build a minimal program to compute its code_hash/abi_hash
@@ -9974,8 +10111,7 @@ pub mod tests {
         tx1.apply();
         let _ = block1.commit_world_overlay_for_testing();
         // Block 2: submit the IVM program; validation should find the manifest in WSV and accept
-        let header2 =
-            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block2 = fixture.state.block(header2);
         let mut state_tx = block2.transaction();
         let mut ivm_cache = IvmCache::new();
@@ -10863,8 +10999,7 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "seq-check-chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -10931,8 +11066,7 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "seq-accept-chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -11038,8 +11172,7 @@ pub mod tests {
         pipeline.ivm_max_cycles_upper_bound =
             std::num::NonZeroU64::new(4_000).expect("test ceiling is non-zero");
         state.set_pipeline(pipeline);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         // The retired custom parameter cannot lower the configured ceiling.
         let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
@@ -11711,7 +11844,7 @@ pub mod tests {
             (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
             Json::new(contract_address.to_string()),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         macro_rules! validate_instruction {
             ($instruction:expr, $metadata:expr) => {{
@@ -11913,7 +12046,7 @@ pub mod tests {
             },
         );
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         for syscall in [
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
@@ -12035,7 +12168,7 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "noop".into())])
         .sign(keypair.private_key());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
@@ -12111,7 +12244,7 @@ pub mod tests {
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0xCA])))
         .sign(keypair.private_key());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
@@ -12235,7 +12368,7 @@ pub mod tests {
         }
         let tx = selected.expect("fixture should find a tx routed to elastic lane");
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -12477,7 +12610,7 @@ pub mod tests {
             entrypoints,
             validator,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let results = block
@@ -12574,7 +12707,7 @@ pub mod tests {
         ));
         let explicit_route =
             crate::queue::RoutingDecision::new(TestLaneId::SINGLE, TestDataSpaceId::UNIVERSAL);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let external_result = block
@@ -12734,13 +12867,13 @@ pub mod tests {
             world.commit();
         }
 
-        let early_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let early_block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let early =
             canonical_carrier_membership_hashes(&early_block, core::slice::from_ref(&exact));
         assert_eq!(early, vec![exact.hash()]);
         drop(early_block);
 
-        let open_block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let open_block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let missing_identities =
             canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&missing));
         assert_eq!(missing_identities, vec![missing.hash()]);
@@ -12754,7 +12887,7 @@ pub mod tests {
         assert!(exact_identities.contains(&signed.hash_as_entrypoint()));
         drop(open_block);
 
-        let late_block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let late_block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
         let late = canonical_carrier_membership_hashes(&late_block, core::slice::from_ref(&exact));
         assert_eq!(late, vec![exact.hash()]);
     }
@@ -12774,7 +12907,7 @@ pub mod tests {
         state
             .set_zk(zk)
             .expect("empty SCCP state accepts focused confidential limits");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut rejected = block.transaction();
         rejected
@@ -12820,7 +12953,7 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "unlimited block gas".to_owned())])
         .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         block.gas_limit_per_block = 0;
         let mut cache = IvmCache::new();
@@ -12858,7 +12991,7 @@ pub mod tests {
             validator,
         );
         artifact.entrypoint_hashes[0] = Hash::new(b"forged lane execution entrypoint hash");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let err = block
@@ -12899,7 +13032,7 @@ pub mod tests {
             ],
             validator,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let err = block
@@ -12957,7 +13090,7 @@ pub mod tests {
             vec![TransactionEntrypoint::External(tx)],
             validator,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let results = block
@@ -13082,7 +13215,7 @@ pub mod tests {
             .expect("marker present")
             .0;
         let first_hash = first.hash();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_, first_result) = block.validate_transaction(
@@ -13108,6 +13241,7 @@ pub mod tests {
         );
         let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
         let restarted = crate::state::deserialize::KuraSeed {
+            lane_manifests: state.lane_manifests.read().clone(),
             kura: Kura::blank_kura_for_testing(),
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
@@ -13118,7 +13252,6 @@ pub mod tests {
         // Runtime fee policy is process configuration, not persisted World state.
         // Restore that exact fixture policy without replacing authenticated lane geometry.
         restarted.nexus.write().fees = state.nexus.read().fees.clone();
-        restarted.install_lane_manifests(&state.lane_manifests.read().clone());
         assert!(
             restarted
                 .view()
@@ -13128,7 +13261,7 @@ pub mod tests {
                 .is_some(),
             "claim marker must survive snapshot restore"
         );
-        let replay_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let replay_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut replay_block = restarted.block(replay_header);
 
         let duplicate = marked_test_transaction(
@@ -13211,7 +13344,7 @@ pub mod tests {
             .expect("valid marker")
             .expect("marker present")
             .0;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_, failure) = block.validate_transaction(

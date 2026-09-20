@@ -44,7 +44,9 @@ def checker():
 
 def _copy_owners(root):
     relatives = (*OWNERS.values(),
+        "crates/iroha_core/src/sumeragi/v2_worker/lifecycle_serve_ownership.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_tests.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_source_test_helpers.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_recovered_fetch_source_tests.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_ready_proposal_sign_test_fixtures.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch_pending_kura_source_tests.rs",
@@ -109,6 +111,7 @@ def test_reviewed_lifecycle_serve_owner_deltas_are_accepted(tmp_path, checker):
     ("ordinary", "run_lifecycle_active_height", "step_completion_capacity_relief_after_cut(", "step_after_completion_runtime_cut(", "sidecar Runtime preserves physical cut and typed escape"),
     ("pending", "run_pending_active_height", "settle_historical_body_serve_completion(", "ignore_historical_body_serve_completion(", "pending completion settles before no-clock Serve"),
     ("pending", "run_pending_active_height", "!block_sync_server.has_pending_historical_body_serve()", "true", "pending rollover retains historical output owner"),
+    ("pending", "run_pending_active_height", "activated.ready_for_finalized_rollover(&mut active_runner)?", "true", "pending rollover authenticates retained finalization custody"),
     ("pending", "run_pending_active_height", "let drained = drain_decided_lane_recovery_ingress(", "let drained = ignore_decided_lane_recovery_ingress(", "closed-prefix drain settles historical completion first"),
     ("pending", "run_pending_active_height", "if block_sync_server.has_pending_historical_body_serve()", "if false", "closed-prefix rollover cannot drop pending historical output"),
     ("ordinary", "run_lifecycle_active_height", "authenticate_terminal_complete_tip(", "skip_terminal_complete_tip_authentication(", "terminal height authenticates exact durable evidence"),

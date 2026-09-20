@@ -6,7 +6,7 @@ fn transfer_batch_rejects_empty_entries() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let err = TransferAssetBatch::new(Vec::new())

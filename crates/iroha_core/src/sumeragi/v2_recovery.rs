@@ -905,7 +905,14 @@ fn authenticate_snapshot_bootstrap_record(
             anchor.snapshot_block_hash
         )));
     }
-    let live_state_hash = crate::snapshot::canonical_state_snapshot_hash(state);
+    let live_state_hash =
+        crate::snapshot::canonical_state_snapshot_hash(state).map_err(|error| {
+            if error.is_observation_changed() {
+                V2StartupReplayError::SnapshotObservationChanged
+            } else {
+                snapshot_bootstrap_error(error.to_string())
+            }
+        })?;
     if anchor.snapshot_state_hash != live_state_hash {
         return Err(snapshot_bootstrap_error(format!(
             "snapshot anchor WSV hash {:?} differs from restored canonical WSV hash {live_state_hash:?}",
@@ -1002,6 +1009,9 @@ fn snapshot_bootstrap_error(reason: impl Into<String>) -> V2StartupReplayError {
 /// Fail-closed classification error for the startup replay boundary.
 #[derive(Debug, Error)]
 pub enum V2StartupReplayError {
+    /// A concurrent State publisher invalidated the startup observation.
+    #[error("startup State snapshot observation changed; retry recovery")]
+    SnapshotObservationChanged,
     /// Kura sidecar or canonical-block validation failed.
     #[error(transparent)]
     Kura(#[from] crate::kura::Error),
@@ -2462,7 +2472,7 @@ pub(crate) fn recover_active_height_with_plan(
         let checkpoint = kura.wsv_checkpoint(durable_height)?.ok_or(
             V2RecoveryError::AppliedPendingTipWithoutCheckpoint(durable_height),
         )?;
-        let actual = crate::snapshot::canonical_state_snapshot_hash(state);
+        let actual = crate::snapshot::canonical_state_snapshot_hash(state)?;
         if checkpoint.state_hash() != actual {
             return Err(V2RecoveryError::AppliedPendingTipCheckpointMismatch {
                 height: durable_height,
@@ -2751,7 +2761,9 @@ fn nexus_amx_context_hash_with_runtime_policy(
     state: &State,
     configured: Option<&iroha_config::parameters::actual::Nexus>,
 ) -> Result<Hash, V2RecoveryError> {
-    let view = state.view();
+    let view = state
+        .try_view()
+        .map_err(|error| V2RecoveryError::ExecutionPolicy(error.to_string()))?;
     // A height context is frozen from its predecessor state, so committed
     // height `h` supplies the exact validator tenure for target height `h + 1`.
     let target_height = u64::try_from(view.block_hashes.len())
@@ -2811,6 +2823,9 @@ fn ensure_execution_policy_matches_context(
 /// Fail-closed active-height selection error.
 #[derive(Debug, Error)]
 pub(crate) enum V2RecoveryError {
+    /// A complete committed snapshot identity could not be acquired.
+    #[error(transparent)]
+    SnapshotCapture(#[from] crate::snapshot::SnapshotCaptureError),
     /// Startup replay-boundary classification failed.
     #[error(transparent)]
     StartupReplay(#[from] V2StartupReplayError),
@@ -3001,7 +3016,7 @@ pub(crate) enum V2RecoveryError {
 /// Build the exact clean-height-one recovery boundary used by the lifecycle
 /// runner's CompleteTip restart regression.
 #[cfg(all(test, feature = "bls"))]
-pub(in crate::sumeragi) fn production_empty_genesis_complete_tip_fixture_for_test() -> (
+pub(in crate::sumeragi) fn production_genesis_complete_tip_fixture_for_test() -> (
     std::sync::Arc<crate::kura::Kura>,
     std::sync::Arc<crate::state::State>,
     crate::sumeragi::v2::VerifiedHeightContext,
@@ -3009,7 +3024,7 @@ pub(in crate::sumeragi) fn production_empty_genesis_complete_tip_fixture_for_tes
     iroha_crypto::KeyPair,
     crate::sumeragi::v2_lifecycle_coordinator::RetiredRecoveredCompleteTipActivationAuthorityV1,
 ) {
-    tests::production_empty_genesis_complete_tip_fixture()
+    tests::production_genesis_complete_tip_fixture()
 }
 
 #[cfg(test)]

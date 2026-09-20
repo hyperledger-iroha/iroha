@@ -33,7 +33,7 @@ fn fresh_state() -> State {
     State::new_for_testing(world, kura, query_handle)
 }
 fn grant_manage_confidential_params(state: &mut State) {
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm = Permission::from(CanManageConfidentialParams);
@@ -73,7 +73,7 @@ fn sample_poseidon_params(id: u32) -> PoseidonParams {
 fn publish_pedersen_params_inserts_record() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
@@ -101,7 +101,7 @@ fn publish_pedersen_params_inserts_record() {
 #[test]
 fn publish_pedersen_params_requires_permission() {
     let state = fresh_state();
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
@@ -128,7 +128,7 @@ fn publish_pedersen_params_requires_permission() {
 fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-    let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let executor = {
         let mut stx = block.transaction();
@@ -197,7 +197,7 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
 fn set_pedersen_params_lifecycle_updates_entry() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-    let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(4_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let params = sample_pedersen_params(5);
     let id = params.params_id;
@@ -247,7 +247,7 @@ fn set_pedersen_params_lifecycle_updates_entry() {
 fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-    let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(5_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
@@ -333,7 +333,7 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
 fn publish_poseidon_params_and_update_lifecycle() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-    let header = BlockHeader::new(nonzero!(6_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(6_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let params = sample_poseidon_params(2);
     let id = params.params_id;
@@ -384,7 +384,7 @@ fn publish_poseidon_params_and_update_lifecycle() {
 fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
     let mut state = fresh_state();
     grant_manage_confidential_params(&mut state);
-    let header = BlockHeader::new(nonzero!(7_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(7_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();

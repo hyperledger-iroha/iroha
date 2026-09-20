@@ -193,7 +193,7 @@ fn durable_validate_dispatch_rejects_stale_foreign_and_wrong_kind_without_mutati
             fixture
                 .registry
                 .entries
-                .insert(fixture.address, pending)
+                .insert(fixture.address, Box::new(pending))
                 .is_none()
         );
         let mut holder = take_dispatch_registry(&mut fixture);
@@ -1266,12 +1266,18 @@ fn cold_ready_validate_runtime_at_durable(
             .expect("aggregate the cold Ready Validate PrepareQC"),
     };
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(prepare.clone()),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                prepare.clone(),
+            )),
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated cold Ready Validate PrepareQC");
     let crate::sumeragi::v2_runtime::RuntimeStep::Advanced(fetch_effects) = runtime
-        .step(now)
+        .step(
+            now,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch cold Ready Validate PrepareQC")
     else {
         panic!("cold Ready Validate PrepareQC unexpectedly idled")
@@ -2867,8 +2873,8 @@ fn pre_timeout_physical_local_validate_completion_reaches_proposal_intent_before
         .name("pre-timeout-physical-local-validate-completion".to_owned())
         .stack_size(32 * 1024 * 1024)
         .spawn(|| {
-            pre_timeout_physical_local_validate_completion_fixture(false);
-            pre_timeout_physical_local_validate_completion_fixture(true);
+            pre_timeout_physical_local_validate_completion_fixture(false, None);
+            pre_timeout_physical_local_validate_completion_fixture(true, None);
         })
         .expect("spawn pre-timeout physical local Validate completion fixture");
     if let Err(payload) = handle.join() {
@@ -2878,7 +2884,10 @@ fn pre_timeout_physical_local_validate_completion_reaches_proposal_intent_before
 
 #[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
-fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadline: bool) {
+fn pre_timeout_physical_local_validate_completion_fixture(
+    completes_after_deadline: bool,
+    local_recovery: Option<bool>,
+) {
     let marker = 0xDF;
     let (mut fixture, _body_directory, body_store, durable) =
         durable_local_validate_store_fixture_at_view(marker, 0);
@@ -2946,7 +2955,7 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
     let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
     crate::sumeragi::v2_worker::tests::install_active_tag_for_test(&mut services, tag);
-    let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+    let (mut executor, planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
         &mut services,
         runtime,
         std::sync::Arc::clone(&output_guard),
@@ -2970,12 +2979,21 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
             &binding_directory,
             &validator,
         );
-    let mut launched =
+    let launched =
         super::super::LaunchedProductionLifecycleV1::ready_local_proposal_sign_fixture_for_test(
             owner, executor, services, ingress,
         );
+    // The planner retains worker ownership. Install the unwind guard before
+    // any further fixture setup can fail, so teardown detaches it first.
+    let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
     let (mut lane_work, _) =
         crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("read actual owners"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible,
+    );
 
     let (dispatched, after_validate_dispatch) =
         super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
@@ -3019,6 +3037,148 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
         }
     );
 
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("queued real Validate custody")
+            .fresh_admission_permissions_for_test(),
+        (false, false),
+        "queued Validate excludes both another Ready worker and certified-response Phase A",
+    );
+
+    if let Some(recovery) = local_recovery {
+        use super::super::{
+            ProductionLifecycleCompletionPreGateV1 as Gate,
+            ProductionLifecycleCompletionSelectionV1 as Selection,
+        };
+        use crate::sumeragi::v2_body_store::LocalValidationRefusal;
+        let (queue, release, reservation, _queue_directory) =
+            crate::queue::tests::lane_retirement_release_fixture_for_test();
+        let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
+        queue.set_sumeragi_wake(wake_tx);
+        let lifecycle_before = launched.validate_row_and_registry_for_test(validate_ordinal);
+        let files_before = regular_file_state_below(_body_directory.path());
+        launched
+            .planner
+            .as_mut()
+            .unwrap()
+            .activate_one_lifecycle_validate();
+        let refusal = if recovery {
+            LocalValidationRefusal::RecoveryRequired(
+                "exact local storage repair fixture".to_owned(),
+            )
+        } else {
+            LocalValidationRefusal::QueueRelease {
+                wait: release,
+                wake: queue.sumeragi_waker(),
+            }
+        };
+        assert_eq!(
+            launched
+                .planner
+                .as_mut()
+                .unwrap()
+                .execute_held_lifecycle_validate_result_fixture(
+                    Err::<wire::ExecutionCommitment, _>(refusal),
+                    std::sync::Arc::clone(&output_guard),
+                ),
+            1
+        );
+        let select =
+            |launched: &mut super::super::LaunchedProductionLifecycleV1,
+             lane_work: &mut crate::sumeragi::v2_lane_work::V2LaneWorkAdapter| {
+                super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+                    fixture.verified.context(),
+                    super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+                    |runner| match launched.drive_completion_pre_gate(runner, lane_work) {
+                        Gate::Selected(selection) => selection,
+                        _ => panic!("retained local Validate must own the Completion turn"),
+                    },
+                )
+                .0
+            };
+        let selected = select(&mut launched, &mut lane_work);
+        assert_eq!(
+            launched.validate_row_and_registry_for_test(validate_ordinal),
+            lifecycle_before
+        );
+        assert_eq!(
+            regular_file_state_below(_body_directory.path()),
+            files_before
+        );
+        let snapshot = launched
+            .planner
+            .as_ref()
+            .unwrap()
+            .lifecycle_validate_io_snapshot();
+        assert_eq!(snapshot.completion_pending(), 1);
+        assert_eq!(
+            snapshot.completion_owners(),
+            usize::from(recovery),
+            "open local wait transfers to its armed ack; recovery retains the guarded physical completion"
+        );
+        if recovery {
+            assert!(matches!(selected, Selection::RestartRequired));
+            assert!(output_guard.restart_required());
+            assert!(
+                output_guard
+                    .restart_error()
+                    .contains("exact local storage repair fixture")
+            );
+            assert!(
+                !launched.has_pending_lifecycle_completion_for_test(),
+                "closed output cannot publish or detach the quarantined physical completion"
+            );
+            return;
+        }
+        assert!(matches!(selected, Selection::LifecycleValidateLocalWaiting));
+        assert!(matches!(
+            select(&mut launched, &mut lane_work),
+            Selection::LifecycleValidateLocalWaiting
+        ));
+        assert!(!output_guard.restart_required());
+        assert_eq!(
+            launched
+                .planner
+                .as_ref()
+                .unwrap()
+                .lifecycle_validate_io_snapshot()
+                .queued(),
+            0
+        );
+        queue
+            .commit_lane_reservation_for_test(&reservation)
+            .expect("release exact actual Queue owner");
+        wake_rx.try_recv().expect("actual release wakes Sumeragi");
+        assert!(matches!(
+            select(&mut launched, &mut lane_work),
+            Selection::LifecycleValidateLocalRequeued
+        ));
+        assert_eq!(
+            launched.validate_row_and_registry_for_test(validate_ordinal),
+            lifecycle_before
+        );
+        assert_eq!(
+            regular_file_state_below(_body_directory.path()),
+            files_before
+        );
+        let planner = launched.planner.as_mut().unwrap();
+        assert_eq!(planner.lifecycle_validate_io_snapshot().queued(), 1);
+        planner.activate_one_lifecycle_validate();
+        assert_eq!(
+            planner.execute_held_lifecycle_validate_fixture(
+                commitment,
+                std::sync::Arc::clone(&output_guard)
+            ),
+            1
+        );
+        assert!(
+            matches!(select(&mut launched, &mut lane_work), Selection::LifecycleValidatePublished { ordinal } if ordinal == validate_ordinal)
+        );
+        assert!(!output_guard.restart_required());
+        return;
+    }
+
     let deadline = started + round_timeout;
     if completes_after_deadline {
         std::thread::sleep(
@@ -3027,12 +3187,20 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
         );
         assert!(std::time::Instant::now() > deadline);
     }
-    planner_io.activate_one_lifecycle_validate();
+    launched
+        .planner
+        .as_mut()
+        .unwrap()
+        .activate_one_lifecycle_validate();
     assert_eq!(
-        planner_io.execute_held_lifecycle_validate_fixture(
-            commitment,
-            std::sync::Arc::clone(&output_guard),
-        ),
+        launched
+            .planner
+            .as_mut()
+            .unwrap()
+            .execute_held_lifecycle_validate_fixture(
+                commitment,
+                std::sync::Arc::clone(&output_guard),
+            ),
         1,
         "the real worker must execute the local body before publishing completion"
     );
@@ -3042,10 +3210,30 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
             "the guarded worker must actually retain its result before the deadline"
         );
     }
-    let physical_completion = planner_io.lifecycle_validate_io_snapshot();
+    let physical_completion = launched
+        .planner
+        .as_ref()
+        .unwrap()
+        .lifecycle_validate_io_snapshot();
     assert_eq!(physical_completion.completion_pending(), 1);
     assert_eq!(physical_completion.completion_owners(), 1);
-    let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
+    for _ in 0..2 {
+        assert_eq!(
+            launched
+                .producer_claim_projection()
+                .expect("physical completion still owns its lease"),
+            super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+        );
+    }
+
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("unacknowledged real Validate result")
+            .fresh_admission_permissions_for_test(),
+        (false, false),
+        "result arrival cannot reopen either admission gate before acknowledgement",
+    );
 
     if !completes_after_deadline {
         assert_eq!(
@@ -3089,6 +3277,23 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
             ordinal
         } if ordinal == validate_ordinal
     ));
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("publication transfers ownership to the successor"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor {
+            ordinal: validate_ordinal,
+        },
+    );
+
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("exact retained Ready Validate token")
+            .fresh_admission_permissions_for_test(),
+        (false, false),
+        "Validate acknowledgement transfers the exclusion to its Ready successor without a gap",
+    );
 
     let (successor, after_validate_successor) =
         super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
@@ -3118,6 +3323,12 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
             super::super::ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal }
         )) if ordinal == validate_ordinal
     ));
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("retired Validate has no remaining lease or token"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible,
+    );
     assert_eq!(
         launched
             .runtime_queue_snapshot_for_ready_sign_test(deadline)
@@ -3161,7 +3372,6 @@ fn pre_timeout_physical_local_validate_completion_fixture(completes_after_deadli
     }
     assert!(!output_guard.restart_required());
 }
-
 #[cfg(feature = "bls")]
 struct ReadyLocalProposalSignLaunchedFixtureGuard {
     launched: Option<super::super::LaunchedProductionLifecycleV1>,
@@ -3321,7 +3531,10 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     );
     let (command_identity, ready_replay) = published.into_entry();
     let crate::sumeragi::v2_runtime::RuntimeStep::Advanced(effects) = runtime
-        .step(now)
+        .step(
+            now,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("execute the exact local ProposalReady command")
     else {
         panic!("local ProposalReady command unexpectedly idled")
@@ -3469,16 +3682,19 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     )
     .expect("aggregate the pending timeout certificate");
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(wire::TimeoutCertificate {
-                round: timeout_round,
-                groups: vec![wire::TimeoutVoteGroup {
-                    highest_prepare_qc: None,
-                    signers: timeout_signers,
-                    aggregate_signature: timeout_aggregate,
-                }],
-            }),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                wire::TimeoutCertificate {
+                    round: timeout_round,
+                    groups: vec![wire::TimeoutVoteGroup {
+                        highest_prepare_qc: None,
+                        signers: timeout_signers,
+                        aggregate_signature: timeout_aggregate,
+                    }],
+                },
+            )),
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("queue one authenticated timeout certificate behind the Ready Proposal Sign");
     let queue_now = std::time::Instant::now();
     let queue_before = runtime.queue_snapshot(queue_now);
@@ -3562,10 +3778,11 @@ fn local_proposal_intent_live_wal_sign_fixture() {
             fixture.verified.context(),
             super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
             |runner| {
-                let permit =
-                    super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial()
-                        .ready_proposal_sign_preemption_permit()
-                        .expect("an eligible height mints the exact Proposal Sign exception");
+                let permit = launched
+                    .producer_claim_projection()
+                    .expect("derive eligibility from owners")
+                    .ready_proposal_sign_preemption_permit()
+                    .expect("an eligible height mints the exact Proposal Sign exception");
                 let ready = match launched
                     .drive_completion_pre_gate_with_ready_proposal_sign_preemption(
                         runner,
@@ -3605,6 +3822,12 @@ fn local_proposal_intent_live_wal_sign_fixture() {
         dispatched,
         super::super::ProductionCompletionDispatchV1::SignQueued { ordinal }
     );
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("the Sign worker owns the lease"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+    );
     assert!(
         launched.ordinary_completion_head_retained_for_ready_sign_test(),
         "Proposal Sign preemption must not acknowledge or remove the ordinary physical head"
@@ -3638,6 +3861,12 @@ fn local_proposal_intent_live_wal_sign_fixture() {
     assert_eq!(
         launched.settle_recovered_lifecycle_proposal_prepare_wal(),
         super::super::ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
+    );
+    assert_eq!(
+        launched
+            .producer_claim_projection()
+            .expect("Sign settlement releases the worker lease"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible,
     );
     assert!(
         launched
@@ -3706,7 +3935,7 @@ fn registered_deferred_validate_passes_ordinary_completion_without_releasing_wai
     let handle = std::thread::Builder::new()
         .name("registered-sidecar-ordinary-completion".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(false))
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(false, false))
         .expect("spawn registered-sidecar Completion fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -3719,7 +3948,7 @@ fn registered_deferred_validate_decision_drains_recovery_prefix_without_releasin
     let handle = std::thread::Builder::new()
         .name("registered-sidecar-decided-recovery".to_owned())
         .stack_size(32 * 1024 * 1024)
-        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true))
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true, false))
         .expect("spawn registered-sidecar decided recovery fixture");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
@@ -3727,8 +3956,21 @@ fn registered_deferred_validate_decision_drains_recovery_prefix_without_releasin
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn registered_deferred_validate_decision_drains_recovery_batch_without_releasing_wait() {
+    let handle = std::thread::Builder::new()
+        .name("registered-sidecar-decided-recovery-batch".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| registered_deferred_validate_ordinary_completion_fixture(true, true))
+        .expect("spawn registered-sidecar decided recovery batch fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
-fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bool) {
+fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bool, batch: bool) {
     let marker = 0xDF;
     let (mut lane_work, keys, verified, reference, kura) =
         crate::sumeragi::v2_lane_work::tests::missing_lifecycle_sidecar_fixture_for_test();
@@ -3748,7 +3990,6 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
     let header = BlockHeader::new(
         NonZeroU64::new(context.height).expect("non-zero successor height"),
         Some(parent),
-        None,
         None,
         1_000,
         0,
@@ -3943,6 +4184,29 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             &keys,
             local_validator,
         );
+    // This batch exercises the production dispatch path. Retain the sole
+    // consumer of actual bounded actor queues so post_recoverable checks its
+    // wire, topology, FIFO and byte owners instead of a closed test handle.
+    let mut actor_admissions = batch.then(|| {
+        let local_peer = fixture.verified.context().roster[local_validator as usize]
+            .validator
+            .clone();
+        let targets = fixture
+            .verified
+            .context()
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .filter(|peer| peer != &local_peer)
+            .collect();
+        let (network, actor) = crate::IrohaNetwork::actor_admission_for_tests(
+            local_peer,
+            targets,
+            std::num::NonZeroUsize::new(16).expect("bounded recovery actor capacity"),
+        );
+        crate::sumeragi::v2_worker::tests::install_network_for_test(&mut services, network);
+        actor
+    });
     crate::sumeragi::v2_worker::tests::install_active_tag_for_test(&mut services, tag);
     let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
         &mut services,
@@ -4061,6 +4325,16 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
                 super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
             )
         });
+        assert_eq!(
+            launched
+                .producer_claim_projection()
+                .expect("deferred Validate retains one owner"),
+            if registered {
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+            } else {
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion
+            },
+        );
     }
     let registration_before = launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
         load_registration_for_test(&owner.coordinator)
@@ -4229,8 +4503,9 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             retained_after_admission.1, retained_before.1,
             "ingress admission cannot mutate the registered private work registry"
         );
-        let claim =
-            super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar;
+        let claim = launched
+            .producer_claim_projection()
+            .expect("derive the retained sidecar barrier");
         assert!(
             claim
                 .decided_validate_sidecar_recovery_permit(false)
@@ -4250,18 +4525,43 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
         let admitted_high_water = ingress.state.lock().last_admission_ordinal;
         let wal_before = std::fs::read(runtime_directory.path().join("safety.wal"))
             .expect("read durable Decision WAL");
-        for remaining in [1, 0] {
+        let turns = if batch {
+            [(2, 0), (0, 0)]
+        } else {
+            [(1, 1), (1, 0)]
+        };
+        let mut admitted_output_posts = 0;
+        for (expected_drained, remaining) in turns {
             let drained = launched.with_proposal_restart_fixture_for_test(|_, executor, services| {
                 let directive = executor.local_proposal_directive().expect("read actual executor Decision");
                 assert_eq!(directive.decided_subject(), Some(subject));
                 let _permit = claim.decided_validate_sidecar_recovery_permit(directive.decided_subject().is_some())
                     .expect("only actual Decision opens the registered-wait recovery seam");
-                crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
-                    &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync,
-                ).expect("retire exactly one authenticated recovery occurrence")
+                if batch {
+                    crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_batch_for_test(
+                        &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync, 2,
+                    ).expect("service the bounded authenticated recovery burst")
+                } else {
+                    usize::from(crate::sumeragi::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_for_test(
+                        &ingress, executor, services, &mut lane_work, kura.as_ref(), &mut block_sync,
+                    ).expect("retire exactly one authenticated recovery occurrence"))
+                }
             });
-            assert!(drained);
+            assert_eq!(drained, expected_drained);
             assert_eq!(ingress.len(), remaining);
+            if let Some(actor) = actor_admissions.as_mut() {
+                admitted_output_posts += actor.drain_posts(|post| {
+                    assert!(
+                        fixture
+                            .verified
+                            .context()
+                            .roster
+                            .iter()
+                            .any(|entry| entry.validator == post.peer_id),
+                        "recovery output must retain an exact committee target"
+                    );
+                });
+            }
             assert_eq!(
                 ingress.state.lock().last_admission_ordinal,
                 admitted_high_water
@@ -4293,6 +4593,19 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
                 "recovery cannot step the reducer or append safety work"
             );
             assert!(!output_guard.restart_required());
+        }
+        if batch {
+            assert!(
+                admitted_output_posts > 0,
+                "the batch must cross real actor admission and release its consumed output leases"
+            );
+            assert_eq!(
+                actor_admissions
+                    .as_mut()
+                    .expect("retain live actor owner")
+                    .drain_posts(|_| { panic!("the recovery turn left an unobserved actor post") }),
+                0
+            );
         }
         assert_eq!(
             keeper_kura
@@ -4366,5 +4679,132 @@ fn registered_deferred_validate_ordinary_completion_fixture(decided_recovery: bo
             "ordinary auxiliary Completion cannot enter the reducer FIFO"
         );
         assert!(!output_guard.restart_required());
+    }
+}
+#[cfg(feature = "bls")]
+#[test]
+fn local_validation_failure_returns_original_waiting_dispatch_without_rejection() {
+    let WaitingDurableValidateFixture {
+        fixture,
+        _directory,
+        mut store,
+        durable,
+        coordinator,
+        holder,
+        dispatch,
+    } = waiting_durable_validate_fixture(0xDA);
+    let wait = dispatch.wait_token_for_test();
+    let records = coordinator.records.clone();
+    let digest = holder.registry_for_test().entries[&fixture.address].digest;
+    let (error, dispatch) = dispatch
+        .execute(&mut store, |_| {
+            Err::<wire::ExecutionCommitment, _>(
+                crate::sumeragi::v2_apply::V2ApplyError::CanonicalStorageRead(
+                    crate::kura::Error::IO(
+                        std::io::Error::other("canonical local read failed"),
+                        _directory.path().join("canonical-finality.norito"),
+                    ),
+                ),
+            )
+        })
+        .expect_err("local read failure must return the original dispatch");
+    assert!(matches!(error, V2BodyStoreError::LocalValidation(_)));
+    assert_eq!(dispatch.wait_token_for_test(), wait);
+    assert_eq!(coordinator.records, records);
+    assert_eq!(
+        holder.registry_for_test().entries[&fixture.address].digest,
+        digest
+    );
+    assert!(store.validated_recovery_catalog().is_empty());
+    let commitment = ValidatedBodyReceipt::for_test(durable).execution_commitment();
+    let executed = dispatch
+        .execute(&mut store, |_| Ok::<_, DetachedValidationError>(commitment))
+        .expect("same dispatch must remain executable after local storage recovers");
+    assert_eq!(executed.wait_token_for_test(), wait);
+    assert_eq!(
+        executed
+            .outcome()
+            .validated_receipt()
+            .unwrap()
+            .execution_commitment(),
+        commitment
+    );
+    assert!(executed.outcome().rejection_identity().is_none());
+    assert_eq!(coordinator.records, records);
+    assert_eq!(
+        holder.registry_for_test().entries[&fixture.address].digest,
+        digest
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn local_queue_release_retries_original_validate_dispatch_without_replacing_row() {
+    let handle = std::thread::Builder::new()
+        .name("local-validate-queue-dispatch".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(local_queue_release_retries_original_validate_dispatch_fixture)
+        .expect("spawn real Queue/Validate ownership regression");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+fn local_queue_release_retries_original_validate_dispatch_fixture() {
+    let (mut fixture, _directory, mut store, durable) = durable_validate_store_fixture(0xBC);
+    let mut coordinator = claimed_durable_validate_coordinator(&fixture);
+    let mut holder = take_dispatch_registry(&mut fixture);
+    let dispatch = coordinator
+        .begin_durable_validate_dispatch(&mut holder, fixture.lease.clone(), &fixture.verified)
+        .expect("exact original waiting dispatch");
+    let record_before = coordinator.records[&fixture.lease.ordinal()].clone();
+    let registry_before = format!("{:?}", holder.registry_for_test());
+    let key = super::super::LifecycleValidateDispatchKeyV1::from_recovered_validate_registration(
+        record_before.key.context(),
+        fixture.verified.context().height,
+        fixture.lease.owner(),
+        fixture.lease.ordinal(),
+        fixture.slot,
+        fixture.lease.physical_slots()[&fixture.slot],
+    )
+    .expect("exact worker key from the existing row");
+    let commitment = ValidatedBodyReceipt::for_test(durable).execution_commitment();
+    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+    let completion =
+        crate::sumeragi::v2_worker::tests::exercise_local_validate_queue_retry_for_test(
+            dispatch,
+            key,
+            &mut store,
+            commitment,
+            std::sync::Arc::clone(&output_guard),
+        );
+    assert_eq!(coordinator.records[&fixture.lease.ordinal()], record_before);
+    assert_eq!(format!("{:?}", holder.registry_for_test()), registry_before);
+    let (executed, ack) = completion.into_publication_parts();
+    let publication = coordinator
+        .complete_durable_validate_dispatch(&mut holder, executed)
+        .expect("semantic success may now replace the exact existing row");
+    let DurableValidateCompletionPublication::PublishedValidated(published) = publication else {
+        panic!("same dispatch should publish one validated successor")
+    };
+    assert_eq!(published.lifecycle_ordinal(), fixture.lease.ordinal());
+    ack.acknowledge_after_publication();
+    assert!(!output_guard.restart_required());
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn local_validate_turn_driver_retains_queue_wait_and_recovery_quarantine() {
+    let handle = std::thread::Builder::new()
+        .name("local-validate-resource-custody".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            pre_timeout_physical_local_validate_completion_fixture(false, Some(false));
+            pre_timeout_physical_local_validate_completion_fixture(false, Some(true));
+        })
+        .expect("spawn local Validate ownership regression");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
     }
 }

@@ -17,7 +17,7 @@ pub(crate) struct AutonomousLaneMergeBundleV1 {
 /// already outside the authenticated terminal retention window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ObsoleteCertifiedBundleAppendPlan {
-    entry: LaneConfigEntry,
+    entry: LaneStorageEntry,
     frontier: CertifiedLaneBlockArtifact,
     component: CertifiedBundleCapacityComponent,
     recovery: CertifiedBundleAppendRecovery,
@@ -1882,7 +1882,7 @@ impl Kura {
         })
     }
     fn autonomous_lane_merge_bundle_paths_for_entry(
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         store_root: &Path,
     ) -> (PathBuf, PathBuf) {
         let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
@@ -1894,6 +1894,12 @@ impl Kura {
     pub(crate) fn validate_certified_lane_block_artifact(
         artifact: &CertifiedLaneBlockArtifact,
     ) -> std::result::Result<(), &'static str> {
+        #[cfg(test)]
+        CERTIFIED_ARTIFACT_VALIDATION_COUNT.with(|count| {
+            if let Some(current) = count.get() {
+                count.set(Some(current + 1));
+            }
+        });
         #[cfg(test)]
         if FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION.with(|flag| flag.replace(false)) {
             return Err("injected certified lane block artifact validation failure");
@@ -2262,6 +2268,51 @@ impl Kura {
         let entry = self
             .lane_storage_entry(lane_id)
             .map_err(|_| "autonomous merge source has no active lane storage")?;
+        self.durable_autonomous_lane_merge_source_at_entry_locked(
+            &entry,
+            lane_block_height,
+            expected_network_id,
+            expected_epoch,
+            certified_override,
+            require_persisted_bundle,
+        )
+    }
+    /// Reconstruct only an existing, journal-retained instance during restart.
+    /// This private reader never installs an active route or signs new work.
+    fn durable_autonomous_lane_merge_source_at_retained_entry_under_prune_guard(
+        &self,
+        entry: &LaneStorageEntry,
+        lane_block_height: u64,
+        expected_network_id: NetworkId,
+        expected_epoch: u64,
+        certified_override: Option<&CertifiedLaneBlockArtifact>,
+        require_persisted_bundle: bool,
+    ) -> std::result::Result<DurableAutonomousLaneMergeSource, &'static str> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        self.require_retained_lane_storage_entry(entry)
+            .map_err(|_| "autonomous restart source lost its exact retained reference")?;
+        self.durable_autonomous_lane_merge_source_at_entry_locked(
+            entry,
+            lane_block_height,
+            expected_network_id,
+            expected_epoch,
+            certified_override,
+            require_persisted_bundle,
+        )
+    }
+    fn durable_autonomous_lane_merge_source_at_entry_locked(
+        &self,
+        entry: &LaneStorageEntry,
+        lane_block_height: u64,
+        expected_network_id: NetworkId,
+        expected_epoch: u64,
+        certified_override: Option<&CertifiedLaneBlockArtifact>,
+        require_persisted_bundle: bool,
+    ) -> std::result::Result<DurableAutonomousLaneMergeSource, &'static str> {
+        if entry.network_id != expected_network_id {
+            return Err("autonomous source network differs from its exact storage identity");
+        }
+        let lane_id = entry.lane_id;
         let _sidecar_guard = self.sidecar_lock.lock();
         if self.prune_recovery_is_required() {
             return Err("Kura prune recovery blocks autonomous merge-source admission");
@@ -2666,6 +2717,24 @@ impl Kura {
         &self,
         source: &DurableAutonomousLaneMergeSource,
     ) -> Result<()> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(source.bundle.certified.proposal.descriptor.lane_id)?;
+        self.persist_autonomous_lane_merge_bundle_at_entry_locked(&entry, source)
+    }
+    fn persist_recovered_autonomous_lane_merge_bundle_under_prune_guard(
+        &self,
+        entry: &LaneStorageEntry,
+        source: &DurableAutonomousLaneMergeSource,
+    ) -> Result<()> {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        self.require_retained_lane_storage_entry(entry)?;
+        self.persist_autonomous_lane_merge_bundle_at_entry_locked(entry, source)
+    }
+    fn persist_autonomous_lane_merge_bundle_at_entry_locked(
+        &self,
+        entry: &LaneStorageEntry,
+        source: &DurableAutonomousLaneMergeSource,
+    ) -> Result<()> {
         self.durable_mutation_authorized()?;
         let descriptor = &source.bundle.certified.proposal.descriptor;
         Self::validate_autonomous_lane_merge_bundle(
@@ -2684,8 +2753,12 @@ impl Kura {
                 "autonomous merge source bytes or hash differ from its canonical bundle",
             ));
         }
-        let _geometry_guard = self.lane_geometry_lock.lock();
-        let entry = self.lane_storage_entry(descriptor.lane_id)?;
+        if entry.network_id != source.bundle.executable_payload().network_id {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous bundle network differs from its exact storage identity",
+            ));
+        }
         self.require_active_lane_artifact(&entry, descriptor)?;
         let (data_path, index_path) =
             Self::autonomous_lane_merge_bundle_paths_for_entry(&entry, &self.store_root);
@@ -2870,7 +2943,7 @@ impl Kura {
     /// include every returned index-growth bound before these plans execute.
     fn plan_obsolete_certified_bundle_appends_under_prune_guard(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         frontier: &CertifiedLaneBlockArtifact,
         retention: &AuthenticatedLaneHistoryRetention,
     ) -> Result<Vec<ObsoleteCertifiedBundleAppendPlan>> {
@@ -2881,12 +2954,7 @@ impl Kura {
             ));
         }
         let _geometry_guard = self.lane_geometry_lock.lock();
-        if self.lane_storage_entry(entry.lane_id)? != *entry {
-            return Err(Self::invalid_lane_artifact_error(
-                self.store_root.clone(),
-                "obsolete append planning observed changed lane geometry",
-            ));
-        }
+        self.require_retained_lane_storage_entry(&entry)?;
         self.require_active_lane_artifact(entry, &frontier.proposal.descriptor)?;
         let _sidecar_guard = self.sidecar_lock.lock();
         let actual = self
@@ -2920,7 +2988,7 @@ impl Kura {
 
     fn plan_obsolete_certified_bundle_append_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         frontier: &CertifiedLaneBlockArtifact,
         component: CertifiedBundleCapacityComponent,
     ) -> Result<Option<ObsoleteCertifiedBundleAppendPlan>> {
@@ -3264,12 +3332,7 @@ impl Kura {
         }
         for plan in plans {
             let _geometry_guard = self.lane_geometry_lock.lock();
-            if self.lane_storage_entry(plan.entry.lane_id)? != plan.entry {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "obsolete append geometry changed before recovery",
-                ));
-            }
+            self.require_retained_lane_storage_entry(&plan.entry)?;
             let _sidecar_guard = self.sidecar_lock.lock();
             let (data_path, index_path, kind) = match plan.component {
                 CertifiedBundleCapacityComponent::CertifiedPair => {
@@ -3315,13 +3378,14 @@ impl Kura {
     /// append mutation deferred until aggregate capacity admission succeeds.
     fn validate_startup_persisted_autonomous_bundle_under_prune_guard(
         &self,
+        entry: &LaneStorageEntry,
         persisted: &AutonomousLaneMergeBundleV1,
     ) -> Result<()> {
         let descriptor = &persisted.certified.proposal.descriptor;
         let payload = persisted.executable_payload();
         let source = self
-            .durable_autonomous_lane_merge_source_under_prune_guard(
-                descriptor.lane_id,
+            .durable_autonomous_lane_merge_source_at_retained_entry_under_prune_guard(
+                entry,
                 descriptor.lane_block_height,
                 payload.network_id,
                 payload.epoch,
@@ -3360,25 +3424,77 @@ impl Kura {
         self.durable_mutation_authorized()?;
         let entries = {
             let _geometry_guard = self.lane_geometry_lock.lock();
-            self.lane_storage_entries
-                .lock()
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
+            self.retained_lane_storage_entries_under_geometry_guard()?
         };
+        let mut deferred_reset_identities = BTreeSet::new();
         for entry in entries {
             // Authenticate retention under prune -> canonical ordering before
             // entering the geometry/sidecar corridor used by the pair reads.
             let retention = self.authenticated_lane_history_retention_under_prune_guard(&entry)?;
+            // Full READY/source authentication may acquire canonical/geometry
+            // guards; do it before entering the pair-repair lock corridor.
+            let captured_frontier = {
+                let _geometry_guard = self.lane_geometry_lock.lock();
+                self.require_retained_lane_storage_entry(&entry)?;
+                let _sidecar_guard = self.sidecar_lock.lock();
+                self.read_latest_certified_lane_block_frontier_locked(&entry, false)?
+            };
+            if let Some(frontier) = captured_frontier.as_ref()
+                && retention.as_ref().is_none_or(|proof| {
+                    !proof.permits_discard(&frontier.frontier.artifact.proposal.descriptor)
+                })
+            {
+                let artifact = &frontier.frontier.artifact;
+                let source = self.certified_reset_source_under_prune_guard(&entry, artifact)?;
+                let _geometry_guard = self.lane_geometry_lock.lock();
+                self.require_retained_lane_storage_entry(&entry)?;
+                let _sidecar_guard = self.sidecar_lock.lock();
+                let debt = self.certified_reset_debt_locked(&entry, artifact, source.as_ref())?;
+                self.confirm_latest_certified_lane_block_frontier_read_locked(
+                    &entry,
+                    &frontier.snapshot,
+                )?;
+                if debt.is_some() {
+                    if let Some(source) = source.as_ref() {
+                        let plan = self.certified_bundle_capacity_plan(&entry, artifact, source)?;
+                        let consumed = self.certified_bundle_capacity_consumed_components_locked(
+                            &entry,
+                            artifact,
+                            source,
+                            None,
+                            debt.as_ref(),
+                        )?;
+                        let outstanding = plan
+                            .component_bytes
+                            .keys()
+                            .filter(|component| !consumed.contains(component))
+                            .copied()
+                            .collect::<BTreeSet<_>>();
+                        let reservations = self.certified_bundle_capacity_reservations.lock();
+                        let expected = reservations.get(&plan.identity);
+                        if (!outstanding.is_empty() && expected.is_none())
+                            || expected.is_some_and(|reservation| {
+                                reservation.plan != plan
+                                    || reservation.outstanding_components != outstanding
+                            })
+                        {
+                            return Err(Self::invalid_lane_artifact_error(
+                                self.store_root.clone(),
+                                "deferred READY reset lost its exact full publication reservation",
+                            ));
+                        }
+                        deferred_reset_identities.insert(plan.identity);
+                    }
+                    // Neither the certified QC nor READY/source grants State's
+                    // reset watermark. Preserve the exact history and every
+                    // outstanding byte until the State-owned continuation.
+                    continue;
+                }
+            }
             let (frontier_artifact, mut certified, mut persisted_bundles) = {
                 let _geometry_guard = self.lane_geometry_lock.lock();
-                let active_entry = self.lane_storage_entry(entry.lane_id)?;
-                if active_entry != entry {
-                    return Err(Self::invalid_lane_artifact_error(
-                        self.store_root.clone(),
-                        "lane geometry changed during autonomous merge bundle startup repair",
-                    ));
-                }
+                self.require_retained_lane_storage_entry(&entry)?;
+                let active_entry = &entry;
                 let _sidecar_guard = self.sidecar_lock.lock();
                 self.ensure_prune_recovery_not_required()?;
                 let frontier =
@@ -3390,6 +3506,7 @@ impl Kura {
                         self.recover_certified_lane_block_pair_from_frontier_locked(
                             &active_entry,
                             &frontier.frontier.artifact,
+                            None,
                             None,
                         )?;
                     }
@@ -3602,8 +3719,8 @@ impl Kura {
                 };
                 if let Some(bundle) = persisted_bundles.get(&lane_block_height) {
                     let input = self
-                        .read_active_lane_block_execution_input_structural(
-                            entry.lane_id,
+                        .read_retained_lane_block_execution_input_structural(
+                            &entry,
                             lane_block_height,
                             false,
                         )
@@ -3632,8 +3749,8 @@ impl Kura {
                         ));
                     }
                     let published = self
-                        .durable_autonomous_lane_merge_source_under_prune_guard(
-                            entry.lane_id,
+                        .durable_autonomous_lane_merge_source_at_retained_entry_under_prune_guard(
+                            &entry,
                             lane_block_height,
                             availability.body.network_id,
                             availability.body.epoch,
@@ -3663,8 +3780,8 @@ impl Kura {
                     ));
                 }
                 let source = self
-                    .durable_autonomous_lane_merge_source_under_prune_guard(
-                        entry.lane_id,
+                    .durable_autonomous_lane_merge_source_at_retained_entry_under_prune_guard(
+                        &entry,
                         lane_block_height,
                         availability.body.network_id,
                         availability.body.epoch,
@@ -3685,10 +3802,12 @@ impl Kura {
                         "startup autonomous merge source retained another certificate",
                     ));
                 }
-                self.persist_autonomous_lane_merge_bundle_under_prune_guard(&source)?;
+                self.persist_recovered_autonomous_lane_merge_bundle_under_prune_guard(
+                    &entry, &source,
+                )?;
                 let published = self
-                    .durable_autonomous_lane_merge_source_under_prune_guard(
-                        entry.lane_id,
+                    .durable_autonomous_lane_merge_source_at_retained_entry_under_prune_guard(
+                        &entry,
                         lane_block_height,
                         availability.body.network_id,
                         availability.body.epoch,
@@ -3707,12 +3826,19 @@ impl Kura {
                         "startup autonomous merge bundle changed during durable publication",
                     ));
                 }
-                self.ensure_certified_bundle_capacity_reservation_under_prune_guard(
-                    &artifact, &published, None,
-                )?;
+                // Recovery consumes the already admitted exact publication.
+                // Fresh active-catalog admission is unavailable before State
+                // restoration and cannot stand in for retained work authority.
+                self.consume_certified_bundle_pair_capacity(&artifact)?;
+                self.consume_autonomous_bundle_pair_capacity(&published)?;
             }
         }
-        if self.certified_bundle_capacity_reserved_bytes()? != 0 {
+        if self
+            .certified_bundle_capacity_reservations
+            .lock()
+            .keys()
+            .any(|identity| !deferred_reset_identities.contains(identity))
+        {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "autonomous merge bundle startup repair left an outstanding certified/bundle reservation",

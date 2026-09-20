@@ -78,7 +78,7 @@ pub struct RuntimeDataSpaceAdditionV1 {
 pub struct RuntimeLaneManifestV1 {
     /// Lane whose native manifest is being installed.
     pub lane_id: LaneId,
-    /// Canonical, bounded native `ManifestFile` JSON. Core validates its schema and authority.
+    /// Canonical, bounded [`super::NativeLaneManifestV1`] JSON. Core validates its schema and authority.
     pub manifest: Json,
 }
 

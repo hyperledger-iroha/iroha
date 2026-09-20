@@ -5073,12 +5073,57 @@ fn canonical_alias_read_source(source: Option<String>, field: &str) -> Result<Op
 fn alias_text_cmp(left: &AccountAliasName, right: &AccountAliasName) -> std::cmp::Ordering {
     left.to_string().cmp(&right.to_string())
 }
+fn decode_account_alias_absence(
+    response: &Response<Vec<u8>>,
+    expected_code: &str,
+) -> Result<iroha_torii_shared::ErrorEnvelope> {
+    let mut content_types = response.headers().get_all("Content-Type").iter();
+    let content_type = content_types
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next());
+    eyre::ensure!(
+        content_types.next().is_none()
+            && content_type
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case(APPLICATION_JSON)),
+        "account-alias absence requires one application/json Content-Type header"
+    );
+    eyre::ensure!(
+        response.status() == StatusCode::NOT_FOUND
+            && response.body().len()
+                <= iroha_torii_shared::aliases::ACCOUNT_ALIAS_ABSENCE_MAX_BYTES,
+        "account-alias absence requires bounded HTTP 404"
+    );
+    let envelope: iroha_torii_shared::ErrorEnvelope = norito::json::from_slice(response.body())
+        .wrap_err("decode account-alias absence ErrorEnvelope")?;
+    eyre::ensure!(
+        envelope.code() == expected_code,
+        "account-alias lookup returned HTTP 404 code `{}` instead of exact ledger absence",
+        envelope.code()
+    );
+    Ok(envelope)
+}
 fn decode_account_alias_resolution(
     response: &Response<Vec<u8>>,
     expected_alias: &AccountAliasName,
 ) -> Result<Option<AccountAliasResolutionV1>> {
     match response.status() {
-        StatusCode::NOT_FOUND => Ok(None),
+        StatusCode::NOT_FOUND => {
+            let envelope = decode_account_alias_absence(
+                response,
+                iroha_torii_shared::aliases::ACCOUNT_ALIAS_NOT_FOUND_CODE,
+            )?;
+            let absence = envelope
+                .details
+                .as_ref()
+                .and_then(|details| details.account_alias_not_found.as_ref())
+                .ok_or_else(|| eyre!("account-alias absence omitted its typed selector"))?;
+            eyre::ensure!(
+                absence.alias == expected_alias.to_string(),
+                "account-alias absence selector differs from the requested alias"
+            );
+            Ok(None)
+        }
         StatusCode::OK => {
             let wire: AccountAliasResolutionWireV1 = norito::json::from_slice(response.body())
                 .wrap_err("decode account-alias resolution response")?;
@@ -5138,7 +5183,28 @@ fn decode_account_aliases_by_account(
     request: &AccountAliasesByAccountRequestV1,
 ) -> Result<Option<AccountAliasesByAccountV1>> {
     match response.status() {
-        StatusCode::NOT_FOUND => Ok(None),
+        StatusCode::NOT_FOUND => {
+            let envelope = decode_account_alias_absence(
+                response,
+                iroha_torii_shared::aliases::ACCOUNT_ALIASES_BY_ACCOUNT_NOT_FOUND_CODE,
+            )?;
+            let absence = envelope
+                .details
+                .as_ref()
+                .and_then(|details| details.account_aliases_by_account_not_found.as_ref())
+                .ok_or_else(|| {
+                    eyre!("account aliases-by-account absence omitted its typed selector")
+                })?;
+            eyre::ensure!(
+                absence.matches_selector(
+                    &request.account_id().to_string(),
+                    request.dataspace().map(AsRef::as_ref),
+                    request.domain().map(AsRef::as_ref)
+                ),
+                "account aliases-by-account absence differs from the requested account or scope"
+            );
+            Ok(None)
+        }
         StatusCode::OK => {
             let wire: AccountAliasesByAccountWireV1 = norito::json::from_slice(response.body())
                 .wrap_err("decode account aliases-by-account response")?;
@@ -9651,14 +9717,19 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, decoding fails, or any
     /// diagnostics evidence fails verification.
-    pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus> {
+    pub async fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/diagnostics");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", ACCEPT_NORITO_PREFERRED),
-        )?;
+        let request = self
+            .operator_signed_request(HttpMethod::GET, url, Vec::new())?
+            .header("Accept", ACCEPT_NORITO_PREFERRED)
+            .build()?;
+        let resp = self.dispatch_request(request).await?;
+        Self::decode_sumeragi_diagnostics(&resp)
+    }
+
+    fn decode_sumeragi_diagnostics(resp: &Response<Vec<u8>>) -> Result<SumeragiDiagnosticsStatus> {
         Self::ensure_response_status(
-            &resp,
+            resp,
             StatusCode::OK,
             "Failed to get sumeragi diagnostics",
             " ",
@@ -9706,8 +9777,8 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the status request fails or if relay envelopes fail validation or deduplication.
-    pub fn get_cross_lane_transfer_proofs(&self) -> Result<Vec<CrossLaneTransferProof>> {
-        let status = self.get_sumeragi_diagnostics()?;
+    pub async fn get_cross_lane_transfer_proofs(&self) -> Result<Vec<CrossLaneTransferProof>> {
+        let status = self.get_sumeragi_diagnostics().await?;
         verify_lane_relay_envelopes(&status.lane_relay_envelopes)?;
         Ok(status
             .lane_relay_envelopes
@@ -10792,6 +10863,47 @@ pub(crate) fn compatible_capabilities_body() -> String {
 #[cfg(test)]
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked client fixture keypair")
+}
+// Explicit finite fixture policy, not a production policy/default.
+#[cfg(test)]
+fn client_fixture_output_limits() -> iroha_data_model::block::output_budget::ExecutionOutputLimits {
+    iroha_data_model::block::output_budget::ExecutionOutputLimits {
+        max_outputs: 16,
+        max_output_bytes: 64 * 1024,
+        max_total_output_bytes: 256 * 1024,
+        max_executed_wire_bytes: 1024 * 1024,
+    }
+}
+#[cfg(test)]
+fn client_fixture_network_output(
+    input_index: u32,
+    result: iroha_data_model::transaction::TransactionResult,
+) -> iroha_data_model::block::execution_output::ExecutionOutputV1 {
+    use iroha_data_model::block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1};
+    ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+        input_index,
+        result,
+        completions: Vec::new(),
+    })
+}
+#[cfg(test)]
+fn attach_client_fixture_outputs(
+    block: &mut SignedBlock,
+    outputs: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+    fragments: u64,
+) {
+    block
+        .set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &client_fixture_output_limits(),
+        )
+        .expect("attach bounded canonical client fixture outputs");
 }
 #[cfg(test)]
 mod evidence_http_tests {
@@ -14045,22 +14157,27 @@ mod evidence_http_tests {
         let entrypoint = TransactionEntrypoint::External(signed.clone());
         let entrypoint_hash = signed.hash_as_entrypoint();
         assert_eq!(entrypoint.hash(), entrypoint_hash);
+        let output = iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+            iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            },
+        );
         let transaction = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH])),
             entrypoint_hash,
             entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
             entrypoint,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
+            output_hash: HashOf::new(&output),
+            output_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            output,
         };
         (
             signed,
             PipelineTransactionDetailsResponse {
                 hash: entrypoint_hash.to_string(),
                 transaction,
-                trigger_completions: Vec::new(),
             },
         )
     }
@@ -14115,10 +14232,37 @@ mod evidence_http_tests {
             Some(expected.to_owned())
         );
     }
+    pub(super) fn scoped_pipeline_absence(
+        hash: &HashOf<SignedTransaction>,
+    ) -> HttpResponse<Vec<u8>> {
+        let envelope = iroha_torii_shared::ErrorEnvelope::new(
+            iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+            "Missing status.",
+        )
+        .with_details(iroha_torii_shared::ErrorDetails {
+            pipeline_transaction_status_not_found: Some(
+                iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(hash, "global"),
+            ),
+            ..iroha_torii_shared::ErrorDetails::default()
+        });
+        json_response(
+            StatusCode::NOT_FOUND,
+            &norito::json::to_json(&envelope).expect("typed absence"),
+        )
+    }
     #[test]
     fn pipeline_status_404_returns_none_from_exact_global_query() {
-        let (result, snapshots) =
-            captured_pipeline_status(0x11, empty_response(StatusCode::NOT_FOUND), false);
+        let (result, snapshots) = captured_pipeline_status(
+            0x11,
+            scoped_pipeline_absence(&transaction_hash(0x11)),
+            false,
+        );
+        assert!(
+            captured_pipeline_status(0x11, empty_response(StatusCode::NOT_FOUND), false)
+                .0
+                .is_err(),
+            "untyped404 cannot establish absence"
+        );
         let status = result.expect("pipeline status query");
         assert!(status.is_none());
         assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
@@ -14723,6 +14867,7 @@ mod evidence_http_tests {
         Local,
         Global,
         AsyncGlobal,
+        AsyncLocal,
     }
     fn typed_status_response_snapshot(
         seed: u8,
@@ -14758,6 +14903,13 @@ mod evidence_http_tests {
                     }
                     StatusResponseRequest::Global => {
                         client.get_transaction_status_response_global(hash)
+                    }
+                    StatusResponseRequest::AsyncLocal => {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("status runtime")
+                            .block_on(client.fetch_transaction_status_response_local(hash))
                     }
                     StatusResponseRequest::AsyncGlobal => {
                         tokio::runtime::Builder::new_current_thread()
@@ -14816,6 +14968,130 @@ mod evidence_http_tests {
     }
     #[test]
     fn get_transaction_status_response_global_sets_global_scope() {
+        use iroha_torii_shared::{
+            ErrorDetails, ErrorEnvelope, PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+            PipelineTransactionStatusNotFoundV1,
+        };
+        let hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x51; Hash::LENGTH],
+        ));
+        for scope in [None, Some("global"), Some("local")] {
+            let envelope = ErrorEnvelope::new(
+                PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                "Missing status.",
+            )
+            .with_details(ErrorDetails {
+                pipeline_transaction_status_not_found: Some(
+                    PipelineTransactionStatusNotFoundV1::new(&hash, scope.unwrap_or("global")),
+                ),
+                ..ErrorDetails::default()
+            });
+            let bytes = norito::json::to_vec(&envelope).expect("envelope");
+            let response = HttpResponse::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header("content-type", APPLICATION_JSON)
+                .body(bytes.clone())
+                .expect("response");
+            let (result, snapshot) = capture_request(response, |transport| {
+                let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+                client.get_transaction_status_response_with_scope(hash, scope)
+            });
+            assert!(result.expect("typed absence").is_none());
+            assert_eq!(snapshot.url.path(), "/v1/pipeline/transactions/status");
+            let response = HttpResponse::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header("content-type", APPLICATION_JSON)
+                .body(bytes.clone())
+                .expect("response");
+            assert!(
+                Client::decode_transaction_status_response(&response, hash, scope)
+                    .expect("absence")
+                    .is_none()
+            );
+            for invalid in 0..10_u8 {
+                let mut value = norito::json::to_value(&envelope).expect("value");
+                match invalid {
+                    0 => {
+                        *value.pointer_mut("/code").expect("code") = Value::from("route_not_found")
+                    }
+                    1 => {
+                        *value
+                            .pointer_mut("/details/pipeline_transaction_status_not_found/hash")
+                            .expect("hash") = Value::from(
+                            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+                                [0x53; Hash::LENGTH],
+                            ))
+                            .to_string(),
+                        )
+                    }
+                    2 => {
+                        *value
+                            .pointer_mut("/details/pipeline_transaction_status_not_found/scope")
+                            .expect("scope") = Value::from(if scope == Some("local") {
+                            "global"
+                        } else {
+                            "local"
+                        })
+                    }
+                    3 => *value.pointer_mut("/details").expect("details") = Value::Null,
+                    _ => {}
+                }
+                let mut response = HttpResponse::builder().status(if invalid == 9 {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::NOT_FOUND
+                });
+                if invalid != 4 {
+                    response = response.header(
+                        "content-type",
+                        if invalid == 5 {
+                            "text/plain"
+                        } else {
+                            APPLICATION_JSON
+                        },
+                    );
+                }
+                if invalid == 6 {
+                    response = response.header("content-type", APPLICATION_JSON);
+                }
+                let body = if invalid == 7 {
+                    b"{}".to_vec()
+                } else if invalid == 8 {
+                    vec![b' '; 4097]
+                } else {
+                    norito::json::to_vec(&value).expect("value")
+                };
+                let response = response.body(body).expect("response");
+                assert!(
+                    Client::decode_transaction_status_response(&response, hash, scope).is_err(),
+                    "case {invalid} scope {scope:?}"
+                );
+            }
+        }
+        let envelope = ErrorEnvelope::new(
+            PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+            "Missing status.",
+        )
+        .with_details(ErrorDetails {
+            pipeline_transaction_status_not_found: Some(PipelineTransactionStatusNotFoundV1::new(
+                &hash, "global",
+            )),
+            ..ErrorDetails::default()
+        });
+        let response = HttpResponse::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header("content-type", APPLICATION_JSON)
+            .body(norito::json::to_vec(&envelope).expect("body"))
+            .expect("response");
+        let (result, _) = capture_request(response, |transport| {
+            let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(client.fetch_transaction_status_response_global(hash))
+        });
+        assert!(result.expect("async exactabsence").is_none());
         let snapshot = typed_status_response_snapshot(
             0x45,
             "Committed",
@@ -14838,6 +15114,88 @@ mod evidence_http_tests {
         );
         assert_status_scope(&snapshot, "global");
         assert_eq!(snapshot.url.path(), "/v1/pipeline/transactions/status");
+    }
+    #[test]
+    fn fetch_transaction_status_response_local_uses_exact_bounded_local_decoder() {
+        let snapshot = typed_status_response_snapshot(
+            0x49,
+            "Applied",
+            Some(8),
+            "local",
+            "state",
+            StatusResponseRequest::AsyncLocal,
+        );
+        assert_status_scope(&snapshot, "local");
+        assert_eq!(snapshot.url.path(), "/v1/pipeline/transactions/status");
+        assert!(
+            snapshot
+                .url
+                .query_pairs()
+                .any(|(name, value)| name == "hash" && value == transaction_hash(0x49).to_string())
+        );
+    }
+    #[test]
+    fn async_local_status_rejects_global_and_other_hash_without_fallback() {
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
+        for wrong_hash in [false, true] {
+            let expected = transaction_hash(0x49);
+            let payload = PipelineTransactionStatusResponse::new(
+                if wrong_hash {
+                    transaction_hash(0x4b)
+                } else {
+                    expected
+                }
+                .to_string(),
+                PipelineTransactionStatus {
+                    kind: "Applied".to_owned(),
+                    block_height: Some(8),
+                },
+                if wrong_hash { "local" } else { "global" }.to_owned(),
+                "state".to_owned(),
+            );
+            let body = norito::json::to_string(&payload).expect("typed status JSON");
+            let (decoded, snapshot) =
+                capture_request(json_response(StatusCode::OK, &body), |transport| {
+                    let client = client_with_base_url(base_url())
+                        .with_test_http_transport(transport.clone());
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(client.fetch_transaction_status_response_local(expected))
+                });
+            assert!(decoded.is_err());
+            assert_status_scope(&snapshot, "local");
+            assert_eq!(
+                snapshot.max_response_bytes,
+                PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES
+            );
+        }
+    }
+    #[test]
+    fn async_local_status_missing_stays_missing_without_global_fallback() {
+        let (decoded, snapshot) =
+            capture_request(json_response(StatusCode::NOT_FOUND, "{}"), |transport| {
+                let client =
+                    client_with_base_url(base_url()).with_test_http_transport(transport.clone());
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(
+                        client.fetch_transaction_status_response_local(transaction_hash(0x49)),
+                    )
+            });
+        assert!(
+            decoded
+                .expect("local absence is not transport failure")
+                .is_none()
+        );
+        assert_status_scope(&snapshot, "local");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES
+        );
     }
     #[test]
     fn get_account_read_signs_request_and_decodes_typed_payload() {
@@ -15419,6 +15777,80 @@ fn tx_confirmation_final_report(report: eyre::Report) -> eyre::Report {
 fn tx_confirmation_unresolved_final_report(report: eyre::Report) -> eyre::Report {
     TxConfirmationFinalError::unresolved(report).into()
 }
+/// A dispatched batch did not produce an all-accepted acknowledgement.
+///
+/// Inspect input-ordered outcomes when available. Missing or malformed results
+/// leave every submitted hash unresolved; never automatically resend the batch.
+#[derive(Debug)]
+pub struct TransactionBatchAdmissionError {
+    hashes: Vec<HashOf<SignedTransaction>>,
+    outcomes: Option<Vec<iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome>>,
+    cause: eyre::Report,
+}
+impl TransactionBatchAdmissionError {
+    /// Locally computed signed identities in original request order.
+    #[must_use]
+    pub fn hashes(&self) -> &[HashOf<SignedTransaction>] {
+        &self.hashes
+    }
+    /// Exact matched per-entry results, or `None` if the response was ambiguous.
+    #[must_use]
+    pub fn outcomes(
+        &self,
+    ) -> Option<&[iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome]> {
+        self.outcomes.as_deref()
+    }
+}
+impl fmt::Display for TransactionBatchAdmissionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "transaction batch was not fully acknowledged; reconcile each submitted hash before retrying: {}",
+            self.cause
+        )
+    }
+}
+impl std::error::Error for TransactionBatchAdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+fn transaction_batch_outcomes(
+    response: &Response<Vec<u8>>,
+    hashes: &[HashOf<SignedTransaction>],
+) -> Result<Vec<iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome>> {
+    use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
+    let outcomes: Vec<TransactionBatchEntryOutcome> = norito::json::from_slice(response.body())
+        .wrap_err("invalid transaction batch outcome body")?;
+    if outcomes.len() != hashes.len()
+        || outcomes.iter().zip(hashes).any(|(outcome, hash)| {
+            &outcome.signed_transaction_hash != hash
+                || !(outcome.status == 202 || (400..=599).contains(&outcome.status))
+        })
+    {
+        return Err(eyre!(
+            "transaction batch outcomes differ from the exact requested identities"
+        ));
+    }
+    let accepted = outcomes
+        .iter()
+        .filter(|outcome| outcome.status == 202)
+        .count();
+    if response
+        .headers()
+        .get("x-iroha-transactions-accepted")
+        .and_then(|value| value.to_str().ok())
+        != Some(accepted.to_string().as_str())
+        || accepted == outcomes.len()
+    {
+        return Err(eyre!(
+            "transaction batch outcome count contradicts its acknowledgement"
+        ));
+    }
+    Ok(outcomes)
+}
+
 /// `QueuePlan` admission may have crossed its durability boundary, but the client could not
 /// determine whether the submitted transaction was applied, rejected, or expired.
 ///
@@ -16437,6 +16869,11 @@ impl Client {
             .unwrap_or_else(|| Err(eyre!("capability probe produced no compatibility decision")))
     }
 
+    pub(crate) async fn ensure_query_compatibility(&self) -> Result<()> {
+        self.ensure_compatibility(CompatibilityRequirement::DataModel, false)
+            .await
+    }
+
     pub(crate) fn ensure_data_model_compatibility(&self) -> Result<()> {
         self.ensure_compatibility_blocking(CompatibilityRequirement::DataModel, false)
     }
@@ -16447,7 +16884,7 @@ impl Client {
 }
 
 impl AccountClient {
-    fn client(&self) -> &Client {
+    pub(crate) fn client(&self) -> &Client {
         &self.context
     }
 
@@ -16894,7 +17331,9 @@ impl AccountClient {
     /// # Errors
     /// Fails if sending the batch to the peer fails, if Torii returns a non-success response, if
     /// the accepted-count acknowledgement does not match the requested batch size, or if the submit
-    /// compatibility advert is missing or incompatible.
+    /// compatibility advert is missing or incompatible. After dispatch, partial results or a lost
+    /// response return [`TransactionBatchAdmissionError`] with original identities and any exact
+    /// per-entry outcomes. Batching does not provide atomic admission or execution.
     pub async fn submit_prepared_transaction_payload_batch(
         &self,
         payloads: &[PreparedTransactionPayload],
@@ -16921,28 +17360,58 @@ impl AccountClient {
                 join_torii_url(&client.torii_url, torii_uri::TRANSACTIONS_BATCH),
             )
             .header("Content-Type", APPLICATION_NORITO)
-            .header("Accept", client.wire_format_preference.accept_header())
+            .header("Accept", "application/json")
             .header("Prefer", "return=minimal")
-            .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
+            .max_response_bytes(1024 * 1024);
         request = request.headers(client.transaction_headers_without_content_type());
-        let response = request
-            .body(body)
-            .build()?
-            .send()
-            .await
-            .wrap_err("Failed to send transaction batch")?;
-        TransactionResponseHandler::handle(&response)?;
-        let accepted_count = response
+        let result = request.body(body).build()?.send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(cause) => {
+                return Err(TransactionBatchAdmissionError {
+                    hashes,
+                    outcomes: None,
+                    cause,
+                }
+                .into());
+            }
+        };
+        if response.status() == StatusCode::MULTI_STATUS {
+            let (outcomes, cause) = match transaction_batch_outcomes(&response, &hashes) {
+                Ok(outcomes) => (
+                    Some(outcomes),
+                    eyre!("one or more entries were not accepted"),
+                ),
+                Err(error) => (None, error),
+            };
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes,
+                cause,
+            }
+            .into());
+        }
+        if response.status() != StatusCode::ACCEPTED {
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes: None,
+                cause: TransactionResponseHandler::rejection_report(&response),
+            }
+            .into());
+        }
+        let expected_count = payloads.len().to_string();
+        if response
             .headers()
             .get("x-iroha-transactions-accepted")
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        if accepted_count != payloads.len() {
-            return Err(eyre!(
-                "transaction batch accepted {accepted_count} item(s), expected {}",
-                payloads.len()
-            ));
+            != Some(expected_count.as_str())
+        {
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes: None,
+                cause: eyre!("batch acknowledgement count mismatch"),
+            }
+            .into());
         }
         Ok(hashes)
     }
@@ -17153,7 +17622,11 @@ impl Client {
                 );
                 return Ok(None);
             }
-            Err(error @ (QueryError::Validation(_) | QueryError::ResponseShape(_))) => {
+            Err(
+                error @ (QueryError::Http { .. }
+                | QueryError::Validation(_)
+                | QueryError::ResponseShape(_)),
+            ) => {
                 return Err(tx_confirmation_final_report(eyre::Report::new(error)));
             }
             Err(QueryError::Other(error)) => return Err(error),
@@ -17261,7 +17734,34 @@ impl Client {
                 validate_pipeline_status_response(&payload, hash, scope.unwrap_or("global"))?;
                 Ok(Some(payload))
             }
-            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::NOT_FOUND => {
+                let content_type = exact_single_response_header(resp, "content-type")
+                    .wrap_err("invalid pipeline status absence Content-Type")?;
+                if !Self::is_exact_json_content_type(content_type) {
+                    return Err(eyre!("pipeline status absence requires application/json"));
+                }
+                if resp.body().len()
+                    > iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_MAX_BYTES
+                {
+                    return Err(eyre!("pipeline status absence exceeds its bound"));
+                }
+                let envelope: iroha_torii_shared::ErrorEnvelope =
+                    norito::json::from_slice(resp.body())
+                        .wrap_err("failed to decode pipeline status absence ErrorEnvelope")?;
+                if envelope.code() != iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE
+                    || !envelope
+                        .details
+                        .as_ref()
+                        .and_then(|details| details.pipeline_transaction_status_not_found.as_ref())
+                        .is_some_and(|absence| absence.matches(&hash, scope.unwrap_or("global")))
+                {
+                    return Err(eyre!(
+                        "pipeline status HTTP 404 code `{}` does not establish absence for the exact requested hash and scope",
+                        envelope.code()
+                    ));
+                }
+                Ok(None)
+            }
             StatusCode::TOO_MANY_REQUESTS => Err(transaction_wait::backpressure_response(resp)),
             status => Err(eyre!(
                 "Failed to get pipeline transaction status: {} {}",
@@ -17272,6 +17772,9 @@ impl Client {
     }
     /// GET `/v1/pipeline/transactions/status` — typed global pipeline status lookup by signed
     /// transaction hash. In V1, omitting `scope` means `global`.
+    ///
+    /// Returns `None` only for a canonical HTTP 404 absence bound to this exact hash
+    /// and requested scope. An incomplete global fanout returns an error, not absence.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
@@ -17285,6 +17788,9 @@ impl Client {
     /// GET `/v1/pipeline/transactions/status?scope=local` — typed pipeline status lookup
     /// using explicit peer-local routing.
     ///
+    /// Returns `None` only for a canonical HTTP 404 absence bound to this exact hash
+    /// and requested scope. An incomplete global fanout returns an error, not absence.
+    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
     /// or the typed JSON payload cannot be decoded.
@@ -17297,6 +17803,9 @@ impl Client {
     /// GET `/v1/pipeline/transactions/status?scope=global` — typed pipeline status lookup
     /// using explicit global/fanout routing.
     ///
+    /// Returns `None` only for a canonical HTTP 404 absence bound to this exact hash
+    /// and requested scope. An incomplete global fanout returns an error, not absence.
+    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
     /// or the typed JSON payload cannot be decoded.
@@ -17307,11 +17816,31 @@ impl Client {
         self.get_transaction_status_response_with_scope(hash, Some("global"))
     }
 
+    /// Fetch exact typed peer-local transaction status with the asynchronous transport.
+    ///
+    /// The bounded canonical decoder validates the signed hash and explicit local
+    /// scope. This lookup uses only this client's configured peer; callers must
+    /// require state-resolved `Applied` when proving that peer has applied a hash.
+    /// It never submits a transaction or falls back to global status.
+    ///
+    /// # Errors
+    /// Returns transport, content-type, bounded-decoding, hash, or scope errors.
+    pub async fn fetch_transaction_status_response_local(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        self.fetch_transaction_status_response_with_scope(hash, Some("local"))
+            .await
+    }
+
     /// Fetch exact typed global transaction status with the asynchronous transport.
     ///
     /// The canonical bounded decoder validates the requested signed hash and global
     /// scope. Callers must still distinguish state-resolved `Applied` from cached
     /// or nonterminal observations; this lookup does not submit or retry a transaction.
+    ///
+    /// Returns `None` only for a canonical HTTP 404 absence bound to this exact hash
+    /// and requested scope. An incomplete global fanout returns an error, not absence.
     ///
     /// # Errors
     /// Returns transport, content-type, bounded-decoding, hash, or scope errors.
@@ -18465,8 +18994,9 @@ impl Client {
     ///
     /// This variant is intended for aliases in public dataspaces. Restricted
     /// dataspaces reject unsigned requests without revealing whether the alias exists.
-    /// A `404` is returned as `Ok(None)`; successful responses are strictly
-    /// pinned to the requested alias.
+    /// Only a canonical typed `404` matching the exact requested alias
+    /// is returned as `Ok(None)`; other errors remain errors. Successful responses
+    /// are also pinned to that exact selector.
     ///
     /// # Errors
     /// Returns an error if the typed alias is invalid, request construction,
@@ -18493,8 +19023,9 @@ impl Client {
     ///
     /// The request carries the configured account, signature, timestamp, and nonce headers.
     /// Use this variant when resolving aliases in restricted dataspaces.
-    /// A `404` is returned as `Ok(None)`; successful responses are strictly
-    /// pinned to the requested alias.
+    /// Only a canonical typed `404` matching the exact requested alias
+    /// is returned as `Ok(None)`; other errors remain errors. Successful responses
+    /// are also pinned to that exact selector.
     ///
     /// # Errors
     /// Returns an error if the typed alias is invalid, request signing,
@@ -18569,8 +19100,9 @@ impl Client {
     ///
     /// Results contain only entries visible through public dataspace policy. Restricted entries
     /// are filtered before pagination and totals are calculated.
-    /// A `404` is returned as `Ok(None)`; successful responses are strictly
-    /// pinned to the requested account and filters.
+    /// Only a canonical typed `404` matching the exact requested account and filters
+    /// is returned as `Ok(None)`; other errors remain errors. Successful responses
+    /// are also pinned to that exact selector.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, or HTTP
@@ -18594,8 +19126,9 @@ impl Client {
     ///
     /// The request carries the configured account, signature, timestamp, and nonce headers so
     /// Torii can include restricted aliases that the configured account may resolve.
-    /// A `404` is returned as `Ok(None)`; successful responses are strictly
-    /// pinned to the requested account and filters.
+    /// Only a canonical typed `404` matching the exact requested account and filters
+    /// is returned as `Ok(None)`; other errors remain errors. Successful responses
+    /// are also pinned to that exact selector.
     ///
     /// # Errors
     /// Returns an error if request signing, construction, JSON serialization,
@@ -23191,16 +23724,8 @@ fn rejection_reason_from_transaction_details(
     signed_hash: HashOf<SignedTransaction>,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<TransactionRejectionReason> {
+    crate::query::validate_transaction_details_bindings(details, entrypoint_hash)?;
     let transaction = &details.transaction;
-    if details.hash != entrypoint_hash.to_string()
-        || transaction.entrypoint_hash() != &entrypoint_hash
-        || transaction.entrypoint().hash() != entrypoint_hash
-        || transaction.result_hash() != &transaction.result().hash()
-    {
-        return Err(eyre!(
-            "transaction-details response does not match the requested entrypoint/result hash"
-        ));
-    }
     let TransactionEntrypoint::External(committed) = transaction.entrypoint() else {
         return Err(eyre!(
             "transaction-details response is not for an external signed transaction"
@@ -24208,7 +24733,6 @@ mod tx_confirmation_stream_tests {
                 height,
                 prev_block_hash: None,
                 merkle_root: None,
-                result_merkle_root: None,
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
@@ -25515,6 +26039,53 @@ mod tests {
         assert_eq!(body_b, b"transport-b");
         assert_eq!(sends_a.load(Ordering::Relaxed), 1);
         assert_eq!(sends_b.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn transaction_batch_outcomes_require_exact_order_status_and_count() {
+        use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
+        let hashes =
+            [0x51, 0x52].map(|byte| HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])));
+        let outcomes = vec![
+            TransactionBatchEntryOutcome {
+                signed_transaction_hash: hashes[0],
+                status: 202,
+                reject_code: None,
+            },
+            TransactionBatchEntryOutcome {
+                signed_transaction_hash: hashes[1],
+                status: 503,
+                reject_code: Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()),
+            },
+        ];
+        let response = |items: &Vec<TransactionBatchEntryOutcome>, count: &str| {
+            HttpResponse::builder()
+                .status(StatusCode::MULTI_STATUS)
+                .header("x-iroha-transactions-accepted", count)
+                .body(norito::json::to_vec(items).unwrap())
+                .unwrap()
+        };
+        assert_eq!(
+            transaction_batch_outcomes(&response(&outcomes, "1"), &hashes).unwrap(),
+            outcomes
+        );
+        assert!(transaction_batch_outcomes(&response(&outcomes, "2"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed.swap(0, 1);
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed[1].status = 200;
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed.pop();
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let error = TransactionBatchAdmissionError {
+            hashes: hashes.to_vec(),
+            outcomes: Some(outcomes.clone()),
+            cause: eyre!("partial"),
+        };
+        assert_eq!(error.hashes(), &hashes);
+        assert_eq!(error.outcomes(), Some(outcomes.as_slice()));
     }
 
     #[tokio::test]
@@ -27013,30 +27584,121 @@ mod tests {
     }
     #[test]
     fn typed_account_alias_reads_map_not_found_to_none() {
-        let alias = "merchant@banka.paynet"
-            .parse::<AccountAliasName>()
-            .expect("canonical alias");
+        use iroha_torii_shared::{ErrorDetails, ErrorEnvelope, aliases::*};
+        let alias = "merchant@banka.paynet".parse::<AccountAliasName>().unwrap();
+        let account = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account").unwrap();
+        let request =
+            AccountAliasesByAccountRequestV1::try_new(&account, Some("paynet"), Some("banka"))
+                .unwrap();
+        let alias_envelope = ErrorEnvelope::new(ACCOUNT_ALIAS_NOT_FOUND_CODE, "alias absent")
+            .with_details(ErrorDetails {
+                account_alias_not_found: Some(AccountAliasNotFoundV1 {
+                    alias: alias.to_string(),
+                }),
+                ..Default::default()
+            });
+        let account_envelope =
+            ErrorEnvelope::new(ACCOUNT_ALIASES_BY_ACCOUNT_NOT_FOUND_CODE, "account absent")
+                .with_details(ErrorDetails {
+                    account_aliases_by_account_not_found: Some(AccountAliasesByAccountNotFoundV1 {
+                        account_id: account.to_string(),
+                        dataspace: Some("paynet".into()),
+                        domain: Some("banka".into()),
+                    }),
+                    ..Default::default()
+                });
+        let response = |envelope: &ErrorEnvelope| {
+            json_response(
+                StatusCode::NOT_FOUND,
+                &norito::json::to_json(envelope).unwrap(),
+            )
+        };
         assert!(
-            decode_account_alias_resolution(&empty_response(StatusCode::NOT_FOUND), &alias)
-                .expect("404 is a typed miss")
+            decode_account_alias_resolution(&response(&alias_envelope), &alias)
+                .unwrap()
                 .is_none()
         );
+        assert!(
+            decode_account_aliases_by_account(&response(&account_envelope), &request)
+                .unwrap()
+                .is_none()
+        );
+        for generic in [
+            empty_response(StatusCode::NOT_FOUND),
+            response(&ErrorEnvelope::new("not_found", "route missing")),
+            json_response(StatusCode::NOT_FOUND, r#"{"message":"not found"}"#),
+        ] {
+            assert!(decode_account_alias_resolution(&generic, &alias).is_err());
+            assert!(decode_account_aliases_by_account(&generic, &request).is_err());
+        }
+        let mut forged = alias_envelope.clone();
+        forged
+            .details
+            .as_mut()
+            .unwrap()
+            .account_alias_not_found
+            .as_mut()
+            .unwrap()
+            .alias = "other@banka.paynet".into();
+        assert!(decode_account_alias_resolution(&response(&forged), &alias).is_err());
+        for field in 0..3 {
+            let mut forged = account_envelope.clone();
+            let detail = forged
+                .details
+                .as_mut()
+                .unwrap()
+                .account_aliases_by_account_not_found
+                .as_mut()
+                .unwrap();
+            match field {
+                0 => detail.account_id = "different-account".into(),
+                1 => detail.dataspace = None,
+                _ => detail.domain = None,
+            }
+            assert!(decode_account_aliases_by_account(&response(&forged), &request).is_err());
+        }
+        let mut duplicate_media = response(&alias_envelope);
+        duplicate_media
+            .headers_mut()
+            .append("Content-Type", "application/json".parse().unwrap());
+        assert!(decode_account_alias_resolution(&duplicate_media, &alias).is_err());
+        let oversized = json_response(
+            StatusCode::NOT_FOUND,
+            &"x".repeat(ACCOUNT_ALIAS_ABSENCE_MAX_BYTES + 1),
+        );
+        assert!(decode_account_alias_resolution(&oversized, &alias).is_err());
+        // The selected public methods use the same exact decoder for signed/unsigned reads.
+        let client = client_with_static_canonical_auth_headers();
+        let ((), snapshot) = capture_request(response(&alias_envelope), |transport| {
+            let client = client.clone().with_test_http_transport(transport.clone());
+            assert!(
+                client
+                    .resolve_account_alias_authenticated(&alias)
+                    .unwrap()
+                    .is_none()
+            );
+        });
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve");
+        let ((), snapshot) = capture_request(response(&account_envelope), |transport| {
+            let client = client.clone().with_test_http_transport(transport.clone());
+            assert!(
+                client
+                    .list_account_aliases_authenticated(&request)
+                    .unwrap()
+                    .is_none()
+            );
+        });
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/by-account");
+        // Index lookup is outside this exact alias/account contract.
         assert!(
             decode_account_alias_index_resolution(
                 &empty_response(StatusCode::NOT_FOUND),
-                AliasIndex(9),
+                AliasIndex(9)
             )
-            .expect("404 is a typed index miss")
+            .unwrap()
             .is_none()
-        );
-        let account = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
-            .expect("canonical fixture account");
-        let request = AccountAliasesByAccountRequestV1::try_new(&account, None, None)
-            .expect("unfiltered request");
-        assert!(
-            decode_account_aliases_by_account(&empty_response(StatusCode::NOT_FOUND), &request)
-                .expect("404 is a typed list miss")
-                .is_none()
         );
     }
     #[test]
@@ -30378,7 +31040,6 @@ mod tests {
             NonZeroU64::new(12).expect("nonzero height"),
             None,
             None,
-            None,
             1_700_000_000_000,
             0,
         );
@@ -30436,7 +31097,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_diagnostics()
+                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
             },
         )
         .0
@@ -30453,7 +31114,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_cross_lane_transfer_proofs()
+                crate::blocking::Client::from_client(client)?.get_cross_lane_transfer_proofs()
             },
         )
         .0
@@ -30488,7 +31149,6 @@ mod tests {
         };
         let block_header = BlockHeader::new(
             NonZeroU64::new(block_height).expect("nonzero height"),
-            None,
             None,
             None,
             timestamp_ms,
@@ -30599,7 +31259,7 @@ mod tests {
         assert!(decoded.proof_backend.is_none());
         assert!(decoded.proof_call_hash.is_none());
         assert!(decoded.proof_envelope_hash.is_none());
-        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, 0, 0);
         let warning = PipelineWarning {
             header,
             kind: "test".to_string(),
@@ -30798,24 +31458,31 @@ mod tests {
         let mut builder = DataModelBlockBuilder::new(proposal.header());
         builder.set_da_proof_policies(proposal.da_proof_policies().cloned());
         builder.push_transaction(tx);
-        builder.push_result(Ok(
-            iroha_data_model::transaction::DataTriggerSequence::default(),
-        ));
-        let block = builder
+        let mut block = builder
             .try_build_with_signature(0, &private_key)
             .expect("sign canonical result-bearing block-stream fixture");
+        let proposal_header = block.header();
+        let proposal_hash = block.hash();
+        attach_client_fixture_outputs(
+            &mut block,
+            vec![client_fixture_network_output(
+                0,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()).into(),
+            )],
+            1,
+        );
         block
-            .validate_entrypoint_merkle_cache()
-            .expect("block-stream entrypoint Merkle cache must be canonical");
+            .validate_proposal_commitments()
+            .expect("canonical proposal commitments");
         block
-            .validate_result_merkle_cache()
-            .expect("block-stream result Merkle cache must be canonical");
+            .validate_output_merkle_cache()
+            .expect("canonical typed output cache");
         assert_eq!(block.committed_fragment_count(), Some(1));
+        assert_eq!(block.header(), proposal_header);
+        assert_eq!(block.hash(), proposal_hash);
         assert_eq!(
-            block.header().result_merkle_root(),
-            block
-                .result_merkle_commitment()
-                .map(|commitment| *commitment.root())
+            block.output_merkle_commitment().unwrap().leaf_count().get(),
+            1
         );
         let mut final_signatures = block.signatures();
         let final_signature = final_signatures
@@ -34833,7 +35500,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_diagnostics()
+                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
             },
         );
         assert!(result.is_err(), "malformed json should be rejected");
@@ -34858,7 +35525,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_diagnostics()
+                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
             },
         );
         assert!(result.is_err(), "unknown nested fields must be rejected");
@@ -34893,7 +35560,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_diagnostics()
+                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
             },
         );
         let decoded = decoded.expect("decode declared current diagnostics JSON");
@@ -34912,7 +35579,7 @@ mod tests {
                     let client = client
                         .clone()
                         .with_test_http_transport(mock_transport.clone());
-                    client.get_sumeragi_diagnostics()
+                    crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
                 },
             )
             .expect_err("undeclared or noncanonical diagnostics media must fail closed");

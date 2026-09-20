@@ -1112,7 +1112,7 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1169,7 +1169,7 @@ mod tests {
                 .contains(&opaque_id),
             "account should advertise claimed opaque id"
         );
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         RevokeIdentifier {
@@ -1235,7 +1235,7 @@ mod tests {
             IdentifierNormalization::EmailAddress,
             program_id.clone(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1287,7 +1287,7 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1338,7 +1338,7 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1398,7 +1398,7 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1528,7 +1528,7 @@ mod tests {
             IdentifierNormalization::PhoneE164,
             program_id.clone(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1583,7 +1583,7 @@ mod tests {
             IdentifierNormalization::EmailAddress,
             program_id.clone(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 11, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 11, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1638,7 +1638,7 @@ mod tests {
             program_id.clone(),
         );
         let output_seed = b"shared-identifier-value";
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
@@ -1671,7 +1671,7 @@ mod tests {
         block
             .commit_world_overlay_for_testing()
             .expect("commit first block");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 101, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 101, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let replacement_receipt = claim_receipt(

@@ -2590,6 +2590,7 @@ impl HostExecutionArtifacts {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub(crate) fn queued_instructions(&self) -> Vec<InstructionBox> {
         self.queued
             .iter()
@@ -2745,6 +2746,9 @@ impl HostExecutionArtifacts {
             &self.durable_state_overlay,
             &self.durable_state_authorizations,
         )?;
+        // The actual consumed group must fit before its first call-hash,
+        // confidential-work, instruction, AXT or durable-state effect is applied.
+        tx.admit_host_execution_effects(self.queued.iter().map(|queued| &queued.instruction))?;
         Self::seed_queued_call_hash_if_missing(tx, &self.queued)?;
         if self.confidential_gas_delta > 0 {
             tx.record_confidential_gas_delta(self.confidential_gas_delta);
@@ -7549,7 +7553,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.prepared_argument_record_pointer = None;
         self.fastpq_batch_entries = None;
         self.nested_contract_call_depth += 1;
-        let run_result = child_vm.run_with_host(self);
+        // The parent instruction keeps its own reservation while every nested
+        // VM consumes the same source-owned completed-cycle allowance.
+        let run_result = child_vm.run_with_host_and_parent_cycle_budget(self, vm);
         self.nested_contract_call_depth -= 1;
         let child_gas_consumed = child_gas_limit.saturating_sub(child_vm.remaining_gas());
         let actual_gas = |base: u64| {
@@ -13299,7 +13305,7 @@ seiyaku ReadOnlyBinding {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let error = host
@@ -13363,7 +13369,7 @@ seiyaku ReadOnlyBinding {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let error = host
@@ -17408,7 +17414,7 @@ seiyaku StaleRuntimeBinding {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
         if tx.world.account(&account_id).is_err() {
             Register::account(Account::new(account_id.clone()))
@@ -17446,7 +17452,7 @@ seiyaku StaleRuntimeBinding {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next permission grant height");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
         Grant::account_permission(
             iroha_executor_data_model::permission::asset::CanTransferAsset { asset },
@@ -17618,7 +17624,7 @@ seiyaku StaleRuntimeBinding {
         )
         .with_executable(Executable::ContractCall(invocation))
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut stx = block.transaction();
         let result = crate::executor::Executor::Initial
             .execute_transaction(&mut stx, authority, tx, ivm_cache);
@@ -17964,6 +17970,32 @@ seiyaku AliasPayout {{
         BTreeMap<StatePath, Option<Vec<u8>>>,
         u64,
     ) {
+        dispatch_call_contract_syscall_with_cycle_budget(
+            state,
+            outer_authority,
+            caller_contract,
+            callee_contract,
+            entrypoint,
+            payload,
+            gas_limit,
+            None,
+        )
+    }
+    fn dispatch_call_contract_syscall_with_cycle_budget(
+        state: &State,
+        outer_authority: &AccountId,
+        caller_contract: &ContractAddress,
+        callee_contract: &ContractAddress,
+        entrypoint: &str,
+        payload: Json,
+        gas_limit: u64,
+        cycle_budget: Option<&ivm::VmCycleBudget>,
+    ) -> (
+        Result<(), ivm::VMError>,
+        IVM,
+        BTreeMap<StatePath, Option<Vec<u8>>>,
+        u64,
+    ) {
         let view = state.view();
         let mut host = CoreHostImpl::new(outer_authority.clone());
         host.set_query_state(&view);
@@ -18020,7 +18052,10 @@ seiyaku AliasPayout {{
         vm.set_register(10, target_ptr);
         vm.set_register(11, entrypoint_ptr);
         vm.set_register(12, payload_ptr);
-        let result = vm.run_with_host(&mut host);
+        let result = match cycle_budget {
+            Some(budget) => vm.run_with_host_and_cycle_budget(&mut host, budget),
+            None => vm.run_with_host(&mut host),
+        };
         let durable_state_overlay = host.drain_durable_state_overlay();
         (result, vm, durable_state_overlay, target_ptr)
     }
@@ -20376,7 +20411,7 @@ seiyaku OpaqueInstructionSubmission {
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
         let alias_literal = "merchant@paynet";
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_test_call_hash(&mut tx, 0xA1);
@@ -20420,7 +20455,7 @@ seiyaku OpaqueInstructionSubmission {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
         seed_test_call_hash(&mut tx, 0xA2);
         EnsureTestAccountAliasBinding::bind(replacement_account_id.clone(), alias, None)
@@ -20454,7 +20489,7 @@ seiyaku OpaqueInstructionSubmission {
         let state = State::new_for_testing(world, kura, query);
         let (_paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_test_call_hash(&mut tx, 0xA3);
@@ -20489,7 +20524,7 @@ seiyaku OpaqueInstructionSubmission {
         let (paynet, catalog) = retail_dataspace_catalog();
         state.nexus.write().dataspace_catalog = catalog;
         let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_test_call_hash(&mut tx, 0xA4);
@@ -20535,7 +20570,7 @@ seiyaku OpaqueInstructionSubmission {
         state.nexus.write().dataspace_catalog = catalog;
         let alias_literal = "merchant@paynet";
         let alias = AccountAlias::domainless("merchant".parse().expect("alias label"), paynet);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_test_call_hash(&mut tx, 0xB1);
@@ -20614,7 +20649,7 @@ seiyaku OpaqueInstructionSubmission {
             )),
             paynet,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
@@ -20676,7 +20711,7 @@ seiyaku OpaqueInstructionSubmission {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
         EnsureTestAccountAliasBinding::bind(replacement_account_id.clone(), alias, None)
             .execute(&authority, &mut tx)
@@ -20746,7 +20781,7 @@ seiyaku OpaqueInstructionSubmission {
             )),
             paynet,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
@@ -20853,7 +20888,7 @@ seiyaku OpaqueInstructionSubmission {
             )),
             paynet,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.nexus.dataspace_catalog = state.nexus.read().dataspace_catalog.clone();
@@ -21499,6 +21534,7 @@ seiyaku Callee {
         );
     }
     include!("host/nested_contract_state_and_rollback_tests.rs");
+    include!("host/shared_vm_cycle_budget_tests.rs");
     #[test]
     fn dispatched_call_contract_spends_reserved_gas_and_returns_output() {
         let authority: AccountId = fixture_account("alice");
@@ -21901,10 +21937,10 @@ seiyaku HeldCallee {
             1,
         );
         state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
             .commit_empty_block_for_testing()
             .expect("commit the execution-height bootstrap block");
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         {
             let mut tx = block.transaction();
             let binding = tx
@@ -22166,7 +22202,7 @@ seiyaku EffectfulView {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height must fit in u64 and be non-zero");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
         tx.world
             .contract_manifests
@@ -22837,6 +22873,38 @@ seiyaku Callee {
         );
         assert_eq!(ivm::argument_record_decode_count(), 0);
     }
+    // Low-level artifact authorization tests bind a genuine signed Halt root.
+    // They exercise artifact authority snapshots, not correspondence to that
+    // program's VM output, full transaction admission, or budget qualification.
+    fn bind_artifact_test_signed_root(tx: &mut StateTransaction<'_, '_>, authority: &AccountId) {
+        let keypair = if authority == &*ALICE_ID {
+            &*ALICE_KEYPAIR
+        } else if authority == &*BOB_ID {
+            &*BOB_KEYPAIR
+        } else {
+            panic!("artifact fixture requires a known actual signer");
+        };
+        let mut program = ivm::ProgramMetadata::default().encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let source = TransactionBuilder::new(
+            tx.network_id,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                core::num::NonZeroU64::new(1_000_000),
+            ),
+        )
+        .with_executable(Executable::Ivm(
+            iroha_data_model::transaction::executable::IvmBytecode::from_compiled(program),
+        ))
+        .sign(keypair.private_key());
+        assert_eq!(tx.current_dataspace_id, tx.world.current_dataspace_id);
+        tx.current_tx_hash = Some(source.hash());
+        tx.tx_call_hash = Some(Hash::from(source.hash_as_entrypoint()));
+        tx.begin_execution_effect_budget(&source)
+            .expect("bind exact signed artifact test root");
+    }
+
     #[test]
     fn call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts() {
         let authority: AccountId = fixture_account("alice");
@@ -23005,11 +23073,14 @@ seiyaku Callee {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut stx = block.transaction();
+        bind_artifact_test_signed_root(&mut stx, &authority);
         artifacts
             .apply_to_transaction(&mut stx, &authority)
             .expect("root and nested transfers should apply");
+        stx.finish_execution_effect_budget()
+            .expect("close artifact test root");
         let authority_balance = stx
             .world
             .asset(&source_asset_id)
@@ -23323,7 +23394,7 @@ seiyaku Callee {
         case: &AliasContractCaseV1,
         fixture: &AliasContractCaseState,
     ) -> Option<AccountAlias> {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = fixture.state.block(header);
         let mut tx = block.transaction();
         if let Some(seed) = case.setup_seed {
@@ -23542,7 +23613,7 @@ seiyaku Callee {
             .expect("next block height");
         let mut block = fixture
             .state
-            .block(BlockHeader::new(next_height, None, None, None, 0, 0));
+            .block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut tx = block.transaction();
         if let Some(seed) = case.rebind_seed {
             seed_test_call_hash(&mut tx, seed);
@@ -23777,12 +23848,12 @@ seiyaku Callee {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         state
             .block(genesis_header)
             .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let artifacts = HostExecutionArtifacts {
@@ -23806,9 +23877,12 @@ seiyaku Callee {
         assert_eq!(grouped.len(), 1);
         assert_eq!(grouped.get(&nested_authority).map(Vec::len), Some(1));
         assert!(!grouped.contains_key(&outer_authority));
+        bind_artifact_test_signed_root(&mut stx, &outer_authority);
         artifacts
             .apply_to_transaction(&mut stx, &outer_authority)
             .expect("queued instruction should execute under queued authority");
+        stx.finish_execution_effect_budget()
+            .expect("close artifact test root");
         let source_balance = stx
             .world
             .asset(&source_asset_id)
@@ -23862,12 +23936,16 @@ seiyaku Callee {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut transaction = block.transaction();
 
+        bind_artifact_test_signed_root(&mut transaction, &authority);
         artifacts
             .apply_to_transaction(&mut transaction, &authority)
             .expect_err("restricted initial executor must reject the queued proof");
+        transaction
+            .finish_execution_effect_budget()
+            .expect("close artifact test root");
 
         assert_eq!(transaction.zk_confidential_ops_in_tx, 0);
         assert_eq!(transaction.zk_verify_calls_in_tx, 0);
@@ -23890,6 +23968,88 @@ seiyaku Callee {
             "mutable-host gas must be retained before queued execution can reject"
         );
     }
+    #[test]
+    fn actual_host_artifacts_require_signed_root_before_first_effect() {
+        let authority = fixture_account("alice");
+        for bind_root in [false, true] {
+            let state = contract_test_state(&authority);
+            let mut host = CoreHost::new(authority.clone());
+            host.set_generic_execution();
+            let mut program = ivm::ProgramMetadata::default().encode();
+            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+            let mut vm = IVM::new(1_000_000);
+            vm.load_program(&program)
+                .expect("load valid generic Halt program");
+            let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
+            let key: Name = "artifact_root_required".parse().unwrap();
+            let key_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&key));
+            let value_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&Json::new(true)));
+            vm.set_register(10, account_ptr);
+            vm.set_register(11, key_ptr);
+            vm.set_register(12, value_ptr);
+            host.syscall(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL, &mut vm)
+                .expect("actual generic syscall produces the queued artifact");
+            let artifacts = host
+                .into_execution_artifacts(None)
+                .expect("export actual artifact");
+            assert_eq!(artifacts.queued_instructions().len(), 1);
+            let next_height =
+                core::num::NonZeroU64::new(u64::try_from(state.view().height() + 1).unwrap())
+                    .unwrap();
+            let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
+            let fragments = block.committed_fragment_count();
+            let mut tx = block.transaction();
+            if bind_root {
+                bind_artifact_test_signed_root(&mut tx, &authority);
+            }
+            let result = artifacts.apply_to_transaction(&mut tx, &authority);
+            if bind_root {
+                result.expect("otherwise valid real artifact applies with its fixture root");
+                tx.finish_execution_effect_budget()
+                    .expect("close actual artifact fixture root");
+                assert_eq!(
+                    tx.world.account(&authority).unwrap().metadata().get(&key),
+                    Some(&Json::new(true))
+                );
+            } else {
+                let error =
+                    result.expect_err("missing signed-root owner must refuse before any effect");
+                assert!(
+                    matches!(error, ValidationFail::InternalError(ref reason)
+                    if reason == "instruction effects have no exact signed-root budget"),
+                    "{error:?}"
+                );
+                assert!(
+                    tx.world
+                        .account(&authority)
+                        .unwrap()
+                        .metadata()
+                        .get(&key)
+                        .is_none()
+                );
+                assert!(
+                    !tx.execution_effect_limit_exceeded(),
+                    "missing authority is not a consensus capacity limit"
+                );
+                assert!(
+                    tx.finish_execution_effect_budget().is_err(),
+                    "owner refusal remains sticky"
+                );
+            }
+            drop(tx);
+            assert_eq!(block.committed_fragment_count(), fragments);
+            assert!(
+                block
+                    .world
+                    .account(&authority)
+                    .unwrap()
+                    .metadata()
+                    .get(&key)
+                    .is_none()
+            );
+        }
+    }
+
     #[test]
     fn host_execution_artifacts_reject_foreign_durable_path_before_any_write() {
         let authority = fixture_account("alice");
@@ -23935,7 +24095,7 @@ seiyaku DurableOwner {
             .ok()
             .and_then(core::num::NonZeroU64::new)
             .expect("next block height");
-        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
         let mut transaction = block.transaction();
         let error = artifacts
             .apply_to_transaction(&mut transaction, &authority)
@@ -23968,7 +24128,7 @@ seiyaku DurableOwner {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::new(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let first_hash = {
             let mut transaction = block.transaction();
@@ -25080,7 +25240,7 @@ seiyaku DurableOwner {
         );
         let kura = Kura::blank_kura_for_testing();
         let authenticated_block = iroha_data_model::block::builder::BlockBuilder::new(
-            BlockHeader::new(nonzero!(1_u64), None, None, None, 1_700_000_000_000, 0),
+            BlockHeader::new(nonzero!(1_u64), None, None, 1_700_000_000_000, 0),
         )
         .build_with_signature(0, ALICE_KEYPAIR.private_key());
         kura.store_block(Arc::new(authenticated_block.clone()))
@@ -26903,7 +27063,6 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let header = iroha_data_model::block::BlockHeader::new(
             nonzero_ext::nonzero!(1_u64),
-            None,
             None,
             None,
             0,

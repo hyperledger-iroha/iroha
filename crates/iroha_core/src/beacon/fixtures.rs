@@ -111,9 +111,53 @@ pub fn signed_persisted_pulse_fixture_for_world(
     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     FinalizedGlobalThresholdBeaconPulseV1,
 ) {
-    assert!(height > 4, "fixture pulse follows DKG finalization");
+    let anchor = GlobalThresholdBeaconChainAnchorV1 {
+        height: height
+            .checked_sub(1)
+            .expect("positive fixture pulse height"),
+        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x88; 32])),
+    };
+    let (key_record, mut pulses) = signed_pulses_fixture_with_binding(
+        network_id,
+        adaptive_dkg_session_fixture().roster_hash,
+        &[anchor],
+    );
+    (
+        key_record,
+        pulses.pop().expect("one requested fixture pulse"),
+    )
+}
+
+/// Produce real threshold signatures for exact native parent anchors and roster.
+#[cfg(test)]
+pub(crate) fn signed_pulses_fixture_for_roster_and_anchors(
+    network_id: NetworkId,
+    roster: &[PeerId],
+    anchors: &[GlobalThresholdBeaconChainAnchorV1],
+) -> (
+    FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    Vec<FinalizedGlobalThresholdBeaconPulseV1>,
+) {
+    assert_eq!(roster.len(), 4, "the adaptive fixture has four DKG seats");
+    signed_pulses_fixture_with_binding(
+        network_id,
+        global_threshold_beacon_roster_hash_v1(roster),
+        anchors,
+    )
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
+fn signed_pulses_fixture_with_binding(
+    network_id: NetworkId,
+    roster_hash: [u8; 32],
+    anchors: &[GlobalThresholdBeaconChainAnchorV1],
+) -> (
+    FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    Vec<FinalizedGlobalThresholdBeaconPulseV1>,
+) {
     let mut dkg_session = adaptive_dkg_session_fixture();
     dkg_session.network_id = network_id;
+    dkg_session.roster_hash = roster_hash;
     dkg_session.sharing_end_height = 2;
     dkg_session.complaints_end_height = 3;
     dkg_session.responses_end_height = 4;
@@ -123,44 +167,48 @@ pub fn signed_persisted_pulse_fixture_for_world(
     ])
     .into();
     let fixture = adaptive_beacon_fixture_for_session(dkg_session);
-    let anchor = GlobalThresholdBeaconChainAnchorV1 {
-        height: height - 1,
-        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x88; 32])),
-    };
-    let mut aggregator =
-        GlobalThresholdBeaconPulseAggregatorV1::new(fixture.session.clone(), height, anchor)
-            .expect("open exact world-test pulse reducer");
-    let payload = aggregator.payload().to_vec();
-    for recipient_index in 1_u16..=fixture.session.transcript.session().threshold() {
-        let private_contributions = fixture
-            .dealer_secrets
-            .iter()
-            .zip(&fixture.dealer_commitments)
-            .map(|(secret, dealer)| {
-                secret
-                    .private_share(&fixture.parameters, dealer, recipient_index)
-                    .expect("verified private DKG contribution")
-            })
-            .collect::<Vec<_>>();
-        let signing_share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
-            &fixture.session.transcript,
-            &private_contributions,
-        )
-        .expect("aggregate exact qualified private contributions");
-        aggregator
-            .accept_partial(global_threshold_beacon_partial_signature_dto_v1(
-                &signing_share
-                    .sign_payload(&fixture.session.transcript, &payload)
-                    .expect("sign exact world-test pulse payload"),
-            ))
-            .expect("accept proof-verified world-test partial");
+    let mut pulses = Vec::new();
+    for anchor in anchors {
+        let height = anchor
+            .height
+            .checked_add(1)
+            .expect("fixture pulse height fits");
+        assert!(height > 4, "fixture pulse follows DKG finalization");
+        let mut aggregator =
+            GlobalThresholdBeaconPulseAggregatorV1::new(fixture.session.clone(), height, *anchor)
+                .expect("open exact world-test pulse reducer");
+        let payload = aggregator.payload().to_vec();
+        for recipient_index in 1_u16..=fixture.session.transcript.session().threshold() {
+            let private_contributions = fixture
+                .dealer_secrets
+                .iter()
+                .zip(&fixture.dealer_commitments)
+                .map(|(secret, dealer)| {
+                    secret
+                        .private_share(&fixture.parameters, dealer, recipient_index)
+                        .expect("verified private DKG contribution")
+                })
+                .collect::<Vec<_>>();
+            let signing_share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
+                &fixture.session.transcript,
+                &private_contributions,
+            )
+            .expect("aggregate exact qualified private contributions");
+            aggregator
+                .accept_partial(global_threshold_beacon_partial_signature_dto_v1(
+                    &signing_share
+                        .sign_payload(&fixture.session.transcript, &payload)
+                        .expect("sign exact world-test pulse payload"),
+                ))
+                .expect("accept proof-verified world-test partial");
+        }
+        pulses.push(aggregator.finalize().expect("finalize world-test pulse"));
     }
-    let pulse = aggregator.finalize().expect("finalize world-test pulse");
     let mut key_record =
         FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone())
             .expect("construct world-test key lifecycle");
     key_record
         .activate(fixture.session.record().adaptive_dkg.finalized_at_height)
         .expect("activate world-test key at DKG finalization");
-    (key_record, pulse)
+    (key_record, pulses)
 }

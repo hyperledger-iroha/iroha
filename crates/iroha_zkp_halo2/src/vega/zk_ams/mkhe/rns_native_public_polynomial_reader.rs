@@ -29,6 +29,10 @@
 
 use std::sync::OnceLock;
 
+use super::rns_native_proof_hash::{
+    RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
+    RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+};
 use super::{
     direct_object_transport::{
         ZK_AMS_MKHE_DIRECT_OBJECT_POINTER_BYTES_V1, ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1,
@@ -101,6 +105,7 @@ const ENCODING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-public-polyn
 const ARTIFACT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.artifact";
 const MANIFEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.manifest";
 const READ_SET_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.read-set";
+const QPCS_SCHEDULE_POINT_BYTES_V1: usize = 40 * (2 + 8 + 5 * (2 + 8));
 const QPCS_SCHEDULE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-public-polynomial.qpcs-schedule";
 const ENCODING_LANGUAGE_V1: &[u8] = b"coefficient-domain;ascending-c0-through-c131071;u32-count-big-endian-then-count-u64-big-endian;count=131072;strict-residue-less-than-position-modulus;no-reduction;no-ntt-order;one-complete-blake3-transaction-before-evaluation-escape";
@@ -122,6 +127,8 @@ pub(super) const RNS_NATIVE_PUBLIC_POLYNOMIAL_PRODUCTION_READY_V1: bool = false;
 const _: () = {
     assert!(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 == 40);
     assert!(LEGACY_RNS_LIMBS_V1 == 38);
+    assert!(QPCS_SCHEDULE_POINT_BYTES_V1 == 2_400);
+    assert!(core::mem::size_of::<QpcsScheduleIdentityV1>() == 224);
     assert!(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 == 131_072);
     assert!(RECORDS_V1 == 43);
     assert!(REPETITIONS_V1 == 5);
@@ -521,10 +528,10 @@ fn manifest_digest_v1(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QpcsScheduleIdentityV1 {
     parameter_digest: [u8; DIGEST_BYTES_V1],
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
-    pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
-    relation_seed: [u8; DIGEST_BYTES_V1],
-    binding_digest: [u8; DIGEST_BYTES_V1],
+    q_mask_s_root: ProofDigestV1,
+    pre_relation_transcript_digest: ProofDigestV1,
+    relation_seed: ProofDigestV1,
+    binding_digest: ProofDigestV1,
 }
 
 impl QpcsScheduleIdentityV1 {
@@ -536,53 +543,68 @@ impl QpcsScheduleIdentityV1 {
             q_mask_s_root: schedule.q_mask_s_root(),
             pre_relation_transcript_digest: schedule.qpcs_pre_relation_transcript_digest(),
             relation_seed: schedule.relation_seed(),
-            binding_digest: [0; DIGEST_BYTES_V1],
+            binding_digest: ProofDigestV1::ZERO,
         };
         value.validate_base_v1()?;
-        let mut hash = Keccak256::new();
-        hash.update(QPCS_SCHEDULE_DOMAIN_V1);
-        hash.update(&[VERSION_V1]);
-        hash.update(&value.parameter_digest);
-        hash.update(&value.q_mask_s_root);
-        hash.update(&value.pre_relation_transcript_digest);
-        hash.update(&value.relation_seed);
-        hash.update(&(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u16).to_be_bytes());
-        hash.update(&(REPETITIONS_V1 as u16).to_be_bytes());
-        for (limb, modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.into_iter().enumerate() {
-            hash.update(&(limb as u16).to_be_bytes());
-            hash.update(&modulus.to_be_bytes());
-            let mut limb_points = [0_u64; REPETITIONS_V1];
-            for (repetition, point) in limb_points.iter_mut().enumerate() {
-                *point = schedule
+        let mut points = [0_u8; QPCS_SCHEDULE_POINT_BYTES_V1];
+        for (limb, (entry, modulus)) in points
+            .chunks_exact_mut(60)
+            .zip(ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1)
+            .enumerate()
+        {
+            entry[..2].copy_from_slice(&(limb as u16).to_be_bytes());
+            entry[2..10].copy_from_slice(&modulus.to_be_bytes());
+            let mut limb_points = [0; REPETITIONS_V1];
+            for (repetition, slot) in entry[10..].chunks_exact_mut(10).enumerate() {
+                let point = schedule
                     .point(limb, repetition)
                     .ok_or(RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule)?;
-                if *point == 0 || *point >= modulus {
+                if point == 0 || point >= modulus || limb_points[..repetition].contains(&point) {
                     return Err(RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule);
                 }
-                hash.update(&(repetition as u16).to_be_bytes());
-                hash.update(&point.to_be_bytes());
-            }
-            if limb_points
-                .iter()
-                .enumerate()
-                .any(|(index, point)| limb_points[index + 1..].contains(point))
-            {
-                return Err(RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule);
+                limb_points[repetition] = point;
+                slot[..2].copy_from_slice(&(repetition as u16).to_be_bytes());
+                slot[2..].copy_from_slice(&point.to_be_bytes());
             }
         }
-        value.binding_digest = hash.finalize();
+        let context = RnsNativeProofHashContextV1::canonical()
+            .map_err(|_| RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule)?;
+        value.binding_digest = context
+            .hash(
+                RnsNativeProofHashRoleV1::Transcript,
+                RnsNativeProofHashPhaseV1::Binding,
+                RnsNativeProofHashPositionV1 {
+                    level: 4,
+                    index: 1,
+                    counter: 0,
+                },
+                &[
+                    QPCS_SCHEDULE_DOMAIN_V1,
+                    &[VERSION_V1],
+                    &value.parameter_digest,
+                    value.q_mask_s_root.as_bytes(),
+                    value.pre_relation_transcript_digest.as_bytes(),
+                    value.relation_seed.as_bytes(),
+                    &(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u16).to_be_bytes(),
+                    &(REPETITIONS_V1 as u16).to_be_bytes(),
+                    &points,
+                ],
+            )
+            .map_err(|_| RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule)?;
         value.validate_v1()?;
         Ok(value)
     }
 
     fn validate_base_v1(self) -> Result<(), RnsNativePublicPolynomialReaderErrorV1> {
+        let context = RnsNativeProofHashContextV1::canonical()
+            .map_err(|_| RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule)?;
         let values = [
-            self.parameter_digest,
             self.q_mask_s_root,
             self.pre_relation_transcript_digest,
             self.relation_seed,
         ];
-        if values.contains(&[0; DIGEST_BYTES_V1])
+        if self.parameter_digest != context.parameter_digest()
+            || values.contains(&ProofDigestV1::ZERO)
             || values
                 .iter()
                 .enumerate()
@@ -595,7 +617,7 @@ impl QpcsScheduleIdentityV1 {
 
     fn validate_v1(self) -> Result<(), RnsNativePublicPolynomialReaderErrorV1> {
         self.validate_base_v1()?;
-        if self.binding_digest == [0; DIGEST_BYTES_V1] {
+        if self.binding_digest == ProofDigestV1::ZERO {
             return Err(RnsNativePublicPolynomialReaderErrorV1::InvalidSchedule);
         }
         Ok(())
@@ -842,7 +864,7 @@ const _: () = {
 #[must_use = "the direct source must retain the completed read-set receipt"]
 pub(super) struct RnsNativePublicPolynomialReadReceiptV1 {
     manifest_digest: [u8; DIGEST_BYTES_V1],
-    qpcs_schedule_digest: [u8; DIGEST_BYTES_V1],
+    qpcs_schedule_digest: ProofDigestV1,
     provider_identity: [u8; DIGEST_BYTES_V1],
     snapshot_identity: [u8; DIGEST_BYTES_V1],
     object_count: u16,
@@ -858,7 +880,7 @@ impl RnsNativePublicPolynomialReadReceiptV1 {
         self.manifest_digest
     }
 
-    pub(super) const fn qpcs_schedule_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn qpcs_schedule_digest_v1(&self) -> ProofDigestV1 {
         self.qpcs_schedule_digest
     }
 
@@ -1035,7 +1057,8 @@ where
         let schedule_identity = QpcsScheduleIdentityV1::from_schedule_v1(schedule)?;
         match self.schedule_identity {
             None => {
-                self.read_set_hash.update(&schedule_identity.binding_digest);
+                self.read_set_hash
+                    .update(schedule_identity.binding_digest.as_bytes());
                 self.schedule_identity = Some(schedule_identity);
             }
             Some(expected) if expected == schedule_identity => {}

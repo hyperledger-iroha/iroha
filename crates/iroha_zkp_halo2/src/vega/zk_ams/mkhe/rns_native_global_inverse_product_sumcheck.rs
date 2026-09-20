@@ -30,8 +30,8 @@
 //!
 //! The first 87 coordinates of that dedicated commitment contain three field
 //! elements per round under the same 16,384-coordinate basis.  It is distinct
-//! from the global-lookup sum-check mask (which uses a 1,024-coordinate basis
-//! and remains owned by its later stage).  The honest builder zero-pads the
+//! from the multiplicity commitment consumed by direct membership under the
+//! 32,768-coordinate basis.  The honest builder zero-pads the
 //! unused suffix; acceptance does not claim a value for that irrelevant
 //! suffix.  If `h = 1/2`, round `j` adds
 //! `h*carry - h*(m1+m2+m3) + m1*t + m2*t^2 + m3*t^3`.
@@ -126,7 +126,7 @@ const GEOMETRY_LANGUAGE_V1: &[u8] = b"flat-index=p*16384+v;v-bits-first-little-e
 const ROLE_ORDER_LANGUAGE_V1: &[u8] = b"A/U-plane-order:D-low[5848],S-low[5848],Delta[5848],small-positive[1032],small-negative[1032],q-digit[column-major,6400],q-complement[column-major,6400]";
 const STREAMING_LANGUAGE_V1: &[u8] = b"move-only-replay-source;coordinate-prefix-folds-little-endian;RAM=O(16384+32768)-field-elements;no-530972672-cell-materialization;replay-consistency-is-not-trusted-by-verifier;random-endpoint-is-commitment-bound";
 const RELATION_LANGUAGE_V1: &[u8] = b"rho-nonzero-after-all-A-U-commitments;R_rho=MLE_i(rho^i);F=R_rho*((z-A)*U-1);sum-over-{0,1}^29-F=0;cubic-individual-degree;endpoint-folds-existing-plane-commitments";
-const MASK_LANGUAGE_V1: &[u8] = b"dedicated-inverse-product-mask-distinct-from-global-lookup-mask;87-pre-z-random-scalar-prefix-plus-independent-Pedersen-blinding-under-16384-basis;unused-suffix-is-not-claimed;per-round=(m1,m2,m3);h=1/2;mask(t)=h*carry-h*(m1+m2+m3)+m1*t+m2*t^2+m3*t^3;terminal-weights=h^(28-j)*(r_j-h,r_j^2-h,r_j^3-h)";
+const MASK_LANGUAGE_V1: &[u8] = b"dedicated-inverse-product-mask-distinct-from-multiplicity;87-pre-z-random-scalar-prefix-plus-independent-Pedersen-blinding-under-16384-basis;unused-suffix-is-not-claimed;per-round=(m1,m2,m3);h=1/2;mask(t)=h*carry-h*(m1+m2+m3)+m1*t+m2*t^2+m3*t^3;terminal-weights=h^(28-j)*(r_j-h,r_j^2-h,r_j^3-h)";
 const SOUNDNESS_LANGUAGE_V1: &[u8] = b"per-fresh-transcript:batching-error<=(2^29-1)/(pT-1),sumcheck-error<=29*3/(pT-1),plus-at-most-48*2^-256-for-512-bit-reduction-and-nonzero-conditioning-across-30-sumcheck-and-18-endpoint-GBP-draws;challenge-exhaustion-fails-closed;Fiat-Shamir-adversary-incurs-standard-Keccak-ROM-query-loss;endpoint-binding-under-T256-DL-and-generalized-BP-transcript";
 const TRANSCRIPT_LANGUAGE_V1: &[u8] = b"pre-z:A-and-mask;derive-z;post-z:U;derive-rho;for-j=0..28:absorb-(constant,quadratic,cubic)-then-derive-r_j;derive-folded-A-U;verify-one-T256-generalized-BP-core;exclude-current-frame-residual-and-binding-from-all-challenges;bind-them-only-after-verification";
 
@@ -152,7 +152,7 @@ const _: () = {
     assert!(ENDPOINT_CORE_BYTES_V1 == 1_513);
     assert!(OWNED_WIRE_BYTES_V1 == 4_369);
     assert!(MIN_WIRE_BYTES_V1 == 4_370);
-    assert!(RNS_NATIVE_GLOBAL_INVERSE_PRODUCT_RESIDUAL_MAX_BYTES_V1 == 110_115);
+    assert!(RNS_NATIVE_GLOBAL_INVERSE_PRODUCT_RESIDUAL_MAX_BYTES_V1 == 108_852);
     assert!(MIN_WIRE_BYTES_V1 <= PARENT_RESIDUAL_CAP_BYTES_V1);
     assert!(INVERSE_PRODUCT_RELATION_VERIFIED_V1);
     assert!(!LOOKUP_MEMBERSHIP_VERIFIED_V1);

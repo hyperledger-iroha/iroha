@@ -1,4 +1,4 @@
-//! One-shot role-filtered replay permits for retained quadratic plane openings.
+//! One-shot role-filtered replay permits for retained native direct-product inputs.
 
 use crate::vega::sponge::Keccak256;
 
@@ -7,82 +7,53 @@ use super::{
     plane_coordinate_v1, require_nonzero_v1,
 };
 
-pub(super) const REPLAY_PURPOSE_COUNT_V1: usize = 6;
+pub(super) const REPLAY_PURPOSE_COUNT_V1: usize = 3;
 const REPLAY_PURPOSE_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.global-lookup.vector-arithmetic-plane.replay-purpose\0";
 const REPLAY_BINDING_LANGUAGE_V1: &[u8] =
-    b"permits-are-one-shot-and-independent;each-replay-is-global-plane-order-filtered-by-authorized-role;s3-derived=(bD,bS,q3);s5-derived=(bD,beta,m,q5);s8-derived=(x,n,q8);q3/q5/q8-coefficient-IPA=matching-q-only;q_s-has-exactly-derived-O-plus-coefficient-IPA-authorization";
+    b"native40-direct-product-inputs;permits-are-one-shot-and-independent;each-replay-is-global-plane-order-filtered-by-authorized-role;statement3=(bD,bS);statement5=(bD,beta,m);statement8=(x,n);no-residual-plane-or-coefficient-IPA-permit";
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PlaneOpeningReplayPurposeV1 {
-    Statement3DerivedLro = 1,
-    Statement3CoefficientIpa = 2,
-    Statement5DerivedLro = 3,
-    Statement5CoefficientIpa = 4,
-    Statement8DerivedLro = 5,
-    Statement8CoefficientIpa = 6,
+    Statement3Inputs = 3,
+    Statement5Inputs = 5,
+    Statement8Inputs = 8,
 }
 
 impl PlaneOpeningReplayPurposeV1 {
     const ALL: [Self; REPLAY_PURPOSE_COUNT_V1] = [
-        Self::Statement3DerivedLro,
-        Self::Statement3CoefficientIpa,
-        Self::Statement5DerivedLro,
-        Self::Statement5CoefficientIpa,
-        Self::Statement8DerivedLro,
-        Self::Statement8CoefficientIpa,
+        Self::Statement3Inputs,
+        Self::Statement5Inputs,
+        Self::Statement8Inputs,
     ];
-
     const fn index_v1(self) -> usize {
-        self as usize - 1
-    }
-
-    pub(super) const fn statement_v1(self) -> u8 {
         match self {
-            Self::Statement3DerivedLro | Self::Statement3CoefficientIpa => 3,
-            Self::Statement5DerivedLro | Self::Statement5CoefficientIpa => 5,
-            Self::Statement8DerivedLro | Self::Statement8CoefficientIpa => 8,
+            Self::Statement3Inputs => 0,
+            Self::Statement5Inputs => 1,
+            Self::Statement8Inputs => 2,
         }
     }
-
-    pub(super) const fn is_derived_lro_v1(self) -> bool {
-        matches!(
-            self,
-            Self::Statement3DerivedLro | Self::Statement5DerivedLro | Self::Statement8DerivedLro
-        )
+    pub(super) const fn statement_v1(self) -> u8 {
+        self as u8
     }
-
     pub(super) const fn accepts_role_v1(self, role: GlobalLookupPlaneRoleV1) -> bool {
         match self {
-            Self::Statement3DerivedLro => matches!(
+            Self::Statement3Inputs => matches!(
                 role,
-                GlobalLookupPlaneRoleV1::BooleanD
-                    | GlobalLookupPlaneRoleV1::BooleanS
-                    | GlobalLookupPlaneRoleV1::ResidualQ3
+                GlobalLookupPlaneRoleV1::BooleanD | GlobalLookupPlaneRoleV1::BooleanS
             ),
-            Self::Statement3CoefficientIpa => {
-                matches!(role, GlobalLookupPlaneRoleV1::ResidualQ3)
-            }
-            Self::Statement5DerivedLro => matches!(
+            Self::Statement5Inputs => matches!(
                 role,
                 GlobalLookupPlaneRoleV1::BooleanD
                     | GlobalLookupPlaneRoleV1::ComparatorBorrow
                     | GlobalLookupPlaneRoleV1::MixedTop
-                    | GlobalLookupPlaneRoleV1::ResidualQ5
             ),
-            Self::Statement5CoefficientIpa => {
-                matches!(role, GlobalLookupPlaneRoleV1::ResidualQ5)
-            }
-            Self::Statement8DerivedLro => matches!(
+            Self::Statement8Inputs => matches!(
                 role,
                 GlobalLookupPlaneRoleV1::SmallSigned
                     | GlobalLookupPlaneRoleV1::SmallNegativeMagnitude
-                    | GlobalLookupPlaneRoleV1::ResidualQ8
             ),
-            Self::Statement8CoefficientIpa => {
-                matches!(role, GlobalLookupPlaneRoleV1::ResidualQ8)
-            }
         }
     }
 }
@@ -108,11 +79,7 @@ fn purpose_binding_digest_v1(
     hash.update(REPLAY_PURPOSE_DOMAIN_V1);
     hash.update(&require_nonzero_v1(context_digest)?);
     hash.update(&require_nonzero_v1(mapping_digest)?);
-    hash.update(&[
-        purpose as u8,
-        purpose.statement_v1(),
-        purpose.is_derived_lro_v1() as u8,
-    ]);
+    hash.update(&[purpose as u8, purpose.statement_v1()]);
     hash.update(&(replay_plane_count_v1(purpose)? as u16).to_be_bytes());
     hash.update(&(REPLAY_BINDING_LANGUAGE_V1.len() as u16).to_be_bytes());
     hash.update(REPLAY_BINDING_LANGUAGE_V1);
@@ -302,5 +269,5 @@ impl PlaneOpeningReplayCursorV1 {
 }
 
 const _: () = {
-    assert!(REPLAY_PURPOSE_COUNT_V1 == 6);
+    assert!(REPLAY_PURPOSE_COUNT_V1 == 3);
 };

@@ -363,8 +363,8 @@ async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
         app.state.ivm_admission_cycle_limit().get()
     );
 }
-#[test]
-fn pipeline_status_global_read_skips_non_terminal_local_cache() {
+#[tokio::test]
+async fn pipeline_status_global_read_skips_non_terminal_local_cache() {
     let app = mk_app_state_for_tests();
     let tx_hash =
         HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed([0x74; Hash::LENGTH]));
@@ -372,7 +372,7 @@ fn pipeline_status_global_read_skips_non_terminal_local_cache() {
         tx_hash,
         PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
     );
-    let err = execute_pipeline_status_local_read(
+    let response = execute_pipeline_status_local_read(
         &app,
         &PipelineStatusQuery {
             hash: Some(tx_hash.to_string()),
@@ -381,8 +381,75 @@ fn pipeline_status_global_read_skips_non_terminal_local_cache() {
         ResponseFormat::Json,
         None,
     )
-    .expect_err("global reads must route/fan out before accepting local queued cache");
-    assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    .expect("global local observation");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    for scope in [
+        PipelineStatusReadScope::Global,
+        PipelineStatusReadScope::Local,
+    ] {
+        for format in [ResponseFormat::Json, ResponseFormat::Norito] {
+            use axum::{Router, routing::get};
+            use tower::ServiceExt as _;
+            let response = execute_pipeline_status_local_read(
+                &app,
+                &PipelineStatusQuery {
+                    hash: Some(tx_hash.to_string()),
+                    scope: Some(scope.as_str().to_owned()),
+                },
+                format,
+                None,
+            )
+            .expect("exact absence");
+            let response = Arc::new(parking_lot::Mutex::new(Some(response)));
+            let router = Router::new()
+                .route(
+                    "/status",
+                    get(move || {
+                        let response = response.lock().take().expect("one request");
+                        async move { response }
+                    }),
+                )
+                .layer(axum::middleware::from_fn(
+                    crate::enforce_typed_error_contract,
+                ));
+            let accept = if matches!(format, ResponseFormat::Json) {
+                "application/json"
+            } else {
+                crate::utils::NORITO_MIME_TYPE
+            };
+            let response = router
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri("/status")
+                        .header("Accept", accept)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("middleware");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .expect("body");
+            let envelope: ErrorEnvelope = if matches!(format, ResponseFormat::Json) {
+                norito::json::from_slice(&body).expect("JSON")
+            } else {
+                norito::decode_from_bytes(&body).expect("native")
+            };
+            assert_eq!(
+                envelope.code(),
+                iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE
+            );
+            assert!(
+                envelope
+                    .details
+                    .unwrap()
+                    .pipeline_transaction_status_not_found
+                    .unwrap()
+                    .matches(&tx_hash, scope.as_str())
+            );
+        }
+    }
 }
 #[test]
 fn pipeline_status_local_read_evicts_stale_queued_cache() {
@@ -393,7 +460,7 @@ fn pipeline_status_local_read_evicts_stale_queued_cache() {
         tx_hash,
         PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
     );
-    let err = execute_pipeline_status_local_read(
+    let response = execute_pipeline_status_local_read(
         &app,
         &PipelineStatusQuery {
             hash: Some(tx_hash.to_string()),
@@ -402,25 +469,413 @@ fn pipeline_status_local_read_evicts_stale_queued_cache() {
         ResponseFormat::Json,
         None,
     )
-    .expect_err("local reads must not expose stale queued cache entries");
-    assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    .expect("local absence observation");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
 }
-#[tokio::test]
+#[cfg(feature = "connect")]
+struct FreshQueuePlanIngressFixture {
+    peer: SharedAppState,
+    journal_dir: Arc<tempfile::TempDir>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    server: Option<tokio::task::JoinHandle<()>>,
+}
+#[cfg(feature = "connect")]
+impl FreshQueuePlanIngressFixture {
+    fn assert_durable(&self, app: &SharedAppState, transaction: &SignedTransaction) {
+        let mut bindings = Vec::new();
+        for (name, receiver) in [("local", app), ("peer", &self.peer)] {
+            assert!(
+                receiver
+                    .queue
+                    .contains_pending_hash(transaction.hash_as_entrypoint(), &receiver.state,)
+            );
+            assert!(
+                !receiver
+                    .state
+                    .queue_plan_admission_registry_entrypoint_present(
+                        transaction.hash_as_entrypoint(),
+                    )
+                    .expect("coherent canonical registry"),
+                "this fixture must exercise fresh receipt admission, not canonical retry"
+            );
+            let accepted = routing::accept_transaction_for_ingress(
+                receiver.state.clone(),
+                TransactionEntrypoint::External(transaction.clone()),
+                &receiver.telemetry,
+            )
+            .expect("inspect the actually admitted signed input");
+            let claim = receiver
+                .queue
+                .durable_plan_admission_claim_with_state(&accepted, &receiver.state)
+                .expect("original durable claim is coherent")
+                .expect("real receipt receiver retains its original journal owner");
+            assert!(claim.global_admission_identity.is_some());
+            bindings.push(
+                iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(&claim)
+                    .expect("original receipt binding"),
+            );
+            assert!(
+                std::fs::metadata(self.journal_dir.path().join(format!("{name}.norito")))
+                    .expect("actual receiver journal")
+                    .len()
+                    > 0
+            );
+        }
+        assert_eq!(
+            bindings[0], bindings[1],
+            "both real authorities admitted the exact same binding"
+        );
+    }
+
+    async fn finish(mut self) {
+        let _ = self
+            .shutdown
+            .take()
+            .expect("one peer shutdown owner")
+            .send(());
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            self.server.take().expect("one peer task"),
+        )
+        .await
+        .expect("signed peer should shut down")
+        .expect("signed peer should finish");
+    }
+}
+#[cfg(feature = "connect")]
+impl Drop for FreshQueuePlanIngressFixture {
+    fn drop(&mut self) {
+        // A failed assertion still closes the server without aborting an in-flight receipt.
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+}
+#[cfg(feature = "connect")]
+#[inline(never)]
+fn seed_fresh_queue_plan_submitter_for_test(state: &IrohaState, authority: &AccountId) {
+    let missing = state.view().world().account(authority).is_err();
+    if !missing {
+        return;
+    }
+    // End this large StateBlock frame before entering the validator setup frames.
+    let mut block = state.block(BlockHeader::new(
+        NonZeroU64::new(1).unwrap(),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    Register::account(Account::new(authority.clone()))
+        .execute(&ALICE_ID, &mut tx)
+        .expect("seed original universal submitter account");
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("publish fixture account");
+}
+#[cfg(feature = "connect")]
+fn install_fresh_queue_plan_authorities_for_test(
+    app: &mut SharedAppState,
+    signers: &[KeyPair],
+    local_index: usize,
+    transactions: &[&SignedTransaction],
+) {
+    let app = Arc::get_mut(app).expect("unique fresh ingress app");
+    app.local_peer_id = Some(PeerId::new(signers[local_index].public_key().clone()));
+    app.torii_proxy_bridge_signer = signers[local_index].clone();
+    let state = Arc::get_mut(&mut app.state).expect("unique fresh ingress State");
+    for transaction in transactions {
+        assert_eq!(
+            transaction.admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced
+        );
+        assert!(
+            !state
+                .queue_plan_admission_registry_entrypoint_present(transaction.hash_as_entrypoint(),)
+                .expect("empty canonical admission registry")
+        );
+        seed_fresh_queue_plan_submitter_for_test(state, transaction.authority());
+    }
+    let bindings = signers
+        .iter()
+        .enumerate()
+        .map(|(index, signer)| {
+            let validator = AccountId::new(signer.public_key().clone());
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &validator,
+                signer,
+                &format!("fresh-ingress-{index}"),
+            );
+            (validator, PeerId::new(signer.public_key().clone()))
+        })
+        .collect::<Vec<_>>();
+    let mut topology = state.commit_topology.block();
+    topology.clear();
+    for (_, peer) in &bindings {
+        topology.push(peer.clone());
+    }
+    topology.commit();
+    install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, bindings)]);
+    app.sumeragi = Some(queue_plan_capacity_handle_for_test(
+        *state.network_id_ref(),
+        iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
+        signers,
+    ));
+}
+#[cfg(feature = "connect")]
+async fn fresh_queue_plan_ingress_for_test(
+    app: &mut SharedAppState,
+    transactions: &[&SignedTransaction],
+) -> FreshQueuePlanIngressFixture {
+    fresh_queue_plan_ingress_with_peer_for_test(app, mk_app_state_for_tests(), transactions).await
+}
+#[cfg(feature = "connect")]
+async fn fresh_queue_plan_ingress_with_peer_for_test(
+    app: &mut SharedAppState,
+    mut peer: SharedAppState,
+    transactions: &[&SignedTransaction],
+) -> FreshQueuePlanIngressFixture {
+    // Same real four-authority path as the live-pending regression below. The
+    // origin and signed HTTP receiver each persist a claim before their receipt.
+    let signers = (0_u8..4)
+        .map(|index| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xe0 + index,
+                Algorithm::BlsNormal,
+                "fresh QueuePlan receipt authority",
+            )
+        })
+        .collect::<Vec<_>>();
+    install_fresh_queue_plan_authorities_for_test(app, &signers, 0, transactions);
+    install_fresh_queue_plan_authorities_for_test(&mut peer, &signers, 1, transactions);
+    let journal_dir = Arc::new(tempfile::tempdir().expect("fresh QueuePlan receiver journals"));
+    for (name, receiver) in [("local", &*app), ("peer", &peer)] {
+        receiver
+            .queue
+            .install_plan_journal(
+                &journal_dir.path().join(format!("{name}.norito")),
+                1024 * 1024,
+                true,
+            )
+            .expect("install original receiver journal");
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind real receipt receiver");
+    let peer_url = format!("http://{}/", listener.local_addr().unwrap());
+    let validators = signers
+        .iter()
+        .enumerate()
+        .map(|(index, signer)| {
+            (
+                AccountId::new(signer.public_key().clone()),
+                PeerId::new(signer.public_key().clone()),
+                (index == 1).then_some(peer_url.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+    for receiver in [&*app, &peer] {
+        install_lane_manifest_registry_with_torii_urls_for_test(
+            &receiver.state,
+            &[(LaneId::SINGLE, validators.clone())],
+        );
+    }
+    let plan = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let context = app
+        .queue
+        .plan_admission_context_with_state(&app.state, &plan)
+        .expect("original route authority");
+    assert_eq!(single_route_queue_plan_authorities(&context).len(), 4);
+    assert_eq!(
+        context,
+        peer.queue
+            .plan_admission_context_with_state(&peer.state, &plan)
+            .expect("peer route authority")
+    );
+    let layer = axum::middleware::from_fn_with_state::<
+        _,
+        _,
+        (axum::extract::State<SharedAppState>, axum::extract::Request),
+    >(
+        peer.clone(),
+        operator_signatures::enforce_torii_proxy_peer_signature,
+    );
+    let router = axum::Router::new()
+        .route(
+            TORII_INTERNAL_PROXY_HTTP_PATH,
+            axum::routing::post(handler_internal_torii_proxy_request).layer(layer),
+        )
+        .with_state(peer.clone());
+    let (shutdown, requested) = tokio::sync::oneshot::channel();
+    let journal_owner = journal_dir.clone();
+    let server = tokio::spawn(async move {
+        // Keep both paths alive through graceful shutdown even if the test unwinds.
+        let _journal_owner = journal_owner;
+        axum::serve(listener, router.into_make_service())
+            .with_graceful_shutdown(async move {
+                let _ = requested.await;
+            })
+            .await
+            .expect("serve authenticated fresh receipts");
+    });
+    FreshQueuePlanIngressFixture {
+        peer,
+        journal_dir,
+        shutdown: Some(shutdown),
+        server: Some(server),
+    }
+}
+#[cfg(feature = "connect")]
+fn signed_queue_plan_log_for_test(
+    network_id: NetworkId,
+    authority: AccountId,
+    message: &str,
+    keypair: &KeyPair,
+) -> SignedTransaction {
+    TransactionBuilder::new(
+        network_id,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, message.to_owned())])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .sign(keypair.private_key())
+}
+#[cfg(feature = "connect")]
+fn lifecycle_transaction_with_nonce_for_test(
+    app: &SharedAppState,
+    key: &KeyPair,
+    certificate: &ThresholdKeyLifecycleCertificateV1,
+    nonce: u32,
+) -> SignedTransaction {
+    let mut builder = TransactionBuilder::new(
+        *app.state.network_id_ref(),
+        AccountId::new(key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([ApplyThresholdKeyLifecycleCertificateV1 {
+        certificate: certificate.clone(),
+    }])
+    .with_admission_intent(TransactionAdmissionIntent::Ordinary);
+    builder.set_nonce(NonZeroU32::new(nonce).expect("distinct nonzero fixture nonce"));
+    builder.sign(key.private_key())
+}
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
-    let mut app = mk_app_state_for_tests();
+    // Public Log admission requires an exact QueuePlan certificate. Keep four real
+    // authorities and obtain f+1 receipts from the local queue and a signed HTTP
+    // peer request; neither a lifecycle intent nor an injected queue entry tests
+    // the public handler's live-pending path.
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xd8_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive live pending QueuePlan authority",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (mut app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xd8,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair =
-        checked_torii_test_ed25519_keypair(0xd8, "derive live pending pipeline-status fixture key");
-    let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = signed_log_transaction_for_test(
-        *app.state.network_id_ref(),
-        authority,
-        "pipeline-status-live-pending",
-        &keypair,
+    let (mut peer_app, _) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xd8,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
     );
+    {
+        let peer = Arc::get_mut(&mut peer_app).expect("unique peer app state");
+        peer.local_peer_id = Some(PeerId::from(signers[1].public_key().clone()));
+        peer.torii_proxy_bridge_signer = signers[1].clone();
+        peer.high_load_tx_threshold = usize::MAX;
+    }
+    let journal_dir = tempfile::tempdir().expect("live pending QueuePlan journals");
+    for (name, receiver) in [("local", &app), ("peer", &peer_app)] {
+        receiver
+            .queue
+            .install_plan_journal(
+                &journal_dir.path().join(format!("{name}.norito")),
+                1024 * 1024,
+                true,
+            )
+            .expect("install actual receiver QueuePlan journal");
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind live pending authority");
+    let peer_url = format!(
+        "http://{}/",
+        listener
+            .local_addr()
+            .expect("live pending authority address")
+    );
+    let validators = signers
+        .iter()
+        .enumerate()
+        .map(|(index, signer)| {
+            (
+                AccountId::new(signer.public_key().clone()),
+                PeerId::from(signer.public_key().clone()),
+                (index == 1).then_some(peer_url.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let lanes = [(LaneId::SINGLE, validators)];
+    for receiver in [&app, &peer_app] {
+        install_lane_manifest_registry_with_torii_urls_for_test(&receiver.state, &lanes);
+    }
+    let plan = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let context = app
+        .queue
+        .plan_admission_context_with_state(&app.state, &plan)
+        .expect("local live pending authority context");
+    assert_eq!(single_route_queue_plan_authorities(&context).len(), 4);
+    assert_eq!(
+        context,
+        peer_app
+            .queue
+            .plan_admission_context_with_state(&peer_app.state, &plan)
+            .expect("peer live pending authority context"),
+        "both durable receivers must authenticate the same canonical route and roster"
+    );
+    let peer_layer = axum::middleware::from_fn_with_state::<
+        _,
+        _,
+        (axum::extract::State<SharedAppState>, axum::extract::Request),
+    >(
+        peer_app.clone(),
+        operator_signatures::enforce_torii_proxy_peer_signature,
+    );
+    let router = axum::Router::new()
+        .route(
+            TORII_INTERNAL_PROXY_HTTP_PATH,
+            axum::routing::post(handler_internal_torii_proxy_request).layer(peer_layer),
+        )
+        .with_state(peer_app.clone());
+    let (shutdown, shutdown_requested) = tokio::sync::oneshot::channel();
+    let peer_task = tokio::spawn(async move {
+        axum::serve(listener, router.into_make_service())
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_requested.await;
+            })
+            .await
+            .expect("serve actual signed QueuePlan receiver");
+    });
+    let TransactionEntrypoint::External(transaction) =
+        queue_plan_synced_test_entrypoint(&request).clone()
+    else {
+        panic!("live pending fixture must retain its signed external transaction")
+    };
     let tx_hash = transaction.hash();
     let response = super::handler_post_transaction(
         State(app.clone()),
@@ -431,7 +886,25 @@ async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
     .await
     .expect("accepted")
     .into_response();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let status = response.status();
+    let body = torii_body_bytes(response, "live pending admission response").await;
+    let _ = shutdown.send(());
+    tokio::time::timeout(Duration::from_secs(5), peer_task)
+        .await
+        .expect("signed QueuePlan receiver should shut down")
+        .expect("signed QueuePlan receiver should finish");
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "actual certified handler admission: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(
+        peer_app
+            .queue
+            .contains_pending_hash(transaction.hash_as_entrypoint(), &peer_app.state),
+        "the second authenticated authority must have durably admitted the same input"
+    );
     assert!(
         app.queue
             .contains_pending_hash(transaction.hash_as_entrypoint(), &app.state),
@@ -895,7 +1368,10 @@ async fn account_read_for_routes_skips_route_unavailable_until_success() {
     let keypair =
         checked_torii_test_ed25519_keypair(0x2c, "derive Torii routed account-read fixture key");
     let account_id = AccountId::new(keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&account_id),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (local_route, foreign_route) =
         configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let response = super::execute_torii_account_read_for_resolved_routes(
@@ -1193,7 +1669,7 @@ async fn trusted_internal_transaction_read_requires_exact_hash_and_account_invol
     ));
     let (block, entrypoint_hash) = make_signed_block(1, None);
     let header = block.header();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header, block_hash);
     let expected = crate::routing::committed_transactions_snapshot(app.state.as_ref())
         .expect("committed transaction snapshot")
@@ -1415,7 +1891,10 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
 async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_missing() {
     let missing =
         checked_torii_test_account_id(0x2d, "derive Torii missing routed account-read fixture key");
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let response = super::execute_torii_account_read_for_resolved_routes(
@@ -1444,7 +1923,10 @@ async fn account_read_for_routes_returns_route_unavailable_when_only_unavailable
         0x2e,
         "derive Torii unavailable routed account-read fixture key",
     );
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (_local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let response = super::execute_torii_account_read_for_resolved_routes(
@@ -1462,11 +1944,11 @@ async fn account_read_for_routes_returns_route_unavailable_when_only_unavailable
     assert_route_unavailable_response(&response);
 }
 #[test]
-fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
+fn trigger_completion_query_projects_only_authenticated_persisted_calls() {
     let app = mk_app_state_for_tests();
     let sample = make_persisted_data_trigger_completion_block(1, None);
     let header = sample.block.header();
-    let block_hash = store_block(&app, sample.block);
+    let block_hash = store_finalized_history_fixture(&app, sample.block);
     record_committed_block_hash_for_test(&app, header, block_hash);
     let response = super::trigger_completion_query_response(
         &app,
@@ -1478,13 +1960,12 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
             to_height: Some(1),
             limit: Some(10),
             scan_limit_blocks: Some(1),
-            include_reconstructed: Some(true),
         },
     )
     .expect("query response");
     assert_eq!(response.completions.len(), 1);
     let record = response.completions.first().expect("completion");
-    assert_eq!(record.source, "reconstructed_result");
+    assert_eq!(record.source, "execution_output");
     assert_eq!(record.block_height, 1);
     assert_eq!(record.entrypoint_index, Some(0));
     assert_eq!(record.completion.trigger_id, sample.trigger_id.to_string());
@@ -1492,21 +1973,20 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
         record.completion.trigger_execution_hash,
         sample.entrypoint_hash.to_string()
     );
-    let without_reconstruction = super::trigger_completion_query_response(
+    let missing_call = super::trigger_completion_query_response(
         &app,
         &TriggerCompletionQuery {
             id: None,
-            entrypoint_hash: Some(sample.entrypoint_hash.to_string()),
+            entrypoint_hash: Some(Hash::new(b"missing execution call").to_string()),
             outcome: None,
             from_height: Some(1),
             to_height: Some(1),
             limit: Some(10),
             scan_limit_blocks: Some(1),
-            include_reconstructed: Some(false),
         },
     )
     .expect("query response");
-    assert!(without_reconstruction.completions.is_empty());
+    assert!(missing_call.completions.is_empty());
     let persisted_response = super::trigger_completion_query_response(
         &app,
         &TriggerCompletionQuery {
@@ -1517,13 +1997,12 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
             to_height: Some(1),
             limit: Some(10),
             scan_limit_blocks: Some(1),
-            include_reconstructed: Some(true),
         },
     )
     .expect("query response");
     assert_eq!(persisted_response.completions.len(), 1);
     let persisted = persisted_response.completions.first().expect("completion");
-    assert_eq!(persisted.source, "block_result");
+    assert_eq!(persisted.source, "execution_output");
     assert_eq!(
         persisted.completion.trigger_execution_hash,
         sample.trigger_execution_hash.to_string()
@@ -1532,26 +2011,29 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
 #[test]
 fn trigger_completion_record_visit_stops_without_buffering_the_block() {
     let mut sample = make_persisted_data_trigger_completion_block(1, None);
-    sample.block.set_trigger_completions(vec![
-        TriggerCompletedEvent::new(
-            sample.trigger_id.clone(),
-            sample.trigger_execution_hash,
-            0,
-            TriggerCompletedOutcome::Success,
-        ),
-        TriggerCompletedEvent::new(
-            sample.trigger_id.clone(),
-            sample.trigger_execution_hash,
-            1,
-            TriggerCompletedOutcome::Success,
-        ),
-    ]);
+    use iroha_data_model::block::execution_output::{ExecutionOutputV1, InvocationCompletionV1};
+    let mut rows = sample.block.execution_outputs().to_vec();
+    let ExecutionOutputV1::Network(row) = &mut rows[0] else {
+        unreachable!()
+    };
+    let step = DataTriggerStep {
+        id: sample.trigger_id.clone(),
+        instructions: ExecutionStep(ConstVec::new_empty()),
+    };
+    row.result =
+        iroha_data_model::transaction::TransactionResult::new(Ok(vec![step.clone(), step]));
+    row.completions.push(InvocationCompletionV1 {
+        trigger_id: sample.trigger_id.clone(),
+        callback_index: 1,
+        outcome: TriggerCompletedOutcome::Success,
+    });
+    crate::test_utils::attach_fixture_execution_outputs(&mut sample.block, rows);
     let mut visited = 0_u8;
-    let completed =
-        super::visit_trigger_completion_records_for_block(&sample.block, 1, false, None, |_| {
-            visited = visited.saturating_add(1);
-            false
-        });
+    let completed = super::visit_trigger_completion_records_for_block(&sample.block, 1, |_| {
+        visited = visited.saturating_add(1);
+        false
+    })
+    .unwrap();
     assert!(!completed);
     assert_eq!(
         visited, 1,
@@ -1563,16 +2045,13 @@ fn trigger_completion_query_caps_explicit_from_height() {
     let app = mk_app_state_for_tests();
     let sample = make_persisted_data_trigger_completion_block(1, None);
     let header = sample.block.header();
-    let block_hash = store_block(&app, sample.block);
+    let block_hash = store_finalized_history_fixture(&app, sample.block);
     record_committed_block_hash_for_test(&app, header, block_hash);
     let mut prev_hash = Some(block_hash);
     for height in 2..=4 {
-        let mut block = make_empty_signed_block(height, prev_hash, 0);
-        block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("empty test block should accept empty results");
+        let block = make_empty_signed_block(height, prev_hash, 0);
         let header = block.header();
-        let hash = store_block(&app, block);
+        let hash = store_finalized_history_fixture(&app, block);
         record_committed_block_hash_for_test(&app, header, hash);
         prev_hash = Some(hash);
     }
@@ -1586,7 +2065,6 @@ fn trigger_completion_query_caps_explicit_from_height() {
             to_height: Some(4),
             limit: Some(10),
             scan_limit_blocks: Some(2),
-            include_reconstructed: Some(true),
         },
     )
     .expect("query response");
@@ -1603,7 +2081,6 @@ fn trigger_completion_query_caps_explicit_from_height() {
             to_height: Some(4),
             limit: Some(10),
             scan_limit_blocks: Some(2),
-            include_reconstructed: Some(true),
         },
     )
     .expect("query response");
@@ -1617,9 +2094,18 @@ fn canonical_outcome_test_fixture(
     let app = mk_app_state_for_tests();
     let (mut block, entrypoint_hash) = make_signed_block(1, None);
     if let Some(reason) = rejection {
-        block
-            .set_transaction_results(Vec::new(), &[entrypoint_hash], vec![Err(reason)])
-            .expect("replace the fixture's execution result before canonical storage");
+        crate::test_utils::attach_fixture_execution_outputs(
+            &mut block,
+            vec![
+                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                    iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                        input_index: 0,
+                        result: iroha_data_model::transaction::TransactionResult::new(Err(reason)),
+                        completions: vec![],
+                    },
+                ),
+            ],
+        );
     }
     let hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
     (app, hash)
@@ -1631,7 +2117,7 @@ fn append_canonical_outcome_test_block(
 ) {
     let block = make_empty_signed_block(2, Some(anchor.block_hash), 10);
     let header = block.header();
-    let block_hash = store_block(app, block);
+    let block_hash = store_finalized_history_fixture(app, block);
     record_committed_block_hash_for_test(app, header.clone(), block_hash);
     let mut state_block = app.state.block(header);
     let membership = if rebind_transaction {
@@ -1827,23 +2313,28 @@ async fn canonical_outcome_rejects_result_substitution_under_the_same_header_has
         .expect("indexed transaction");
     let canonical = app.kura.get_block(anchor.height).expect("canonical block");
     let mut replacement = canonical.as_ref().clone();
-    replacement
-        .set_transaction_results(
-            Vec::new(),
-            &[anchor.entrypoint_hash],
-            vec![Err(TransactionRejectionReason::Validation(
-                ValidationFail::TooComplex,
-            ))],
-        )
-        .expect("construct a substituted result-bearing block");
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut replacement,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Err(
+                        TransactionRejectionReason::Validation(ValidationFail::TooComplex),
+                    )),
+                    completions: vec![],
+                },
+            ),
+        ],
+    );
     assert_eq!(
         replacement.hash(),
         canonical.hash(),
         "header hash omits execution results"
     );
     assert_ne!(
-        replacement.header().result_merkle_root(),
-        canonical.header().result_merkle_root()
+        replacement.output_merkle_commitment(),
+        canonical.output_merkle_commitment()
     );
     assert_ne!(
         replacement.encode_wire().expect("replacement wire"),
@@ -1882,10 +2373,14 @@ async fn canonical_outcome_authentication_error_cannot_fall_back_to_terminal_cac
     journal.commit_for_tests();
     let error = pipeline_status_terminal_or_state_entry(&app, &hash)
         .expect_err("a cached terminal result must not mask canonical authentication failure");
-    assert!(
-        query_conversion_message(&error)
-            .expect("projection error")
-            .contains("does not match the committed State journal")
+    let unavailable = iroha_data_model::query::error::QueryExecutionFail::Conversion(
+        "canonical Network transaction history is inconsistent: finalized carrier is unavailable"
+            .to_owned(),
+    );
+    assert_eq!(
+        query_conversion_message(&error).expect("projection error"),
+        format!("committed transaction status projection is inconsistent: {unavailable}"),
+        "an unavailable exact canonical hash cannot inherit a cached terminal result",
     );
     assert_eq!(
         app.pipeline_status_cache
@@ -1903,7 +2398,7 @@ async fn pipeline_status_handler_returns_applied_from_state() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
@@ -1935,7 +2430,7 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     let app = mk_app_state_for_tests();
     let (block, _) = make_signed_block(1, None);
     let header = block.header();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let bogus_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
         [0x76; Hash::LENGTH],
@@ -1968,7 +2463,13 @@ async fn pipeline_status_handler_rejects_inconsistent_committed_membership() {
     else {
         panic!("inconsistent committed membership must fail closed");
     };
-    assert!(message.contains("absent from its external body and has no merge reference"));
+    assert_eq!(
+        message,
+        format!(
+            "committed transaction status projection is inconsistent: transaction {bogus_hash} is absent from its finalized carrier"
+        ),
+        "authenticated output absence must not be confused with missing finality",
+    );
 }
 #[tokio::test]
 async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
@@ -1978,7 +2479,7 @@ async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
     let height_nz = NonZeroUsize::new(height_usize).expect("height");
-    let block_hash = store_block(&app, sample.block);
+    let block_hash = store_finalized_history_fixture(&app, sample.block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let mut state_block = app.state.block(header);
     let tx_hashes: HashSet<_> = [sample.entrypoint_hash].into_iter().collect();
@@ -2030,7 +2531,7 @@ fn store_and_index_transaction_details_block(
         usize::try_from(header.height().get()).expect("transaction-details height fits usize"),
     )
     .expect("transaction-details height is nonzero");
-    let block_hash = store_block(app, block);
+    let block_hash = store_finalized_history_fixture(app, block);
     record_committed_block_hash_for_test(app, header.clone(), block_hash);
     let mut state_block = app.state.block(header);
     state_block
@@ -2196,12 +2697,21 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         amount: Quantity::from(7_u32),
         status: AssetBatchTransferLegStatus::Applied,
     };
-    block
-        .set_batch_transfer_outcomes(std::collections::BTreeMap::from([(
-            entrypoint_hash,
-            vec![outcome.clone()],
-        )]))
-        .expect("attach batch receipt to transaction-details fixture");
+    let mut outputs = block.execution_outputs().to_vec();
+    let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
+        &mut outputs[0]
+    else {
+        unreachable!("single Network fixture")
+    };
+    assert_eq!(output.input_index, 0);
+    assert_eq!(
+        block.network_entrypoint_at(0).unwrap().hash(),
+        entrypoint_hash
+    );
+    output
+        .result
+        .set_batch_transfer_outcomes(vec![outcome.clone()]);
+    crate::test_utils::attach_fixture_execution_outputs(&mut block, outputs);
     let signed_hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
     let public = pipeline_status_response(
         app.clone(),
@@ -2241,6 +2751,22 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
             )
             .expect("typed transaction-details canonical Norito");
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
+        let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
+            details.transaction.output()
+        else {
+            panic!("transaction details must carry a Network output");
+        };
+        assert_eq!(
+            output.input_index,
+            details.transaction.entrypoint_proof().leaf_index()
+        );
+        assert_eq!(
+            output.input_index,
+            details.transaction.output_proof().leaf_index()
+        );
+        let details_json = norito::json::to_value(&details).unwrap();
+        assert_eq!(details_json.as_object().unwrap().len(), 2);
+        assert!(details_json.get("trigger_completions").is_none());
         assert_eq!(
             details.transaction.result().batch_transfer_outcomes(),
             &[outcome.clone()]
@@ -2335,11 +2861,15 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
     ];
     for (label, instruction, names_native_beneficiary) in instructions {
         for applied in [true, false] {
-            let mut app = mk_app_state_for_tests_with_world(transaction_details_test_world(&[
-                sender.clone(),
-                beneficiary.clone(),
-                unrelated.clone(),
-            ]));
+            let mut app =
+                crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+                    transaction_details_test_world(&[
+                        sender.clone(),
+                        beneficiary.clone(),
+                        unrelated.clone(),
+                    ]),
+                    crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+                );
             let (_, restricted_dataspace) = configure_private_ingress_routes_for_test(&mut app);
             assert!(
                 torii_all_dataspace_routes(app.as_ref())
@@ -2386,14 +2916,10 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
                 ),
                 "{label}: a queued target must not establish committed read authority"
             );
-            let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-            let signature = checked_torii_test_block_signature(
-                0,
-                &sender_key,
-                &header,
-                "sign native beneficiary details block",
-            );
-            let mut block = SignedBlock::presigned(signature, header, vec![transaction]);
+            let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
+            let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+            builder.push_transaction(transaction);
+            let mut block = builder.build_with_signature(0, sender_key.private_key());
             let result = if applied {
                 Ok(DataTriggerSequence::default())
             } else {
@@ -2401,9 +2927,18 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
                     ValidationFail::NotPermitted("native beneficiary fixture rejected".to_owned()),
                 ))
             };
-            block
-                .set_transaction_results(Vec::new(), &[entrypoint_hash], vec![result])
-                .expect("bind actual committed native result");
+            crate::test_utils::attach_fixture_execution_outputs(
+                &mut block,
+                vec![
+                    iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                        iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                            input_index: 0,
+                            result: iroha_data_model::transaction::TransactionResult::new(result),
+                            completions: vec![],
+                        },
+                    ),
+                ],
+            );
             store_and_index_transaction_details_block(&app, block, entrypoint_hash);
             for (caller_label, key_pair, allowed) in [
                 ("sender", &sender_key, true),
@@ -2566,7 +3101,7 @@ async fn pipeline_status_handler_resolves_sealed_reveal_carrier_and_signed_alias
     let signed_entrypoint_alias =
         iroha_core::tx::external_entrypoint_hash_from_signed_hash(signed_hash.clone());
     let header = block.header();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let height = header.height();
     let height_usize = usize::try_from(height.get()).expect("height usize");
@@ -2630,7 +3165,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     app.pipeline_status_cache.record_entry(
         tx_hash,
@@ -2668,7 +3203,7 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let tx = block.external_transactions().next().expect("tx");
     let tx_hash = tx.hash();
     let tx_entry_hash = tx.hash_as_entrypoint();
-    let block_hash = store_block(&app, block);
+    let block_hash = store_finalized_history_fixture(&app, block);
     record_committed_block_hash_for_test(&app, header.clone(), block_hash);
     let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
     app.pipeline_status_cache.record_entry(
@@ -2802,10 +3337,9 @@ async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
         .state
         .block_by_height(NonZeroUsize::new(1).expect("nonzero height"))
         .expect("committed fixture block")
-        .header()
-        .result_merkle_root()
-        .map(|hash| Hash::prehashed(*hash.as_ref()))
-        .expect("fixture result root");
+        .output_merkle_commitment()
+        .map(|commitment| Hash::prehashed(*commitment.root().as_ref()))
+        .expect("fixture output root");
     assert_ne!(
         expected_root, result_root,
         "the result Merkle root must be an adversarially distinct fallback candidate"
@@ -3042,47 +3576,70 @@ async fn ledger_state_endpoints_reject_forged_v2_finality_signature() {
             .expect_err("forged finality proof must fail closed");
     assert_ledger_state_handler_status(proof_error, StatusCode::INTERNAL_SERVER_ERROR);
 }
+include!("committed_network_proof_support.rs");
+
 #[tokio::test]
 async fn block_proof_handler_emits_norito() {
-    let app = mk_app_state_for_tests();
-    let (block, entry_hash) = make_signed_block(1, None);
-    let expected_block_hash = block.hash();
-    let expected_executed_wire_hash = block
-        .executed_block_wire_hash()
-        .expect("executed block wire hash");
-    let expected_entry_commitment = block
-        .full_entry_merkle_commitment()
-        .expect("full entry commitment");
-    let expected_result_commitment = block.result_merkle_commitment().expect("result commitment");
-    store_block(&app, block);
-    let entry_hex = hex::encode(entry_hash.as_ref());
-    let resp = super::handler_block_proof(State(app), axum::extract::Path((1, entry_hex)))
+    use iroha_data_model::block::{
+        execution_output::ExecutionOutputV1,
+        proofs::{BlockProofs, TrustedBlockProofAnchor},
+    };
+    let (app, block, artifact) = committed_network_proof_app_for_test();
+    let fixture_context = artifact.context_id();
+    let expected_entry_commitment = block.network_input_merkle_commitment().unwrap();
+    let expected_output_commitment = block.output_merkle_commitment().unwrap();
+    assert_eq!(expected_entry_commitment.leaf_count().get(), 2);
+    assert_eq!(expected_output_commitment.leaf_count().get(), 4);
+    for (index, entry) in block.network_entrypoints().enumerate() {
+        let entry_hash = entry.hash();
+        let entry_hex = hex::encode(entry_hash.as_ref());
+        let resp = super::handler_block_proof(
+            State(Arc::clone(&app)),
+            axum::extract::Path((1, entry_hex)),
+        )
         .await
-        .expect("ok")
-        .into_response();
-    assert_eq!(
-        resp.headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .map(HeaderValue::as_bytes),
-        Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
-    );
-    let bytes = torii_body_bytes(resp, "norito payload").await;
-    let archived = norito::from_bytes::<BlockProofs>(&bytes).expect("archive decode");
-    let proofs: BlockProofs = norito::core::DeserializePayload::deserialize(archived);
-    assert_eq!(proofs.block_height.get(), 1);
-    assert_eq!(proofs.block_hash, expected_block_hash);
-    assert_eq!(proofs.executed_block_wire_hash, expected_executed_wire_hash);
-    assert_eq!(proofs.entry_hash, entry_hash);
-    assert_eq!(proofs.entry_commitment, expected_entry_commitment);
-    assert!(proofs.entry_proof.verify(&expected_entry_commitment));
-    assert_eq!(proofs.result_commitment, expected_result_commitment);
-    let result_proof = proofs.result_proof;
-    assert_eq!(
-        proofs.entry_proof.proof().leaf_index(),
-        result_proof.proof().leaf_index()
-    );
-    assert!(result_proof.verify(&expected_result_commitment));
-    assert!(proofs.fastpq_transcripts.is_empty());
+        .expect("exact finalized Network proof");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
+        );
+        let bytes = torii_body_bytes(resp, "norito payload").await;
+        let proofs: BlockProofs = norito::decode_canonical(&bytes).expect("canonical proof frame");
+        assert_eq!(proofs.block_height.get(), 1);
+        assert_eq!(proofs.block_hash, block.hash());
+        assert_eq!(
+            proofs.executed_block_wire_hash,
+            block.executed_block_wire_hash().unwrap()
+        );
+        assert_eq!(proofs.entry_hash, entry_hash);
+        assert_eq!(proofs.entry_commitment, expected_entry_commitment);
+        assert!(proofs.entry_proof.verify(&expected_entry_commitment));
+        assert_eq!(proofs.output_commitment, expected_output_commitment);
+        assert!(proofs.output_proof.verify(&expected_output_commitment));
+        assert_eq!(
+            proofs.output_proof.output(),
+            &block.execution_outputs()[index]
+        );
+        let ExecutionOutputV1::Network(row) = proofs.output_proof.output() else {
+            panic!("Network proof")
+        };
+        assert_eq!(usize::try_from(row.input_index).unwrap(), index);
+        assert_eq!(proofs.entry_proof.proof().leaf_index(), row.input_index);
+        assert_eq!(proofs.output_proof.proof().leaf_index(), row.input_index);
+        assert_eq!(row.result.is_err(), index == 1);
+        assert!(proofs.fastpq_transcripts.is_empty());
+        let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+            &block,
+            &artifact,
+            fixture_context,
+            &entry_hash,
+        )
+        .unwrap();
+        assert!(proofs.verify(&anchor));
+    }
 }
 const EXECUTED_BLOCK_WIRE_TEST_OWNER_STACK_BYTES: usize = 8 * 1024 * 1024;
 fn run_executed_block_wire_handler_test<F, Fut>(name: &'static str, test: F)
@@ -3108,17 +3665,21 @@ where
 #[test]
 fn executed_block_wire_handler_returns_the_exact_finalized_canonical_wire() {
     run_executed_block_wire_handler_test("executed-wire-canonical", || async {
-        let app = mk_app_state_for_tests();
-        let (block, _) = make_signed_block(1, None);
-        let header = block.header();
+        let (app, block, artifact) = committed_network_proof_app_for_test();
         let expected_wire = block.encode_wire().expect("canonical executed wire");
-        let block_hash = store_block(&app, block);
-        record_committed_block_hash_for_test(&app, header, block_hash);
+        let commitment = &artifact.commit_qc.execution_commitment;
+        assert_eq!(
+            commitment.executed_block_wire_hash,
+            Hash::new(&expected_wire)
+        );
+        assert_eq!(
+            commitment.executed_block_wire_len,
+            u64::try_from(expected_wire.len()).unwrap()
+        );
         let response =
             super::handler_ledger_executed_block_wire(State(app), axum::extract::Path(1))
                 .await
-                .expect("finalized block wire")
-                .into_response();
+                .expect("finalized block wire");
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response
@@ -3136,6 +3697,10 @@ fn executed_block_wire_handler_returns_the_exact_finalized_canonical_wire() {
         );
         let actual_wire = torii_body_bytes(response, "wire body").await;
         assert_eq!(actual_wire.as_ref(), expected_wire.as_slice());
+        assert_eq!(
+            Hash::new(actual_wire.as_ref()),
+            commitment.executed_block_wire_hash
+        );
     });
 }
 #[test]
@@ -3222,20 +3787,38 @@ fn executed_block_wire_handler_fails_closed_on_hash_and_execution_shape_drift() 
     });
 }
 #[test]
-fn executed_block_wire_carrier_bound_is_exact() {
-    let maximum =
-        iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1;
-    assert!(super::finalized_block_wire_fits_carrier_v1(maximum));
-    assert!(!super::finalized_block_wire_fits_carrier_v1(
-        maximum.saturating_add(1)
-    ));
+fn block_proof_capacity_responses_distinguish_work_from_bytes() {
+    for resource in [
+        BlockProofResource::BlockWireBytes,
+        BlockProofResource::ResponseBytes,
+    ] {
+        assert_eq!(
+            super::block_proof_capacity_response(resource, 33, 32).status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
     assert_eq!(
-        super::executed_block_wire_too_large_response(
-            NonZeroU64::new(1).expect("non-zero height"),
-        )
-        .status(),
-        StatusCode::PAYLOAD_TOO_LARGE,
+        super::block_proof_capacity_response(BlockProofResource::WorkItems, 7, 6).status(),
+        StatusCode::TOO_MANY_REQUESTS
     );
+    assert_eq!(
+        super::executed_block_wire_too_large_response(NonZeroU64::new(1).unwrap()).status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+}
+#[test]
+fn block_proof_limits_use_the_configured_query_work_ceiling() {
+    let app = mk_app_state_for_tests();
+    let limits = super::block_proof_limits(&app.state);
+    assert_eq!(
+        limits.max_work_items,
+        app.state.pipeline_snapshot().query_max_fetch_size
+    );
+    assert_eq!(
+        limits.max_block_wire_bytes,
+        iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 as u64
+    );
+    assert_eq!(limits.max_response_bytes, limits.max_block_wire_bytes);
 }
 #[test]
 fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
@@ -3270,16 +3853,15 @@ fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
             requested: height,
             actual: other_height,
         },
+        BlockProofError::Storage {
+            block_height: height,
+            reason: "bad finalized wire".into(),
+        },
+        BlockProofError::InvalidOutputs {
+            block_height: height,
+            reason: "bad complete source join".into(),
+        },
         BlockProofError::MissingResults(height),
-        BlockProofError::ExecutionResultMissing {
-            entry_hash,
-            block_height: height,
-        },
-        BlockProofError::MerkleProofUnavailable {
-            entry_hash,
-            block_height: height,
-        },
-        BlockProofError::ExecutedBlockWireHashUnavailable(height),
     ] {
         assert_eq!(
             super::map_block_proof_error(error).into_response().status(),
@@ -3288,3 +3870,6 @@ fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
     }
 }
 include!("part_5b_sccp_bundle.rs");
+
+#[cfg(feature = "connect")]
+include!("part_5_threshold_key_lifecycle.rs");

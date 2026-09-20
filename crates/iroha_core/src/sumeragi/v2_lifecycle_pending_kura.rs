@@ -54,6 +54,9 @@ pub(in crate::sumeragi) enum ProductionPendingKuraApplyRecoveryErrorV1 {
     /// The replay reached Completed without a fully drained finality owner.
     #[error("pending Kura recovery completed without exact drained finality")]
     IncompleteFinality,
+    /// Verified application could not durably settle its exact surviving lifecycle row.
+    #[error("pending Kura Apply lifecycle settlement failed: {0}")]
+    LifecycleSettlement(&'static str),
     /// Local completion or reducer replay failed closed.
     #[error(transparent)]
     Effect(#[from] crate::sumeragi::v2_effects::EffectExecutorError),
@@ -184,7 +187,8 @@ impl PendingKuraProductionLifecycleV1 {
                 .close_admission_for_restart();
             return Err(ProductionPendingKuraApplyRecoveryErrorV1::MissingEvidence);
         }
-        self.launched
+        let progress = self
+            .launched
             .with_runner_setup(runner, |executor, services| {
                 let stage = executor
                     .pending_kura_apply_recovery_evidence()
@@ -234,7 +238,26 @@ impl PendingKuraProductionLifecycleV1 {
                         stage,
                     })
                 }
-            })
+            })?;
+        if matches!(
+            progress,
+            ProductionPendingKuraApplyRecoveryProgressV1::Completed { .. }
+        ) {
+            let guard = self.launched.services.lifecycle_output_guard();
+            let operation = guard
+                .begin_fail_stop_operation()
+                .ok_or(ProductionPendingKuraApplyRecoveryErrorV1::MissingEvidence)?;
+            self.launched
+                .owner
+                .settle_pending_kura_apply(
+                    &self.installed,
+                    &self.launched.executor,
+                    &self.launched.services,
+                )
+                .map_err(ProductionPendingKuraApplyRecoveryErrorV1::LifecycleSettlement)?;
+            operation.complete();
+        }
+        Ok(progress)
     }
 
     /// Construct and authenticate lane recovery after the local Apply completes.

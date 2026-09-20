@@ -224,8 +224,9 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             "network-g4p-mandatory-cases",
             "network-g12p-ten-seeds",
             "network-g12p-rotating-fault-soak",
+            "scale-complete-parent-preflight",
             "scale-five-paired-trials",
-            "scale-evidence-validation",
+            "scale-retained-verification-and-publication",
             "network-chaos-100000-height",
         ),
         "final-bootstrap-publication": (
@@ -247,7 +248,7 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
             "eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb"
         ),
         "network-scale-soak": (
-            "a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663"
+            "9df5a8d32471bd8cdecc654a8146f380597a1ca3c1824942aadbbbc8a1be2388"
         ),
         "final-bootstrap-publication": (
             "76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd"
@@ -287,7 +288,7 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
     } == {
         "offline-toolchain-sdk": 23,
         "formal-proof-tools": 38,
-        "network-scale-soak": 7,
+        "network-scale-soak": 8,
         "final-bootstrap-publication": 8,
     }
     final_arguments = tuple(
@@ -441,12 +442,12 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
 
         network_class = module.ReleaseApprovalClass.NETWORK_SCALE_SOAK
         extra_network_operation = copy.deepcopy(documents[network_class])
-        eighth_operation = copy.deepcopy(extra_network_operation["operations"][-1])
-        eighth_operation["ordinal"] = 7
-        eighth_operation["operation_id"] = "network-unapproved-eighth-operation"
-        extra_network_operation["operations"].append(eighth_operation)
+        ninth_operation = copy.deepcopy(extra_network_operation["operations"][-1])
+        ninth_operation["ordinal"] = 8
+        ninth_operation["operation_id"] = "network-unapproved-ninth-operation"
+        extra_network_operation["operations"].append(ninth_operation)
         extra_network_path = _approval_write(
-            root / "network-eighth-operation.json",
+            root / "network-ninth-operation.json",
             _approval_canonical(extra_network_operation),
         )
         with pytest.raises(
@@ -457,6 +458,101 @@ def _case_release_approval_four_class_binding_and_path_free_archives() -> None:
                 expected_class=network_class,
                 expectation=expectations[network_class],
             )
+
+        # These records authorize parent-owned obligations, not independently
+        # executable commands or operator-supplied descriptors and seed bytes.
+        network_operations = documents[network_class]["operations"]
+        scaling_operations = network_operations[4:7]
+        assert tuple(record["tool_id"] for record in scaling_operations) == (
+            "release-bootstrap",
+            "release-bootstrap",
+            "release-bootstrap",
+        )
+        assert tuple(record["arguments"][0] for record in scaling_operations) == (
+            "operation:release-scaling.complete-parent-preflight.v1",
+            "operation:release-scaling.fixed-five-paired-trials.v1",
+            "operation:release-scaling.verify-retained-and-publish-parent-record.v1",
+        )
+        old_scaling_operations = [
+            {
+                "operation_id": "scale-five-paired-trials",
+                "tool_id": "python3",
+                "arguments": [
+                    "-I",
+                    "-S",
+                    "scripts/nexus/run_multilane_scaling_gate.py",
+                    "--operation-id",
+                    "release-scaling.five-paired-trials.v1",
+                    "--hardware-identity-id",
+                    "archive:release-scaling.hardware-identity.v1",
+                    "--configuration-id",
+                    "archive:release-scaling.configuration.v1",
+                    "--trial-harness-id",
+                    "archive:release-scaling.trial-harness.v1",
+                    "--evidence-root-id",
+                    _APPROVAL_EVIDENCE_ROOT_ID,
+                ],
+            },
+            {
+                "operation_id": "scale-evidence-validation",
+                "tool_id": "python3",
+                "arguments": [
+                    "-I",
+                    "-S",
+                    "scripts/nexus/validate_multilane_scaling_evidence.py",
+                    "archive:release-scaling.evidence-manifest.v1",
+                    "--expected-source-revision",
+                    _APPROVAL_CANDIDATE_OID,
+                    "--quiet",
+                ],
+            },
+        ]
+        invalid_scaling_plans = [
+            (
+                "retired-scaling-plan",
+                copy.deepcopy(network_operations[:4])
+                + old_scaling_operations
+                + copy.deepcopy(network_operations[7:]),
+            ),
+        ]
+        for missing_ordinal in range(4, 7):
+            missing_operation = copy.deepcopy(network_operations)
+            missing_operation.pop(missing_ordinal)
+            invalid_scaling_plans.append(
+                (f"missing-scaling-operation-{missing_ordinal}", missing_operation)
+            )
+        for operation_ordinal, record in enumerate(scaling_operations, start=4):
+            # Drop every declared input/ownership obligation independently;
+            # the exact binding must reject even otherwise canonical records.
+            arguments = record["arguments"]
+            for argument_index in range(1, len(arguments), 2):
+                assert arguments[argument_index].startswith("--")
+                missing_obligation = copy.deepcopy(network_operations)
+                del missing_obligation[operation_ordinal]["arguments"][
+                    argument_index : argument_index + 2
+                ]
+                invalid_scaling_plans.append(
+                    (
+                        f"missing-scaling-obligation-{operation_ordinal}-{argument_index}",
+                        missing_obligation,
+                    )
+                )
+        for label, invalid_operations in invalid_scaling_plans:
+            invalid_document = copy.deepcopy(documents[network_class])
+            invalid_document["operations"] = invalid_operations
+            for ordinal, record in enumerate(invalid_operations):
+                record["ordinal"] = ordinal
+            invalid_path = _approval_write(
+                root / f"{label}.json", _approval_canonical(invalid_document)
+            )
+            with pytest.raises(
+                module.ReleaseApprovalError, match="exact planned invocation"
+            ):
+                module.load_protected_release_approval(
+                    invalid_path,
+                    expected_class=network_class,
+                    expectation=expectations[network_class],
+                )
 
         first_class = module.APPROVAL_CLASS_ORDER[0]
         mismatched = copy.deepcopy(expectations[first_class])

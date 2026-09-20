@@ -161,15 +161,95 @@ pub(crate) fn quote_and_sign_transaction(
     requested_fee_payment: FeePaymentIntent,
     metadata: Metadata,
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
+    quote_and_sign_transaction_inner(
+        client,
+        executable,
+        requested_fee_payment,
+        metadata,
+        None,
+        None,
+    )
+}
+
+/// Bound the exact unsigned payload to its authorization before fee quoting.
+/// Quoting and signing retain that payload's original timestamp and bounded TTL.
+pub(crate) fn quote_and_sign_transaction_with_expiry(
+    client: &BlockingClient,
+    executable: Executable,
+    requested_fee_payment: FeePaymentIntent,
+    metadata: Metadata,
+    execution_expiry_ms: u64,
+) -> Result<(SignedTransaction, FeeQuoteResponse)> {
+    quote_and_sign_transaction_inner(
+        client,
+        executable,
+        requested_fee_payment,
+        metadata,
+        Some(execution_expiry_ms),
+        None,
+    )
+}
+
+/// Select an intentional admission corridor before quoting the exact payload.
+/// Ordinary lifecycle certificates still retain the signed execution expiry;
+/// callers of the default helpers keep the account draft's QueuePlanSynced intent.
+pub(crate) fn quote_and_sign_transaction_with_admission_and_expiry(
+    client: &BlockingClient,
+    executable: Executable,
+    requested_fee_payment: FeePaymentIntent,
+    metadata: Metadata,
+    admission_intent: iroha::data_model::transaction::TransactionAdmissionIntent,
+    execution_expiry_ms: u64,
+) -> Result<(SignedTransaction, FeeQuoteResponse)> {
+    quote_and_sign_transaction_inner(
+        client,
+        executable,
+        requested_fee_payment,
+        metadata,
+        Some(execution_expiry_ms),
+        Some(admission_intent),
+    )
+}
+
+fn bound_transaction_payload_lifetime(
+    payload: &mut iroha::data_model::transaction::TransactionPayload,
+    execution_expiry_ms: u64,
+) -> Result<()> {
+    let remaining = execution_expiry_ms
+        .checked_sub(payload.creation_time_ms)
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| eyre!("transaction has no remaining signed execution window"))?;
+    let configured = payload
+        .time_to_live_ms
+        .ok_or_else(|| eyre!("authorized transaction omits its required TTL"))?;
+    payload.time_to_live_ms = Some(configured.min(remaining));
+    Ok(())
+}
+
+fn quote_and_sign_transaction_inner(
+    client: &BlockingClient,
+    executable: Executable,
+    requested_fee_payment: FeePaymentIntent,
+    metadata: Metadata,
+    execution_expiry_ms: Option<u64>,
+    admission_intent: Option<iroha::data_model::transaction::TransactionAdmissionIntent>,
+) -> Result<(SignedTransaction, FeeQuoteResponse)> {
     validate_executable_fee_payment(&executable, &requested_fee_payment)?;
     let account = client.account_client();
+    let mut draft = iroha::client::AccountTransactionDraft::new(
+        executable.clone(),
+        requested_fee_payment.clone(),
+        metadata,
+    );
+    if let Some(intent) = admission_intent {
+        draft = draft.with_admission_intent(intent);
+    }
     let mut payload = account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            executable.clone(),
-            requested_fee_payment.clone(),
-            metadata,
-        ))
+        .prepare_transaction(draft)
         .wrap_err("Failed to build exact unsigned transaction payload for fee quoting")?;
+    if let Some(expiry) = execution_expiry_ms {
+        bound_transaction_payload_lifetime(&mut payload, expiry)?;
+    }
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("Failed to request an exact transaction fee quote")?;
@@ -1180,6 +1260,9 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         )
         .map(|()| std::process::ExitCode::SUCCESS);
     }
+    if let Some(result) = run_local_dataspace_profile(&args, io::stdout()) {
+        return result.map(|()| std::process::ExitCode::SUCCESS);
+    }
     if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
         reject_irrelevant_taira_public_reset_globals(&args)?;
         return map_command_result(reset.run_without_client_config(io::stdout()))
@@ -1213,6 +1296,50 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
                 .map(|()| std::process::ExitCode::SUCCESS);
         }
         unreachable!("local SoraFS pack dispatch matched above");
+    }
+    if matches!(
+        &args.command,
+        Command::Tx(transaction::Command::CollectScalingInputs(_))
+            | Command::Ledger(ledger::Command::Transaction(
+                transaction::Command::CollectScalingInputs(_)
+            ))
+    ) {
+        let (Some(fd), Some(source)) = (args.config_fd, args.config_source_path.as_deref()) else {
+            return Err(Report::new(MainError::CliArgs(
+                "scaling collection requires --config-fd and --config-source-path".to_owned(),
+            )));
+        };
+        if !args.machine
+            || effective_output_format(&args) != CliOutputFormat::Json
+            || args.config.is_some()
+            || args.operator_private_key_file.is_some()
+            || args.operator_private_key_fd.is_some()
+            || args.verbose
+            || args.metadata.is_some()
+            || args.input
+            || args.output
+            || args.fee_payment.fee_payer.is_some()
+            || args.fee_payment.fee_program.is_some()
+            || args.fee_payment.fee_program_revision.is_some()
+        {
+            return Err(Report::new(MainError::CliArgs(
+                "scaling collection requires machine JSON and only its original inherited client"
+                    .to_owned(),
+            )));
+        }
+        if let Command::Tx(transaction::Command::CollectScalingInputs(command))
+        | Command::Ledger(ledger::Command::Transaction(
+            transaction::Command::CollectScalingInputs(command),
+        )) = args.command
+        {
+            return map_command_result(command.run_with_inherited(
+                fd,
+                source,
+                &mut io::stdout().lock(),
+            ))
+            .map(|()| std::process::ExitCode::SUCCESS);
+        }
+        unreachable!("fixed collection dispatch matched above");
     }
     let (load_path, config_was_explicit) = args.config.as_ref().map_or_else(
         || {
@@ -1312,6 +1439,21 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         context.transaction_metadata = Some(metadata);
     }
     map_command_result(args.command.run(&mut context)).map(|()| std::process::ExitCode::SUCCESS)
+}
+fn run_local_dataspace_profile(
+    args: &Args,
+    output: impl std::io::Write,
+) -> Option<ReportResult<(), MainError>> {
+    let Command::Taira(taira::Command::DataspaceDeploy(
+        taira_dataspace_deploy::Command::ExportProfile(command),
+    )) = &args.command
+    else {
+        return None;
+    };
+    Some((|| {
+        reject_irrelevant_local_tool_globals(args, "taira dataspace-deploy export-profile")?;
+        map_command_result(command.run_without_client_config(output))
+    })())
 }
 fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
     result.into_report().map_err(|report| {
@@ -4883,6 +5025,8 @@ mod transaction {
         Ping(Ping),
         /// Collect an exact fixed-schedule transaction trace for multilane qualification
         Load(crate::transaction_load::Args),
+        /// Collect complete canonical finality and transaction inputs from an original stopped validator
+        CollectScalingInputs(crate::transaction_load::collect_inputs::Args),
         /// Send a transaction using IVM bytecode
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
@@ -4898,6 +5042,7 @@ mod transaction {
                 Get(cmd) => cmd.run(context),
                 Ping(cmd) => cmd.run(context),
                 Load(cmd) => cmd.run(context),
+                CollectScalingInputs(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
                 SignedSize(cmd) => cmd.run(context),

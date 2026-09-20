@@ -2298,7 +2298,6 @@ fn create_manifest_readback_setup_with_seed(
         NonZeroU64::new(height).expect("nonzero fixture height"),
         previous,
         None,
-        None,
         height,
         0,
     );
@@ -2371,7 +2370,6 @@ fn ensure_authority_registered(
         NonZeroU64::new(*next_height).expect("block height fits into NonZeroU64"),
         prev_hash,
         None,
-        None,
         *next_height,
         0,
     );
@@ -2428,7 +2426,6 @@ fn attach_governance_revocation(
     let header = BlockHeader::new(
         NonZeroU64::new(*next_height).expect("block height fits into NonZeroU64"),
         prev_hash,
-        None,
         None,
         *next_height,
         0,
@@ -2519,7 +2516,6 @@ fn bind_alias_with_proof(
     let header = BlockHeader::new(
         NonZeroU64::new(*next_height).unwrap_or_else(|| NonZeroU64::new(1).unwrap()),
         prev_hash,
-        None,
         None,
         *next_height,
         0,
@@ -3255,7 +3251,6 @@ fn commit_pin_readback_fixture(harness: &ToriiHarness) {
     let header = BlockHeader::new(
         NonZeroU64::new(height).expect("nonzero fixture height"),
         previous,
-        None,
         None,
         height,
         0,

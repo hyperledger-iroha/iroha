@@ -7923,15 +7923,6 @@ fn parse_route_via_dev(line: &str) -> (Option<String>, Option<String>) {
     }
     (via, dev)
 }
-fn apply_terminal_network_lifecycle(state: &mut State, active: bool, repair_required: bool) {
-    if !active && !repair_required {
-        state.applied_network = None;
-        state.network_service = None;
-        if state.worker_identity.is_none() && state.network_worker_identity.is_none() {
-            clear_session_binding(state);
-        }
-    }
-}
 fn current_state() -> Result<State, ControllerError> {
     let mut state = load_state()?;
     hydrate_runtime_fields(&mut state);
@@ -14302,10 +14293,13 @@ mod tests {
             applied_network: Some(applied.clone()),
             ..State::default()
         };
-        apply_terminal_network_lifecycle(&mut state, false, true);
+        scrub_stale_process_with(&mut state, 1, |_| Ok(false))
+            .expect("terminal state retains its outstanding cleanup journal");
+        assert!(state.repair_required);
         assert_eq!(state.applied_network, Some(applied));
         assert_eq!(state.network_service.as_deref(), Some("resolvectl"));
-        apply_terminal_network_lifecycle(&mut state, false, false);
+        cleanup_persisted_network_with(&mut state, &mut FakeNetworkCleanupOps::default())
+            .expect("successful repair releases the network snapshot");
         assert!(state.applied_network.is_none());
         assert!(state.network_service.is_none());
 
@@ -14330,10 +14324,11 @@ mod tests {
             message: "private relay handshake failure".to_owned(),
             ..State::default()
         };
-        apply_terminal_network_lifecycle(&mut exiting, false, false);
+        scrub_stale_process_with(&mut exiting, 1, |_| Ok(true))
+            .expect("a live worker retains its caller binding");
         assert_eq!(exiting.owner_uid, Some(1_000));
-        exiting.worker_identity = None;
-        apply_terminal_network_lifecycle(&mut exiting, false, false);
+        scrub_stale_process_with(&mut exiting, 1, |_| Ok(false))
+            .expect("an exited worker releases its repaired session");
         assert!(!state_has_session_binding(&exiting));
         assert_eq!(exiting.bytes_in, 0);
         assert_eq!(exiting.bytes_out, 0);

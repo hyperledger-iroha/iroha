@@ -934,17 +934,26 @@ impl Kura {
                 } else if !plan.routes.is_empty()
                     && self.native_amx_publication_plan_is_durably_complete_under_prune_and_canonical_guards(carrier, &plan)? {
                     return Ok(false);
-                } else if target_indices.len() != evidence.artifacts.len() {
-                    // A partial repair must not reconstruct a subset of an indexed
-                    // carrier and silently forget its other publication obligations.
+                } else if target_indices.len() != evidence.artifacts.len()
+                    && Self::read_native_amx_publication_index_for_store(&self.store_root)?
+                        .records.get(&carrier).is_some_and(|record|
+                            record.origin == NativeAmxPublicationIndexOriginV1::CanonicalWrite)
+                {
+                    // An unfinished original write still needs its complete
+                    // carrier owner. Only separately authenticated completed
+                    // repair may prove every non-target already terminal.
                     return Err(Error::PruneIntentConflict(
                         "Native AMX targeted repair lacks the complete carrier reservation".to_owned(),
                     ));
                 }
                 let merge =
                     self.native_amx_capacity_merge_entry_under_prune_and_canonical_guards(block)?;
-                let publication =
-                    self.prepare_native_amx_publication_index(block, merge.as_ref(), None)?;
+                let publication = self.prepare_native_amx_repair_publication_index(
+                    block,
+                    merge.as_ref(),
+                    evidence,
+                    target_indices,
+                )?;
                 self.admit_native_amx_publication_capacity_plan(carrier, plan, None, publication)?
             }
             None => None,
@@ -1015,7 +1024,7 @@ impl Kura {
     }
     fn complete_native_amx_publication_route_capacity_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         namespace: &BoundProgressNamespace,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
     ) -> Result<()> {
@@ -1255,9 +1264,10 @@ impl Kura {
                 NativeAmxPublicationCarrier,
                 NativeAmxPublicationCapacityReservation,
             >::new();
-            // Every unfinished publication has an index persisted before its canonical
-            // carrier. A completed tip has no remaining publication obligation; deriving
-            // one from its body would resurrect retired routes during geometry replay.
+            // Initial publication persists its index before the canonical carrier;
+            // authenticated later repairs persist a new index before any repair write.
+            // A completed tip has no remaining publication obligation; deriving one
+            // from its body would resurrect retired routes during geometry replay.
             // Durable locators include unfinished carriers below an ordinary tip.
             // Classify every record against the independently resolved canonical marker;
             // an omitted body pin or a different hash never authorizes retirement.
@@ -1603,6 +1613,15 @@ impl Kura {
                     return Err(Error::PruneIntentConflict(
                         "Native recovery compact association changed its recorded hash".to_owned(),
                     ));
+                }
+                if let Some(record) = pending_index.records.get(&expected)
+                    && record.origin == NativeAmxPublicationIndexOriginV1::CompletedRepair
+                {
+                    self.authenticate_native_amx_completed_repair_on_startup(
+                        &block,
+                        merge.as_ref(),
+                        record,
+                    )?;
                 }
                 let (carrier, plan) = match self
                     .native_amx_publication_plan_for_storage_under_prune_and_canonical_guards(
@@ -1956,7 +1975,7 @@ impl Kura {
     /// before those sibling mutations. Caller holds prune/canonical/geometry/sidecar.
     fn validate_native_amx_startup_completed_pair_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         namespace: &BoundProgressNamespace,
         admitted: &NativeAmxEvidenceInventory,
         manifest: &NativeAmxParticipantApplicationManifestArtifactV1,

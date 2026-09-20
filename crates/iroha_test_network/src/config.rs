@@ -17,7 +17,7 @@ use iroha_core::{
     state::{State, World},
     sumeragi::network_topology::Topology as CoreTopology,
 };
-use iroha_crypto::{Hash, KeyPair, MerkleTree, SignatureOf};
+use iroha_crypto::{Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     Registrable as _,
     account::{Account, AccountId},
@@ -43,9 +43,8 @@ use iroha_data_model::{
         },
     },
     permission::Permission,
-    prelude::{HashOf, Transfer},
-    transaction::{Executable, signed::TransactionResultInner},
-    trigger::TimeTriggerEntrypoint,
+    prelude::Transfer,
+    transaction::Executable,
 };
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount,
@@ -1045,11 +1044,15 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
     }
     // Preserve already computed execution results while restoring the canonical genesis signature.
     if has_results {
-        block.0 = rebuild_block_with_results(&block.0, genesis_key_pair);
+        block.0 = resign_genesis(&block.0, genesis_key_pair);
         return;
     }
+    // A builder-owned proposal mutation invalidates both its execution outputs
+    // and signature. Sign those exact new proposal bytes before strict Core
+    // validation; publish the replacement only after execution succeeds.
+    let signed_proposal = GenesisBlock(resign_genesis(&block.0, genesis_key_pair));
     let (executed, _) = preexecute_genesis_with_runtime_config(
-        block,
+        &signed_proposal,
         genesis_account,
         topology,
         genesis_key_pair,
@@ -1062,29 +1065,24 @@ pub(crate) fn ensure_genesis_results_with_runtime_config(
     block.0 = executed;
 }
 fn genesis_results_are_canonical(block: &iroha_data_model::block::SignedBlock) -> bool {
-    if !block.has_results() {
-        return false;
-    }
-    let entrypoint_count = block.entrypoint_hashes().len();
-    let result_count = block.results().len();
-    if result_count != entrypoint_count || block.results().any(|result| result.as_ref().is_err()) {
-        return false;
-    }
-    let Ok(minimum_committed_fragments) = u64::try_from(result_count) else {
-        return false;
-    };
-    let Some(actual_committed_fragments) = block.committed_fragment_count() else {
-        return false;
-    };
-    if actual_committed_fragments < minimum_committed_fragments
-        || block.validate_entrypoint_merkle_cache().is_err()
-        || block.validate_result_merkle_cache().is_err()
+    if !block.has_results()
+        || block.validate_output_merkle_cache().is_err()
+        || block
+            .output_results()
+            .any(|result| result.as_ref().is_err())
     {
         return false;
     }
-    let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
-    block.header().result_merkle_root() == expected_result_root
+    // Complete typed validation checks every exact Network source plus internal
+    // Pipeline/Time ownership. Internal invocations have no separate input leaf.
+    let Ok(minimum_committed_fragments) = u64::try_from(block.execution_outputs().len()) else {
+        return false;
+    };
+    block
+        .committed_fragment_count()
+        .is_some_and(|actual| actual >= minimum_committed_fragments)
 }
+
 fn genesis_signature_is_canonical(
     block: &iroha_data_model::block::SignedBlock,
     genesis_key_pair: &KeyPair,
@@ -1229,13 +1227,22 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
                 .has_results()
                 .then(|| {
                     rejected_block
-                        .results()
+                        .execution_outputs()
+                        .iter()
                         .enumerate()
-                        .find_map(|(index, result)| {
-                            result
-                                .as_ref()
-                                .err()
-                                .map(|tx_err| format!("tx#{index}: {tx_err}; details: {tx_err:?}"))
+                        .find_map(|(index, output)| {
+                            use iroha_data_model::block::execution_output::ExecutionOutputV1;
+                            let error = output.result().as_ref().err()?;
+                            let source = match output {
+                                ExecutionOutputV1::Network(row) => {
+                                    format!("tx#{}", row.input_index)
+                                }
+                                ExecutionOutputV1::Pipeline(_) => {
+                                    format!("pipeline output#{index}")
+                                }
+                                ExecutionOutputV1::Time(_) => format!("time output#{index}"),
+                            };
+                            Some(format!("{source}: {error}; details: {error:?}"))
                         })
                 })
                 .flatten();
@@ -1267,7 +1274,7 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     drop(state_block);
     let signed_block: iroha_data_model::block::SignedBlock = valid_block.into();
     Ok((
-        rebuild_block_with_results(&signed_block, genesis_key_pair),
+        resign_genesis(&signed_block, genesis_key_pair),
         staged_hashes,
     ))
 }
@@ -1380,88 +1387,25 @@ fn install_preexec_lane_manifests(
     state.install_lane_manifests(&Arc::new(lane_manifests));
     Ok(())
 }
-fn rebuild_block_with_results(
+fn resign_genesis(
     template: &iroha_data_model::block::SignedBlock,
     genesis_key_pair: &KeyPair,
 ) -> iroha_data_model::block::SignedBlock {
-    let transactions = template
-        .external_transactions()
-        .cloned()
-        .collect::<Vec<_>>();
-    let time_triggers = template.time_triggers().cloned().collect::<Vec<_>>();
-    let hashes = template.entrypoint_hashes().collect::<Vec<_>>();
-    let results = template
-        .results()
-        .map(|result| match result.as_ref() {
-            Ok(seq) => Ok(seq.clone()),
-            Err(err) => Err(err.clone()),
-        })
-        .collect::<Vec<_>>();
-    rebuild_block_from_parts(
-        template,
-        transactions,
-        time_triggers,
-        hashes,
-        results,
-        genesis_key_pair,
-    )
-}
-fn rebuild_block_from_parts(
-    template: &iroha_data_model::block::SignedBlock,
-    transactions: Vec<iroha_data_model::transaction::SignedTransaction>,
-    time_triggers: Vec<TimeTriggerEntrypoint>,
-    hashes: Vec<HashOf<iroha_data_model::transaction::TransactionEntrypoint>>,
-    results: Vec<TransactionResultInner>,
-    genesis_key_pair: &KeyPair,
-) -> iroha_data_model::block::SignedBlock {
-    let header = template.payload().header;
-    let initial_signature = template.signatures().next().cloned().unwrap_or_else(|| {
-        iroha_data_model::block::BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(genesis_key_pair.private_key(), header.hash())
-                .expect("sign genesis placeholder header"),
-        )
-    });
-    let da_commitments = template.da_commitments().cloned();
-    let da_proof_policies = template.da_proof_policies().cloned();
-    let da_pin_intents = template.da_pin_intents().cloned();
-    let committed_fragment_count = template.committed_fragment_count();
-    let signer_index = initial_signature.index();
-    let mut working = iroha_data_model::block::SignedBlock::presigned(
-        initial_signature,
-        header,
-        transactions.clone(),
-    );
-    working.set_da_commitments(da_commitments.clone());
-    working.set_da_proof_policies(da_proof_policies.clone());
-    working.set_da_pin_intents(da_pin_intents.clone());
-    working
-        .set_transaction_results(time_triggers.clone(), &hashes, results.clone())
-        .expect("genesis result hashes should match payload");
-    if let Some(count) = committed_fragment_count {
-        working.set_committed_fragment_count(count);
-    }
+    // Preserve the complete proposal or executed object, including internal
+    // outputs, source context, AXT/FASTPQ data and fragment accounting. Signing never rebuilds
+    // results or restores outputs invalidated by a proposal change.
+    let mut signed = template.clone();
     let signature = iroha_data_model::block::BlockSignature::new(
-        signer_index,
-        SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
-            .expect("sign rebuilt genesis header"),
+        0,
+        SignatureOf::try_from_hash(genesis_key_pair.private_key(), signed.hash())
+            .expect("sign exact genesis proposal header"),
     );
-    let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
-        signature,
-        working.payload().header,
-        transactions,
-    );
-    rebuilt.set_da_commitments(da_commitments);
-    rebuilt.set_da_proof_policies(da_proof_policies);
-    rebuilt.set_da_pin_intents(da_pin_intents);
-    rebuilt
-        .set_transaction_results(time_triggers, &hashes, results)
-        .expect("genesis result hashes should match payload");
-    if let Some(count) = committed_fragment_count {
-        rebuilt.set_committed_fragment_count(count);
-    }
-    rebuilt
+    signed
+        .replace_signatures(BTreeSet::from([signature]))
+        .expect("replace genesis with its one canonical signature");
+    signed
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1469,6 +1413,61 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{asset::AssetDefinition, domain::Domain};
     use norito::codec::Decode;
+
+    // Genesis uses the same exact four-validator committee and authenticated PoPs
+    // as a real minimum-size test network; individual tests may own one key.
+    fn genesis_committee_with_key(
+        first: &KeyPair,
+    ) -> (UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) {
+        let mut keys = vec![first.clone()];
+        keys.extend((0xC1..=0xC3).map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic test-network validator")
+        }));
+        let mut entries = keys
+            .into_iter()
+            .map(|key| {
+                GenesisTopologyEntry::new(
+                    PeerId::new(key.public_key().clone()),
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("validator BLS PoP"),
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.peer.cmp(&right.peer));
+        let topology = entries
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<UniqueVec<_>>();
+        assert_eq!(topology.len(), 4, "fixture validators must be distinct");
+        (topology, entries)
+    }
+    fn genesis_committee() -> (UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) {
+        let first = KeyPair::try_from_seed(vec![0xC0; 32], Algorithm::BlsNormal)
+            .expect("deterministic first test-network validator");
+        genesis_committee_with_key(&first)
+    }
+    // Adversarial wire fixture only: production cannot mutate the fragment count
+    // independently of its one complete execution-output owner.
+    #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
+    #[norito_schema(name = "iroha_test_network::config::tests::MutableGenesisWire")]
+    struct MutableGenesisWire {
+        signatures: BTreeSet<iroha_data_model::block::BlockSignature>,
+        payload: iroha_data_model::block::BlockPayload,
+        result: Option<iroha_data_model::block::BlockResult>,
+    }
+    fn set_fixture_fragment_count(block: &mut iroha_data_model::block::SignedBlock, count: u64) {
+        use norito::codec::{DecodeAll, Encode};
+        let bytes = block.encode();
+        let mut wire = MutableGenesisWire::decode_all(&mut bytes.as_slice())
+            .expect("decode complete genesis mutation fixture");
+        wire.result
+            .as_mut()
+            .expect("fixture is executed")
+            .committed_fragment_count = count;
+        *block = iroha_data_model::block::SignedBlock::decode_all(&mut wire.encode().as_slice())
+            .expect("fragment mutation remains structurally decodable");
+    }
     #[test]
     fn base_config_enables_confidential_verification() {
         let table = super::base_iroha_config();
@@ -1589,30 +1588,29 @@ mod tests {
     #[test]
     fn builds_signed_genesis_block() {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
-        let block = genesis(Vec::new(), topology, vec![entry]);
+        let (topology, entries) = genesis_committee_with_key(&bls);
+        let block = genesis(Vec::new(), topology, entries);
         assert!(block.0.signatures().next().is_some());
         assert!(
             block.0.has_results(),
             "genesis block must carry execution results"
         );
         assert!(
-            block.0.results().all(|result| result.as_ref().is_ok()),
+            block
+                .0
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
             "genesis transactions should execute successfully"
         );
     }
     #[test]
     fn minimal_genesis_seeds_neutral_first_release_hijiri_parameters() {
         init_instruction_registry();
+        let (topology, entries) = genesis_committee();
         let (block, _, _, _) = build_minimal_genesis_unexecuted(
             Vec::new(),
-            UniqueVec::new(),
-            Vec::new(),
+            topology,
+            entries,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
         );
         let mut hijiri_parameters = Vec::new();
@@ -1647,6 +1645,7 @@ mod tests {
     #[test]
     fn parameter_only_addition_does_not_create_empty_genesis_transaction() {
         init_instruction_registry();
+        let (topology, entries) = genesis_committee();
         let parameter = Parameter::Block(
             iroha_data_model::parameter::system::BlockParameter::MaxTransactions(
                 std::num::NonZeroU64::new(17).expect("non-zero test transaction limit"),
@@ -1654,16 +1653,16 @@ mod tests {
         );
         let (baseline, _, _, _) = build_minimal_genesis_unexecuted(
             Vec::new(),
-            UniqueVec::new(),
-            Vec::new(),
+            topology.clone(),
+            entries.clone(),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
         );
         let (with_parameter, _, _, _) = build_minimal_genesis_unexecuted(
             vec![vec![InstructionBox::from(SetParameter::new(
                 parameter.clone(),
             ))]],
-            UniqueVec::new(),
-            Vec::new(),
+            topology,
+            entries,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
         );
 
@@ -1689,12 +1688,7 @@ mod tests {
         use iroha_core::block::check_genesis_block;
         use iroha_data_model::{asset::AssetDefinition, isi::Register};
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "genesis_extra".parse().unwrap(),
@@ -1707,7 +1701,7 @@ mod tests {
                 None,
             ),
         ))];
-        let block = genesis(vec![instructions], topology, vec![entry]);
+        let block = genesis(vec![instructions], topology, entries);
         let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         check_genesis_block(&block.0, &genesis_account)
             .expect("genesis authority should be permitted to seed wonderland assets");
@@ -1716,19 +1710,12 @@ mod tests {
     fn ensure_genesis_results_populates_when_preexecution_succeeds() {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()]
-            .into_iter()
-            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let (mut block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
-                vec![entry],
+                entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
         assert!(
@@ -1748,27 +1735,23 @@ mod tests {
             "ensure_genesis_results must attach execution results"
         );
         assert!(
-            block.0.results().all(|result| result.as_ref().is_ok()),
+            block
+                .0
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
             "pre-executed genesis should yield successful outcomes"
         );
     }
     #[test]
-    fn rebuild_block_with_results_preserves_committed_fragment_count() {
+    fn resign_executed_genesis_preserves_committed_fragment_count() {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()]
-            .into_iter()
-            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let (mut block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
-                vec![entry],
+                entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
         super::ensure_genesis_results(
@@ -1780,7 +1763,7 @@ mod tests {
             None,
         );
         let minimum_count =
-            u64::try_from(block.0.results().count()).expect("genesis result count fits u64");
+            u64::try_from(block.0.output_results().count()).expect("genesis result count fits u64");
         let preserved_count = block
             .0
             .committed_fragment_count()
@@ -1789,7 +1772,27 @@ mod tests {
             preserved_count >= minimum_count,
             "execution-derived committed count must cover every result row"
         );
-        let rebuilt = super::rebuild_block_with_results(&block.0, &genesis_key_pair);
+        let executed_before_resigning = block.0.clone();
+        let wrong_key = KeyPair::try_from_seed(vec![0xB5; 32], Algorithm::Ed25519)
+            .expect("deterministic unrelated genesis signer");
+        let wrong_signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(wrong_key.private_key(), block.0.hash()).unwrap(),
+        );
+        block
+            .0
+            .replace_signatures(BTreeSet::from([wrong_signature]))
+            .unwrap();
+        assert!(!super::genesis_signature_is_canonical(
+            &block.0,
+            &genesis_key_pair
+        ));
+        assert!(super::genesis_results_are_canonical(&block.0));
+        let rebuilt = super::resign_genesis(&block.0, &genesis_key_pair);
+        assert_eq!(
+            rebuilt, executed_before_resigning,
+            "re-signing must preserve every complete output field"
+        );
         assert_eq!(
             rebuilt.committed_fragment_count(),
             Some(preserved_count),
@@ -1797,13 +1800,13 @@ mod tests {
         );
         assert!(
             super::genesis_signature_is_canonical(&rebuilt, &genesis_key_pair),
-            "preserved committed fragment count must be included before the canonical signature"
+            "the canonical signature is restored without rebuilding complete outputs"
         );
         let mut extra_internal_fragments = rebuilt;
         let augmented_count = preserved_count
             .checked_add(1)
             .expect("genesis fixture committed count has room for an internal fragment");
-        extra_internal_fragments.set_committed_fragment_count(augmented_count);
+        set_fixture_fragment_count(&mut extra_internal_fragments, augmented_count);
         assert!(
             super::genesis_results_are_canonical(&extra_internal_fragments),
             "deterministic internal fragments may increase the committed count beyond the result count"
@@ -1814,19 +1817,12 @@ mod tests {
     fn ensure_genesis_results_rejects_noncanonical_fragment_count() {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()]
-            .into_iter()
-            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
-        let entry = GenesisTopologyEntry::new(
-            peer_id,
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let (mut block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
-                vec![entry],
+                entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
         super::ensure_genesis_results(
@@ -1838,12 +1834,12 @@ mod tests {
             None,
         );
         let expected_count =
-            u64::try_from(block.0.results().len()).expect("genesis result count fits u64");
+            u64::try_from(block.0.output_results().len()).expect("genesis result count fits u64");
         assert_ne!(
             expected_count, 0,
             "fixture must execute at least one entrypoint"
         );
-        block.0.set_committed_fragment_count(0);
+        set_fixture_fragment_count(&mut block.0, 0);
         super::ensure_genesis_results(
             &mut block,
             &genesis_account,
@@ -1854,22 +1850,15 @@ mod tests {
         );
     }
     #[test]
-    fn ensure_genesis_results_resigns_mutated_genesis_with_existing_results() {
+    fn ensure_genesis_results_reexecutes_after_proposal_mutation() {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()]
-            .into_iter()
-            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let (mut block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
-                vec![entry],
+                entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
         super::ensure_genesis_results(
@@ -1884,9 +1873,26 @@ mod tests {
             block.0.has_results(),
             "precondition: genesis has execution results"
         );
-        block.0.set_da_proof_policies(Some(
-            iroha_data_model::da::commitment::DaProofPolicyBundle::new(Vec::new()),
-        ));
+        let mut changed_policies = block
+            .0
+            .da_proof_policies()
+            .expect("genesis carries the active DA policies")
+            .policies
+            .clone();
+        changed_policies[0].alias = "reexecuted-default".to_owned();
+        let changed_policies = DaProofPolicyBundle::new(changed_policies);
+        assert_ne!(
+            block.0.da_proof_policies(),
+            Some(&changed_policies),
+            "fixture must change the proposal while retaining valid DA policy"
+        );
+        block
+            .0
+            .set_da_proof_policies(Some(changed_policies.clone()));
+        assert!(
+            !block.0.has_results(),
+            "proposal mutation must invalidate prior complete execution outputs"
+        );
         let stale_signature = block
             .0
             .signatures()
@@ -1899,6 +1905,19 @@ mod tests {
             stale_signature,
             "mutating header should stale existing signature"
         );
+        let error = super::populate_genesis_results(
+            &block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+            None,
+        )
+        .expect_err("strict preexecution must reject the stale proposal signature");
+        assert!(
+            format!("{error:#}").contains("must be signed with genesis private key"),
+            "the strict verifier must reject the stale signature before execution: {error:#}"
+        );
         super::ensure_genesis_results(
             &mut block,
             &genesis_account,
@@ -1906,6 +1925,15 @@ mod tests {
             &genesis_key_pair,
             None,
             None,
+        );
+        assert!(
+            super::genesis_results_are_canonical(&block.0),
+            "changed proposal must be executed again with complete typed outputs"
+        );
+        assert_eq!(
+            block.0.da_proof_policies(),
+            Some(&changed_policies),
+            "reexecution must retain the exact changed proposal metadata"
         );
         let signatures: Vec<_> = block.0.signatures().collect();
         assert_eq!(
@@ -1925,19 +1953,12 @@ mod tests {
     fn populate_genesis_results_executes_without_fallback() {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()]
-            .into_iter()
-            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let (block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
-                vec![entry],
+                entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
         let executed = super::populate_genesis_results(
@@ -1950,7 +1971,9 @@ mod tests {
         )
         .expect("genesis pre-execution should succeed");
         assert!(
-            executed.results().all(|result| result.as_ref().is_ok()),
+            executed
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
             "pre-executed genesis should not carry errors for valid proof-bearing peers"
         );
     }
@@ -1961,12 +1984,7 @@ mod tests {
         use std::num::NonZeroU32;
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
         let lane0 = LaneConfig {
             id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
@@ -1991,7 +2009,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 topology,
-                vec![entry],
+                entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
                 None,
@@ -2012,7 +2030,9 @@ mod tests {
         )
         .expect("genesis pre-execution should accept proof-policy-derived catalogs");
         assert!(
-            executed.results().all(|result| result.as_ref().is_ok()),
+            executed
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
             "pre-executed genesis should succeed with custom lane config"
         );
     }
@@ -2033,11 +2053,7 @@ mod tests {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let validator_key = KeyPair::random();
         let validator_id = AccountId::new(validator_key.public_key().clone());
         let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
@@ -2113,7 +2129,7 @@ mod tests {
                 Vec::new(),
                 post_topology_transactions,
                 topology,
-                vec![entry],
+                entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
                 None,
@@ -2153,7 +2169,9 @@ mod tests {
         )
         .expect("custom staking genesis should succeed with the resolved nexus config");
         assert!(
-            executed.results().all(|result| result.as_ref().is_ok()),
+            executed
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
             "pre-executed custom staking genesis should succeed when the builder threads the resolved nexus config"
         );
     }
@@ -2179,17 +2197,12 @@ mod tests {
             InstructionBox::from(Register::account(gas_account)),
         ]];
         let bls = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            peer_id,
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let (block, genesis_account, topology, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 extra_transactions,
                 topology,
-                vec![entry],
+                entries,
                 genesis_key_pair,
             );
         assert_eq!(
@@ -2207,7 +2220,9 @@ mod tests {
         )
         .expect("genesis pre-execution should lease aliases used by labeled genesis accounts");
         assert!(
-            executed.results().all(|result| result.as_ref().is_ok()),
+            executed
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
             "labeled genesis accounts should not fail SNS lease checks"
         );
     }
@@ -2282,12 +2297,12 @@ mod tests {
     #[should_panic(expected = "genesis pre-execution must succeed")]
     fn ensure_genesis_results_fails_closed_when_preexecution_fails() {
         init_instruction_registry();
-        let empty_topology = iroha_primitives::unique_vec::UniqueVec::new();
+        let (topology, entries) = genesis_committee();
         let (mut block, genesis_account, _, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
-                empty_topology,
-                Vec::new(),
+                topology,
+                entries,
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             );
         assert!(
@@ -2307,22 +2322,26 @@ mod tests {
     fn genesis_registers_peers_with_pop() {
         use iroha_data_model::{isi::RegisterBox, transaction::Executable};
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
-        let block = genesis(Vec::new(), topology, vec![entry]);
-        let mut register_pop = 0;
+        let (topology, entries) = genesis_committee_with_key(&bls);
+        let expected = topology.iter().cloned().collect::<BTreeSet<_>>();
+        let block = genesis(Vec::new(), topology, entries);
+        let mut registered = BTreeSet::new();
         for tx in block.0.external_transactions() {
             match tx.instructions() {
                 Executable::Instructions(isi) => {
                     for instr in isi {
-                        if let Some(RegisterBox::Peer(_)) =
+                        if let Some(RegisterBox::Peer(register)) =
                             instr.as_any().downcast_ref::<RegisterBox>()
                         {
-                            register_pop += 1;
+                            iroha_crypto::bls_normal_pop_verify(
+                                register.peer.public_key(),
+                                &register.pop,
+                            )
+                            .expect("registered committee member has its own valid PoP");
+                            assert!(
+                                registered.insert(register.peer.clone()),
+                                "no duplicate registration"
+                            );
                         }
                     }
                 }
@@ -2333,8 +2352,8 @@ mod tests {
             }
         }
         assert_eq!(
-            register_pop, 1,
-            "exactly one RegisterPeerWithPop instruction expected"
+            registered, expected,
+            "every committee member must be registered exactly once with its authenticated PoP"
         );
     }
     #[test]
@@ -2381,18 +2400,12 @@ mod tests {
                 ..Default::default()
             });
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let topology = [PeerId::new(bls.public_key().clone())]
-            .into_iter()
-            .collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let block = super::genesis_with_keypair_and_post_topology_with_policies(
             Vec::new(),
             Vec::new(),
             topology,
-            vec![entry],
+            entries,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
             Some(expected.clone()),
@@ -2448,28 +2461,18 @@ mod tests {
                 "minimal genesis should register a fixture account in garden_of_live_flowers"
             );
         }
-        let empty_topology = iroha_primitives::unique_vec::UniqueVec::new();
-        assert_registers_fixture_accounts(empty_topology, Vec::new());
+        let (topology, entries) = genesis_committee();
+        assert_registers_fixture_accounts(topology, entries);
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
-        assert_registers_fixture_accounts(topology, vec![entry]);
+        let (topology, entries) = genesis_committee_with_key(&bls);
+        assert_registers_fixture_accounts(topology, entries);
     }
     #[test]
     fn genesis_grants_alice_bootstrap_management_permissions() {
         use iroha_data_model::{isi::GrantBox, transaction::Executable};
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
-        let block = genesis(Vec::new(), topology, vec![entry]);
+        let (topology, entries) = genesis_committee_with_key(&bls);
+        let block = genesis(Vec::new(), topology, entries);
         let alice_id = sanitize_account_id(&ALICE_ID);
         let genesis_id = sanitize_account_id(&AccountId::new(
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
@@ -2548,13 +2551,8 @@ mod tests {
     fn genesis_contains_upgrade_instruction() {
         use iroha_data_model::{isi::Upgrade, transaction::Executable};
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
-        let block = genesis(Vec::new(), topology, vec![entry]);
+        let (topology, entries) = genesis_committee_with_key(&bls);
+        let block = genesis(Vec::new(), topology, entries);
         let first_tx = block.0.external_transactions().next().unwrap();
         let Executable::Instructions(isi) = first_tx.instructions() else {
             panic!("expected instructions in first transaction");
@@ -2575,13 +2573,8 @@ mod tests {
     #[test]
     fn genesis_includes_confidential_digest() {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
-        let block = genesis(Vec::new(), topology, vec![entry]);
+        let (topology, entries) = genesis_committee_with_key(&bls);
+        let block = genesis(Vec::new(), topology, entries);
         assert!(
             block.0.header().confidential_features().is_some(),
             "genesis block must advertise confidential feature digest"
@@ -2590,12 +2583,7 @@ mod tests {
     #[test]
     fn genesis_confidential_digest_tracks_registered_verifying_keys() {
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
+        let (topology, entries) = genesis_committee_with_key(&bls);
         let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "offline-test");
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
             1,
@@ -2617,7 +2605,7 @@ mod tests {
             Vec::new(),
             vec![vec![register]],
             topology,
-            vec![entry],
+            entries,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
             None,

@@ -129,6 +129,11 @@ macro_rules! reopen_single_lifecycle_bootstrap {
     ) => {
         let ($kura, _) = Kura::open_test_kura_with_configured_lane_config(&$config, &$lane_config)
             .expect(concat!($context, ": reopen Kura"));
+        assert!($kura.lane_storage_entries.lock().is_empty());
+        restore_autonomous_lane_fixture_geometry(&$kura, &$lane_config, &$payload).expect(concat!(
+            $context,
+            ": authenticate original geometry before live recovery"
+        ));
         $kura
             .bind_local_peer_id($local_peer.clone())
             .expect(concat!($context, ": bind local peer"));
@@ -236,6 +241,8 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     drop(kura);
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("reopen authenticated bootstrap Kura after catalog publication");
+    restore_autonomous_lane_fixture_geometry(&kura, &lane_config, &payload)
+        .expect("authenticate the original published geometry before live fixture use");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind bootstrap local peer");
     let generation_one = kura
@@ -274,6 +281,10 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             authentication_facts,
         )
     };
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let bootstrap_path = Kura::autonomous_lifecycle_bootstrap_path_for_entry(
         lane,
         temp_dir.path(),
@@ -325,6 +336,12 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     assert!(bootstrap_atomic_temp.exists());
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("startup quarantines the real pre-rename bootstrap temporary");
+    assert!(
+        kura.lane_storage_entries.lock().is_empty(),
+        "bootstrap quarantine and generation audit cannot publish live State geometry"
+    );
+    restore_autonomous_lane_fixture_geometry(&kura, &lane_config, &payload)
+        .expect("authenticate the original published geometry before live fixture use");
     assert!(!bootstrap_atomic_temp.exists());
     assert_retained_publication_quarantine(&bootstrap_quarantine, &bootstrap_atomic_bytes);
     assert!(!bootstrap_path.exists());
@@ -863,10 +880,12 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let (terminal_source_kura, _) =
         open_authenticated_temp_recovery_kura(&terminal_source_config, &lane_config, &catalog)
             .expect("reopen terminal source with its final payload incarnation");
+    restore_autonomous_lane_fixture_geometry(&terminal_source_kura, &lane_config, &payload)
+        .expect("authenticate the original published geometry before live fixture use");
     let terminal_execution =
         canonical_terminal_merge_execution_for_test(&terminal_source_kura, &payload, &signer);
     let (terminal_parent, terminal_carrier, terminal_merge_entry) =
-        canonical_terminal_merge_carrier_for_test(terminal_execution, 1);
+        canonical_terminal_merge_carrier_for_test(vec![terminal_execution], 1);
     let terminal_carrier_height = terminal_carrier.header().height().get();
     let terminal_carrier_hash = terminal_carrier.hash();
     drop(terminal_source_kura);
@@ -889,6 +908,8 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         let (terminal_kura, _) =
             open_authenticated_temp_recovery_kura(&terminal_config, &lane_config, &catalog)
                 .expect("reopen terminal bootstrap with its final payload incarnation");
+        restore_autonomous_lane_fixture_geometry(&terminal_kura, &lane_config, &payload)
+            .expect("authenticate the original published geometry before live fixture use");
         terminal_kura
             .bind_local_peer_id(local_peer.clone())
             .expect("bind terminal-bootstrap local peer");
@@ -1030,6 +1051,14 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         let (restarted_terminal_kura, _) =
             Kura::open_test_kura_with_configured_lane_config(&terminal_config, &lane_config)
                 .expect("receipt-terminal Live lifecycle unit is restart-valid");
+        assert!(
+            restarted_terminal_kura
+                .lane_storage_entries
+                .lock()
+                .is_empty()
+        );
+        restore_autonomous_lane_fixture_geometry(&restarted_terminal_kura, &lane_config, &payload)
+            .expect("restore the original receipt-terminal State identity before live inventory");
         restarted_terminal_kura
             .bind_local_peer_id(local_peer.clone())
             .expect("rebind restarted terminal-bootstrap local peer");
@@ -1129,7 +1158,8 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
         .enumerate()
         .map(|(index, lane)| {
             canonical_terminal_payload_for_test(
-                lane,
+                lane.lane_id,
+                lane.dataspace_id,
                 height_context_id,
                 &signer,
                 u8::try_from(index + 11).expect("capacity fixture salt fits u8"),
@@ -1139,6 +1169,15 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
     let network_id = payloads[0].network_id;
     let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("canonical terminal capacity Kura");
+    kura.bind_lane_storage_network(network_id).unwrap();
+    let incarnations = payloads
+        .iter()
+        .map(|payload| {
+            let descriptor = &payload.origin_proposal.descriptor;
+            (descriptor.lane_id, descriptor.lane_incarnation)
+        })
+        .collect();
+    publish_initial_configured_lane_geometry_for_test(&kura, &lane_config, &incarnations);
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind canonical terminal capacity peer");
     let generation = kura
@@ -1169,7 +1208,9 @@ fn canonical_terminal_capacity_fixture() -> CanonicalTerminalCapacityFixture {
             (descriptor.lane_block_height, descriptor.proposal_height),
         ));
         outcome_paths.push(Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
-            lane,
+            &kura
+                .lane_storage_entry(lane.lane_id)
+                .expect("capture the exact terminal storage identity"),
             temp_dir.path(),
             descriptor.lane_block_height,
             descriptor.proposal_height,
@@ -1516,7 +1557,13 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
     let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
         Hash::new(b"release-terminal-capacity-context"),
     ));
-    let payload = canonical_terminal_payload_for_test(&lane, height_context_id, &signer, 0x51);
+    let payload = canonical_terminal_payload_for_test(
+        lane.lane_id,
+        lane.dataspace_id,
+        height_context_id,
+        &signer,
+        0x51,
+    );
     let network_id = payload.network_id;
     let epoch = payload.epoch;
     let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
@@ -1572,6 +1619,10 @@ fn retired_release_pending_and_complete_progress_at_the_original_exact_limit() {
         .is_err(),
         "one byte below the admitted global slot must reject before Pending",
     );
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
         &lane,
         temp_dir.path(),
@@ -1627,7 +1678,8 @@ pub(crate) fn persist_merge_application_receipt_for_autonomous_payload_for_test(
         .expect("read fully authenticated autonomous merge source");
     let execution =
         canonical_terminal_merge_execution_from_durable_source_for_test(payload, source);
-    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
+    let (parent, carrier, merge_entry) =
+        canonical_terminal_merge_carrier_for_test(vec![execution], 1);
     let carrier_height = carrier.header().height().get();
     let carrier_hash = carrier.hash();
     kura.store_block(parent)
@@ -1652,7 +1704,6 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
-    let lane_entry = lane_config.primary();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Kura");
     let entrypoint = indexed_log_entrypoint([0xD2; 32], [0xD3; 32]);
@@ -1701,12 +1752,7 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         producer.private_key(),
     )
     .expect("construct merge-terminal autonomous payload");
-    kura.install_lane_incarnation_marker_for_test(
-        lane_entry,
-        proposal.descriptor.lane_incarnation,
-        0,
-    )
-    .expect("install merge-terminal lane marker");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let _execution = canonical_terminal_merge_execution_for_test(&kura, &payload, &producer);
     let recovered = kura
         .recover_autonomous_lane_block_payload(&proposal, network_id, epoch)
@@ -1909,12 +1955,6 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
         check_production_in_flight_first_release_transition(activate)
             .expect("carrier-hint promotion uses the production ActivateKura transition")
     };
-    let bootstrap_path = Kura::autonomous_lifecycle_bootstrap_path_for_entry(
-        lane,
-        temp_dir.path(),
-        1,
-        hint_free.origin_proposal.descriptor.proposal_height,
-    );
 
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("authenticated carrier-hint promotion Kura");
@@ -1922,9 +1962,21 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
     // preinstalling unrelated default markers would corrupt that binding.
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &hint_free);
     publish_temp_recovery_catalog_baseline(&kura, &catalog);
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("exact published fixture identity");
+    let lane = &lane;
+    let bootstrap_path = Kura::autonomous_lifecycle_bootstrap_path_for_entry(
+        lane,
+        temp_dir.path(),
+        1,
+        hint_free.origin_proposal.descriptor.proposal_height,
+    );
     drop(kura);
     let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
         .expect("reopen authenticated carrier-hint promotion Kura");
+    restore_autonomous_lane_fixture_geometry(&kura, &lane_config, &hint_free)
+        .expect("authenticate the original published geometry before live fixture use");
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind carrier-hint promotion local peer");
     let generation_one = kura

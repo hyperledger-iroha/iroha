@@ -22,6 +22,7 @@ async fn can_read_snapshot_after_writing() {
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -83,6 +84,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -382,6 +384,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     let restored = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(0),
         TEST_CHUNK_SIZE,
@@ -392,8 +395,9 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("read signed snapshot without canonical payload drift");
-    let mut roundtrip = String::new();
-    serialize_state_snapshot(&restored, &mut roundtrip);
+    let roundtrip = CapturedStateSnapshot::capture(&restored)
+        .expect("stable valid fixture snapshot")
+        .json;
     assert_eq!(
         roundtrip.as_bytes(),
         payload,
@@ -469,6 +473,7 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -505,8 +510,9 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura(Arc::clone(&kura));
-        let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized);
+        let mut serialized = CapturedStateSnapshot::capture(&state)
+            .expect("stable valid fixture snapshot")
+            .json;
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -538,6 +544,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let error = match try_read_snapshot(
             &store_dir,
             &kura,
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(0),
             TEST_CHUNK_SIZE,
@@ -568,16 +575,18 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
     let block = signed_block_with_transaction(accepted_log_transaction("checkpointed"));
     let block_hash = block.hash();
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
-    let expected = canonical_state_snapshot_hash(&state);
+    let expected = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     kura.store_wsv_checkpoint(1, block_hash, expected)
         .expect("persist canonical WSV checkpoint");
     let key_pair = checked_random_snapshot_keypair();
-    let mut serialized = String::new();
-    serialize_state_snapshot(&state, &mut serialized);
+    let serialized = CapturedStateSnapshot::capture(&state)
+        .expect("stable valid fixture snapshot")
+        .json;
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let restored = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -588,7 +597,10 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         StateTelemetry::new(<_>::default(), true),
     )
     .expect("an exact signed snapshot must match its Kura WSV checkpoint");
-    assert_eq!(canonical_state_snapshot_hash(&restored), expected);
+    assert_eq!(
+        canonical_state_snapshot_hash(&restored).expect("stable valid fixture snapshot"),
+        expected
+    );
     drop(restored);
     let injected_account = AccountId::new(
         checked_seeded_keypair(0xD1, Algorithm::Ed25519)
@@ -604,17 +616,19 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
             Vec::new(),
         )),
     );
-    let actual = canonical_state_snapshot_hash(&state);
+    let actual = canonical_state_snapshot_hash(&state).expect("stable valid fixture snapshot");
     assert_ne!(
         actual, expected,
         "hostile WSV mutation must affect its checkpoint"
     );
-    serialized.clear();
-    serialize_state_snapshot(&state, &mut serialized);
+    let serialized = CapturedStateSnapshot::capture(&state)
+        .expect("stable valid fixture snapshot")
+        .json;
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -664,8 +678,9 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
             Arc::clone(&kura),
             iroha_model_base::chain::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
-        let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized);
+        let mut serialized = CapturedStateSnapshot::capture(&state)
+            .expect("stable valid fixture snapshot")
+            .json;
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -700,6 +715,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         let result = try_read_snapshot(
             &store_dir,
             &kura,
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(0),
             TEST_CHUNK_SIZE,
@@ -874,8 +890,9 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
         let (state, _, _) = state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
-        let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized);
+        let mut serialized = CapturedStateSnapshot::capture(&state)
+            .expect("stable valid fixture snapshot")
+            .json;
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -939,6 +956,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         let error = match try_read_snapshot(
             &store_dir,
             &kura,
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(1),
             TEST_CHUNK_SIZE,
@@ -1004,6 +1022,7 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1058,6 +1077,7 @@ async fn incompatible_sccp_caps_reject_snapshot_without_mutating_kura() {
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(1),
         TEST_CHUNK_SIZE,
@@ -1190,6 +1210,7 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1217,6 +1238,7 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1245,6 +1267,7 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
     let Err(error) = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1285,6 +1308,7 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
         let Err(error) = try_read_snapshot(
             &store_dir,
             &Kura::blank_kura_for_testing(),
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
@@ -1335,6 +1359,7 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
         let Err(error) = try_read_snapshot(
             &store_dir,
             &Kura::blank_kura_for_testing(),
+            &state.lane_manifests.read().clone(),
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
@@ -1371,6 +1396,7 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1415,6 +1441,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
@@ -1446,6 +1473,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
+        &state.lane_manifests.read().clone(),
         LiveQueryStore::start_test,
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,

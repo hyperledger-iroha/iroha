@@ -65,7 +65,7 @@ fn state_for_test() -> State {
 }
 fn execute_bridge_proof(proof: BridgeProof) -> Result<(), String> {
     let state = state_for_test();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let submit: InstructionBox =
@@ -91,7 +91,7 @@ fn generic_proof_variants_require_authoritative_on_chain_verifiers() {
 #[test]
 fn rejected_generic_proof_does_not_mutate_proof_registry() {
     let state = state_for_test();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let proof = make_ics_proof(0x12, (1, 1));
@@ -125,8 +125,7 @@ fn bridge_range_and_binding_shape_are_checked_before_backend_admission() {
 fn bridge_range_length_cap_enforced() {
     let mut state = state_for_test();
     state.zk.bridge_proof_max_range_len = 2;
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(10_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let submit: InstructionBox =
@@ -145,7 +144,7 @@ fn bridge_height_window_respected_before_generic_backend_rejection() {
     let executor = Executor::default();
     state.zk.bridge_proof_max_future_drift_blocks = 1;
     let header_future =
-        iroha_data_model::block::BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
+        iroha_data_model::block::BlockHeader::new(nonzero!(5_u64), None, None, 0, 0);
     let mut block_future = state.block(header_future);
     let mut stx_future = block_future.transaction();
     let submit_future: InstructionBox =
@@ -158,8 +157,7 @@ fn bridge_height_window_respected_before_generic_backend_rejection() {
     drop(block_future);
     state.zk.bridge_proof_max_future_drift_blocks = 10;
     state.zk.bridge_proof_max_past_age_blocks = 2;
-    let header_past =
-        iroha_data_model::block::BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+    let header_past = iroha_data_model::block::BlockHeader::new(nonzero!(10_u64), None, None, 0, 0);
     let mut block_past = state.block(header_past);
     let mut stx_past = block_past.transaction();
     let submit_past: InstructionBox =
@@ -196,7 +194,7 @@ fn manual_prune_has_no_caller_controlled_retention_bypass() {
     let (newer_id, newer) = proof_record(make_ics_proof(0x34, (2, 2)), 2);
     insert_proof_record_for_test(&mut state, older_id.clone(), older);
     insert_proof_record_for_test(&mut state, newer_id.clone(), newer);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned()))

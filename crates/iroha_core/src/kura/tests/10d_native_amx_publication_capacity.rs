@@ -71,15 +71,9 @@ fn native_amx_startup_reserves_journal_routes_without_publishing_live_geometry()
     let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("read-only journal route reservation before State geometry");
-    assert_eq!(
-        reopened
-            .lane_storage_entries
-            .lock()
-            .keys()
-            .copied()
-            .collect::<Vec<_>>(),
-        vec![LaneId::SINGLE],
-        "reservation reads must not publish secondary lane geometry"
+    assert!(
+        reopened.lane_storage_entries.lock().is_empty(),
+        "reservation reads must not publish any active lane geometry"
     );
     assert_eq!(
         reopened
@@ -135,7 +129,7 @@ fn native_amx_startup_rejects_changed_or_moving_physical_binding_without_growth(
             kura.seal_native_amx_reservation_pair_move_for_test(&entry)
                 .expect("stage exact paired move seal");
         } else {
-            kura.install_lane_incarnation_marker_for_test(
+            kura.substitute_lane_marker_identity_for_test(
                 &entry,
                 Hash::new(b"wrong Native reservation incarnation"),
                 0,
@@ -294,8 +288,7 @@ fn native_amx_publication_capacity_fixture_with_route_count(
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("first height"),
         None,
-        None,
-        None,
+        iroha_crypto::MerkleTree::root_from_typed_leaves(original.network_input_hashes()),
         40,
         6,
     );
@@ -309,18 +302,8 @@ fn native_amx_publication_capacity_fixture_with_route_count(
         header,
         original.external_transactions().cloned().collect(),
     );
-    let entrypoints = contexts
-        .iter()
-        .map(|context| context.entrypoint_hash)
-        .collect::<Vec<_>>();
     block.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &entrypoints,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default()); entrypoints.len()],
-        )
-        .expect("retain all real Native transaction results");
+    attach_ok_results_to_block(&mut block);
     let signature = BlockSignature::new(
         0,
         SignatureOf::try_from_hash(signer.private_key(), block.header().hash())
@@ -376,13 +359,17 @@ fn native_amx_publication_capacity_fixture_with_route_count(
         .expect("persistent Kura with authentic configured catalog");
     assert_eq!(
         kura.lane_storage_entries.lock().len(),
-        1,
-        "the constructor must leave secondary geometry unpublished"
+        0,
+        "canonical-only constructor must leave all State geometry unpublished"
     );
-    let requested_incarnations = configured_routes
+    let mut requested_incarnations = configured_routes
         .iter()
         .map(|(lane, (_, incarnation))| (*lane, *incarnation))
         .collect::<BTreeMap<_, _>>();
+    requested_incarnations.insert(
+        LaneId::new(1),
+        Hash::new(b"kura-autonomous-view-incarnation"),
+    );
     // The real configured-primary anchor and journaled transition own every
     // secondary directory and marker. Restart must not depend on a test-only
     // live map or an incarnation marker without its durable geometry binding.
@@ -829,14 +816,10 @@ fn native_amx_reserved_capacity_cannot_be_spent_by_autonomous_claim_staging() {
         .kura
         .lane_storage_entry(lane.lane_id)
         .expect("configured competitor storage");
-    fixture
-        .kura
-        .install_lane_incarnation_marker_for_test(
-            &entry,
-            payload.origin_proposal.descriptor.lane_incarnation,
-            0,
-        )
-        .expect("activate only the competing route; preserve all Native incarnations");
+    assert_eq!(
+        entry.incarnation, payload.origin_proposal.descriptor.lane_incarnation,
+        "the competitor uses its original journal-admitted identity"
+    );
     fixture
         .kura
         .store_block(Arc::clone(&fixture.block))
@@ -975,22 +958,6 @@ fn native_amx_replay_test_complete_publication(
     );
 }
 
-fn native_amx_replay_test_geometry_maps(
-    kura: &Kura,
-    lane_config: &RuntimeLaneConfig,
-) -> (BTreeMap<LaneId, Hash>, BTreeMap<LaneId, u64>) {
-    lane_config
-        .entries()
-        .iter()
-        .map(|entry| {
-            let (incarnation, activation) = kura
-                .active_lane_incarnation_marker(entry)
-                .expect("authenticate each original journal-published route");
-            ((entry.lane_id, incarnation), (entry.lane_id, activation))
-        })
-        .unzip()
-}
-
 #[test]
 fn native_amx_completed_tip_does_not_resurrect_publication_during_no_snapshot_replay() {
     let NativeAmxPublicationCapacityFixture {
@@ -1001,17 +968,19 @@ fn native_amx_completed_tip_does_not_resurrect_publication_during_no_snapshot_re
         finality,
         lane_config,
     } = native_amx_publication_capacity_fixture();
-    let (incarnations, activations) = native_amx_replay_test_geometry_maps(&kura, &lane_config);
+    let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
     kura.store_block(Arc::clone(&block))
         .expect("store real Native carrier");
     let _finality_receipt = kura
         .store_v2_finality_artifact(&finality)
         .expect("persist real finality");
     native_amx_replay_test_complete_publication(&kura, &block, &finality);
+    let network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("cold open a fully completed Native tip");
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .rewind_native_amx_fixture_geometry_before_replay_for_test()
         .expect("real pre-genesis geometry restore must not infer new tip obligations");
@@ -1037,6 +1006,7 @@ fn native_amx_completed_tip_does_not_resurrect_publication_during_no_snapshot_re
             .lock()
             .is_empty()
     );
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
         .expect("forward replay the exact retained configured geometry");
@@ -1072,7 +1042,7 @@ fn native_amx_indexed_publication_survives_no_snapshot_rewind_cold_restart_and_c
             finality,
             lane_config,
         } = native_amx_publication_capacity_fixture();
-        let (incarnations, activations) = native_amx_replay_test_geometry_maps(&kura, &lane_config);
+        let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
         kura.store_block(Arc::clone(&block))
             .expect("store indexed Native carrier");
         let _finality_receipt = kura
@@ -1099,10 +1069,12 @@ fn native_amx_indexed_publication_survives_no_snapshot_rewind_cold_restart_and_c
                 .values()
                 .all(|route| !route.cleanup_complete)
         );
+        let network_id = kura.bound_lane_storage_network().unwrap();
         drop(kura);
         let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
         let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("reconstruct all three indexed routes before State geometry");
+        reopened.bind_lane_storage_network(network_id).unwrap();
         reopened
             .rewind_native_amx_fixture_geometry_before_replay_for_test()
             .expect("preserve pending publication while rewinding to the genesis cursor");
@@ -1143,6 +1115,7 @@ fn native_amx_indexed_publication_survives_no_snapshot_rewind_cold_restart_and_c
             .expect("reconstructed exact carrier"),
             carrier
         );
+        reopened.bind_lane_storage_network(network_id).unwrap();
         reopened
             .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
             .expect("move exact retained pairs forward into live geometry");
@@ -1365,8 +1338,8 @@ fn native_amx_retained_replay_pair_corruption_is_rejected_without_recovery_growt
                 .expect("open exact retained block or merge bytes");
             std::io::Write::write_all(&mut file, &[0xA5]).expect("change one retained byte digest");
         } else {
-            kura.clear_native_amx_retained_pair_seal_for_test(lane, fault_index == 2)
-                .expect("clear exactly one authenticated paired-seal field");
+            kura.corrupt_native_amx_retained_pair_seal_for_test(lane, fault_index == 2)
+                .expect("corrupt exactly one original unsealed marker field");
         }
         let store_root = kura.store_root.clone();
         let corrupted = snapshot_regular_files_recursively(&store_root);
@@ -1380,6 +1353,1231 @@ fn native_amx_retained_replay_pair_corruption_is_rejected_without_recovery_growt
             snapshot_regular_files_recursively(&store_root),
             corrupted,
             "strict refusal must neither normalize retained authority nor grow recovery storage"
+        );
+    }
+}
+
+#[test]
+fn native_amx_completed_repair_retains_exact_owner_across_interruption_and_reopen() {
+    let NativeAmxPublicationCapacityFixture {
+        _temp_dir,
+        kura,
+        block,
+        manifest,
+        finality,
+        lane_config,
+    } = native_amx_publication_capacity_fixture();
+    let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
+    kura.store_block(Arc::clone(&block))
+        .expect("store actual Native carrier");
+    let _finality_receipt = kura
+        .store_v2_finality_artifact(&finality)
+        .expect("authenticate canonical executed wire");
+    native_amx_replay_test_complete_publication(&kura, &block, &finality);
+    let leaf = &manifest.entries().last().expect("three exact routes").leaf;
+    let entry = kura.lane_storage_entry(leaf.lane_id).expect("active route");
+    let path = Kura::native_amx_application_manifest_path_for_entry(
+        &entry,
+        &kura.store_root,
+        leaf.participant_height,
+    );
+    let expected = fs::read(&path).expect("completed authoritative manifest");
+    fs::remove_file(&path).expect("lose one sidecar after publication completed");
+    let carrier = Kura::native_amx_publication_carrier(&block).unwrap();
+    {
+        let _publication = kura.prune_lock.lock();
+        let plan = kura
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                &block,
+                true,
+                NativeAmxMergeAssociation::CommittedOnly,
+            )
+            .expect("derive exact complete finality and WSV-backed plan");
+        let targets = (0..plan.artifacts.len()).collect::<Vec<_>>();
+        assert!(
+            kura.ensure_native_amx_publication_capacity_under_publication_guard(
+                &block, &plan, &targets,
+            )
+            .expect("durably admit completed repair before any sidecar write")
+        );
+        let held = Kura::read_native_amx_publication_index_for_store(&kura.store_root).unwrap();
+        assert_eq!(
+            held.records[&carrier].origin,
+            NativeAmxPublicationIndexOriginV1::CompletedRepair
+        );
+        assert!(
+            kura.ensure_native_amx_publication_capacity_under_publication_guard(
+                &block, &plan, &targets,
+            )
+            .expect("same live repair retries retain original index")
+        );
+        assert_eq!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .unwrap()
+                .records,
+            held.records
+        );
+        assert!(
+            !path.exists(),
+            "the interrupted point precedes the artifact write"
+        );
+    }
+    let reserved = kura
+        .native_amx_publication_capacity_reserved_bytes()
+        .unwrap();
+    assert!(reserved > 0);
+    let network_id = kura.bound_lane_storage_network().unwrap();
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart reconstructs completed repair from its exact locator");
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        reserved
+    );
+    assert_eq!(
+        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+            .unwrap()
+            .records[&carrier]
+            .origin,
+        NativeAmxPublicationIndexOriginV1::CompletedRepair
+    );
+    reopened.bind_lane_storage_network(network_id).unwrap();
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .expect("restore only authenticated route geometry");
+    reopened
+        .finish_restored_lane_segments_with_geometry(&lane_config)
+        .expect("restore bounded outstanding repair custody");
+    assert_eq!(
+        reopened
+            .repair_native_amx_participant_application_evidence(&block)
+            .expect("settle all original participant routes"),
+        3
+    );
+    assert_eq!(fs::read(&path).expect("repaired exact sidecar"), expected);
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        0
+    );
+    let files = snapshot_regular_files_recursively(&reopened.store_root);
+    assert_eq!(
+        reopened
+            .repair_native_amx_participant_application_evidence(&block)
+            .expect("completed retry"),
+        3
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&reopened.store_root),
+        files,
+        "completed retry does not manufacture new custody or bytes"
+    );
+}
+
+#[test]
+fn native_amx_completed_repair_rechecks_exact_wire_and_wsv_join_without_growth() {
+    let fixture = native_amx_publication_capacity_fixture();
+    let kura = &fixture.kura;
+    kura.store_block(Arc::clone(&fixture.block))
+        .expect("store real Native carrier");
+    let _finality_receipt = kura
+        .store_v2_finality_artifact(&fixture.finality)
+        .expect("exact finality");
+    native_amx_replay_test_complete_publication(kura, &fixture.block, &fixture.finality);
+    let _publication = kura.prune_lock.lock();
+    let plan = kura
+        .native_amx_participant_application_evidence_for_block_under_publication_guard(
+            &fixture.block,
+            true,
+            NativeAmxMergeAssociation::CommittedOnly,
+        )
+        .expect("capture completed source before adverse changes");
+    let _canonical = kura.canonical_chain_lock.lock();
+    let mut changed_wire = fixture.block.as_ref().clone();
+    let wrong_key = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    changed_wire
+        .replace_signatures(
+            [BlockSignature::new(
+                0,
+                SignatureOf::try_from_hash(wrong_key.private_key(), changed_wire.header().hash())
+                    .unwrap(),
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .unwrap();
+    assert_eq!(
+        changed_wire.hash(),
+        fixture.block.hash(),
+        "same header does not authenticate complete wire"
+    );
+    let files = snapshot_regular_files_recursively(&kura.store_root);
+    assert!(
+        kura.prepare_native_amx_repair_publication_index(
+            &changed_wire,
+            None,
+            &plan,
+            &(0..plan.artifacts.len()).collect::<Vec<_>>()
+        )
+        .is_err()
+    );
+    for path in [
+        kura.commit_manifest_path(fixture.block.header().height().get()),
+        kura.wsv_checkpoint_path(fixture.block.header().height().get()),
+    ] {
+        let bytes = fs::read(&path).expect("completed join evidence");
+        fs::remove_file(&path).expect("remove one exact join dependency");
+        let missing_files = snapshot_regular_files_recursively(&kura.store_root);
+        assert!(
+            kura.prepare_native_amx_repair_publication_index(
+                &fixture.block,
+                None,
+                &plan,
+                &(0..plan.artifacts.len()).collect::<Vec<_>>()
+            )
+            .is_err(),
+            "a previously captured plan cannot bypass a missing finalized join"
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&kura.store_root),
+            missing_files
+        );
+        fs::write(&path, &bytes).expect("restore exact join evidence");
+    }
+    let mut wrong_plan = plan;
+    wrong_plan.artifacts[0].1.application_block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"wrong completed checkpoint"));
+    assert!(
+        kura.prepare_native_amx_repair_publication_index(
+            &fixture.block,
+            None,
+            &wrong_plan,
+            &(0..wrong_plan.artifacts.len()).collect::<Vec<_>>()
+        )
+        .is_err()
+    );
+    assert_eq!(snapshot_regular_files_recursively(&kura.store_root), files);
+    assert!(
+        kura.native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty()
+    );
+}
+
+#[test]
+fn native_amx_missing_unfinished_index_cannot_be_recreated_as_completed_repair() {
+    for has_wsv_join in [false, true] {
+        let fixture = native_amx_publication_capacity_fixture();
+        let kura = &fixture.kura;
+        kura.store_block(Arc::clone(&fixture.block))
+            .expect("admit actual Native write");
+        let _finality_receipt = kura
+            .store_v2_finality_artifact(&fixture.finality)
+            .expect("exact finality");
+        kura.prepublish_native_amx_participant_application_evidence(&fixture.block, None)
+            .expect("durable prepublication retains its original pending index");
+        if has_wsv_join {
+            let checkpoint = Hash::new(b"unfinished repair adverse WSV checkpoint");
+            kura.store_wsv_checkpoint(1, fixture.block.hash(), checkpoint)
+                .unwrap();
+            kura.store_commit_manifest(
+                CommitManifest::new(1, fixture.block.hash(), None, None, checkpoint, None)
+                    .with_authenticated_v2_commit_authority(&fixture.finality),
+            )
+            .unwrap();
+        }
+        let _publication = kura.prune_lock.lock();
+        let plan = kura
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                &fixture.block,
+                has_wsv_join,
+                NativeAmxMergeAssociation::CommittedOnly,
+            )
+            .expect("authenticate the exact source without claiming completed publication");
+        let _canonical = kura.canonical_chain_lock.lock();
+        let leaf = &fixture.manifest.entries().last().unwrap().leaf;
+        let entry = kura.lane_storage_entry(leaf.lane_id).unwrap();
+        let receipt = Kura::native_amx_participant_receipt_path_for_entry(
+            &entry,
+            &kura.store_root,
+            leaf.participant_height,
+        );
+        fs::remove_file(receipt).expect("unfinished route lacks its exact receipt");
+        let inventory =
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root).unwrap();
+        assert_eq!(inventory.records.len(), 1);
+        for file in &inventory.files {
+            fs::remove_file(&file.path).expect("inject lost unfinished index");
+        }
+        let owners = kura
+            .native_amx_publication_capacity_reservations
+            .lock()
+            .clone();
+        let files = snapshot_regular_files_recursively(&kura.store_root);
+        assert!(
+            kura.prepare_native_amx_repair_publication_index(
+                &fixture.block,
+                None,
+                &plan,
+                &(0..plan.artifacts.len()).collect::<Vec<_>>()
+            )
+            .is_err(),
+            "completed repair cannot replace lost unfinished index; WSV join={has_wsv_join}"
+        );
+        assert_eq!(
+            *kura.native_amx_publication_capacity_reservations.lock(),
+            owners
+        );
+        assert_eq!(snapshot_regular_files_recursively(&kura.store_root), files);
+    }
+}
+
+#[test]
+fn native_amx_completed_repair_restart_revalidates_retained_authority_without_growth() {
+    for fault in 0..4 {
+        let NativeAmxPublicationCapacityFixture {
+            _temp_dir,
+            kura,
+            block,
+            manifest,
+            finality,
+            lane_config,
+        } = native_amx_publication_capacity_fixture();
+        kura.store_block(Arc::clone(&block))
+            .expect("store exact Native carrier");
+        let _finality_receipt = kura
+            .store_v2_finality_artifact(&finality)
+            .expect("retain exact canonical finality");
+        native_amx_replay_test_complete_publication(&kura, &block, &finality);
+        let leaf = &manifest.entries().last().expect("three exact routes").leaf;
+        let entry = kura
+            .lane_storage_entry(leaf.lane_id)
+            .expect("active target");
+        let missing_manifest = Kura::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &kura.store_root,
+            leaf.participant_height,
+        );
+        fs::remove_file(&missing_manifest).expect("completed route loses only its manifest");
+        {
+            let _publication = kura.prune_lock.lock();
+            let plan = kura
+                .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                    &block,
+                    true,
+                    NativeAmxMergeAssociation::CommittedOnly,
+                )
+                .expect("exact complete repair plan");
+            let targets = (0..plan.artifacts.len()).collect::<Vec<_>>();
+            assert!(
+                kura.ensure_native_amx_publication_capacity_under_publication_guard(
+                    &block, &plan, &targets,
+                )
+                .expect("persist repair owner before the adverse restart cut")
+            );
+        }
+        let height = block.header().height().get();
+        let path = match fault {
+            0 => kura.commit_manifest_path(height),
+            1 => kura.wsv_checkpoint_path(height),
+            2 => Kura::native_amx_participant_receipt_path_for_entry(
+                &entry,
+                &kura.store_root,
+                leaf.participant_height,
+            ),
+            _ => Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+                &entry,
+                &kura.store_root,
+            ),
+        };
+        let retained_bytes =
+            fs::read(&path).expect("prior completed publication retained this dependency");
+        fs::remove_file(&path).expect("remove one authority dependency after locator admission");
+        let store_root = kura.store_root.clone();
+        drop(kura);
+        let files = snapshot_regular_files_recursively(&store_root);
+        let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+        assert!(
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
+            "CompletedRepair origin alone cannot authorize startup; missing dependency={fault}"
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&store_root),
+            files,
+            "failed reauthentication cannot repair, normalize or grow durable storage"
+        );
+        fs::write(&path, retained_bytes).expect("restore exact source bytes, not a new authority");
+        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("the same interrupted repair is recoverable with all original evidence");
+        assert!(
+            reopened
+                .native_amx_publication_capacity_reserved_bytes()
+                .unwrap()
+                > 0
+        );
+        assert!(
+            !missing_manifest.exists(),
+            "read-only startup does not prematurely settle the missing artifact"
+        );
+    }
+}
+
+/// Build an actual second canonical carrier advancing only one Native route.
+/// All source transactions, participant statements and both QCs are re-signed;
+/// the other participant from the first carrier is absent from the new plan.
+fn native_amx_completed_repair_successor_for_one_route(
+    fixture: &NativeAmxPublicationCapacityFixture,
+    route: LaneId,
+) -> (
+    Arc<SignedBlock>,
+    V2FinalityArtifact,
+    crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+) {
+    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
+    use iroha_data_model::block::consensus::{NativeAmxParticipantSettlement, NativeAmxPhase};
+    let height = fixture.block.header().height().get() + 1;
+    let signer = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::BlsNormal)
+        .expect("existing Native fixture attestation signer");
+    let mut contexts = fixture.block.execution_context().unwrap().external.clone();
+    let network_id = contexts[0].native_amx_receipt.as_ref().unwrap().network_id;
+    let transactions = (0..contexts.len())
+        .map(|index| {
+            let key = KeyPair::try_from_seed(
+                vec![0x31 + u8::try_from(index).unwrap(); 32],
+                Algorithm::Ed25519,
+            )
+            .expect("existing transaction authority");
+            TransactionBuilder::new(
+                network_id,
+                AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                format!("Native repair successor {height}:{index}"),
+            )])
+            .sign(key.private_key())
+        })
+        .collect::<Vec<_>>();
+    let hashes = transactions
+        .iter()
+        .map(|tx| tx.hash_as_entrypoint())
+        .collect::<Vec<_>>();
+    let sources = transactions
+        .iter()
+        .map(|tx| *tx.hash().as_ref())
+        .collect::<Vec<_>>();
+    for (index, context) in contexts.iter_mut().enumerate() {
+        context.entrypoint_hash = hashes[index];
+        let receipt = context.native_amx_receipt.as_mut().unwrap();
+        receipt.source_id = sources[index];
+        receipt.authority_context_height = height;
+        receipt.lane_block_height += 1;
+        let coordinator_route = RoutingDecision::new(receipt.lane_id, receipt.dataspace_id);
+        receipt.legs.retain(|leg| {
+            leg.lane_id == route
+                || (leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id)
+        });
+        assert_eq!(
+            receipt.legs.len(),
+            2,
+            "one advancing participant plus the coordinator"
+        );
+        for leg in &mut receipt.legs {
+            let previous_settlement = leg.participant_settlement_hash;
+            let descriptor = &mut leg.participant_proposal.descriptor;
+            descriptor.proposal_height = height;
+            descriptor.previous_lane_block_height = descriptor.lane_block_height;
+            descriptor.previous_lane_block_descriptor_hash = Some(descriptor.descriptor_hash);
+            descriptor.lane_block_height += 1;
+            descriptor.accepted_transaction_hashes =
+                hashes.iter().copied().map(Hash::from).collect();
+            descriptor.subject_hash = Hash::new_from_chunks(&[
+                b"Native repair successor subject",
+                &height.to_le_bytes(),
+                descriptor.subject_hash.as_ref(),
+            ]);
+            descriptor.payload_ownership_hash = Hash::new_from_chunks(&[
+                b"Native repair successor ownership",
+                &height.to_le_bytes(),
+                descriptor.payload_ownership_hash.as_ref(),
+            ]);
+            descriptor.rbc_instance_hash = Hash::new_from_chunks(&[
+                b"Native repair successor availability",
+                &height.to_le_bytes(),
+                descriptor.rbc_instance_hash.as_ref(),
+            ]);
+            descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+            leg.participant_proposal.proposal_hash =
+                leg.participant_proposal.computed_proposal_hash();
+            crate::lane_consensus::validate_lane_block_proposal(&leg.participant_proposal).unwrap();
+            let descriptor = &leg.participant_proposal.descriptor;
+            leg.participant_settlement = NativeAmxParticipantSettlement::try_new(
+                leg.lane_id,
+                leg.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor.lane_block_height,
+                height,
+                Some(previous_settlement),
+                sources.clone(),
+            )
+            .expect("exact contiguous grouped successor settlement");
+            leg.participant_settlement_hash = leg.participant_settlement.computed_hash().unwrap();
+        }
+        let coordinator = receipt
+            .legs
+            .iter()
+            .find(|leg| leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id)
+            .unwrap()
+            .participant_proposal
+            .clone();
+        receipt.coordinator_proposal_hash = coordinator.proposal_hash;
+        let routing_plan = RoutingPlan::native_amx(
+            coordinator_route,
+            receipt
+                .legs
+                .iter()
+                .map(|leg| {
+                    RouteLeg::new(
+                        RoutingDecision::new(leg.lane_id, leg.dataspace_id),
+                        RouteLegRole::Participant,
+                    )
+                })
+                .collect(),
+        );
+        receipt.plan_digest = routing_plan.digest();
+        context.routing_plan_digest = receipt.plan_digest;
+        context.routing_plan_legs =
+            crate::queue::execution_context_legs_for_routing_plan(&routing_plan);
+        for leg in &mut receipt.legs {
+            let descriptor = &leg.participant_proposal.descriptor;
+            let mut prepare = leg.prepare_qc.body;
+            prepare.round.height = height;
+            prepare.source_id = sources[index];
+            prepare.tx_entrypoint_hash = hashes[index];
+            prepare.plan_digest = receipt.plan_digest;
+            prepare.authority_context_height = height;
+            prepare.planned_coordinator_block_height = coordinator.descriptor.lane_block_height;
+            prepare.coordinator_proposal_hash = coordinator.proposal_hash;
+            prepare.participant_previous_block_height = descriptor.previous_lane_block_height;
+            prepare.participant_previous_block_descriptor_hash =
+                descriptor.previous_lane_block_descriptor_hash;
+            prepare.participant_lane_block_height = descriptor.lane_block_height;
+            prepare.participant_proposal_hash = leg.participant_proposal.proposal_hash;
+            prepare.participant_settlement_commitment = Hash::from(leg.participant_settlement_hash);
+            prepare.phase = NativeAmxPhase::Prepare;
+            let mut commit = prepare;
+            commit.phase = NativeAmxPhase::Commit;
+            leg.prepare_qc = native_amx_capacity_fixture_qc(prepare, &signer);
+            leg.commit_qc = native_amx_capacity_fixture_qc(commit, &signer);
+        }
+        assert!(
+            crate::native_amx::receipt_shape_matches_coordinator_payload(
+                Some(receipt),
+                &routing_plan,
+                &receipt.source_id,
+                Hash::from(context.entrypoint_hash),
+                receipt.network_id,
+                &coordinator,
+            )
+        );
+    }
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).unwrap(),
+        Some(fixture.block.hash()),
+        iroha_crypto::MerkleTree::root_from_typed_leaves(hashes.iter().copied()),
+        fixture
+            .block
+            .header()
+            .creation_time()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+            + 1,
+        6,
+    );
+    let signature = BlockSignature::new(
+        0,
+        SignatureOf::try_from_hash(signer.private_key(), header.hash()).unwrap(),
+    );
+    let mut block = SignedBlock::presigned(signature, header, transactions);
+    block.set_execution_context(Some(BlockExecutionContextBundle::new(contexts)));
+    attach_ok_results_to_block(&mut block);
+    block
+        .replace_signatures(
+            [BlockSignature::new(
+                0,
+                SignatureOf::try_from_hash(signer.private_key(), block.header().hash()).unwrap(),
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .unwrap();
+    let manifest =
+        crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(&block)
+            .unwrap();
+    assert_eq!(manifest.count(), 1);
+    assert_eq!(manifest.entries()[0].leaf.lane_id, route);
+    let mut execution = v2_finality_fixture_execution_commitment();
+    execution.native_amx_application_manifest_root = manifest.root();
+    execution.native_amx_application_manifest_count = manifest.count();
+    let finality = v2_finality_artifact_for_block_with_keys(
+        &block,
+        Some(&fixture.finality),
+        &v2_finality_fixture_keys(),
+        execution,
+    );
+    (Arc::new(block), finality, manifest)
+}
+
+fn native_amx_complete_exact_fixture_carrier(
+    kura: &Kura,
+    block: &SignedBlock,
+    finality: &V2FinalityArtifact,
+    routes: usize,
+) {
+    kura.store_block(Arc::new(block.clone()))
+        .expect("actual canonical append owns publication first");
+    let _receipt = kura
+        .store_v2_finality_artifact(finality)
+        .expect("authenticate exact canonical finality");
+    kura.prepublish_native_amx_participant_application_evidence(block, None)
+        .expect("complete all real Native publication components before WSV join");
+    let height = block.header().height().get();
+    let checkpoint =
+        Hash::new_from_chunks(&[b"completed repair fixture WSV", &height.to_le_bytes()]);
+    kura.store_wsv_checkpoint(height, block.hash(), checkpoint)
+        .unwrap();
+    kura.store_commit_manifest(
+        CommitManifest::new(height, block.hash(), None, None, checkpoint, None)
+            .with_authenticated_v2_commit_authority(finality),
+    )
+    .unwrap();
+    assert_eq!(
+        kura.repair_native_amx_participant_application_evidence(block)
+            .unwrap(),
+        routes
+    );
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert!(
+        kura.native_amx_publication_capacity_reservations
+            .lock()
+            .is_empty()
+    );
+}
+
+#[test]
+fn native_amx_partial_completed_repair_preserves_later_route_across_cold_reopen() {
+    let fixture = native_amx_publication_capacity_fixture_with_route_count(2);
+    native_amx_complete_exact_fixture_carrier(&fixture.kura, &fixture.block, &fixture.finality, 2);
+    let a = fixture.manifest.entries()[0].leaf.lane_id;
+    let b = fixture.manifest.entries()[1].leaf.lane_id;
+    let (second, second_finality, second_manifest) =
+        native_amx_completed_repair_successor_for_one_route(&fixture, b);
+    native_amx_complete_exact_fixture_carrier(&fixture.kura, &second, &second_finality, 1);
+    let (incarnations, activations) =
+        active_fixture_geometry_maps(&fixture.kura, &fixture.lane_config);
+    let NativeAmxPublicationCapacityFixture {
+        _temp_dir,
+        kura,
+        block,
+        lane_config,
+        ..
+    } = fixture;
+    let markers = crate::state::State::native_amx_participant_frontier_markers(&block).unwrap();
+    let marker = markers
+        .iter()
+        .find(|marker| marker.lane_id == a)
+        .unwrap()
+        .clone();
+    let a_entry = kura.lane_storage_entry(a).unwrap();
+    let b_entry = kura.lane_storage_entry(b).unwrap();
+    let a_path =
+        Kura::native_amx_application_manifest_path_for_entry(&a_entry, &kura.store_root, 1);
+    let a_bytes = fs::read(&a_path).unwrap();
+    let b_directory = Kura::lane_artifact_dir(&b_entry.blocks_dir(&kura.store_root));
+    let b_files = snapshot_regular_files_recursively(&b_directory);
+    let b_latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+        &b_entry,
+        &kura.store_root,
+    );
+    let b_latest = fs::read(&b_latest_path).unwrap();
+    fs::remove_file(&a_path).expect("lose only the old A1 manifest after B2 completed");
+    let carrier = Kura::native_amx_publication_carrier(&block).unwrap();
+    {
+        let _publication = kura.prune_lock.lock();
+        let plan = kura
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                &block,
+                true,
+                NativeAmxMergeAssociation::CommittedOnly,
+            )
+            .unwrap();
+        let targets = kura
+            .native_amx_participant_application_repair_target_indices(
+                &plan,
+                std::slice::from_ref(&marker),
+            )
+            .unwrap();
+        assert_eq!(targets.len(), 1);
+        let before = snapshot_regular_files_recursively(&kura.store_root);
+        for invalid in [
+            Vec::new(),
+            vec![targets[0], targets[0]],
+            vec![plan.artifacts.len()],
+        ] {
+            assert!(
+                kura.ensure_native_amx_publication_capacity_under_publication_guard(
+                    &block, &plan, &invalid
+                )
+                .is_err()
+            );
+            assert_eq!(
+                snapshot_regular_files_recursively(&kura.store_root),
+                before,
+                "invalid exact target selection must fail before durable side effects"
+            );
+            assert!(
+                kura.native_amx_publication_capacity_reservations
+                    .lock()
+                    .is_empty()
+            );
+        }
+        assert!(
+            kura.ensure_native_amx_publication_capacity_under_publication_guard(
+                &block, &plan, &targets
+            )
+            .expect("original complete carrier plus later B2 completion covers every route")
+        );
+        let owners = kura.native_amx_publication_capacity_reservations.lock();
+        let owner = owners
+            .get(&carrier)
+            .expect("one durable complete-carrier repair owner");
+        assert_eq!(
+            owner.index_record.as_ref().unwrap().origin,
+            NativeAmxPublicationIndexOriginV1::CompletedRepair
+        );
+        assert_eq!(owner.routes.len(), 1, "B2 independently proves B1 terminal");
+        assert_eq!(owner.routes.keys().next().unwrap().lane_id, a);
+        assert!(
+            !a_path.exists(),
+            "interrupt after durable repair admission, before A1 write"
+        );
+    }
+    assert_eq!(snapshot_regular_files_recursively(&b_directory), b_files);
+    let reserved = kura
+        .native_amx_publication_capacity_reserved_bytes()
+        .unwrap();
+    assert!(reserved > 0);
+    let b_manifest = Kura::native_amx_application_manifest_path_for_entry(
+        &b_entry,
+        &kura.store_root,
+        second_manifest.entries()[0].leaf.participant_height,
+    );
+    let b_manifest_bytes = fs::read(&b_manifest).unwrap();
+    fs::remove_file(&b_manifest).expect("lose the non-target terminal proof after admission");
+    let store_root = kura.store_root.clone();
+    let network_id = kura.bound_lane_storage_network().unwrap();
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let damaged = snapshot_regular_files_recursively(&store_root);
+    assert!(
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
+        "restart must reauthenticate B2, not trust the old CompletedRepair tag"
+    );
+    assert_eq!(snapshot_regular_files_recursively(&store_root), damaged);
+    fs::write(&b_manifest, b_manifest_bytes).expect("restore only the original B2 proof bytes");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("restart derives the exact partial repair through journal physical targets");
+    assert_eq!(
+        reopened.lane_storage_entries.lock().len(),
+        0,
+        "repair reconstruction must not publish any live State geometry"
+    );
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        reserved
+    );
+    reopened.bind_lane_storage_network(network_id).unwrap();
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .unwrap();
+    reopened
+        .finish_restored_lane_segments_with_geometry(&lane_config)
+        .unwrap();
+    assert_eq!(
+        reopened
+            .repair_native_amx_participant_application_evidence_for_markers(
+                &block,
+                std::slice::from_ref(&marker)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(fs::read(&a_path).unwrap(), a_bytes);
+    assert_eq!(
+        fs::read(&b_latest_path).unwrap(),
+        b_latest,
+        "A1 repair cannot roll B2 back to B1"
+    );
+    assert_eq!(snapshot_regular_files_recursively(&b_directory), b_files);
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        0
+    );
+    let completed = snapshot_regular_files_recursively(&store_root);
+    assert_eq!(
+        reopened
+            .repair_native_amx_participant_application_evidence_for_markers(
+                &block,
+                std::slice::from_ref(&marker)
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        reopened
+            .repair_native_amx_participant_application_evidence(&block)
+            .is_err(),
+        "requesting stale B1 publication remains prohibited even after A1 repair"
+    );
+    assert_eq!(snapshot_regular_files_recursively(&store_root), completed);
+}
+
+#[test]
+fn native_amx_partial_completed_repair_rejects_unproved_non_target_completion() {
+    for fault in 0..5 {
+        let fixture = native_amx_publication_capacity_fixture_with_route_count(2);
+        let kura = &fixture.kura;
+        native_amx_complete_exact_fixture_carrier(kura, &fixture.block, &fixture.finality, 2);
+        let a = fixture.manifest.entries()[0].leaf.lane_id;
+        let b = fixture.manifest.entries()[1].leaf.lane_id;
+        if fault != 4 {
+            let (second, finality, _) =
+                native_amx_completed_repair_successor_for_one_route(&fixture, b);
+            native_amx_complete_exact_fixture_carrier(kura, &second, &finality, 1);
+        }
+        let a_entry = kura.lane_storage_entry(a).unwrap();
+        let b_entry = kura.lane_storage_entry(b).unwrap();
+        let a_path =
+            Kura::native_amx_application_manifest_path_for_entry(&a_entry, &kura.store_root, 1);
+        fs::remove_file(a_path).unwrap();
+        match fault {
+            0 => fs::remove_file(Kura::native_amx_application_manifest_path_for_entry(
+                &b_entry,
+                &kura.store_root,
+                2,
+            ))
+            .unwrap(),
+            1 => fs::write(
+                Kura::native_amx_participant_receipt_path_for_entry(&b_entry, &kura.store_root, 2),
+                [0xA5],
+            )
+            .unwrap(),
+            2 => fs::remove_file(kura.wsv_checkpoint_path(2)).unwrap(),
+            3 => {
+                let (stable, temporary) = native_amx_latest_index_test_paths(kura, &b_entry);
+                write_synced_native_amx_test_file(&temporary, &fs::read(stable).unwrap());
+            }
+            _ => fs::remove_file(Kura::native_amx_application_manifest_path_for_entry(
+                &b_entry,
+                &kura.store_root,
+                1,
+            ))
+            .unwrap(),
+        }
+        let marker = crate::state::State::native_amx_participant_frontier_markers(&fixture.block)
+            .unwrap()
+            .into_iter()
+            .find(|marker| marker.lane_id == a)
+            .unwrap();
+        let before = snapshot_regular_files_recursively(&kura.store_root);
+        assert!(
+            kura.repair_native_amx_participant_application_evidence_for_markers(
+                &fixture.block,
+                &[marker]
+            )
+            .is_err(),
+            "A1 target cannot omit unproved non-target B publication; fault={fault}"
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&kura.store_root),
+            before,
+            "failed full-carrier completion proof must not publish A1 or replace B authority"
+        );
+        assert!(
+            Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+                .unwrap()
+                .records
+                .is_empty()
+        );
+        assert!(
+            kura.native_amx_publication_capacity_reservations
+                .lock()
+                .is_empty()
+        );
+    }
+}
+
+struct NativeAmxCompletedRepairTempFixture {
+    source: NativeAmxPublicationCapacityFixture,
+    manifest_path: PathBuf,
+    manifest_bytes: Vec<u8>,
+    receipt_path: PathBuf,
+    receipt_bytes: Vec<u8>,
+    latest_path: PathBuf,
+    latest_bytes: Vec<u8>,
+    reserved_before_write: u64,
+    index: NativeAmxPublicationIndexRecord,
+}
+
+// This cut uses the real repair writer: its exact index is already durable,
+// and the actual descriptor-bound temporary is written and fsynced, but not renamed.
+fn native_amx_completed_repair_after_actual_temp_sync() -> NativeAmxCompletedRepairTempFixture {
+    let source = native_amx_publication_capacity_fixture();
+    let kura = &source.kura;
+    native_amx_complete_exact_fixture_carrier(kura, &source.block, &source.finality, 3);
+    let leaf = &source.manifest.entries().last().unwrap().leaf;
+    let entry = kura.lane_storage_entry(leaf.lane_id).unwrap();
+    let manifest_path = Kura::native_amx_application_manifest_path_for_entry(
+        &entry,
+        &kura.store_root,
+        leaf.participant_height,
+    );
+    let receipt_path = Kura::native_amx_participant_receipt_path_for_entry(
+        &entry,
+        &kura.store_root,
+        leaf.participant_height,
+    );
+    let latest_path =
+        Kura::native_amx_participant_receipt_latest_index_path_for_entry(&entry, &kura.store_root);
+    let manifest_bytes = fs::read(&manifest_path).unwrap();
+    let receipt_bytes = fs::read(&receipt_path).unwrap();
+    let latest_bytes = fs::read(&latest_path).unwrap();
+    fs::remove_file(&manifest_path).unwrap();
+    let carrier = Kura::native_amx_publication_carrier(&source.block).unwrap();
+    {
+        let _publication = kura.prune_lock.lock();
+        let plan = kura
+            .native_amx_participant_application_evidence_for_block_under_publication_guard(
+                &source.block,
+                true,
+                NativeAmxMergeAssociation::CommittedOnly,
+            )
+            .unwrap();
+        let targets = (0..plan.artifacts.len()).collect::<Vec<_>>();
+        assert!(
+            kura.ensure_native_amx_publication_capacity_under_publication_guard(
+                &source.block,
+                &plan,
+                &targets,
+            )
+            .unwrap()
+        );
+    }
+    let index = Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+        .unwrap()
+        .records[&carrier]
+        .clone();
+    assert_eq!(
+        index.origin,
+        NativeAmxPublicationIndexOriginV1::CompletedRepair
+    );
+    let reserved_before_write = kura
+        .native_amx_publication_capacity_reserved_bytes()
+        .unwrap();
+    assert!(reserved_before_write >= u64::try_from(manifest_bytes.len()).unwrap());
+    fail_after_next_native_amx_evidence_temp_sync_for_tests();
+    let error = kura
+        .repair_native_amx_participant_application_evidence(&source.block)
+        .expect_err("actual repair stops after fsync, before rename");
+    assert!(
+        error
+            .to_string()
+            .contains("injected Native evidence interruption after temporary fsync"),
+        "{error}"
+    );
+    assert!(
+        !FAIL_AFTER_NEXT_NATIVE_AMX_EVIDENCE_TEMP_SYNC.with(|flag| flag.get()),
+        "the real physical writer consumed the crash cut"
+    );
+    assert!(!manifest_path.exists());
+    assert_eq!(
+        fs::read(manifest_path.with_extension("norito.tmp")).unwrap(),
+        manifest_bytes
+    );
+    assert_eq!(fs::read(&receipt_path).unwrap(), receipt_bytes);
+    assert_eq!(fs::read(&latest_path).unwrap(), latest_bytes);
+    assert_eq!(
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .unwrap()
+            .records[&carrier],
+        index
+    );
+    NativeAmxCompletedRepairTempFixture {
+        source,
+        manifest_path,
+        manifest_bytes,
+        receipt_path,
+        receipt_bytes,
+        latest_path,
+        latest_bytes,
+        reserved_before_write,
+        index,
+    }
+}
+
+#[test]
+fn native_amx_completed_repair_recovers_actual_synced_temporary_on_restart() {
+    let NativeAmxCompletedRepairTempFixture {
+        source:
+            NativeAmxPublicationCapacityFixture {
+                _temp_dir,
+                kura,
+                block,
+                manifest: _,
+                finality: _,
+                lane_config,
+            },
+        manifest_path,
+        manifest_bytes,
+        receipt_path,
+        receipt_bytes,
+        latest_path,
+        latest_bytes,
+        reserved_before_write,
+        index,
+    } = native_amx_completed_repair_after_actual_temp_sync();
+    let network_id = kura.bound_lane_storage_network().unwrap();
+    let (incarnations, activations) = active_fixture_geometry_maps(&kura, &lane_config);
+    let temp_path = manifest_path.with_extension("norito.tmp");
+    let before_reopen = snapshot_regular_files_recursively(&kura.store_root);
+    // The capacity phase authenticates the owned temporary without publishing
+    // it. Complete Strict startup subsequently has retained-instance authority
+    // to promote the bytes and retire the exact finished locator before State.
+    kura.rebuild_native_amx_publication_capacity_on_startup()
+        .expect("authenticate the original repair index and its exact temporary");
+    assert_eq!(
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .unwrap()
+            .records[&index.carrier],
+        index,
+        "capacity authentication retains the original locator"
+    );
+    assert_eq!(
+        kura.native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        reserved_before_write - u64::try_from(manifest_bytes.len()).unwrap(),
+        "physical temp bytes consume exactly their allocation, never a second reservation"
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&kura.store_root),
+        before_reopen,
+        "capacity authentication itself must not mutate repair evidence"
+    );
+    let mut expected_completed = before_reopen;
+    assert_eq!(
+        expected_completed.remove(temp_path.strip_prefix(&kura.store_root).unwrap()),
+        Some(manifest_bytes.clone())
+    );
+    assert!(
+        expected_completed
+            .remove(
+                &PathBuf::from(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY)
+                    .join(index.file_name().unwrap())
+            )
+            .is_some()
+    );
+    assert!(
+        expected_completed
+            .insert(
+                manifest_path
+                    .strip_prefix(&kura.store_root)
+                    .unwrap()
+                    .to_path_buf(),
+                manifest_bytes.clone()
+            )
+            .is_none()
+    );
+    drop(kura);
+    let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("an exact retained repair index owns the canonical temporary on Strict restart");
+    assert!(reopened.lane_storage_entries.lock().is_empty());
+    assert_eq!(
+        snapshot_regular_files_recursively(&reopened.store_root),
+        expected_completed,
+        "Strict startup only promotes the authenticated manifest and retires its completed index"
+    );
+    reopened.bind_lane_storage_network(network_id).unwrap();
+    reopened
+        .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
+        .unwrap();
+    reopened
+        .finish_restored_lane_segments_with_geometry(&lane_config)
+        .expect("existing authenticated temporary recovery completes the exact publication");
+    assert_eq!(
+        reopened
+            .repair_native_amx_participant_application_evidence(&block)
+            .unwrap(),
+        3
+    );
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest_bytes);
+    assert!(!temp_path.exists());
+    assert_eq!(
+        fs::read(&receipt_path).unwrap(),
+        receipt_bytes,
+        "original completed receipt is untouched"
+    );
+    assert_eq!(
+        fs::read(&latest_path).unwrap(),
+        latest_bytes,
+        "original completed latest pointer is untouched"
+    );
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&reopened.store_root)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(
+        reopened
+            .native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        0
+    );
+    let completed = snapshot_regular_files_recursively(&reopened.store_root);
+    assert_eq!(
+        reopened
+            .repair_native_amx_participant_application_evidence(&block)
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&reopened.store_root),
+        completed,
+        "completed retry neither grows storage nor recreates the retired locator"
+    );
+}
+
+#[test]
+fn native_amx_completed_repair_retries_actual_synced_temporary_with_original_index() {
+    let cut = native_amx_completed_repair_after_actual_temp_sync();
+    let kura = &cut.source.kura;
+    assert_eq!(
+        kura.repair_native_amx_participant_application_evidence(&cut.source.block)
+            .unwrap(),
+        3,
+        "same-process retry uses the same admitted repair, not pristine admission"
+    );
+    assert_eq!(fs::read(&cut.manifest_path).unwrap(), cut.manifest_bytes);
+    assert!(!cut.manifest_path.with_extension("norito.tmp").exists());
+    assert_eq!(fs::read(&cut.receipt_path).unwrap(), cut.receipt_bytes);
+    assert_eq!(fs::read(&cut.latest_path).unwrap(), cut.latest_bytes);
+    assert!(
+        Kura::read_native_amx_publication_index_for_store(&kura.store_root)
+            .unwrap()
+            .records
+            .is_empty()
+    );
+    assert_eq!(
+        kura.native_amx_publication_capacity_reserved_bytes()
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn native_amx_completed_repair_rejects_foreign_tampered_and_unowned_temporaries() {
+    for fault in 0..4 {
+        let cut = native_amx_completed_repair_after_actual_temp_sync();
+        let kura = &cut.source.kura;
+        let temp_path = cut.manifest_path.with_extension("norito.tmp");
+        match fault {
+            0 => {
+                let mut tampered = cut.manifest_bytes.clone();
+                tampered.push(0); // Complete canonical content plus unowned trailing bytes.
+                write_synced_native_amx_test_file(&temp_path, &tampered);
+            }
+            1 => {
+                let other = &cut.source.manifest.entries()[0].leaf;
+                let entry = kura.lane_storage_entry(other.lane_id).unwrap();
+                let foreign = Kura::native_amx_application_manifest_path_for_entry(
+                    &entry,
+                    &kura.store_root,
+                    other.participant_height,
+                );
+                write_synced_native_amx_test_file(&temp_path, &fs::read(foreign).unwrap());
+            }
+            2 => {
+                let inventory =
+                    Kura::read_native_amx_publication_index_for_store(&kura.store_root).unwrap();
+                assert_eq!(inventory.files.len(), 1);
+                fs::remove_file(&inventory.files[0].path).unwrap();
+                // Losing the locator cannot turn an interrupted repair into a
+                // fresh repair admission, even with exact finality/receipt bytes.
+                let before = snapshot_regular_files_recursively(&kura.store_root);
+                assert!(
+                    kura.repair_native_amx_participant_application_evidence(&cut.source.block)
+                        .is_err()
+                );
+                assert_eq!(snapshot_regular_files_recursively(&kura.store_root), before);
+            }
+            _ => {
+                let wrong_height = temp_path
+                    .parent()
+                    .unwrap()
+                    .join(Kura::native_amx_evidence_file_name(
+                        NativeAmxEvidenceKind::Manifest,
+                        2,
+                    ))
+                    .with_extension("norito.tmp");
+                fs::rename(&temp_path, wrong_height).unwrap();
+            }
+        }
+        let store_root = kura.store_root.clone();
+        let files = snapshot_regular_files_recursively(&store_root);
+        let NativeAmxPublicationCapacityFixture {
+            _temp_dir,
+            kura,
+            lane_config,
+            ..
+        } = cut.source;
+        drop(kura);
+        let config = kura_config_for_dir(&_temp_dir, BLOCKS_IN_MEMORY);
+        assert!(
+            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
+            "foreign, noncanonical, wrong-height or unindexed temp cannot acquire recovery authority; fault={fault}"
+        );
+        assert_eq!(
+            snapshot_regular_files_recursively(&store_root),
+            files,
+            "failed restart preserves all authoritative and forensic bytes; fault={fault}"
         );
     }
 }

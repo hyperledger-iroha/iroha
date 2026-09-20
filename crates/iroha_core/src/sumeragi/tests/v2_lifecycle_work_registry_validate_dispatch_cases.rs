@@ -193,7 +193,7 @@ fn prospective_startup_census_rejects_extra_valid_carrier_before_publication() {
     let address = ConcreteWorkAddress::new(owner, 1, slot).expect("exact extra address");
     let mut registry = ConcreteLifecycleWorkRegistry::default();
     registry
-        .install(address, digest, work)
+        .install(address, digest, Box::new(work))
         .expect("install internally valid but extraneous startup carrier");
     let coordinator = super::super::LifecycleCoordinator::new(
         LifecycleContext::new(LifecycleDigest::new([0x62; 32]), 7),
@@ -598,7 +598,7 @@ fn durable_store_fixture_with_views_and_phase(
     assert_eq!(work.effect(), &effect);
     assert_eq!(work.causal_root(), owner.causal_root());
     let mut registry = ConcreteLifecycleWorkRegistry::default();
-    assert!(registry.entries.insert(address, work).is_none());
+    assert!(registry.entries.insert(address, Box::new(work)).is_none());
     DurableStoreFixture {
         registry,
         verified,
@@ -677,7 +677,6 @@ fn durable_validate_fixture_at_view_with_parent(
     let header = BlockHeader::new(
         NonZeroU64::new(round.height).expect("non-zero durable Validate height"),
         parent_block_hash,
-        None,
         None,
         1_000,
         round.view,
@@ -834,7 +833,7 @@ fn durable_validate_fixture_from_material(
     assert_eq!(work.effect(), &effect);
     assert_eq!(work.causal_root(), owner.causal_root());
     let mut registry = ConcreteLifecycleWorkRegistry::default();
-    assert!(registry.entries.insert(address, work).is_none());
+    assert!(registry.entries.insert(address, Box::new(work)).is_none());
     DurableValidateFixture {
         registry,
         verified,
@@ -871,6 +870,12 @@ impl std::fmt::Display for DetachedValidationError {
 
 #[cfg(feature = "bls")]
 impl BodyValidationError for DetachedValidationError {
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity> {
+        match self {
+            Self::Invalid(_) => Some(BodyValidationRejectionIdentity::Rejected),
+            Self::MissingMergeSidecar(_) => None,
+        }
+    }
     fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         match self {
             Self::MissingMergeSidecar(reference) => Some(reference),
@@ -1069,7 +1074,13 @@ fn durable_local_validate_store_fixture_at_view(
     };
     assert!(work.validate_exact());
     assert!(work.validates_at(address));
-    assert!(fixture.registry.entries.insert(address, work).is_none());
+    assert!(
+        fixture
+            .registry
+            .entries
+            .insert(address, Box::new(work))
+            .is_none()
+    );
     fixture.address = address;
     fixture.slot = slot;
     fixture.lease.owner = owner;
@@ -1238,7 +1249,13 @@ fn persist_durable_validate_fixture_into_store(
     fixture.lease.physical_slots = physical_slots;
     fixture.store_ownership = store_ownership;
     assert!(work.validates_at(fixture.address));
-    assert!(fixture.registry.entries.insert(address, work).is_none());
+    assert!(
+        fixture
+            .registry
+            .entries
+            .insert(address, Box::new(work))
+            .is_none()
+    );
     (fixture, durable)
 }
 
@@ -1361,7 +1378,13 @@ fn durable_validate_store_fixture_from_existing(
     fixture.lease.physical_slots = physical_slots;
     fixture.store_ownership = store_ownership;
     assert!(work.validates_at(fixture.address));
-    assert!(fixture.registry.entries.insert(address, work).is_none());
+    assert!(
+        fixture
+            .registry
+            .entries
+            .insert(address, Box::new(work))
+            .is_none()
+    );
     (fixture, directory, store, durable)
 }
 
@@ -1754,6 +1777,57 @@ fn ready_durable_validate_fixture(
     outcome: ReadyDurableValidateFixtureOutcome,
 ) -> ReadyDurableValidateFixture {
     ready_durable_validate_fixture_at_view(marker, 2, outcome)
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn ready_validate_successor_fence_preserves_monotonic_source_bound_ownership() {
+    let source = WaitSource::External(LifecycleDigest::new([0xB4; 32]));
+    let incumbent = WaitToken::new(source, 4);
+    for outcome in [
+        ReadyDurableValidateFixtureOutcome::Validated,
+        ReadyDurableValidateFixtureOutcome::Rejected,
+    ] {
+        for (next, accepted) in [
+            (WaitToken::new(source, 4), true),
+            (WaitToken::new(source, 5), true),
+            (WaitToken::new(source, 3), false),
+            (
+                WaitToken::new(WaitSource::External(LifecycleDigest::new([0xB5; 32])), 5),
+                false,
+            ),
+        ] {
+            let OwnedReadyDurableValidateFixture {
+                ready,
+                coordinator,
+                successor,
+                ..
+            } = owned_ready_durable_validate_fixture_from_waiting(
+                waiting_durable_validate_fixture_at_view(0xB6, 2),
+                outcome,
+            );
+            let ordinal = successor.lifecycle_ordinal();
+            let original_record = coordinator.records[&ordinal].clone();
+            let original_digest =
+                ready.holder.registry_for_test().entries[&ready.fixture.address].digest;
+            assert!(successor.reducer_fence_wait().is_none());
+            let retained = successor
+                .retain_on_reducer_fence(incumbent)
+                .expect("published successor binds its first exact reducer fence")
+                .retain_on_reducer_fence(next);
+            assert_eq!(retained.is_some(), accepted);
+            if let Some(retained) = retained {
+                assert_eq!(retained.lifecycle_ordinal(), ordinal);
+                assert_eq!(retained.reducer_fence_wait(), Some(next));
+            }
+            assert_eq!(coordinator.records[&ordinal], original_record);
+            assert_eq!(
+                ready.holder.registry_for_test().entries[&ready.fixture.address].digest,
+                original_digest,
+                "fence retention cannot rewrite its published Validate carrier"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "bls")]

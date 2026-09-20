@@ -31,6 +31,11 @@ use super::super::super::super::{
         ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_SPOOL_MAX_BYTES_V1,
         ZK_AMS_MKHE_RNS_NATIVE_WORKSPACE_MAX_BYTES_V1,
     },
+    rns_native_proof_hash::{
+        RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
+        RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+        RnsNativeProofHashWorkV1,
+    },
     rns_native_public_polynomial_reader::{
         RnsNativePublicPolynomialEvaluationV1, RnsNativePublicPolynomialReadReceiptV1,
     },
@@ -40,9 +45,9 @@ use super::super::super::super::{
     rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
 };
 use super::{RnsNativeCompletedQpcsSourceReadV2, RnsNativeWholePublicationOwnersV2};
-use crate::vega::{VegaT256ScalarV1 as Scalar, sponge::Keccak256};
+use crate::vega::VegaT256ScalarV1 as Scalar;
 
-const VERSION_V2: u8 = 2;
+const VERSION_V1: u8 = 1;
 const RECORDS_V2: usize = 43;
 const EQUATIONS_V2: usize = 2;
 const REPETITIONS_V2: usize = 5;
@@ -68,7 +73,7 @@ const PUBLIC_EVALUATION_BYTES_V2: usize = size_of::<RnsNativePublicPolynomialEva
 const RETAINED_PUBLIC_EVALUATION_BYTES_V2: usize = RELATIONS_V2 * PUBLIC_EVALUATION_BYTES_V2;
 const RETAINED_TRANSCRIPT_OWNER_BYTES_V2: usize = size_of::<ZkAmsMkheRnsNativeChallengeSeedsV1>();
 const RETAINED_COMMITMENT_DIGEST_BYTES_V2: usize =
-    (EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1) * 32;
+    (EQUATIONS_V2 + ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1) * size_of::<ProofDigestV1>();
 const POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2: usize = RETAINED_PUBLIC_EVALUATION_BYTES_V2
     + RETAINED_TRANSCRIPT_OWNER_BYTES_V2
     + RETAINED_COMMITMENT_DIGEST_BYTES_V2;
@@ -89,18 +94,28 @@ const PUBLIC_MODULAR_MULTIPLICATIONS_V2: u64 = 2_311_357_600;
 const PUBLIC_MODULAR_ADDITIONS_V2: u64 = 2_309_120_000;
 
 const JOINT_BINDING_DOMAIN_V2: &[u8] =
-    b"iroha.zk-ams.v2.mkhe.rns-native.numeric-opening-handoff.joint-binding";
+    b"iroha.zk-ams.v1.mkhe.rns-native.numeric-opening-handoff.joint-binding";
 // Domain, version/four u16 geometry fields, lifecycle digest, five receipt
 // digests, receipt counters, four relation-schedule axes, seven completed-qPCS
 // digests, and the bounded proof length.
 const JOINT_BINDING_FIXED_BYTES_V2: usize =
-    1 + 4 * 2 + 32 + 5 * 32 + 2 + 4 * 8 + 4 * 32 + 7 * 32 + 8;
+    1 + 4 * 2 + 32 + 4 * 32 + 48 + 2 + 4 * 8 + 2 * 32 + 9 * 48 + 8;
 const POST_AUTHENTICATION_JOINT_BINDING_HASH_BYTES_V2: usize =
     JOINT_BINDING_DOMAIN_V2.len() + JOINT_BINDING_FIXED_BYTES_V2;
+const POST_AUTHENTICATION_JOINT_BINDING_FRAME_WORDS_V2: usize = 250;
+const POST_AUTHENTICATION_JOINT_BINDING_WORK_V2: RnsNativeProofHashWorkV1 =
+    match RnsNativeProofHashWorkV1::from_word_count(
+        POST_AUTHENTICATION_JOINT_BINDING_FRAME_WORDS_V2,
+    ) {
+        Ok(work) => work,
+        Err(_) => panic!("fixed native joint-binding frame work is bounded"),
+    };
 const POST_AUTHENTICATION_LOCAL_WORK_UNITS_V2: u64 =
     POST_AUTHENTICATION_NUMERIC_VALIDATION_WORK_UNITS_V2
         + POST_AUTHENTICATION_JOINT_BINDING_HASH_BYTES_V2 as u64
-        + RETAINED_COMMITMENT_DIGEST_BYTES_V2 as u64;
+        + RETAINED_COMMITMENT_DIGEST_BYTES_V2 as u64
+        + POST_AUTHENTICATION_JOINT_BINDING_WORK_V2.field_multiplications
+        + POST_AUTHENTICATION_JOINT_BINDING_WORK_V2.field_additions;
 const POST_AUTHENTICATION_LOCAL_RESOURCE_SCOPE_V2: &[u8] = b"post-authentication-local-numeric-rendezvous-only;excludes-existing-qpcs-prefix-and-fri-authentication-work;not-end-to-end-resource-accounting";
 
 /// This tranche settles only the private source contract and numeric checks.
@@ -131,7 +146,10 @@ pub(super) const RNS_NATIVE_NUMERIC_OPENING_HANDOFF_RELEASE_AUTHORIZED_V2: bool 
 /// Retained payload bytes cover exactly the public-evaluation allocation, moved
 /// transcript record, and copied equation/limb digest arrays named below; they
 /// are not a whole-process resident-memory claim.  Local work charges one unit
-/// for each of the 1,344 commitment-digest bytes copied after authentication.
+/// for each of the 2,016 commitment-digest bytes copied after authentication,
+/// each framed payload byte and each actual shared scalar field operation.
+/// The fixed frame is checked against the shared owner before hashing; its
+/// round/permutation counts remain visible separately from the local work sum.
 /// It is not end-to-end qPCS accounting and cannot qualify resource evidence.
 pub(super) struct RnsNativeNumericOpeningHandoffPostAuthenticationLocalResourceLedgerV2 {
     pub(super) post_authentication_relations: u16,
@@ -146,6 +164,11 @@ pub(super) struct RnsNativeNumericOpeningHandoffPostAuthenticationLocalResourceL
     pub(super) post_authentication_modular_multiplications: u32,
     pub(super) post_authentication_modular_additions: u16,
     pub(super) post_authentication_joint_binding_hash_bytes: u16,
+    pub(super) post_authentication_joint_binding_words_per_lane: u16,
+    pub(super) post_authentication_joint_binding_lane_permutations: u32,
+    pub(super) post_authentication_joint_binding_poseidon_rounds: u32,
+    pub(super) post_authentication_joint_binding_field_multiplications: u32,
+    pub(super) post_authentication_joint_binding_field_additions: u32,
     pub(super) post_authentication_commitment_digest_copy_bytes: u16,
     pub(super) post_authentication_local_work_units: u32,
     pub(super) post_authentication_new_heap_bytes: u8,
@@ -174,6 +197,16 @@ pub(super) const RNS_NATIVE_NUMERIC_OPENING_HANDOFF_POST_AUTHENTICATION_LOCAL_RE
         post_authentication_modular_additions: MODULAR_ADDITIONS_V2 as u16,
         post_authentication_joint_binding_hash_bytes:
             POST_AUTHENTICATION_JOINT_BINDING_HASH_BYTES_V2 as u16,
+        post_authentication_joint_binding_words_per_lane: POST_AUTHENTICATION_JOINT_BINDING_WORK_V2
+            .words_per_lane as u16,
+        post_authentication_joint_binding_lane_permutations:
+            POST_AUTHENTICATION_JOINT_BINDING_WORK_V2.lane_permutations as u32,
+        post_authentication_joint_binding_poseidon_rounds: POST_AUTHENTICATION_JOINT_BINDING_WORK_V2
+            .poseidon_rounds as u32,
+        post_authentication_joint_binding_field_multiplications:
+            POST_AUTHENTICATION_JOINT_BINDING_WORK_V2.field_multiplications as u32,
+        post_authentication_joint_binding_field_additions: POST_AUTHENTICATION_JOINT_BINDING_WORK_V2
+            .field_additions as u32,
         post_authentication_commitment_digest_copy_bytes: RETAINED_COMMITMENT_DIGEST_BYTES_V2
             as u16,
         post_authentication_local_work_units: POST_AUTHENTICATION_LOCAL_WORK_UNITS_V2 as u32,
@@ -193,13 +226,13 @@ const _: () = {
     assert!(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 == 1 << 17);
     assert!(PUBLIC_EVALUATION_BYTES_V2 == 704);
     assert!(RETAINED_PUBLIC_EVALUATION_BYTES_V2 == 140_800);
-    assert!(RETAINED_TRANSCRIPT_OWNER_BYTES_V2 == 5_096);
-    assert!(RETAINED_COMMITMENT_DIGEST_BYTES_V2 == 1_344);
+    assert!(RETAINED_TRANSCRIPT_OWNER_BYTES_V2 == 5_928);
+    assert!(RETAINED_COMMITMENT_DIGEST_BYTES_V2 == 2_016);
     assert!(
         POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2
-            == RETAINED_PUBLIC_EVALUATION_BYTES_V2 + RETAINED_TRANSCRIPT_OWNER_BYTES_V2 + 1_344
+            == RETAINED_PUBLIC_EVALUATION_BYTES_V2 + RETAINED_TRANSCRIPT_OWNER_BYTES_V2 + 2_016
     );
-    assert!(POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2 == 147_240);
+    assert!(POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2 == 148_744);
     assert!(RETAINED_TRANSCRIPT_OWNER_BYTES_V2 <= u32::MAX as usize);
     assert!(POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2 <= u32::MAX as usize);
     assert!(QPCS_PAIR_BYTES_V2 == 16);
@@ -219,9 +252,13 @@ const _: () = {
     assert!(MODULAR_MULTIPLICATIONS_V2 == 3_600);
     assert!(MODULAR_ADDITIONS_V2 == 200);
     assert!(POST_AUTHENTICATION_NUMERIC_VALIDATION_WORK_UNITS_V2 == 22_000);
-    assert!(JOINT_BINDING_FIXED_BYTES_V2 == 595);
-    assert!(POST_AUTHENTICATION_JOINT_BINDING_HASH_BYTES_V2 == 664);
-    assert!(POST_AUTHENTICATION_LOCAL_WORK_UNITS_V2 == 24_008);
+    assert!(JOINT_BINDING_FIXED_BYTES_V2 == 755);
+    assert!(POST_AUTHENTICATION_JOINT_BINDING_HASH_BYTES_V2 == 824);
+    assert!(POST_AUTHENTICATION_LOCAL_WORK_UNITS_V2 == 1_293_090);
+    assert!(POST_AUTHENTICATION_JOINT_BINDING_WORK_V2.lane_permutations == 750);
+    assert!(POST_AUTHENTICATION_JOINT_BINDING_WORK_V2.poseidon_rounds == 48_750);
+    assert!(POST_AUTHENTICATION_JOINT_BINDING_WORK_V2.field_multiplications == 681_750);
+    assert!(POST_AUTHENTICATION_JOINT_BINDING_WORK_V2.field_additions == 586_500);
     assert!(POST_AUTHENTICATION_LOCAL_RESOURCE_SCOPE_V2.len() == 142);
     assert!(
         (POST_AUTHENTICATION_RETAINED_PAYLOAD_BYTES_V2 as u64
@@ -277,18 +314,18 @@ impl std::error::Error for RnsNativeNumericOpeningHandoffErrorV2 {}
 /// evaluation is accepted through this boundary.
 pub(super) struct RnsNativeQpcsNumericVerificationInputV2<'digests, 'proof> {
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
-    equation_commitment_digests: &'digests [[u8; 32]; EQUATIONS_V2],
-    limb_commitment_digests: &'digests [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-    query_opening_digests: &'digests [[u8; 32]; QUERY_OPENINGS_V2],
+    equation_commitment_digests: &'digests [ProofDigestV1; EQUATIONS_V2],
+    limb_commitment_digests: &'digests [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    query_opening_digests: &'digests [ProofDigestV1; QUERY_OPENINGS_V2],
     proof: &'proof [u8],
 }
 
 impl<'digests, 'proof> RnsNativeQpcsNumericVerificationInputV2<'digests, 'proof> {
     pub(super) const fn new_v2(
         transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
-        equation_commitment_digests: &'digests [[u8; 32]; EQUATIONS_V2],
-        limb_commitment_digests: &'digests [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
-        query_opening_digests: &'digests [[u8; 32]; QUERY_OPENINGS_V2],
+        equation_commitment_digests: &'digests [ProofDigestV1; EQUATIONS_V2],
+        limb_commitment_digests: &'digests [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+        query_opening_digests: &'digests [ProofDigestV1; QUERY_OPENINGS_V2],
         proof: &'proof [u8],
     ) -> Self {
         Self {
@@ -596,10 +633,10 @@ pub(super) struct RnsNativeQpcsNumericOpeningHandoffV2<'proof> {
     evaluations: Box<[RnsNativePublicPolynomialEvaluationV1]>,
     read_receipt: RnsNativePublicPolynomialReadReceiptV1,
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
-    equation_commitment_digests: [[u8; 32]; EQUATIONS_V2],
-    limb_commitment_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    equation_commitment_digests: [ProofDigestV1; EQUATIONS_V2],
+    limb_commitment_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
     qpcs: RnsNativeQpcsFriCompleteStageV1<'proof>,
-    joint_binding_digest: [u8; 32],
+    joint_binding_digest: ProofDigestV1,
     cursor: RnsNativeRelationCursorV2,
 }
 
@@ -611,14 +648,14 @@ pub(super) struct RnsNativeCompletedQpcsNumericOpeningHandoffV2<'proof> {
     evaluations: Box<[RnsNativePublicPolynomialEvaluationV1]>,
     read_receipt: RnsNativePublicPolynomialReadReceiptV1,
     transcript: ZkAmsMkheRnsNativeChallengeSeedsV1,
-    equation_commitment_digests: [[u8; 32]; EQUATIONS_V2],
-    limb_commitment_digests: [[u8; 32]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    equation_commitment_digests: [ProofDigestV1; EQUATIONS_V2],
+    limb_commitment_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
     qpcs: RnsNativeQpcsFriCompleteStageV1<'proof>,
-    joint_binding_digest: [u8; 32],
+    joint_binding_digest: ProofDigestV1,
 }
 
 impl RnsNativeCompletedQpcsNumericOpeningHandoffV2<'_> {
-    pub(super) const fn joint_binding_digest_v2(&self) -> [u8; 32] {
+    pub(super) const fn joint_binding_digest_v2(&self) -> ProofDigestV1 {
         self.joint_binding_digest
     }
 
@@ -803,14 +840,14 @@ fn validate_completed_read_shape_v2(
     {
         return Err(RnsNativeNumericOpeningHandoffErrorV2::InvalidCount);
     }
-    if [
-        receipt.manifest_digest_v1(),
-        receipt.qpcs_schedule_digest_v1(),
-        receipt.provider_identity_v1(),
-        receipt.snapshot_identity_v1(),
-        receipt.read_set_digest_v1(),
-    ]
-    .contains(&[0; 32])
+    if receipt.qpcs_schedule_digest_v1() == ProofDigestV1::ZERO
+        || [
+            receipt.manifest_digest_v1(),
+            receipt.provider_identity_v1(),
+            receipt.snapshot_identity_v1(),
+            receipt.read_set_digest_v1(),
+        ]
+        .contains(&[0; 32])
     {
         return Err(RnsNativeNumericOpeningHandoffErrorV2::Authentication);
     }
@@ -823,7 +860,7 @@ fn joint_binding_digest_v2(
     qpcs: &RnsNativeQpcsFriCompleteStageV1<'_>,
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     proof_len: usize,
-) -> Result<[u8; 32], RnsNativeNumericOpeningHandoffErrorV2> {
+) -> Result<ProofDigestV1, RnsNativeNumericOpeningHandoffErrorV2> {
     let schedule = qpcs
         .relation_schedule_v1()
         .map_err(|_| RnsNativeNumericOpeningHandoffErrorV2::Authentication)?;
@@ -839,46 +876,81 @@ fn joint_binding_digest_v2(
     }
     let proof_len = u64::try_from(proof_len)
         .map_err(|_| RnsNativeNumericOpeningHandoffErrorV2::ArithmeticOverflow)?;
-    let mut hash = Keccak256::new();
-    hash.update(JOINT_BINDING_DOMAIN_V2);
-    hash.update(&[VERSION_V2]);
-    hash.update(&(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u16).to_be_bytes());
-    hash.update(&(REPETITIONS_V2 as u16).to_be_bytes());
-    hash.update(&(RECORDS_V2 as u16).to_be_bytes());
-    hash.update(&(RELATIONS_V2 as u16).to_be_bytes());
-    hash.update(&owners.lifecycle_digest);
-    for digest in [
-        receipt.manifest_digest_v1(),
-        receipt.qpcs_schedule_digest_v1(),
-        receipt.provider_identity_v1(),
-        receipt.snapshot_identity_v1(),
-        receipt.read_set_digest_v1(),
-    ] {
-        hash.update(&digest);
-    }
-    hash.update(&receipt.object_count_v1().to_be_bytes());
-    hash.update(&receipt.canonical_bytes_v1().to_be_bytes());
-    hash.update(&receipt.coefficient_count_v1().to_be_bytes());
-    hash.update(&receipt.modular_multiplications_v1().to_be_bytes());
-    hash.update(&receipt.modular_additions_v1().to_be_bytes());
-    for digest in [
+    hash_joint_binding_v2(
         schedule.parameter_digest(),
-        schedule.q_mask_s_root(),
-        schedule.qpcs_pre_relation_transcript_digest(),
-        schedule.relation_seed(),
-        qpcs.parameter_digest(),
-        qpcs.transcript_digest(),
-        qpcs.query_seed(),
-        qpcs.section_binding_digest(),
-        qpcs.schedule_digest(),
-        qpcs.evaluation_binding_digest(),
-        qpcs.residual_digest(),
-    ] {
-        hash.update(&digest);
+        &[
+            JOINT_BINDING_DOMAIN_V2,
+            &[VERSION_V1],
+            &(ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 as u16).to_be_bytes(),
+            &(REPETITIONS_V2 as u16).to_be_bytes(),
+            &(RECORDS_V2 as u16).to_be_bytes(),
+            &(RELATIONS_V2 as u16).to_be_bytes(),
+            &owners.lifecycle_digest,
+            &receipt.manifest_digest_v1(),
+            receipt.qpcs_schedule_digest_v1().as_bytes(),
+            &receipt.provider_identity_v1(),
+            &receipt.snapshot_identity_v1(),
+            &receipt.read_set_digest_v1(),
+            &receipt.object_count_v1().to_be_bytes(),
+            &receipt.canonical_bytes_v1().to_be_bytes(),
+            &receipt.coefficient_count_v1().to_be_bytes(),
+            &receipt.modular_multiplications_v1().to_be_bytes(),
+            &receipt.modular_additions_v1().to_be_bytes(),
+            &schedule.parameter_digest(),
+            schedule.q_mask_s_root().as_bytes(),
+            schedule.qpcs_pre_relation_transcript_digest().as_bytes(),
+            schedule.relation_seed().as_bytes(),
+            &qpcs.parameter_digest(),
+            qpcs.transcript_digest().as_bytes(),
+            qpcs.query_seed().as_bytes(),
+            qpcs.section_binding_digest().as_bytes(),
+            qpcs.schedule_digest().as_bytes(),
+            qpcs.evaluation_binding_digest().as_bytes(),
+            qpcs.residual_digest().as_bytes(),
+            &proof_len.to_be_bytes(),
+        ],
+    )
+}
+
+fn hash_joint_binding_v2(
+    parameter: [u8; 32],
+    fields: &[&[u8]],
+) -> Result<ProofDigestV1, RnsNativeNumericOpeningHandoffErrorV2> {
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeNumericOpeningHandoffErrorV2::InvalidContext)?;
+    if context.parameter_digest() != parameter
+        || fields.len() != 29
+        || fields[0] != JOINT_BINDING_DOMAIN_V2
+        || fields[1] != [VERSION_V1]
+        || fields[17] != parameter
+        || fields[21] != parameter
+    {
+        return Err(RnsNativeNumericOpeningHandoffErrorV2::InvalidContext);
     }
-    hash.update(&proof_len.to_be_bytes());
-    let digest = hash.finalize();
-    if digest == [0; 32] {
+    let frame = context
+        .frame(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 5,
+                index: 0,
+                counter: 0,
+            },
+            fields,
+        )
+        .map_err(|_| RnsNativeNumericOpeningHandoffErrorV2::ArithmeticOverflow)?;
+    let work = RnsNativeProofHashWorkV1::from_frame(&frame)
+        .map_err(|_| RnsNativeNumericOpeningHandoffErrorV2::ArithmeticOverflow)?;
+    if work != POST_AUTHENTICATION_JOINT_BINDING_WORK_V2
+        || fields
+            .iter()
+            .try_fold(0_usize, |sum, field| sum.checked_add(field.len()))
+            != Some(POST_AUTHENTICATION_JOINT_BINDING_HASH_BYTES_V2)
+    {
+        return Err(RnsNativeNumericOpeningHandoffErrorV2::InvalidCount);
+    }
+    let digest = ProofDigestV1::from_shared(frame.hash());
+    if digest == ProofDigestV1::ZERO {
         return Err(RnsNativeNumericOpeningHandoffErrorV2::Authentication);
     }
     Ok(digest)

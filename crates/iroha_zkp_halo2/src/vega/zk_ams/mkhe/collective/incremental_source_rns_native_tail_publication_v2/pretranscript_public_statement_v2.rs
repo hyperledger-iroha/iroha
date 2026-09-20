@@ -142,10 +142,10 @@ const _: () = {
         RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.pretranscript_public_alias_digests == 3_609
     );
     assert!(
-        RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.pretranscript_public_alias_bytes == 115_488
+        RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.pretranscript_public_alias_bytes == 176_841
     );
     assert!(RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.later_global_alias_digests == 3_754);
-    assert!(RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.later_global_alias_bytes == 120_128);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.later_global_alias_bytes == 183_946);
     assert!(
         RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.preparation_public_digest_hash_bytes == 154_158
     );
@@ -154,7 +154,7 @@ const _: () = {
         RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.preparation_and_begin_public_digest_hash_bytes
             == 292_406
     );
-    assert!(RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.known_new_peak_bytes == 240_320);
+    assert!(RNS_NATIVE_PRETRANSCRIPT_RESOURCE_LEDGER_V2.known_new_peak_bytes == 301_673);
     assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_STATEMENT_SOURCE_SETTLED_V2);
     assert!(RNS_NATIVE_PRETRANSCRIPT_PUBLIC_STATEMENT_CONTRACT_IMPLEMENTED_V2);
     assert!(!RNS_NATIVE_PRETRANSCRIPT_LIVE_CORRESPONDENCE_AVAILABLE_V2);

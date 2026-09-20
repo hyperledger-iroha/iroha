@@ -1,4 +1,5 @@
-fn app_with_indexed_sccp_message_for_test(
+/// Build indexed State/Kura evidence with a genuine four-validator Commit QC and DA layout.
+pub(crate) fn app_with_indexed_sccp_message_for_test(
     persist_finality: bool,
 ) -> (SharedAppState, [u8; 32], V2FinalityArtifact) {
     const HEIGHT: u64 = 1;
@@ -61,35 +62,61 @@ fn app_with_indexed_sccp_message_for_test(
         &keypair,
         "sign indexed Torii SCCP-message fixture transaction",
     );
-    let entry_hash = tx.hash_as_entrypoint();
     let header = BlockHeader::new(
         std::num::NonZeroU64::new(HEIGHT).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
-    let signature = checked_torii_test_block_signature(
-        0,
-        &keypair,
-        &header,
-        "sign indexed Torii SCCP-message fixture block",
-    );
-    let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &[entry_hash],
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
-        .expect("test block entrypoint hash should match payload");
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+    builder.push_transaction(tx);
+    let mut block = builder.build_with_signature(0, keypair.private_key());
     let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
     assert_eq!(messages.len(), 1);
     let message = &messages[0];
     let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
         .expect("SCCP commitment root");
     block.set_sccp_commitment_root(Some(commitment_root));
+    // Finalize the proposal before attaching outputs: changing its SCCP root
+    // invalidates any previously attached execution result.
+    let proposal = block.canonical_resultless_proposal();
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut block,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
+    );
+    assert!(block.has_results());
+    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    assert_eq!(block.execution_outputs().len(), 1);
+    block
+        .validate_output_merkle_cache()
+        .expect("SCCP fixture retains its exact Network output");
+    assert_eq!(
+        iroha_core::bridge::sccp_commitment_root_from_messages(
+            &iroha_core::bridge::collect_sccp_messages_from_signed_block(&block),
+        ),
+        Some(commitment_root),
+    );
+    block
+        .replace_signatures(
+            [checked_torii_test_block_signature(
+                0,
+                &keypair,
+                &block.header(),
+                "sign SCCP fixture with final proposal commitment",
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("signature binds the complete SCCP fixture proposal");
     let block_hash = block.hash();
     let message_id = message.commitment.message_id;
     let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(context.lane, message_id)

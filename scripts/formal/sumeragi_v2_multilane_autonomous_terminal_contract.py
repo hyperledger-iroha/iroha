@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from pathlib import Path
+
+import sumeragi_v2_multilane_native_preparation_contract as native_preparation
 from typing import Any, Optional
 
 
@@ -985,10 +987,12 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
             "stable_terminal_reservations",
             "shared_terminal_transient",
             "consumes_terminal_cas_transient",
-            "self.post_wsv_lane_artifact_budget_reserved_bytes()?",
+            "self.lane_publication_budget_reserved_bytes()?",
             ".kura_disk_usage_bytes()?",
             "bytes.checked_add(stable_terminal_reservations)",
-            "bytes.checked_add(post_wsv_reservations)",
+            "bytes.checked_add(lane_publication_reservations)",
+            "self.certified_bundle_capacity_reserved_bytes()?",
+            "bytes.checked_add(certified_bundle_reservations)",
             "required > self.max_disk_usage_bytes",
         ),
     ),
@@ -1009,12 +1013,7 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         KURA_LANE_ARTIFACT_BUDGET_RELATIVE,
         "method",
         "Kura::lane_artifact_required_bytes_for_block",
-        (
-            "merge_entry: Option<&MergeLedgerEntry>",
-            "self.merge_lane_application_artifact_required_bytes_for_block(block, merge_entry)?",
-            "Self::maximum_index_growth_for_unresolved_sidecar_write(",
-            "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry",
-        ),
+        native_preparation.ORDINARY_TOKENS,
     ),
     (
         "crates/iroha_core/src/kura.rs",
@@ -1026,7 +1025,33 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
             "self.lane_artifact_required_bytes_for_block(block, merge_entry)?",
         ),
     ),
-    (
+
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::lane_publication_budget_reserved_bytes',
+ ('let merge = self.post_wsv_lane_artifact_budget_reserved_bytes()?;',
+  'let native = self.native_amx_publication_capacity_reserved_bytes()?;',
+  'merge.checked_add(native).ok_or_else(||')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::native_amx_publication_capacity_reserved_bytes',
+ ('self.native_amx_publication_capacity_reservations',
+  '.try_fold(0_u64, |total, reservation| {',
+  '.checked_add(reservation.reserved_bytes().ok_or_else(||')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'NativeAmxPublicationCapacityReservation::reserved_bytes',
+ ('self.routes',
+  '.try_fold(self.index_additional_bytes, |total, route| {',
+  'total.checked_add(route.reserved_bytes()?)')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'NativeAmxRoutePublicationCapacity::reserved_bytes',
+ ('if self.cleanup_complete {\n            return Some(0);\n        }',
+  'self.outstanding_components',
+  '.try_fold(self.prune_journal_bytes, |total, kind| {',
+  'total.checked_add(*self.component_allocation_bytes.get(kind)?)')),
+(
         "crates/iroha_core/src/kura/tests/07f_canonical_carrier_terminal_recovery_tests.rs",
         "fn",
         "canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane_set",
@@ -1191,14 +1216,7 @@ AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
         KURA_LANE_ARTIFACT_BUDGET_RELATIVE,
         "method",
         "Kura::lane_artifact_required_bytes_for_block",
-        (
-            "let mut total =",
-            "self.merge_lane_application_artifact_required_bytes_for_block(block, merge_entry)?",
-            "if let Some(bundle) = block.execution_context()",
-            "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(",
-            "merge_entry,",
-            "Ok(total)",
-        ),
+        native_preparation.ORDINARY_ORDERED,
     ),
     (
         "crates/iroha_core/src/kura.rs",

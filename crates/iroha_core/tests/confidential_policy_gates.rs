@@ -49,7 +49,7 @@ fn init_state() -> (
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let domain_id: DomainId = DomainId::try_new("zkdomain", "universal").expect("domain id");
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -239,8 +239,7 @@ fn schedule_shielded_only_requires_window() {
     block
         .commit_empty_block_for_testing()
         .expect("commit setup block");
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
@@ -308,8 +307,7 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
     block
         .commit_empty_block_for_testing()
         .expect("commit setup block");
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
@@ -351,7 +349,6 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
         .expect("commit scheduling block");
     let header3 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(effective_height).unwrap(),
-        None,
         None,
         None,
         0,
@@ -418,8 +415,7 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
     block
         .commit_empty_block_for_testing()
         .expect("commit setup block");
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let effective_height = stx2.block_height() + 2;
@@ -440,7 +436,7 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
     let transition_height =
         NonZeroU64::new(effective_height).expect("effective height must be non-zero");
     let header_transition =
-        iroha_data_model::block::BlockHeader::new(transition_height, None, None, None, 0, 0);
+        iroha_data_model::block::BlockHeader::new(transition_height, None, None, 0, 0);
     let block_transition = state.block(header_transition);
     block_transition
         .commit_world_overlay_for_testing()

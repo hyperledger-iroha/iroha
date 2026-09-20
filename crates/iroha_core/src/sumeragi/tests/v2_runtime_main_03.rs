@@ -122,7 +122,7 @@ fn healthy_same_class_fifo_depth_does_not_accrue_service_debt() {
         )
         .expect("enqueue same-class work");
     }
-    let _ = runtime.step(start);
+    let _ = runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test());
     let queue = runtime.queue_snapshot(start);
     assert_eq!(queue.normal.depth, 3);
     assert_eq!(queue.normal.max_service_debt, 0);
@@ -304,14 +304,18 @@ fn aborted_body_completion_retry_reclaims_the_entire_token_without_reminting() {
     let owner_tag = runtime.round_tag();
     let manifest = runtime_manifest(&context, 0xB1);
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0xB3))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0xB3),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("ordinary ingress occupies its sole unreserved slot");
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
                 signed_runtime_timeout_certificate(&context, &keys),
-            ),
-        ))
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("certified progress occupies the isolated certified-fence slot");
     assert_eq!(runtime.remaining_completion_capacity(), 2);
     let reservation = runtime
@@ -696,13 +700,14 @@ fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"coalesced-progress-block")),
         payload_hash: Hash::new(b"coalesced-progress-payload"),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"coalesced parent state"),
-        Hash::new(b"coalesced post state"),
-        Hash::new(b"coalesced ordinary writes"),
-        1,
-        Hash::new(b"coalesced executed block wire"),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"coalesced parent state"),
+            Hash::new(b"coalesced post state"),
+            Hash::new(b"coalesced ordinary writes"),
+            1,
+            Hash::new(b"coalesced executed block wire"),
+        );
     let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
         round,
         proposal_round: round,
@@ -784,11 +789,19 @@ fn runtime_merges_alternate_sources_for_one_semantic_request() {
         route_b.clone(),
     );
     let owner_tag = runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            ownership_a,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("first source admits the semantic request");
     assert_eq!(
         runtime
-            .enqueue_network_with_ingress_ownership(message, ownership_b)
+            .enqueue_network_with_ingress_ownership(
+                message,
+                ownership_b,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("alternate source attaches to the retained request"),
         owner_tag
     );
@@ -861,7 +874,11 @@ fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root() {
         retry_ordinal,
     );
     runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), retained)
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            retained,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("first fair lifecycle enters runtime");
     let physical_ordinal = runtime.ingress.commands[0]
         .admission_ordinal
@@ -870,7 +887,11 @@ fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root() {
         .next_ordinal_for_test()
         .expect("inspect shared source before coalescing retry");
     runtime
-        .enqueue_network_with_ingress_ownership(message, retry)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            retry,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("later same-semantic retry coalesces");
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(
@@ -930,7 +951,11 @@ fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
         older_ordinal,
     );
     runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), newer)
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            newer,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("newer admissible aggregate enters runtime first");
     assert_eq!(
         runtime.ingress.commands[0].lifecycle_ordinal,
@@ -961,7 +986,11 @@ fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
         "only checked dequeue may promote the preview to mutable runtime ownership"
     );
     runtime
-        .enqueue_network_with_ingress_ownership(message, older)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            older,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("older frozen aggregate carrier joins the queued envelope");
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(
@@ -989,7 +1018,7 @@ fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
     );
     assert!(ownership.validate_exact());
     assert_eq!(
-        runtime.minimum_active_lifecycle_ordinal(),
+        runtime.minimum_active_lifecycle_ordinal(&RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(Some(older_ordinal)),
         "the later-transferred frozen carrier must become the active minimum",
     );
@@ -1015,7 +1044,11 @@ fn network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals() {
         unminted_ordinal,
     );
     assert!(matches!(
-        unminted_runtime.enqueue_network_with_ingress_ownership(first_message, first_ownership),
+        unminted_runtime.enqueue_network_with_ingress_ownership(
+            first_message,
+            first_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(NetworkIngressError::FailClosed)
     ));
     assert!(unminted_runtime.fail_closed);
@@ -1050,14 +1083,21 @@ fn network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals() {
         shared_ordinal,
     );
     collision_runtime
-        .enqueue_network_with_ingress_ownership(admitted_message, admitted_ownership)
+        .enqueue_network_with_ingress_ownership(
+            admitted_message,
+            admitted_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("first exact fair lifecycle enters runtime");
     let next_before_collision = source
         .next_ordinal_for_test()
         .expect("inspect source before unrelated collision");
     assert!(matches!(
-        collision_runtime
-            .enqueue_network_with_ingress_ownership(conflicting_message, conflicting_ownership,),
+        collision_runtime.enqueue_network_with_ingress_ownership(
+            conflicting_message,
+            conflicting_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        ),
         Err(NetworkIngressError::FailClosed)
     ));
     assert!(collision_runtime.fail_closed);
@@ -1082,10 +1122,18 @@ fn runtime_keeps_identical_wire_requests_from_distinct_semantic_origins_independ
     let ownership_a = fair_runtime_ownership(&message, origin_a, source.clone());
     let ownership_b = fair_runtime_ownership(&message, origin_b, source);
     runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            ownership_a,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("first semantic origin owns one runtime occurrence");
     runtime
-        .enqueue_network_with_ingress_ownership(message, ownership_b)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            ownership_b,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("distinct semantic origin retains an independent occurrence");
     assert_eq!(runtime.queued_commands(), 2);
     assert!(runtime.ingress.commands.iter().all(|queued| {
@@ -1133,7 +1181,7 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     );
     let deadline = now + runtime.round_timeout();
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("install a runtime-owned local signing fence");
     runtime
         .take_last_scheduler_ownership()
@@ -1154,14 +1202,21 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
         ] => (*tag, vote.signature_preimage()),
         effects => panic!("unexpected timeout effects: {effects:?}"),
     };
+    let mut external_owners = vec![timeout_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
-        .expect("publish the pending timeout signer owner");
-    runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), ownership_a)
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            ownership_a,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("first source enters runtime ingress");
     assert!(matches!(
-        runtime.step(deadline),
+        runtime.step(deadline, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners")),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     let queued_owner = runtime
@@ -1186,7 +1241,12 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     );
     assert_eq!(
         runtime
-            .enqueue_network_with_ingress_ownership(message, ownership_b)
+            .enqueue_network_with_ingress_ownership(
+                message,
+                ownership_b,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners")
+            )
             .expect("alternate source attaches to the Busy owner"),
         round_tag
     );
@@ -1212,12 +1272,14 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     runtime
         .enqueue_signature_with_owner(signature_tag, signature, &timeout_effect_ownership[0])
         .expect("enqueue the exact signing completion");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire the pending signer after completion enqueue");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
 
     assert!(matches!(
-        runtime.step(deadline),
+        runtime.step(deadline, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners")),
         Ok(RuntimeStep::Advanced(ref effects))
             if matches!(effects.as_slice(), [AdapterEffect::Broadcast(_)])
     ));
@@ -1232,7 +1294,11 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
         .take_effect_ownership(1)
         .expect("the executor consumes the TimeoutVote broadcast owner");
 
-    let deferred_effects = match runtime.step(deadline) {
+    let deferred_effects = match runtime.step(
+        deadline,
+        &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+            .expect("valid borrowed executor owners"),
+    ) {
         Ok(RuntimeStep::Advanced(effects)) => effects,
         other => panic!("deferred owner did not receive its service turn: {other:?}"),
     };
@@ -1262,7 +1328,11 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     );
     assert!(runtime.deferred_ingress_ownership.is_empty());
 
-    let periodic_effects = match runtime.step(deadline) {
+    let periodic_effects = match runtime.step(
+        deadline,
+        &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+            .expect("valid borrowed executor owners"),
+    ) {
         Ok(RuntimeStep::Advanced(effects)) => effects,
         other => panic!("the frozen retransmit did not receive its bounded turn: {other:?}"),
     };
@@ -1334,10 +1404,14 @@ fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
         newer_ordinal,
     );
     runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), newer)
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            newer,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("newer aggregate carrier enters runtime before the frozen predecessor");
     assert!(matches!(
-        runtime.step(now),
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     let selected = runtime
@@ -1375,7 +1449,11 @@ fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
     );
     assert_eq!(
         runtime
-            .enqueue_network_with_ingress_ownership(message.clone(), older)
+            .enqueue_network_with_ingress_ownership(
+                message.clone(),
+                older,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("older frozen carrier joins the exact Busy-deferred aggregate"),
         owner_tag
     );
@@ -1455,7 +1533,10 @@ fn busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation() {
         "the adapter-private seal rejects a coherently rehashed causal identity substitution"
     );
     runtime
-        .reconcile_deferred_ingress_ownership(Some((deferred_ordinal, mutation)))
+        .reconcile_deferred_ingress_ownership(
+            Some((deferred_ordinal, mutation)),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the same earlier carrier rebases after restoring the exact identity");
     let final_ingress = &runtime.deferred_ingress_ownership[&deferred_ordinal];
     assert_eq!(final_ingress.direct.len(), 3);
@@ -1533,10 +1614,14 @@ fn distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner() {
     same_token_pre_runtime.leader_wire_runtime_receipt = None;
     assert!(same_token_pre_runtime.validate_exact());
     runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), first_ownership)
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            first_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("first leader-wire carrier enters the runtime");
     assert!(matches!(
-        runtime.step(now),
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     runtime
@@ -1639,7 +1724,7 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
     );
     let deadline = started_at + runtime.round_timeout();
     let timeout_owner = runtime
-        .frozen_timeout_owner_for_test(deadline)
+        .frozen_timeout_owner_for_test(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("freeze the new process's absolute-timeout owner");
     let timeout_physical_cut = runtime
         .timeout_owner_physical_cut
@@ -1704,7 +1789,11 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
     let receipts_before_fresh = runtime.leader_wire_runtime_receipts.len();
     let terminals_before_fresh = runtime.pending_leader_wire_terminals.len();
     assert!(matches!(
-        runtime.enqueue_network_with_ingress_ownership(message.clone(), fresh_runtime),
+        runtime.enqueue_network_with_ingress_ownership(
+            message.clone(),
+            fresh_runtime,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(NetworkIngressError::Backpressure(EnqueueError::Full))
     ));
     assert_eq!(runtime.queued_commands(), queued_before_fresh);
@@ -1771,7 +1860,11 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         "a strictly later carrier identifies the retained physical replay"
     );
     runtime
-        .enqueue_network_with_ingress_ownership(message, restored_runtime)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            restored_runtime,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("authenticate and enqueue the restored TC under its old owner");
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(runtime.leader_wire_runtime_receipts.len(), 1);
@@ -1784,7 +1877,7 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         "authenticated replay must use the ordinary Admit path"
     );
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the absolute timeout retains its already-frozen turn");
     let RuntimeStep::Advanced(timeout_effects) = timeout_step else {
         panic!("frozen timeout unexpectedly idled")
@@ -1807,11 +1900,17 @@ fn restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner() {
         .take_effect_ownership(timeout_effects.len())
         .expect("persisted TimeoutIntent transfers one signer owner");
     assert_eq!(timeout_effect_ownership.len(), 1);
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
-        .expect("publish the pending timeout signer owner");
+    let external_owners = vec![timeout_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let tc_step = runtime
-        .try_step_pacemaker_escape(deadline)
+        .try_step_pacemaker_escape(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("restored authenticated TC remains a certified escape")
         .expect("TC runs after the one-shot timeout persistence turn");
     let RuntimeStep::Advanced(tc_effects) = tc_step else {

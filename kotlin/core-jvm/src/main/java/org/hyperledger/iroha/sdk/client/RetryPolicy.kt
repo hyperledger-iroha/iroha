@@ -56,7 +56,7 @@ class RetryPolicy(
 
     /**
      * Computes the delay before the next attempt. The delay scales linearly with the attempt number:
-     * `baseDelay * attempt`.
+     * `baseDelay * attempt`, capped at [maxDelay], including when the multiplication overflows.
      */
     fun delayForAttempt(attempt: Int): Duration {
         if (attempt <= 0) return Duration.ZERO
@@ -66,7 +66,7 @@ class RetryPolicy(
             val scaled = baseDelay.multipliedBy(multiplier)
             if (scaled > maxDelay) maxDelay else scaled
         } catch (_: ArithmeticException) {
-            Duration.ofMillis(Long.MAX_VALUE)
+            maxDelay
         }
     }
 

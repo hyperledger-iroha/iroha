@@ -47,17 +47,26 @@ async fn dispatch<T: Pload + ClassifyTopic>(
             iroha_logger::error!(?class, "Granted semantic dispatch ownership mismatch");
             break;
         }
-        if !matches!(
-            senders
-                .transfer_before_send(&mut pending.message, pending.topic, pending.priority, false)
-                .await,
-            InboundDispatchAdmission::Admitted
-        ) {
-            iroha_logger::error!(
-                ?class,
-                "Granted semantic dispatch violated admitted geometry"
-            );
-            break;
+        let admission = senders
+            .transfer_before_send(&mut pending.message, pending.topic, pending.priority, false)
+            .await;
+        match admission {
+            InboundDispatchAdmission::Admitted => {}
+            InboundDispatchAdmission::OverTopicCap { cap } => {
+                iroha_logger::error!(
+                    ?class,
+                    cap,
+                    "Granted semantic dispatch exceeded its topic cap"
+                );
+                break;
+            }
+            InboundDispatchAdmission::ByteBudgetFull => {
+                iroha_logger::error!(
+                    ?class,
+                    "Granted semantic dispatch violated admitted geometry"
+                );
+                break;
+            }
         }
         let sender = match class {
             Class::Safety => &senders.safety,

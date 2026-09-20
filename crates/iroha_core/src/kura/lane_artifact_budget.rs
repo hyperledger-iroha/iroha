@@ -51,19 +51,34 @@ struct PostWsvLaneArtifactBudgetReservation {
     plan: PostWsvLaneArtifactBudgetPlan,
     outstanding_components: BTreeSet<PostWsvLaneArtifactStableComponentId>,
     incomplete_terminal_outcomes: BTreeSet<PostWsvLaneArtifactExecutionIdentity>,
+    // Only a proven pending prepend receives this bounded future-growth
+    // envelope. Keep the canonical carrier plan independent of local history.
+    prepend_transient_bytes: u64,
 }
 impl PostWsvLaneArtifactBudgetReservation {
     fn new(plan: PostWsvLaneArtifactBudgetPlan) -> Self {
         Self {
             outstanding_components: plan.stable_components.keys().copied().collect(),
             incomplete_terminal_outcomes: plan.executions.keys().copied().collect(),
+            prepend_transient_bytes: 0,
             plan,
         }
     }
     fn reserved_bytes(&self) -> Option<u64> {
+        let has_unwritten_receipt = self
+            .outstanding_components
+            .iter()
+            .any(|component| matches!(component, PostWsvLaneArtifactStableComponentId::Receipt(_)));
+        let transient = if has_unwritten_receipt {
+            self.plan
+                .shared_transient_bytes
+                .max(self.prepend_transient_bytes)
+        } else {
+            self.plan.shared_transient_bytes
+        };
         self.outstanding_components
             .iter()
-            .try_fold(self.plan.shared_transient_bytes, |total, component| {
+            .try_fold(transient, |total, component| {
                 total.checked_add(*self.plan.stable_components.get(component)?)
             })
     }
@@ -298,15 +313,20 @@ impl Kura {
         let mut active = 0_usize;
         for execution in plan.executions.values() {
             let identity = execution.identity;
-            let Ok(entry) = self.lane_storage_entry(identity.lane_id) else {
+            // Only a complete authenticated reference lookup can classify work
+            // as absent. A corrupt current or retained object cannot erase its
+            // outstanding envelope or prevent reconstruction after restart.
+            let Some(entry) = self.find_existing_work_lane_storage_entry_under_geometry_guard(
+                execution.executable_payload.network_id,
+                identity.lane_id,
+                identity.dataspace_id,
+                identity.lane_incarnation,
+                identity.proposal_height,
+            )?
+            else {
                 continue;
             };
-            if self
-                .require_active_lane_artifact(&entry, &execution.receipt.proposal.descriptor)
-                .is_err()
-            {
-                continue;
-            }
+            self.require_active_lane_artifact(&entry, &execution.receipt.proposal.descriptor)?;
             active = active.checked_add(1).ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
@@ -424,6 +444,287 @@ impl Kura {
         }
         Ok(Some((consumed, complete)))
     }
+    /// Add only the physically required prepend excess to canonical admission.
+    /// The caller retains prune/canonical ownership until durable publication
+    /// installs the same envelope, so no compactor or receipt writer can alter
+    /// the observed class in between. Cached block estimates remain immutable.
+    fn post_wsv_prepend_admission_extra_under_prune_and_canonical_guards(
+        &self,
+        block: &SignedBlock,
+        entry: Option<&MergeLedgerEntry>,
+    ) -> Result<u64> {
+        let Some(entry) = entry else {
+            return Ok(0);
+        };
+        let Some(plan) = self.post_wsv_lane_artifact_budget_plan(
+            entry,
+            block.header().height().get(),
+            block.hash(),
+        )?
+        else {
+            return Ok(0);
+        };
+        let _geometry = self.lane_geometry_lock.lock();
+        let _sidecar = self.sidecar_lock.lock();
+        let envelope = self.post_wsv_prepend_envelope_locked(&plan, &BTreeSet::new())?;
+        Ok(envelope.saturating_sub(plan.shared_transient_bytes))
+    }
+    /// Receipt compaction is the only writer that can raise this pair's base.
+    /// Keep it fixed while any authenticated carrier still owns an unwritten
+    /// receipt, so an admitted ordinary append cannot later become a prepend.
+    fn post_wsv_receipt_compaction_is_pinned_locked(&self, entry: &LaneStorageEntry) -> bool {
+        self.post_wsv_lane_artifact_budget_reservations
+            .lock()
+            .values()
+            .any(|reservation| {
+                reservation
+                    .outstanding_components
+                    .iter()
+                    .any(|component| match component {
+                        PostWsvLaneArtifactStableComponentId::Receipt(identity) => {
+                            identity.lane_id == entry.lane_id
+                                && identity.dataspace_id == entry.dataspace_id
+                                && identity.lane_incarnation == entry.incarnation
+                                && reservation.plan.executions.get(identity).is_some_and(
+                                    |execution| {
+                                        execution.executable_payload.network_id == entry.network_id
+                                    },
+                                )
+                        }
+                        PostWsvLaneArtifactStableComponentId::Frontier(_) => false,
+                    })
+            })
+    }
+    /// Authenticate the actual prepend class, then size a bounded future pair
+    /// at the same namespace. No physical bytes are removed from accounting;
+    /// this envelope is additional journal headroom only.
+    fn post_wsv_prepend_envelope_locked(
+        &self,
+        plan: &PostWsvLaneArtifactBudgetPlan,
+        consumed: &BTreeSet<PostWsvLaneArtifactStableComponentId>,
+    ) -> Result<u64> {
+        let mut envelope = 0;
+        for execution in plan.executions.values() {
+            let identity = execution.identity;
+            if consumed.contains(&PostWsvLaneArtifactStableComponentId::Receipt(identity)) {
+                continue;
+            }
+            let Some(entry) = self.find_existing_work_lane_storage_entry_under_geometry_guard(
+                execution.executable_payload.network_id,
+                identity.lane_id,
+                identity.dataspace_id,
+                identity.lane_incarnation,
+                identity.proposal_height,
+            )?
+            else {
+                continue;
+            };
+            self.require_active_lane_artifact(&entry, &execution.receipt.proposal.descriptor)?;
+            let (data, index) =
+                Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+            let parent = data.parent().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    data.clone(),
+                    "receipt capacity namespace lacks a parent",
+                )
+            })?;
+            if Self::canonical_sidecar_directory_for(&self.store_root, parent)?.is_none() {
+                self.validate_post_wsv_receipt_window_locked(
+                    &entry,
+                    None,
+                    identity.lane_block_height,
+                )?;
+                continue;
+            }
+            let namespace = self.open_bound_progress_namespace(&data, &index)?;
+            if self
+                .open_optional_bound_progress_file(&namespace, &index.with_extension("index.tmp"))?
+                .is_some()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    index.clone(),
+                    "receipt admission requires its committed rewrite to finish first",
+                ));
+            }
+            let mut pair = self.open_bound_progress_pair(&data, &index)?;
+            let intent_path = Self::bound_progress_append_intent_path(&index);
+            let intent = self
+                .open_optional_bound_progress_file(&namespace, &intent_path)?
+                .map(|mut file| {
+                    Self::decode_bound_progress_append_intent(
+                        &mut file,
+                        &intent_path,
+                        &namespace,
+                        &data,
+                        &index,
+                        "post-WSV receipt capacity",
+                    )
+                    .map_err(|_| {
+                        Self::invalid_lane_artifact_error(
+                            intent_path.clone(),
+                            "receipt append intent is invalid",
+                        )
+                    })
+                })
+                .transpose()?;
+            if let Some(intent) = intent.as_ref() {
+                let payload = execution.receipt.encode_framed()?;
+                if intent.height != identity.lane_block_height
+                    || intent.payload_hash != BoundProgressAppendIntentV1::payload_digest(&payload)
+                    || intent.payload_len() != Some(u64::try_from(payload.len())?)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        intent_path,
+                        "receipt admission names another durable append intent",
+                    ));
+                }
+            }
+            let (layout, data_len) = match &mut pair {
+                BoundProgressPair::Absent(_) => (None, 0),
+                BoundProgressPair::Present(bound) => {
+                    let len = bound
+                        .index
+                        .metadata()
+                        .map_err(|error| Error::IO(error, index.clone()))?
+                        .len();
+                    let layout = if let Some(intent) =
+                        intent.as_ref().filter(|intent| intent.is_prepend())
+                    {
+                        intent.prepend_old_layout()
+                    } else {
+                        SidecarIndexLayout::read_from(&mut bound.index, len)
+                    }
+                    .map_err(|reason| Self::invalid_lane_artifact_error(index.clone(), reason))?;
+                    let data_len = bound
+                        .data
+                        .metadata()
+                        .map_err(|error| Error::IO(error, data.clone()))?
+                        .len();
+                    if !self.bound_progress_sidecar_unchanged(bound) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            index.clone(),
+                            "receipt capacity pair changed",
+                        ));
+                    }
+                    (Some(layout), data_len)
+                }
+            };
+            self.validate_post_wsv_receipt_window_locked(
+                &entry,
+                layout,
+                identity.lane_block_height,
+            )?;
+            if let Some(layout) = layout {
+                if identity.lane_block_height < layout.base_height {
+                    BoundProgressAppendIntentV1::prepend_layout(layout, identity.lane_block_height)
+                        .map_err(|reason| {
+                            Self::invalid_lane_artifact_error(index.clone(), reason)
+                        })?;
+                    // The largest valid old/new images differ by one entry.
+                    // Scalar/hash values have fixed canonical widths; parity
+                    // tests compare this count to real sealed intent frames.
+                    let maximum_old = SidecarIndexLayout::based(
+                        identity.lane_block_height + 1,
+                        BOUND_PROGRESS_PREPEND_INDEX_MAX_BYTES as u64
+                            - PIPELINE_INDEX_ENTRY_SIZE_U64,
+                    )
+                    .map_err(|reason| Self::invalid_lane_artifact_error(index.clone(), reason))?;
+                    let bytes = BoundProgressAppendIntentV1::prepend_encoded_len(
+                        &namespace,
+                        &data,
+                        &index,
+                        identity.lane_block_height,
+                        maximum_old,
+                        data_len,
+                        u64::try_from(execution.receipt.encode_framed()?.len())?,
+                    )
+                    .map_err(|reason| Self::invalid_lane_artifact_error(index.clone(), reason))?;
+                    envelope = envelope.max(u64::try_from(bytes)?);
+                }
+            }
+            if !Self::progress_mutation_namespace_unchanged(&namespace) {
+                return Err(Self::invalid_lane_artifact_error(
+                    index,
+                    "receipt capacity namespace changed",
+                ));
+            }
+        }
+        Ok(envelope)
+    }
+    /// Return the exact outstanding range for this physical identity. Receipt
+    /// creation uses its minimum as the initial index base, allowing any first
+    /// writer order without converting an admitted ordinary row into a prepend.
+    fn pending_post_wsv_receipt_range_locked(
+        &self,
+        entry: &LaneStorageEntry,
+        proposed: u64,
+    ) -> (u64, u64) {
+        let mut lowest = proposed;
+        let mut highest = proposed;
+        for reservation in self
+            .post_wsv_lane_artifact_budget_reservations
+            .lock()
+            .values()
+        {
+            for component in &reservation.outstanding_components {
+                if let PostWsvLaneArtifactStableComponentId::Receipt(identity) = component
+                    && identity.lane_id == entry.lane_id
+                    && identity.dataspace_id == entry.dataspace_id
+                    && identity.lane_incarnation == entry.incarnation
+                    && reservation
+                        .plan
+                        .executions
+                        .get(identity)
+                        .is_some_and(|execution| {
+                            execution.executable_payload.network_id == entry.network_id
+                        })
+                {
+                    lowest = lowest.min(identity.lane_block_height);
+                    highest = highest.max(identity.lane_block_height);
+                }
+            }
+        }
+        (lowest, highest)
+    }
+    /// A later receipt cannot exceed the admitted initial sparse range or grow
+    /// a pending prepend past its full-index bound. Run before canonical writes.
+    fn validate_post_wsv_receipt_window_locked(
+        &self,
+        entry: &LaneStorageEntry,
+        layout: Option<SidecarIndexLayout>,
+        proposed_height: u64,
+    ) -> Result<()> {
+        let (mut lowest, mut highest) =
+            self.pending_post_wsv_receipt_range_locked(entry, proposed_height);
+        let invalid = if let Some(layout) = layout {
+            lowest = lowest.min(layout.base_height);
+            highest = highest.max(
+                layout
+                    .next_height()
+                    .and_then(|height| height.checked_sub(1))
+                    .unwrap_or(layout.base_height),
+            );
+            lowest < layout.base_height
+                && highest
+                    .checked_sub(lowest)
+                    .and_then(|span| span.checked_add(1))
+                    .is_none_or(|count| count > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES as u64)
+        } else {
+            highest
+                .checked_sub(lowest)
+                .is_none_or(|gap| gap > MAX_INDEXED_SIDECAR_GAP_ENTRIES)
+        };
+        if invalid {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::WouldBlock,
+                    "receipt admission must wait for the outstanding index window to drain",
+                ),
+                entry.blocks_dir(&self.store_root),
+            ));
+        }
+        Ok(())
+    }
     fn ensure_post_wsv_lane_artifact_budget_plan_locked(
         &self,
         pending_canonical_bytes: u64,
@@ -441,6 +742,7 @@ impl Kura {
             }
             return Ok(0);
         };
+        let prepend_transient_bytes = self.post_wsv_prepend_envelope_locked(&plan, &consumed)?;
         let native_reservations = self.native_amx_publication_capacity_reserved_bytes()?;
         let mut reservations = self.post_wsv_lane_artifact_budget_reservations.lock();
         if let Some(mut reservation) = reservations.get_mut(&plan.entry_hash) {
@@ -448,6 +750,12 @@ impl Kura {
                 return Err(Self::invalid_lane_artifact_error(
                     PathBuf::from(LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE),
                     "post-WSV lane artifact reservation conflicts for one merge entry",
+                ));
+            }
+            if prepend_transient_bytes > reservation.prepend_transient_bytes {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "post-WSV receipt changed its admitted index class",
                 ));
             }
             reservation
@@ -464,6 +772,7 @@ impl Kura {
             });
         }
         let mut reservation = PostWsvLaneArtifactBudgetReservation::new(plan);
+        reservation.prepend_transient_bytes = prepend_transient_bytes;
         reservation
             .outstanding_components
             .retain(|component| !consumed.contains(component));
@@ -963,12 +1272,7 @@ impl Kura {
             }
             let carrier_hashes = {
                 let _geometry_guard = self.lane_geometry_lock.lock();
-                let entries = self
-                    .lane_storage_entries
-                    .lock()
-                    .values()
-                    .cloned()
-                    .collect::<Vec<_>>();
+                let entries = self.retained_lane_storage_entries_under_geometry_guard()?;
                 let _sidecar_guard = self.sidecar_lock.lock();
                 let mut incomplete_seen = 0_usize;
                 let mut carrier_hashes = BTreeSet::new();

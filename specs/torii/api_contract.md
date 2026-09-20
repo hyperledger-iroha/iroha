@@ -413,6 +413,44 @@ rejection reasons or diagnostics, trigger completions, batch-transfer receipts,
 account identities, amounts, or instruction payloads, and the handler does not
 perform a second Kura lookup to hydrate those details.
 
+Pipeline absence is scoped and typed. HTTP `404` is pending only when the
+`ErrorEnvelope` has code `pipeline_transaction_status_not_found` and
+`details.pipeline_transaction_status_not_found` contains the exact requested
+canonical `hash` and `scope` (`local` or `global`; omission requests `global`).
+JSON and Norito carry the same envelope. A global `404` requires exact typed
+absence from every authoritative shard. An unavailable shard returns `503`
+with code `route_unavailable`; generic, malformed, or selector-mismatched
+`404` responses remain failures and never establish global absence. A successful
+status must also bind the exact hash and requested scope. Cache and queue
+observations are progress hints, not proof of Applied execution.
+
+`GET /v1/bridge/finality/attestation/{height}` uses one negotiated JSON or
+canonical Norito `ErrorEnvelope` with code `bridge_finality_attestation_failure`
+and the sole detail `finality_attestation_failure`. Its closed
+`FinalityAttestationFailure` record binds
+the exact nonzero `challenge` and requested `height`, with a closed `reason` and
+`tip_mismatch` payload. In JSON, `reason` is exactly one case-sensitive scalar
+string naming a variant below, for example `"GenesisUncommitted"`; tagged objects,
+numeric values and alternate spellings are invalid. Norito uses the closed enum.
+The CLI report's lower-snake-case `reason` is a separate presentation field.
+`TipChanged` requires the `tip_mismatch` payload; every other reason
+requires null. The payload carries positive `requested_height`, `applied_height`,
+and `status_height` values which are not all equal, plus the exact challenge,
+configured `node_id`, and genesis-derived `network_id`.
+
+HTTP `409` reports `TipChanged` or `ConflictingState`. General finality callers
+may retry only `TipChanged` after validating every selector against their
+independently retained request, node and network, within the existing deadline.
+Genesis scaling treats `TipChanged` as non-retryable conflict. HTTP `503` reports
+`ConsensusUninitialized`, `GenesisUncommitted`, `RestartRequired`, or
+`FinalityUnavailable`; only the first two permit bounded startup retries. HTTP
+`500` reports `InternalFailure`. Missing/corrupt proofs and identity, signature,
+subject or CommitQC failures never grant retryable progress. Generic HTTP errors,
+malformed payloads, and mismatched reason/status/payload combinations are errors.
+These unsigned observations never authenticate readiness or finality. Every
+response is `no-store`, carries `X-Content-Type-Options: nosniff`, and varies by
+`X-Iroha-Finality-Challenge, Accept`.
+
 Exact committed details use `POST /v1/pipeline/transactions/details`. The body
 is a canonical `SignedQuery` containing `FindTransactions` with exactly one
 `entrypoint_hash` equality predicate and default query parameters and selector.

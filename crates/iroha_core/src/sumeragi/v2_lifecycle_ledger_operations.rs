@@ -3864,6 +3864,122 @@ impl LifecycleLedgerV1 {
         Ok(rows)
     }
 
+    /// Seal an existing linked Apply for passive interrupted-tip recovery.
+    /// The native PendingKura executor remains the sole executable owner.
+    pub(super) fn authenticate_pending_kura_linked_apply(
+        &self,
+        verified: &VerifiedHeightContext,
+        comparison: &super::PendingKuraApplyComparisonV1,
+    ) -> Result<Option<(CandidateAdmission, Vec<LifecycleLedgerRecordV1>)>, LifecycleLedgerError>
+    {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        let fail = || {
+            LifecycleLedgerError::InvalidLedger(
+                "pending Kura linked Apply lost its exact original owner or Decision source"
+                    .to_owned(),
+            )
+        };
+        if projection::lifecycle_context(verified.context()) != self.context() {
+            return Err(fail());
+        }
+        let mut matching = self
+            .records
+            .iter()
+            .filter(|row| row.key() == Some(comparison.candidate().key));
+        let Some(apply) = matching.next() else {
+            return Ok(None);
+        };
+        if matching.next().is_some() {
+            return Err(fail());
+        }
+        if apply.owner().causal_root() == comparison.candidate().causal_root {
+            if apply.owner().first_admission_ordinal() == apply.ordinal() {
+                return Ok(None);
+            }
+            // The payload-free recovered Decision Fetch is part of this exact
+            // canonical WAL family, unlike an earlier signed body owner.
+            let rows = self
+                .records
+                .iter()
+                .filter(|row| row.owner() == apply.owner())
+                .collect::<Vec<_>>();
+            let [fetch, store, validate, final_apply] = rows.as_slice() else {
+                return Err(fail());
+            };
+            if *final_apply != apply
+                || fetch.ordinal() != apply.owner().first_admission_ordinal()
+                || apply.terminal() != Some(None)
+                || apply.continuation() != Some(DurableContinuation::None)
+                || !apply.replay_matches_candidate(comparison.candidate())
+                || apply.key() != Some(comparison.candidate().key)
+                || apply.work_class() != Some(comparison.candidate().work_class)
+                || apply.stage() != Some(comparison.candidate().stage)
+                || apply.reconstruction_source() != comparison.candidate().reconstruction_source
+                || apply.durable_payload() != Some(comparison.candidate().payload)
+            {
+                return Err(fail());
+            }
+            for (parent, child, edge, stage) in [
+                (
+                    *fetch,
+                    *store,
+                    DurableContinuationEdge::FetchToStore,
+                    LifecycleStageKind::FetchBody,
+                ),
+                (
+                    *store,
+                    *validate,
+                    DurableContinuationEdge::StoreToValidate,
+                    LifecycleStageKind::StoreBody,
+                ),
+                (
+                    *validate,
+                    apply,
+                    DurableContinuationEdge::ValidateToApply,
+                    LifecycleStageKind::ValidateBody,
+                ),
+            ] {
+                if parent.terminal() != Some(Some(TerminalOutcome::Advanced))
+                    || parent.continuation()
+                        != Some(DurableContinuation::successor(edge, child.ordinal()))
+                    || !comparison.matches_canonical_predecessor(
+                        parent,
+                        &parent.replay_authority,
+                        stage,
+                    )
+                {
+                    return Err(fail());
+                }
+            }
+            return Ok(Some((
+                comparison.candidate().clone(),
+                rows.into_iter().cloned().collect(),
+            )));
+        }
+        let rows = self.retained_body_apply_rows(apply, None)?;
+        let validate = rows[rows.len() - 2];
+        let original_fetch = (rows.len() == 4).then(|| &rows[0].replay_authority);
+        let candidate = comparison
+            .project_retained_body_apply(
+                verified,
+                apply.owner(),
+                validate.key().ok_or_else(fail)?,
+                &validate.replay_authority,
+                original_fetch,
+            )
+            .ok_or_else(fail)?;
+        if apply.key() != Some(candidate.key)
+            || apply.work_class() != Some(candidate.work_class)
+            || apply.stage() != Some(candidate.stage)
+            || apply.reconstruction_source() != candidate.reconstruction_source
+            || apply.durable_payload() != Some(candidate.payload)
+            || !apply.replay_matches_candidate(&candidate)
+        {
+            return Err(fail());
+        }
+        Ok(Some((candidate, rows.into_iter().cloned().collect())))
+    }
+
     /// Authenticate an already-present linked Apply under the complete original
     /// body owner and the current actual Decision-WAL source. Prefix-only cuts
     /// remain owned by the ordinary authenticated body census.

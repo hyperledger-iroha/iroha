@@ -75,7 +75,7 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let mut program = meta.encode();
     program.extend_from_slice(&code);
     // Submit the program; admission should fail before execution due to the unknown syscall.
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let tx = TransactionBuilder::new(
         network_id,

@@ -2954,3 +2954,19 @@ mod tests {
     }
     include!("lane_planner/consensus_domain_rejection_tests.rs");
 }
+#[cfg(test)]
+#[test]
+fn v2_apply_preserves_typed_planner_storage_failure() {
+    use super::v2_apply::V2ApplyError;
+    use super::v2_body_store::BodyValidationError as _;
+
+    let message = "lane frontier is unavailable";
+    let local = V2ApplyError::from(V2LanePayloadPlanError::storage(message));
+    let input = V2ApplyError::from(V2LanePayloadPlanError::new(message));
+    assert!(matches!(local, V2ApplyError::LocalCanonicalState(_)));
+    assert!(local.requires_restart_recovery());
+    assert!(local.rejection_identity().is_none());
+    assert!(matches!(input, V2ApplyError::Validation(_)));
+    assert!(!input.requires_restart_recovery());
+    assert!(input.rejection_identity().is_some());
+}

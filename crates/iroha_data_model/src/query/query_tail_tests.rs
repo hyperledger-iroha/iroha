@@ -1,652 +1,271 @@
-#[cfg(test)]
-mod certified_merge_inclusion_tests {
+#[cfg(all(test, feature = "transparent_api"))]
+mod canonical_output_inclusion_tests {
     use super::*;
-    use crate::{
-        account::AccountId,
-        block::CertifiedMergeLedgerReference,
-        merge::{MergeQuorumCertificate, MergeSignerProof},
-        transaction::{
-            TransactionBuilder,
-            signed::{TransactionEntrypoint, TransactionResult},
-        },
-        trigger::DataTriggerSequence,
-    };
-    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof, MerkleTree};
-    use iroha_model_base::peer::PeerId;
+    use crate::block::{SignedBlock, output_test_support as fixture};
+    use crate::transaction::TransactionEntrypoint;
+    use iroha_crypto::{Hash, HashOf, MerkleProof};
     use norito::codec::DecodeAll as _;
-    fn assert_committed_transaction_roundtrip(committed: &CommittedTransaction) {
-        let encoded = committed.encode();
-        let decoded = CommittedTransaction::decode_all(&mut encoded.as_slice())
-            .expect("canonical committed transaction must decode");
-        assert_eq!(decoded, *committed);
-    }
-    fn test_network_id() -> crate::NetworkId {
-        crate::NetworkId::from_genesis_hash(
-            HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                [0x15; Hash::LENGTH],
-            )),
-        )
-    }
-    fn certified_merge_fixture() -> (CertifiedMergeLedgerReference, CommittedTransaction) {
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let signed = TransactionBuilder::new(
-            test_network_id(),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions::<crate::isi::InstructionBox>([])
-        .sign(key_pair.private_key());
-        let entrypoint = TransactionEntrypoint::External(signed);
-        let result = TransactionResult::from(Ok(DataTriggerSequence::default()));
-        let entrypoint_hash = entrypoint.hash();
-        let result_hash = result.hash();
-        let entrypoint_tree: MerkleTree<TransactionEntrypoint> =
-            [entrypoint_hash].into_iter().collect();
-        let result_tree: MerkleTree<TransactionResult> = [result_hash].into_iter().collect();
-        let entrypoint_merkle_root = entrypoint_tree.root().expect("non-empty entrypoint tree");
-        let result_merkle_root = result_tree.root().expect("non-empty result tree");
-        let merge_entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-entry"));
-        let execution_batch_hash = Hash::new(b"merge-batch");
-        let validators = Vec::<PeerId>::new();
-        let reference = CertifiedMergeLedgerReference {
-            version: 1,
-            entry_hash: merge_entry_hash,
-            encoded_len: 1,
-            epoch_id: 7,
-            execution_batch_hash: Some(execution_batch_hash),
-            entrypoint_count: Some(1),
-            entrypoint_merkle_root: Some(entrypoint_merkle_root),
-            result_merkle_root: Some(result_merkle_root),
-            base_state_height: Some(4),
-            base_state_hash: Some(HashOf::from_untyped_unchecked(Hash::new(b"base-state"))),
-            merge_qc: MergeQuorumCertificate::new(
-                0,
-                7,
-                5,
-                HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
-                test_network_id(),
-                1,
-                HashOf::new(&validators),
-                validators,
-                Vec::new(),
-                Vec::<MergeSignerProof>::new(),
-                Vec::new(),
-                Hash::new(b"message"),
-            ),
-        };
-        let inclusion = CertifiedMergeTransactionInclusion {
-            version: 1,
-            merge_entry_hash,
-            merge_epoch_id: 7,
-            execution_batch_hash,
-            entrypoint_count: 1,
-            entrypoint_merkle_root,
-            result_merkle_root,
-        };
-        let committed = CommittedTransaction {
-            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"carrier-block")),
-            entrypoint_hash,
-            entrypoint_proof: entrypoint_tree.get_proof(0).expect("entrypoint proof"),
-            entrypoint,
-            result_hash,
-            result_proof: result_tree.get_proof(0).expect("result proof"),
-            result,
-            merge_inclusion: Some(inclusion),
-        };
-        (reference, committed)
-    }
-    #[test]
-    fn certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs() {
-        let (reference, committed) = certified_merge_fixture();
-        assert!(committed.verify_certified_merge_inclusion(&reference));
-        assert_committed_transaction_roundtrip(&committed);
-        let mut ordinary = committed.clone();
-        ordinary.merge_inclusion = None;
-        assert_committed_transaction_roundtrip(&ordinary);
-        assert!(
-            !ordinary.verify_certified_merge_inclusion(&reference),
-            "ordinary transactions must not verify as certified merge inclusions"
-        );
-        #[cfg(feature = "transparent_api")]
-        {
-            let carrier_header = BlockHeader::new(
-                core::num::NonZeroU64::new(5).expect("non-zero carrier height"),
-                Some(HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent"))),
-                None,
-                None,
-                10,
-                0,
-            );
-            let mut carrier_builder = crate::block::builder::BlockBuilder::new(carrier_header);
-            carrier_builder.set_execution_context(Some(
-                crate::block::BlockExecutionContextBundle::new(Vec::new())
-                    .with_merge_entry(reference.clone()),
-            ));
-            let carrier = carrier_builder.build(std::collections::BTreeSet::default());
-            let mut block_bound = committed.clone();
-            block_bound.block_hash = carrier.hash();
-            assert!(block_bound.verify_certified_merge_inclusion_in_block(&carrier));
-            assert!(block_bound.verify_inclusion_in_block(&carrier));
-            let other_header = BlockHeader::new(
-                core::num::NonZeroU64::new(5).expect("non-zero carrier height"),
-                Some(HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent"))),
-                None,
-                None,
-                11,
-                0,
-            );
-            let mut other_builder = crate::block::builder::BlockBuilder::new(other_header);
-            other_builder.set_execution_context(Some(
-                crate::block::BlockExecutionContextBundle::new(Vec::new())
-                    .with_merge_entry(reference.clone()),
-            ));
-            let other_carrier = other_builder.build(std::collections::BTreeSet::default());
-            assert!(
-                !block_bound.verify_certified_merge_inclusion_in_block(&other_carrier),
-                "a valid proof and copied reference must not verify against a different block hash"
-            );
-            assert!(!block_bound.verify_inclusion_in_block(&other_carrier));
-        }
-        let mut wrong_reference = reference.clone();
-        wrong_reference.entrypoint_count = Some(2);
-        assert!(!committed.verify_certified_merge_inclusion(&wrong_reference));
-        let mut ambiguous_count_reference = reference.clone();
-        ambiguous_count_reference.entrypoint_count = Some(2);
-        let mut ambiguous_count = committed.clone();
-        ambiguous_count
-            .merge_inclusion
-            .as_mut()
-            .expect("merge inclusion")
-            .entrypoint_count = 2;
-        assert!(
-            !ambiguous_count.verify_certified_merge_inclusion(&ambiguous_count_reference),
-            "a one-leaf proof must not be rebound to a two-leaf certified count"
-        );
-        let oversized_leaf_count = (1_u64 << u32::BITS) + 1;
-        let mut oversized_reference = reference.clone();
-        oversized_reference.entrypoint_count = Some(oversized_leaf_count);
-        let mut oversized = committed.clone();
-        oversized
-            .merge_inclusion
-            .as_mut()
-            .expect("merge inclusion")
-            .entrypoint_count = oversized_leaf_count;
-        assert!(
-            !oversized.verify_certified_merge_inclusion(&oversized_reference),
-            "certified merge proofs must reject counts outside the u32 block-proof index space"
-        );
-        let mut wrong_version = reference.clone();
-        wrong_version.version = 2;
-        assert!(!committed.verify_certified_merge_inclusion(&wrong_version));
-        let mut misaligned = committed;
-        misaligned.result_proof = MerkleProof::from_audit_path(1, Vec::new());
-        assert!(!misaligned.verify_certified_merge_inclusion(&reference));
-    }
-    #[cfg(feature = "transparent_api")]
-    #[test]
-    fn ordinary_committed_transaction_verifies_against_exact_carrier_block() {
-        let (_, fixture) = certified_merge_fixture();
-        let TransactionEntrypoint::External(signed) = fixture.entrypoint else {
-            panic!("fixture must contain an external transaction");
-        };
-        let result_inner = (*fixture.result).clone();
-        let header = BlockHeader::new(
-            core::num::NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            None,
-            10,
-            0,
-        );
-        let mut builder = crate::block::builder::BlockBuilder::new(header);
-        builder.push_transaction(signed);
-        builder.push_result(result_inner);
-        let carrier = builder.build(std::collections::BTreeSet::default());
-        let ordinary = CommittedTransaction {
-            block_hash: carrier.hash(),
-            entrypoint_hash: carrier.entrypoint_hashes().next().expect("entrypoint hash"),
-            entrypoint_proof: carrier
-                .entrypoint_proofs()
-                .next()
-                .expect("entrypoint proof"),
-            entrypoint: carrier.entrypoints_cloned().next().expect("entrypoint"),
-            result_hash: carrier.result_hashes().next().expect("result hash"),
-            result_proof: carrier.result_proofs().next().expect("result proof"),
-            result: carrier.results().next().cloned().expect("result"),
-            merge_inclusion: None,
-        };
-        assert!(ordinary.verify_inclusion_in_block(&carrier));
-        let mut wrong_hash = ordinary.clone();
-        wrong_hash.entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong-entrypoint"));
-        assert!(!wrong_hash.verify_inclusion_in_block(&carrier));
-        let other_header = BlockHeader::new(
-            core::num::NonZeroU64::new(1).expect("non-zero height"),
-            None,
-            None,
-            None,
-            11,
-            0,
-        );
-        let other_carrier = crate::block::builder::BlockBuilder::new(other_header)
-            .build(std::collections::BTreeSet::default());
-        assert!(!ordinary.verify_inclusion_in_block(&other_carrier));
-    }
-
-    #[cfg(feature = "transparent_api")]
-    fn authenticated_execution_fixture(merged: bool) -> (SignedBlock, CommittedTransaction) {
-        let (reference, mut committed) = certified_merge_fixture();
-        let header = BlockHeader::new(
-            core::num::NonZeroU64::new(5).expect("carrier height"),
-            Some(reference.merge_qc.carrier_parent_hash),
-            None,
-            None,
-            10,
-            0,
-        );
-        let mut builder = crate::block::builder::BlockBuilder::new(header);
-        if merged {
-            builder.set_execution_context(Some(
-                crate::block::BlockExecutionContextBundle::new(Vec::new())
-                    .with_merge_entry(reference),
-            ));
-        } else {
-            let TransactionEntrypoint::External(signed) = committed.entrypoint.clone() else {
-                panic!("fixture external transaction");
-            };
-            builder.push_transaction(signed);
-            builder.push_result((*committed.result).clone());
-            committed.merge_inclusion = None;
-        }
-        let block = builder.build(std::collections::BTreeSet::default());
-        committed.block_hash = block.hash();
+    fn execution_fixture() -> (SignedBlock, CommittedTransaction) {
+        let mut block = fixture::proposal(2);
+        let rows = vec![
+            fixture::network(0, Ok(Default::default())),
+            fixture::network(1, Ok(Default::default())),
+            fixture::simple_time(&block, 0),
+        ];
+        fixture::install(&mut block, rows, 3).unwrap();
+        let committed = fixture::committed(&block, 0);
         (block, committed)
     }
-
-    #[cfg(feature = "transparent_api")]
-    fn synthetic_execution_commitment(
-        block: &SignedBlock,
-    ) -> crate::block::consensus_v2::ExecutionCommitment {
-        let wire = block.encode_wire().expect("fixture canonical wire");
-        // Test-only supplied trust input; no consensus verification is claimed here.
-        let mut commitment = crate::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"fixture parent state"),
-            Hash::new(b"fixture post state"),
-            Hash::new(b"fixture ordinary writes"),
+    fn commitment(block: &SignedBlock) -> crate::block::consensus_v2::ExecutionCommitment {
+        let wire = block.encode_wire().unwrap();
+        // Supplied trusted execution projection for the query join test; BLS verification belongs to proofs.rs.
+        crate::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"parent"),
+            Hash::new(b"post"),
+            Hash::new(b"writes"),
             wire.len() as u64,
             Hash::new(&wire),
-        );
-        commitment.merge_carrier = block
-            .execution_context()
-            .and_then(|context| context.merge_entry.as_ref())
-            .map(|reference| {
-                crate::block::consensus_v2::MergeCarrierCommitmentV1::new(reference.entry_hash)
-            });
-        commitment
+        )
     }
-
-    #[cfg(feature = "transparent_api")]
-    fn committed_at(block: &SignedBlock, index: u32) -> CommittedTransaction {
-        let entrypoint = block
-            .entrypoint_cloned_at(index as usize)
-            .expect("entrypoint");
-        let result = block
-            .results()
-            .nth(index as usize)
-            .cloned()
-            .expect("result");
-        CommittedTransaction {
-            block_hash: block.hash(),
-            entrypoint_hash: entrypoint.hash(),
-            entrypoint_proof: block.entrypoint_proof(index).expect("entry proof"),
-            entrypoint,
-            result_hash: result.hash(),
-            result_proof: block.result_proof(index).expect("result proof"),
-            result,
-            merge_inclusion: None,
-        }
-    }
-
-    #[cfg(feature = "transparent_api")]
     #[test]
-    fn authenticated_execution_inclusion_binds_ordinary_and_merge_carriers() {
-        for merged in [false, true] {
-            let (block, committed) = authenticated_execution_fixture(merged);
-            assert!(committed.verify_inclusion_in_authenticated_execution(
-                &block,
-                &synthetic_execution_commitment(&block)
-            ));
-            assert_committed_transaction_roundtrip(&committed);
-            let wire = block.encode_wire().expect("canonical carrier");
-            let decoded = crate::block::decode_framed_signed_block(&wire).expect("decode carrier");
-            assert!(committed.verify_inclusion_in_authenticated_execution(
-                &decoded,
-                &synthetic_execution_commitment(&block)
-            ));
-            assert_eq!(block.external_entrypoint_count(), usize::from(!merged));
-            let mut wrong_length = synthetic_execution_commitment(&block);
-            wrong_length.executed_block_wire_len += 1;
-            assert!(!committed.verify_inclusion_in_authenticated_execution(&block, &wrong_length));
-            let mut wrong_hash = synthetic_execution_commitment(&block);
-            wrong_hash.executed_block_wire_hash = Hash::new(b"different executed wire");
-            assert!(!committed.verify_inclusion_in_authenticated_execution(&block, &wrong_hash));
-            let mut wrong_merge = synthetic_execution_commitment(&block);
-            wrong_merge.merge_carrier = if merged {
-                None
-            } else {
-                Some(crate::block::consensus_v2::MergeCarrierCommitmentV1::new(
-                    HashOf::from_untyped_unchecked(Hash::new(b"unexpected merge carrier")),
-                ))
-            };
-            assert!(!committed.verify_inclusion_in_authenticated_execution(&block, &wrong_merge));
+    fn ordinary_committed_transaction_verifies_against_exact_carrier_block() {
+        let (block, committed) = execution_fixture();
+        assert!(committed.verify_inclusion_in_block(&block));
+        let bytes = committed.encode();
+        let decoded = CommittedTransaction::decode_all(&mut bytes.as_slice()).unwrap();
+        assert_eq!(decoded, committed);
+        let mut altered = committed.clone();
+        altered.entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong"));
+        assert!(!altered.verify_inclusion_in_block(&block));
+        let mut foreign = block.clone();
+        let mut header = block.header();
+        header.creation_time_ms += 1;
+        foreign.replace_header_for_testing(header);
+        assert!(!committed.verify_inclusion_in_block(&foreign));
+    }
+    #[test]
+    fn authenticated_execution_inclusion_binds_complete_carrier_and_rejects_merge_authority() {
+        let (block, committed) = execution_fixture();
+        let expected = commitment(&block);
+        assert!(committed.verify_inclusion_in_authenticated_execution(&block, &expected));
+        let decoded =
+            crate::block::decode_framed_signed_block(&block.encode_wire().unwrap()).unwrap();
+        assert!(committed.verify_inclusion_in_authenticated_execution(&decoded, &expected));
+        for mutation in 0..3 {
+            let mut wrong = expected.clone();
+            match mutation {
+                0 => wrong.executed_block_wire_len += 1,
+                1 => wrong.executed_block_wire_hash = Hash::new(b"foreign"),
+                _ => {
+                    wrong.merge_carrier =
+                        Some(crate::block::consensus_v2::MergeCarrierCommitmentV1::new(
+                            HashOf::from_untyped_unchecked(Hash::new(b"old merge authority")),
+                        ))
+                }
+            }
+            assert!(!committed.verify_inclusion_in_authenticated_execution(&block, &wrong));
         }
     }
-
-    #[cfg(feature = "transparent_api")]
     #[test]
     fn authenticated_execution_inclusion_rejects_unbound_wire_and_header_material() {
-        for merged in [false, true] {
-            let (original, _) = authenticated_execution_fixture(merged);
-            let (mut substituted, mut committed) = authenticated_execution_fixture(merged);
-            substituted.replace_header_for_testing(original.header());
-            committed.block_hash = original.hash();
-            assert_eq!(substituted.hash(), original.hash());
-            assert!(substituted.validate_entrypoint_merkle_cache().is_ok());
-            assert!(substituted.validate_result_merkle_cache().is_ok());
-            assert!(committed.verify_inclusion_in_block(&substituted));
-            assert!(!committed.verify_inclusion_in_authenticated_execution(
-                &substituted,
-                &synthetic_execution_commitment(&original)
-            ));
-            assert!(
-                !committed.verify_inclusion_in_authenticated_execution(
-                    &substituted,
-                    &synthetic_execution_commitment(&substituted)
+        let (original, committed) = execution_fixture();
+        let expected = commitment(&original);
+        let mut rewritten = original.clone();
+        let mut rows = rewritten.execution_outputs().to_vec();
+        rows[0] = fixture::network(
+            0,
+            Err(
+                crate::transaction::error::TransactionRejectionReason::Validation(
+                    crate::ValidationFail::NotPermitted("substituted result".into()),
                 ),
-                "rebinding synthetic wire does not admit invalid header commitments"
-            );
-        }
-
-        let (original, committed) = authenticated_execution_fixture(false);
-        let rejected = TransactionResult::from(Err(
-            crate::transaction::error::TransactionRejectionReason::Validation(
-                crate::ValidationFail::NotPermitted("substituted result".into()),
             ),
-        ));
-        let result_tree: MerkleTree<TransactionResult> = [rejected.hash()].into_iter().collect();
-        let mut value = norito::json::to_value(&original).expect("carrier JSON");
-        let result = value
-            .as_object_mut()
-            .unwrap()
-            .get_mut("result")
-            .unwrap()
-            .as_object_mut()
-            .unwrap();
-        result.insert(
-            "transaction_results".into(),
-            norito::json::to_value(&vec![rejected]).unwrap(),
         );
-        result.insert(
-            "result_merkle".into(),
-            norito::json::to_value(&result_tree).unwrap(),
-        );
-        let substituted: SignedBlock =
-            norito::json::from_value(value).expect("substituted result carrier");
-        assert_eq!(substituted.header(), original.header());
-        assert!(substituted.validate_result_merkle_cache().is_ok());
-        assert!(committed.verify_inclusion_in_block(&substituted));
-        assert!(!committed.verify_inclusion_in_authenticated_execution(
-            &substituted,
-            &synthetic_execution_commitment(&original)
-        ));
-        assert!(!committed.verify_inclusion_in_authenticated_execution(
-            &substituted,
-            &synthetic_execution_commitment(&substituted)
-        ));
-
-        let mut rewritten_result = original.clone();
-        let entry_hashes = rewritten_result.entrypoint_hashes().collect::<Vec<_>>();
-        rewritten_result
-            .set_transaction_results(
-                Vec::new(),
-                &entry_hashes,
-                vec![Err(
-                    crate::transaction::error::TransactionRejectionReason::Validation(
-                        crate::ValidationFail::NotPermitted(
-                            "rewritten result and header root".into(),
-                        ),
-                    ),
-                )],
-            )
-            .expect("structurally valid alternate execution result");
-        let rewritten_committed = committed_at(&rewritten_result, 0);
-        assert_eq!(
-            rewritten_result.hash(),
-            original.hash(),
-            "consensus hash excludes result root"
-        );
+        fixture::install(&mut rewritten, rows, 3).unwrap();
+        let changed = fixture::committed(&rewritten, 0);
+        assert_eq!(rewritten.header(), original.header());
         assert_ne!(
-            rewritten_result.header().result_merkle_root(),
-            original.header().result_merkle_root()
+            rewritten.output_merkle_commitment(),
+            original.output_merkle_commitment()
         );
-        assert!(rewritten_committed.verify_inclusion_in_block(&rewritten_result));
+        assert!(changed.verify_inclusion_in_block(&rewritten));
+        assert!(!changed.verify_inclusion_in_authenticated_execution(&rewritten, &expected));
+        assert!(!committed.verify_inclusion_in_block(&rewritten));
+        let mut unbound = original.clone();
+        let mut header = unbound.header();
+        header.set_execution_context_hash(Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"foreign bundle",
+        ))));
+        unbound.replace_header_for_testing(header);
+        let mut evidence = committed.clone();
+        evidence.block_hash = unbound.hash();
         assert!(
-            !rewritten_committed.verify_inclusion_in_authenticated_execution(
-                &rewritten_result,
-                &synthetic_execution_commitment(&original)
-            ),
-            "matching header hash cannot substitute for authenticated executed wire"
+            !evidence.verify_inclusion_in_authenticated_execution(&unbound, &commitment(&unbound))
         );
-
-        let (merge, merge_committed) = authenticated_execution_fixture(true);
-        let mut context = merge.execution_context().unwrap().clone();
-        context.version += 1;
-        let mut builder = crate::block::builder::BlockBuilder::new(merge.header());
-        builder.set_execution_context(Some(context));
-        let unsupported = builder.build(std::collections::BTreeSet::default());
-        let mut unsupported_committed = merge_committed.clone();
-        unsupported_committed.block_hash = unsupported.hash();
-        assert!(unsupported_committed.verify_inclusion_in_block(&unsupported));
-        assert!(
-            !unsupported_committed.verify_inclusion_in_authenticated_execution(
-                &unsupported,
-                &synthetic_execution_commitment(&unsupported)
-            )
-        );
-
-        for mut block in [original.clone(), merge.clone()] {
-            let mut header = block.header();
-            header.set_execution_context_hash(if block.execution_context().is_some() {
-                None
-            } else {
-                merge.header().execution_context_hash()
-            });
-            block.replace_header_for_testing(header);
-            let mut evidence = if block.execution_context().is_some() {
-                merge_committed.clone()
-            } else {
-                committed.clone()
-            };
-            evidence.block_hash = block.hash();
-            assert!(!evidence.verify_inclusion_in_authenticated_execution(
-                &block,
-                &synthetic_execution_commitment(&block)
-            ));
-        }
-
-        let mut broken_cache = norito::json::to_value(&original).unwrap();
-        broken_cache
-            .as_object_mut()
+        let mut json = norito::json::to_value(&original).unwrap();
+        json.as_object_mut()
             .unwrap()
             .get_mut("result")
             .unwrap()
             .as_object_mut()
             .unwrap()
             .insert(
-                "merkle".into(),
-                norito::json::to_value(&MerkleTree::<TransactionEntrypoint>::default()).unwrap(),
+                "output_merkle".into(),
+                norito::json::to_value(&iroha_crypto::MerkleTree::<
+                    crate::block::execution_output::ExecutionOutputV1,
+                >::default())
+                .unwrap(),
             );
-        let broken_cache: SignedBlock = norito::json::from_value(broken_cache).unwrap();
-        assert!(broken_cache.validate_entrypoint_merkle_cache().is_err());
-        assert!(!committed.verify_inclusion_in_authenticated_execution(
-            &broken_cache,
-            &synthetic_execution_commitment(&broken_cache)
+        let stale: SignedBlock = norito::json::from_value(json).unwrap();
+        assert!(stale.validate_output_merkle_cache().is_err());
+        assert!(
+            !committed.verify_inclusion_in_authenticated_execution(&stale, &commitment(&stale))
+        );
+    }
+    #[test]
+    fn authenticated_execution_inclusion_joins_network_indices_without_time_inputs() {
+        let (block, network) = execution_fixture();
+        let expected = commitment(&block);
+        assert_eq!(
+            block
+                .network_input_merkle_commitment()
+                .unwrap()
+                .leaf_count()
+                .get(),
+            2
+        );
+        assert_eq!(
+            block.output_merkle_commitment().unwrap().leaf_count().get(),
+            3
+        );
+        assert!(network.verify_inclusion_in_authenticated_execution(&block, &expected));
+        for index in [1_u32, 2] {
+            let mut substituted = network.clone();
+            substituted.output = block.execution_outputs()[index as usize].clone();
+            substituted.output_hash = HashOf::new(&substituted.output);
+            substituted.output_proof = block.output_proof(index).unwrap();
+            assert!(!substituted.verify_inclusion_in_authenticated_execution(&block, &expected));
+        }
+        let mut wrong = network.clone();
+        wrong.entrypoint_proof = MerkleProof::from_audit_path(1, vec![]);
+        assert!(!wrong.verify_inclusion_in_authenticated_execution(&block, &expected));
+        assert!(!network.verify_inclusion_in_authenticated_execution(
+            &block.canonical_resultless_proposal(),
+            &expected
         ));
     }
-
-    #[cfg(feature = "transparent_api")]
     #[test]
-    fn authenticated_execution_inclusion_binds_time_and_exact_indices() {
-        let (mut block, original) = authenticated_execution_fixture(false);
-        let scheduled = crate::trigger::TimeTriggerEntrypoint {
-            id: "header_proof_trigger".parse().expect("trigger id"),
-            instructions: crate::transaction::ExecutionStep(
-                Vec::<crate::isi::InstructionBox>::new().into(),
-            ),
-            authority: match &original.entrypoint {
-                TransactionEntrypoint::External(transaction) => transaction.authority().clone(),
-                _ => unreachable!(),
-            },
+    fn committed_query_rejects_retired_parallel_result_and_merge_wire() {
+        let (_, committed) = execution_fixture();
+        let mut json = norito::json::to_value(&committed).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .insert("merge_inclusion".into(), norito::json::Value::Null);
+        assert!(norito::json::from_value::<CommittedTransaction>(json).is_err());
+        #[derive(norito::codec::Encode)]
+        struct RetiredCommitted {
+            block_hash: HashOf<crate::block::BlockHeader>,
+            entrypoint_hash: HashOf<TransactionEntrypoint>,
+            entrypoint_proof: MerkleProof<TransactionEntrypoint>,
+            entrypoint: TransactionEntrypoint,
+            result_hash: HashOf<crate::transaction::TransactionResult>,
+            result_proof: MerkleProof<crate::transaction::TransactionResult>,
+            result: crate::transaction::TransactionResult,
+            merge_inclusion: Option<CertifiedMergeTransactionInclusion>,
+        }
+        let result = committed.result().clone();
+        let old = RetiredCommitted {
+            block_hash: committed.block_hash,
+            entrypoint_hash: committed.entrypoint_hash,
+            entrypoint_proof: committed.entrypoint_proof,
+            entrypoint: committed.entrypoint,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, vec![]),
+            result,
+            merge_inclusion: None,
         };
-        let entry_hashes = [original.entrypoint_hash, scheduled.hash_as_entrypoint()];
-        block
-            .set_transaction_results(
-                vec![scheduled],
-                &entry_hashes,
-                vec![
-                    Ok(DataTriggerSequence::default()),
-                    Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect("native mixed external/time results");
-        let external = committed_at(&block, 0);
-        let time = committed_at(&block, 1);
-        assert!(external.verify_inclusion_in_authenticated_execution(
-            &block,
-            &synthetic_execution_commitment(&block)
-        ));
-        assert!(
-            time.verify_inclusion_in_block(&block),
-            "trusted-full-wire generic capability remains available"
-        );
-        assert!(
-            time.verify_inclusion_in_authenticated_execution(
-                &block,
-                &synthetic_execution_commitment(&block)
-            ),
-            "authenticated full wire binds scheduled entrypoints too"
-        );
-        assert_ne!(block.full_entry_merkle_root(), block.header().merkle_root());
-
-        let mut wrong_index = external;
-        wrong_index.entrypoint_proof = time.entrypoint_proof;
-        wrong_index.result_proof = time.result_proof;
-        assert!(!wrong_index.verify_inclusion_in_authenticated_execution(
-            &block,
-            &synthetic_execution_commitment(&block)
-        ));
-        let mut no_results = block.canonical_resultless_proposal();
-        wrong_index.block_hash = no_results.hash();
-        assert!(!wrong_index.verify_inclusion_in_authenticated_execution(
-            &no_results,
-            &synthetic_execution_commitment(&block)
-        ));
-        no_results.replace_header_for_testing(block.header());
-        assert!(!original.verify_inclusion_in_authenticated_execution(
-            &no_results,
-            &synthetic_execution_commitment(&block)
-        ));
+        assert!(CommittedTransaction::decode_all(&mut old.encode().as_slice()).is_err());
     }
 }
 #[cfg(all(test, feature = "fault_injection"))]
 mod fault_injection_tests {
     use super::*;
+    use crate::transaction::TransactionEntrypoint;
     use crate::{
-        AssetDefinitionId, Level,
+        Level,
         events::data::prelude::{AssetBatchTransferLegStatus, AssetBatchTransferOutcome},
         isi::{InstructionBox, Log},
-        prelude::{DataTriggerSequence, Quantity, TimeTriggerEntrypoint, TransactionResult},
-        trigger::TriggerId,
     };
     use iroha_crypto::{Hash, HashOf, MerkleProof};
-    use std::str::FromStr;
-    fn zero_hash<T>() -> HashOf<T> {
-        let zero = [0u8; 32];
-        HashOf::from_untyped_unchecked(Hash::prehashed(zero))
-    }
-    fn make_time_committed_tx() -> CommittedTransaction {
-        let entry = TransactionEntrypoint::Time(TimeTriggerEntrypoint {
-            id: TriggerId::from_str("fault_trigger").expect("valid trigger id"),
-            instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
-            authority: AccountId::parse_encoded(
-                "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+    fn fixture() -> CommittedTransaction {
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x19; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap();
+        let entrypoint = TransactionEntrypoint::External(
+            crate::transaction::TransactionBuilder::new_genesis(
+                AccountId::new(key.public_key().clone()),
+                crate::transaction::FeePaymentIntent::authority(vec![], None),
             )
-            .expect("valid authority"),
-        });
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        CommittedTransaction {
-            block_hash: zero_hash(),
-            entrypoint_hash: entry.hash(),
-            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
-            entrypoint: entry,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, vec![]),
-            result,
-            merge_inclusion: None,
-        }
-    }
-    #[test]
-    fn time_entrypoint_injection_appends_instructions() {
-        let mut tx = make_time_committed_tx();
-        let original_hash = tx.entrypoint_hash;
-        let injected: InstructionBox = Log {
-            level: Level::WARN,
-            msg: "timer tamper".into(),
-        }
-        .into();
-        tx.inject_instructions([injected.clone()]);
-        assert_ne!(
-            tx.entrypoint_hash, original_hash,
-            "entrypoint hash must reflect injected instructions"
+            .sign(key.private_key()),
         );
-        let instructions = match &tx.entrypoint {
-            TransactionEntrypoint::Time(entry) => entry.instructions.0.clone().into_vec(),
-            _ => panic!("expected time entrypoint"),
-        };
-        assert_eq!(instructions.len(), 1);
-        assert_eq!(instructions[0], injected);
+        let output = crate::block::output_test_support::network(0, Ok(Default::default()));
+        CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"fault carrier")),
+            entrypoint_hash: entrypoint.hash(),
+            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
+            entrypoint,
+            output_hash: HashOf::new(&output),
+            output_proof: MerkleProof::from_audit_path(0, vec![]),
+            output,
+        }
     }
     #[test]
-    fn result_swap_preserves_independent_batch_receipts() {
-        let mut tx = make_time_committed_tx();
-        let authority = match &tx.entrypoint {
-            TransactionEntrypoint::Time(entrypoint) => entrypoint.authority.clone(),
-            _ => panic!("expected time entrypoint"),
+    fn network_entrypoint_injection_appends_instructions() {
+        let mut tx = fixture();
+        let original = tx.entrypoint_hash;
+        let injected: InstructionBox = Log::new(Level::WARN, "tamper".into()).into();
+        tx.inject_instructions([injected.clone()]);
+        assert_ne!(tx.entrypoint_hash, original);
+        let TransactionEntrypoint::External(signed) = &tx.entrypoint else {
+            unreachable!()
         };
+        let crate::transaction::Executable::Instructions(instructions) = signed.instructions()
+        else {
+            panic!("instructions")
+        };
+        assert_eq!(instructions.as_ref(), [injected]);
+    }
+    #[test]
+    fn result_swap_preserves_independent_batch_receipts_as_untrusted_fault_evidence() {
+        let mut tx = fixture();
+        let authority = tx.entrypoint.authority().clone();
         let outcome = AssetBatchTransferOutcome {
             leg_index: 0,
-            leg_id: "fault-injection-leg".to_owned(),
+            leg_id: "fault".into(),
             asset: AssetId::new(
-                AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").expect("domain"),
-                    Name::from_str("rose").expect("asset name"),
+                crate::asset::AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "rose".parse().unwrap(),
                 ),
                 authority.clone(),
             ),
             destination: authority,
-            amount: Quantity::from(1_u32),
+            amount: crate::prelude::Quantity::from(1_u32),
             status: AssetBatchTransferLegStatus::Applied,
         };
-        tx.result.set_batch_transfer_outcomes(vec![outcome.clone()]);
-        tx.result_hash = tx.result.hash();
-        let original_result_hash = tx.result_hash;
-        let original_result_proof = tx.result_proof.clone();
+        let crate::block::execution_output::ExecutionOutputV1::Network(row) = &mut tx.output else {
+            unreachable!()
+        };
+        row.result
+            .set_batch_transfer_outcomes(vec![outcome.clone()]);
+        tx.output_hash = HashOf::new(&tx.output);
+        let old_hash = tx.output_hash;
+        let proof = tx.output_proof.clone();
         tx.swap_result();
-        assert!(tx.result.0.is_err());
-        assert_eq!(tx.result.batch_transfer_outcomes(), &[outcome]);
-        assert_eq!(tx.result_hash, tx.result.hash());
-        assert_ne!(tx.result_hash, original_result_hash);
-        assert_eq!(tx.result_proof, original_result_proof);
+        assert!(tx.result().0.is_err());
+        assert_eq!(tx.result().batch_transfer_outcomes(), [outcome]);
+        assert_ne!(tx.output_hash, old_hash);
+        assert_eq!(tx.output_hash, HashOf::new(&tx.output));
+        assert_eq!(tx.output_proof, proof);
     }
 }
 #[cfg(test)]

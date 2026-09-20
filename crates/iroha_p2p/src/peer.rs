@@ -1,4 +1,7 @@
 //! Tokio actor Peer
+//!
+//! Live sessions use `run::granted` and receive-credit framing. Superseded batching
+//! helpers are retained only as unit-test fixtures for their regression coverage.
 pub(crate) mod post_admission;
 #[cfg(feature = "quic")]
 mod quic_datagram;
@@ -18,6 +21,7 @@ use crate::{
     preauth::{InboundAuthCompletion, PreauthDeadline},
     puzzle_work_admission::{SoranetPuzzleWorkAdmission, run_soranet_admission_work},
 };
+#[cfg(test)]
 use bytes::{Buf, BufMut, BytesMut};
 use iroha_config::parameters::actual::SoranetPow as ActualSoranetPow;
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -95,38 +99,47 @@ const DEFAULT_AAD: &[u8; 10] = b"Iroha3 AAD";
 /// second. A 1 KiB buffer reached ≈25 million messages per second while
 /// larger capacities didn't improve throughput but doubled memory usage.
 /// Therefore 1 KiB is chosen as a balanced default.
+#[cfg(test)]
 const DEFAULT_BUFFER_CAPACITY: usize = 1024;
 /// Maximum source-budget reservation made ahead of received encrypted bytes.
 ///
 /// This keeps length-prefix slowloris retention small. Incremental reservations
 /// from the same source owner are coalesced, so a maximum-size frame does not
 /// retain one lease object per chunk.
+#[cfg(test)]
 const SOURCE_ADMISSION_CHUNK_BYTES: usize = 64 * 1024;
 /// Maximum distinct byte owners retained while assembling one inbound frame:
 /// the process-wide source budget and, for progress traffic, one `PeerId` reserve.
 /// Incremental chunks from the same owner are coalesced into its existing lease.
+#[cfg(test)]
 const SOURCE_RETENTION_MAX_LEASES: usize = 2;
 /// Upper bound for preallocating per-connection message buffers to reduce growth.
+#[cfg(test)]
 const DEFAULT_MESSAGE_PREALLOC_CAP: usize = 512 * 1024;
 /// Largest idle per-connection message buffer retained after a large frame.
+#[cfg(test)]
 const MAX_RETAINED_MESSAGE_BUFFER_CAP: usize = DEFAULT_MESSAGE_PREALLOC_CAP;
 /// Prefix byte used to indicate a versioned handshake hello payload.
 const HANDSHAKE_HELLO_VERSION_PREFIX: u8 = 0xFF;
 /// Single supported handshake hello payload version.
 const HANDSHAKE_HELLO_VERSION: u8 = 1;
+#[cfg(test)]
 fn retained_message_buffer_cap(max_frame_bytes: usize) -> usize {
     DEFAULT_BUFFER_CAPACITY.max(max_frame_bytes.min(MAX_RETAINED_MESSAGE_BUFFER_CAP))
 }
+#[cfg(test)]
 fn shrink_empty_vec_to_cap(buffer: &mut Vec<u8>, retained_cap: usize) {
     if buffer.is_empty() && buffer.capacity() > retained_cap {
         *buffer = Vec::with_capacity(retained_cap);
     }
 }
+#[cfg(test)]
 fn shrink_empty_bytes_to_cap(buffer: &mut BytesMut, retained_cap: usize) {
     if buffer.is_empty() && buffer.capacity() > retained_cap {
         *buffer = BytesMut::with_capacity(retained_cap);
     }
 }
+#[cfg(test)]
 fn compact_sparse_bytes_to_cap(buffer: &mut BytesMut, retained_cap: usize) {
     if buffer.capacity() <= retained_cap || buffer.len() > retained_cap {
         return;
@@ -1773,6 +1786,7 @@ pub(crate) struct SharedByteLease {
     safety: bool,
 }
 impl SharedByteLease {
+    #[cfg(test)]
     fn same_owner(&self, other: &Self) -> bool {
         self.safety == other.safety && Arc::ptr_eq(&self.budget, &other.budget)
     }
@@ -1782,6 +1796,7 @@ impl SharedByteLease {
     /// into `self` therefore must not release and reacquire capacity: doing so
     /// could transiently hand source ownership to a competing waiter between
     /// incremental frame reads.
+    #[cfg(test)]
     fn merge(&mut self, mut other: Self) -> Result<(), Self> {
         if !self.same_owner(&other) {
             return Err(other);
@@ -1832,10 +1847,12 @@ pub(crate) struct OutboundPostByteBudgets {
     source_geometry: AuthenticatedSourceGeometry,
 }
 #[derive(Clone, Debug)]
+#[cfg(test)]
 pub(super) struct OutboundHighByteBudget {
     shared: Arc<SharedByteBudget>,
     peer_reserve: Option<Arc<SharedByteBudget>>,
 }
+#[cfg(test)]
 impl OutboundHighByteBudget {
     fn shared_only(shared: Arc<SharedByteBudget>) -> Self {
         Self {
@@ -1909,6 +1926,7 @@ impl OutboundPostByteBudgets {
             source_geometry,
         })
     }
+    #[cfg(test)]
     fn high(&self, peer_id: &PeerId) -> Option<OutboundHighByteBudget> {
         if self.progress_reserve_bytes_per_peer == 0 {
             self.source_geometry.admit_ownerless_source(peer_id)?;
@@ -1922,9 +1940,12 @@ impl OutboundPostByteBudgets {
             peer_reserve: Some(peer_reserve),
         })
     }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn shared_high(&self) -> Arc<SharedByteBudget> {
         Arc::clone(&self.high)
     }
+    #[cfg(test)]
     fn low(&self) -> Arc<SharedByteBudget> {
         Arc::clone(&self.low)
     }
@@ -2190,8 +2211,10 @@ impl AuthenticatedSourceGeometry {
 }
 #[derive(Clone, Debug)]
 struct InboundSourceByteBudget {
+    #[cfg(any(test, feature = "quic"))]
     shared: Arc<SharedByteBudget>,
     peer_reserve: Option<Arc<SharedByteBudget>>,
+    #[cfg(test)]
     decode_scratch: Arc<SharedByteBudget>,
 }
 impl InboundSourceByteBudget {
@@ -2205,6 +2228,7 @@ impl InboundSourceByteBudget {
             decode_scratch,
         }
     }
+    #[cfg(any(test, feature = "quic"))]
     fn try_reserve(&self, bytes: usize) -> Option<SharedByteLease> {
         self.shared.try_reserve(bytes, false).or_else(|| {
             self.peer_reserve
@@ -2212,6 +2236,7 @@ impl InboundSourceByteBudget {
                 .and_then(|reserve| reserve.try_reserve(bytes, false))
         })
     }
+    #[cfg(test)]
     async fn reserve(&self, bytes: usize) -> Option<SharedByteLease> {
         if let Some(lease) = self.try_reserve(bytes) {
             return Some(lease);
@@ -2239,6 +2264,7 @@ impl InboundSourceByteBudget {
             lease = peer_reserve.reserve(bytes, false) => lease,
         }
     }
+    #[cfg(test)]
     async fn reserve_decode_scratch(&self, bytes: usize) -> Option<SharedByteLease> {
         self.decode_scratch.reserve(bytes, false).await
     }
@@ -2330,8 +2356,10 @@ impl InboundFrameByteBudgets {
         if self.progress_reserve_bytes_per_peer == 0 {
             self.source_geometry.admit_ownerless_source(peer_id)?;
             return Some(InboundSourceByteBudget {
+                #[cfg(any(test, feature = "quic"))]
                 shared: Arc::clone(&self.high),
                 peer_reserve: None,
+                #[cfg(test)]
                 decode_scratch: Arc::clone(&self.high_decode_scratch),
             });
         }
@@ -2339,11 +2367,14 @@ impl InboundFrameByteBudgets {
             .source_geometry
             .inbound_progress_owner(peer_id, self.progress_reserve_bytes_per_peer)?;
         Some(InboundSourceByteBudget {
+            #[cfg(any(test, feature = "quic"))]
             shared: Arc::clone(&self.high),
             peer_reserve: Some(peer_reserve),
+            #[cfg(test)]
             decode_scratch: Arc::clone(&self.high_decode_scratch),
         })
     }
+    #[cfg(test)]
     fn low(&self) -> InboundSourceByteBudget {
         InboundSourceByteBudget {
             shared: Arc::clone(&self.low),
@@ -2414,42 +2445,44 @@ impl Default for InboundDispatchByteBudgets {
 }
 #[derive(Clone, Debug)]
 struct InboundFrameRetention {
-    source: Arc<InboundFrameSourceLeases>,
+    _source: Arc<InboundFrameSourceLeases>,
     frame_queue_overhead_bytes: usize,
 }
 #[derive(Debug)]
 struct InboundFrameSourceLeases {
-    leases: Vec<SharedByteLease>,
+    _leases: Vec<SharedByteLease>,
+    #[cfg(test)]
     retained_bytes: usize,
 }
+#[cfg(test)]
 impl InboundFrameRetention {
     fn new(source: SharedByteLease, frame_queue_overhead_bytes: usize) -> Self {
         let retained_bytes = source.bytes;
         Self {
-            source: Arc::new(InboundFrameSourceLeases {
-                leases: vec![source],
+            _source: Arc::new(InboundFrameSourceLeases {
+                _leases: vec![source],
                 retained_bytes,
             }),
             frame_queue_overhead_bytes,
         }
     }
     fn retained_bytes(&self) -> usize {
-        self.source.retained_bytes
+        self._source.retained_bytes
     }
     fn extend(&mut self, source: SharedByteLease) -> Option<()> {
-        let owned = Arc::get_mut(&mut self.source)?;
+        let owned = Arc::get_mut(&mut self._source)?;
         let retained_bytes = owned.retained_bytes.checked_add(source.bytes)?;
         if let Some(existing) = owned
-            .leases
+            ._leases
             .iter_mut()
             .find(|existing| existing.same_owner(&source))
         {
             existing.merge(source).ok()?;
         } else {
-            owned.leases.push(source);
+            owned._leases.push(source);
         }
         debug_assert!(
-            owned.leases.len() <= SOURCE_RETENTION_MAX_LEASES,
+            owned._leases.len() <= SOURCE_RETENTION_MAX_LEASES,
             "one frame may retain only the shared and PeerId source owners"
         );
         owned.retained_bytes = retained_bytes;
@@ -2632,7 +2665,7 @@ mod shared_byte_budget_tests {
         retention
             .extend(second_peer)
             .expect("peer-owner chunk coalesces");
-        assert_eq!(retention.source.leases.len(), SOURCE_RETENTION_MAX_LEASES);
+        assert_eq!(retention._source._leases.len(), SOURCE_RETENTION_MAX_LEASES);
         assert_eq!(retention.retained_bytes(), 4);
         assert_eq!(shared.retained_total(), 2);
         assert_eq!(peer.retained_total(), 2);
@@ -3907,23 +3940,23 @@ pub mod handles {
 }
 mod run {
     //! Module with peer [`run`] function.
+    #[cfg(test)]
+    use super::cryptographer::Cryptographer;
     use super::{
-        cryptographer::Cryptographer,
         handshake_flow::Handshake,
         state::{ConnectedFrom, Connecting, Ready},
         *,
     };
+    use crate::Priority;
     use crate::network::message::{ClassifyTopic, Topic};
-    use crate::{Priority, sampler::LogSampler};
-    #[cfg(feature = "quic")]
-    use bytes::Bytes;
+    #[cfg(test)]
     use futures::future::poll_fn;
     use iroha_data_model::peer::Peer;
     use iroha_logger::prelude::*;
     use norito::codec::Decode;
+    #[cfg(test)]
     use std::task::Poll;
     use tokio::time::Instant;
-    use tracing;
     fn frame_plaintext_cap_for<E: Enc>(max_frame_bytes: usize) -> usize {
         max_frame_bytes
             .min(crate::MAX_ENCRYPTED_FRAME_BYTES)
@@ -3942,189 +3975,9 @@ mod run {
         }
         Ok(encoded_len)
     }
-    #[cfg(feature = "quic")]
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum DatagramSend {
-        Sent { bytes: usize },
-        TooLarge,
-        Unsupported,
-        Disabled,
-    }
-    #[cfg(feature = "quic")]
-    struct QuicDatagramSender<E: Enc> {
-        connection: quinn::Connection,
-        cryptographer: Cryptographer<E>,
-        buffer: Vec<u8>,
-        encrypted: Vec<u8>,
-        max_frame_bytes: usize,
-        max_payload_bytes: usize,
-    }
-    #[cfg(feature = "quic")]
-    impl<E: Enc> QuicDatagramSender<E> {
-        fn new(
-            connection: quinn::Connection,
-            cryptographer: Cryptographer<E>,
-            max_frame_bytes: usize,
-            max_payload_bytes: usize,
-        ) -> Self {
-            Self {
-                connection,
-                cryptographer,
-                buffer: Vec::new(),
-                encrypted: Vec::new(),
-                max_frame_bytes,
-                max_payload_bytes,
-            }
-        }
-        fn try_send<T: Pload + ClassifyTopic>(&mut self, msg: &T) -> Result<DatagramSend, Error> {
-            // Encode a single Norito-framed payload and encrypt it with the negotiated session key.
-            let encoded_len = match checked_encoded_frame_len::<T, E>(msg, self.max_frame_bytes) {
-                Ok(encoded_len) => encoded_len,
-                Err(error) => return Err(error),
-            };
-            encode_wire_message(msg, &mut self.buffer)?;
-            if self.buffer.len() != encoded_len {
-                self.buffer.clear();
-                return Err(Error::Format);
-            }
-            let encrypted = self
-                .cryptographer
-                .encrypt_into(&self.buffer, &mut self.encrypted)?;
-            if encrypted.len() > self.max_frame_bytes.min(crate::MAX_ENCRYPTED_FRAME_BYTES) {
-                return Err(Error::FrameTooLarge);
-            }
-            let Some(mut max_datagram) = self.connection.max_datagram_size() else {
-                return Ok(DatagramSend::Unsupported);
-            };
-            max_datagram = max_datagram.min(self.max_payload_bytes);
-            if max_datagram == 0 || self.max_payload_bytes == 0 {
-                return Ok(DatagramSend::Disabled);
-            }
-            if encrypted.len() > max_datagram {
-                return Ok(DatagramSend::TooLarge);
-            }
-            match self
-                .connection
-                .send_datagram(Bytes::copy_from_slice(encrypted))
-            {
-                Ok(()) => Ok(DatagramSend::Sent {
-                    bytes: encrypted.len(),
-                }),
-                Err(quinn::SendDatagramError::UnsupportedByPeer) => Ok(DatagramSend::Unsupported),
-                Err(quinn::SendDatagramError::Disabled) => Ok(DatagramSend::Disabled),
-                Err(quinn::SendDatagramError::TooLarge) => Ok(DatagramSend::TooLarge),
-                Err(quinn::SendDatagramError::ConnectionLost(e)) => {
-                    Err(std::io::Error::other(format!("quic datagram send failed: {e}")).into())
-                }
-            }
-        }
-    }
-    #[cfg(feature = "quic")]
-    struct QuicDatagramReceiver<E: Enc, T: Pload + ClassifyTopic> {
-        ingress: QuicDatagramIngress,
-        cryptographer: Cryptographer<E>,
-        decrypted: Vec<u8>,
-        framed_schema: [u8; 16],
-        framed_padding: usize,
-        max_frame_bytes: usize,
-        topic_frame_caps: crate::network::TopicFrameCaps,
-        _payload: std::marker::PhantomData<T>,
-    }
-    #[cfg(feature = "quic")]
-    impl<E: Enc, T: Pload + ClassifyTopic> QuicDatagramReceiver<E, T> {
-        async fn new(
-            mut ingress: QuicDatagramIngress,
-            cryptographer: Cryptographer<E>,
-            max_frame_bytes: usize,
-            topic_frame_caps: crate::network::TopicFrameCaps,
-            byte_budget: InboundSourceByteBudget,
-        ) -> Result<Self, Error> {
-            let framed_schema = norito::schema::identity::frame_hash::<T>();
-            let align = ncore::archived_payload_align::<T>();
-            let framed_padding = if align <= 1 {
-                0
-            } else {
-                let rem = ncore::Header::SIZE % align;
-                if rem == 0 { 0 } else { align - rem }
-            };
-            ingress.authenticate(byte_budget).await?;
-            Ok(Self {
-                ingress,
-                cryptographer,
-                decrypted: Vec::new(),
-                framed_schema,
-                framed_padding,
-                max_frame_bytes,
-                topic_frame_caps,
-                _payload: std::marker::PhantomData,
-            })
-        }
-        async fn recv(&mut self) -> Result<(T, usize), Error> {
-            let retained = self.ingress.recv().await?;
-            let datagram = &retained.payload;
-            if datagram.len() > self.max_frame_bytes {
-                return Err(Error::FrameTooLarge);
-            }
-            let plaintext = self
-                .cryptographer
-                .decrypt_into(datagram.as_ref(), &mut self.decrypted)?;
-            let frame_len =
-                framed_message_len::<T>(plaintext, self.framed_schema, self.framed_padding)
-                    .map_err(|reason| {
-                        iroha_logger::warn!(
-                            reason = reason.as_str(),
-                            "Failed to decode QUIC datagram payload frame"
-                        );
-                        Error::Format
-                    })?;
-            if frame_len != plaintext.len() {
-                return Err(Error::Format);
-            }
-            let decoded =
-                decode_inbound_frame::<T>(plaintext, self.framed_padding, self.topic_frame_caps)
-                    .map_err(|error| match error {
-                        InboundDecodeError::TopicCap(violation) => {
-                            crate::network::record_inbound_cap_violation(violation.topic);
-                            iroha_logger::warn!(
-                                topic = ?violation.topic,
-                                payload_bytes = violation.framed_len,
-                                cap = violation.cap,
-                                "Raw-classified peer datagram exceeds its topic cap"
-                            );
-                            Error::InboundTopicCapExceeded
-                        }
-                        InboundDecodeError::Codec(error) => {
-                            iroha_logger::warn!(?error, "Failed to decode peer datagram payload");
-                            Error::Format
-                        }
-                    })?;
-            Ok((decoded, frame_len))
-        }
-    }
-    #[cfg(feature = "quic")]
-    type DatagramSender<E> = QuicDatagramSender<E>;
-    #[cfg(not(feature = "quic"))]
-    type DatagramSender<E> = std::marker::PhantomData<E>;
-    #[cfg(feature = "quic")]
-    type DatagramReceiver<E, T> = QuicDatagramReceiver<E, T>;
-    #[cfg(not(feature = "quic"))]
-    type DatagramReceiver<E, T> = std::marker::PhantomData<(E, T)>;
-    #[cfg(feature = "quic")]
-    async fn recv_best_effort_datagram<E: Enc, T: Pload + ClassifyTopic>(
-        receiver: &mut Option<DatagramReceiver<E, T>>,
-    ) -> Result<(T, usize), Error> {
-        let receiver = receiver.as_mut().expect("guarded by is_some");
-        receiver.recv().await
-    }
-    #[cfg(not(feature = "quic"))]
-    async fn recv_best_effort_datagram<E: Enc, T: Pload + ClassifyTopic>(
-        _receiver: &mut Option<DatagramReceiver<E, T>>,
-    ) -> Result<(T, usize), Error> {
-        // No QUIC support in this build: the branch is always disabled by the guard in `select!`,
-        // so this future is never polled.
-        std::future::pending::<Result<(T, usize), Error>>().await
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg(test)]
     enum LowTopic {
         BlockSync,
         TxGossip,
@@ -4132,29 +3985,41 @@ mod run {
         Health,
         Other,
     }
+    #[cfg(test)]
     const LOW_TOPIC_COUNT: usize = 5;
+    #[cfg(test)]
     const HI_BUDGET_RESET: u8 = 32;
+    #[cfg(test)]
     const HI_BUDGET_FALLBACK: u8 = 1;
+    #[cfg(test)]
     const HI_SAFETY_BURST_MAX: u8 = 8;
+    #[cfg(test)]
     const HI_CONTROL_BURST_MAX: u8 = 4;
+    #[cfg(test)]
     const HI_CONSENSUS_BURST_MAX: u8 = 4;
+    #[cfg(test)]
     const HI_PAYLOAD_BURST_MAX: u8 = 1;
+    #[cfg(test)]
     const HI_AVAILABILITY_BURST_MAX: u8 = 2;
     // Drain a few queued outbound posts per loop iteration to allow `MessageSender` to
     // batch multiple logical messages into fewer encrypted frames.
+    #[cfg(test)]
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
-    const OUTBOUND_DRAIN_LO_MAX: usize = 32;
+
     // A biased direct-receive arm may win only this many consecutive turns before reliable
     // stream I/O is polled without a post-channel competitor. This is especially important for
     // best-effort datagram posts, which do not consume `MessageSender` capacity.
+    #[cfg(test)]
     const DIRECT_POST_BURST_MAX: u8 = 8;
     const PEER_TERMINATION_NOTIFY_TIMEOUT: Duration = Duration::from_secs(1);
     // The sender emits at most 16 high-priority or 32 low-priority inner messages per
     // encrypted frame. Enforce the protocol-wide larger bound before decoding the next
     // inner object so a hostile peer cannot amplify one bounded byte frame into an
     // unbounded pending-object queue.
+    #[cfg(test)]
     const MAX_INNER_MESSAGES_PER_ENCRYPTED_FRAME: usize = 32;
     #[derive(Clone, Copy, Debug)]
+    #[cfg(test)]
     enum InboundDispatchLane {
         Safety,
         High,
@@ -4320,6 +4185,7 @@ mod run {
             }
         }
     }
+    #[cfg(test)]
     async fn run_inbound_dispatch_lane<T: Pload>(
         mut receiver: mpsc::UnboundedReceiver<PendingInbound<T>>,
         senders: PeerMessageSenders<T>,
@@ -4363,6 +4229,7 @@ mod run {
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum MalformedPayloadFrameReason {
+        #[cfg(test)]
         EmptyDecryptedPayload,
         InnerHeaderTruncated,
         InnerMagicMismatch,
@@ -4373,30 +4240,16 @@ mod run {
         InnerLengthTooLarge,
         InnerLengthOverflow,
         InnerFrameTruncated,
+        #[cfg(test)]
         InnerDecodeFailed,
+        #[cfg(test)]
         TooManyInnerMessages,
+        #[cfg(test)]
         TrailingBytes,
     }
-    impl MalformedPayloadFrameReason {
-        fn as_str(self) -> &'static str {
-            match self {
-                Self::EmptyDecryptedPayload => "empty_decrypted_payload",
-                Self::InnerHeaderTruncated => "inner_header_truncated",
-                Self::InnerMagicMismatch => "inner_magic_mismatch",
-                Self::InnerVersionMismatch => "inner_version_mismatch",
-                Self::InnerSchemaMismatch => "inner_schema_mismatch",
-                Self::InnerCompressionUnsupported => "inner_compression_unsupported",
-                Self::InnerLengthMissing => "inner_length_missing",
-                Self::InnerLengthTooLarge => "inner_length_too_large",
-                Self::InnerLengthOverflow => "inner_length_overflow",
-                Self::InnerFrameTruncated => "inner_frame_truncated",
-                Self::InnerDecodeFailed => "inner_decode_failed",
-                Self::TooManyInnerMessages => "too_many_inner_messages",
-                Self::TrailingBytes => "trailing_bytes",
-            }
-        }
-    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg(test)]
     struct MalformedPayloadFrameContext {
         reason: MalformedPayloadFrameReason,
         encrypted_frame_bytes: usize,
@@ -4405,7 +4258,9 @@ mod run {
         remaining_bytes: usize,
         decoded_messages: usize,
     }
+    #[cfg(test)]
     impl MalformedPayloadFrameContext {
+        #[cfg(test)]
         fn new(
             reason: MalformedPayloadFrameReason,
             encrypted_frame_bytes: usize,
@@ -4424,6 +4279,7 @@ mod run {
             }
         }
     }
+    #[cfg(test)]
     struct MalformedParsedMessages {
         context: MalformedPayloadFrameContext,
         topic_cap_violation: Option<InboundTopicCapViolation>,
@@ -4434,12 +4290,15 @@ mod run {
         framed_len: usize,
         cap: usize,
     }
-    #[derive(Debug)]
+    #[derive(Debug, thiserror::Error)]
     enum InboundDecodeError {
+        #[error("invalid peer frame codec: {0}")]
         Codec(ncore::Error),
+        #[error("peer frame exceeds its topic cap: {0:?}")]
         TopicCap(InboundTopicCapViolation),
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg(test)]
     enum HighTopic {
         ConsensusSafety,
         Control,
@@ -4447,24 +4306,8 @@ mod run {
         ConsensusPayload,
         ConsensusChunk,
     }
-    fn low_topic_label(topic: LowTopic) -> &'static str {
-        match topic {
-            LowTopic::BlockSync => "low:block_sync",
-            LowTopic::TxGossip => "low:tx_gossip",
-            LowTopic::PeerGossip => "low:peer_gossip",
-            LowTopic::Health => "low:health",
-            LowTopic::Other => "low:other",
-        }
-    }
-    fn high_topic_label(topic: HighTopic) -> &'static str {
-        match topic {
-            HighTopic::ConsensusSafety => "hi:consensus_safety",
-            HighTopic::Control => "hi:control",
-            HighTopic::Consensus => "hi:consensus",
-            HighTopic::ConsensusPayload => "hi:consensus_payload",
-            HighTopic::ConsensusChunk => "hi:consensus_chunk",
-        }
-    }
+
+    #[cfg(test)]
     fn note_high_topic_served(
         safety_burst: &mut u8,
         control_burst: &mut u8,
@@ -4509,6 +4352,7 @@ mod run {
             }
         }
     }
+    #[cfg(test)]
     fn try_recv_high_data_fair<T>(
         payload_burst: u8,
         hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
@@ -4530,6 +4374,7 @@ mod run {
         clippy::too_many_lines,
         reason = "the ordered fairness checks stay together so deterministic topic priority remains auditable"
     )]
+    #[cfg(test)]
     fn try_recv_high_fair<T>(
         safety_burst: &mut u8,
         control_burst: &mut u8,
@@ -4688,13 +4533,16 @@ mod run {
         );
         Some((HighTopic::ConsensusSafety, message))
     }
+    #[cfg(test)]
     fn bump_low_rr(low_rr: &mut u8, served_idx: usize) {
         *low_rr = u8::try_from((served_idx + 1) % LOW_TOPIC_COUNT)
             .expect("LOW_TOPIC_COUNT must fit in u8");
     }
+    #[cfg(test)]
     fn inbound_priority_from_topic(topic: Topic) -> Priority {
         topic.scheduling_priority()
     }
+    #[cfg(test)]
     fn inbound_priority_from_message<T: ClassifyTopic>(message: &T) -> Priority {
         // Remote peers must not be able to promote arbitrary traffic into the
         // actor's high-priority queues. Local actor admission can still honor
@@ -4743,6 +4591,7 @@ mod run {
             true
         }
     }
+    #[cfg(test)]
     fn try_recv_low_rr<T>(
         low_rr: &mut u8,
         lo_block_sync_rx: &mut post_channel::Receiver<T>,
@@ -4774,30 +4623,15 @@ mod run {
         }
         None
     }
+    #[cfg(test)]
     fn outbound_receiver_can_yield<T>(receiver: &post_channel::Receiver<T>) -> bool {
         // A closed receiver may still contain buffered posts. Once it is both closed and
         // empty, however, `recv()` is permanently ready with `None`; keeping that branch
         // enabled in the biased actor select would spin and starve every later branch.
         !(receiver.is_closed() && receiver.is_empty())
     }
-    fn any_outbound_receiver_can_yield<T, const N: usize>(
-        receivers: [&post_channel::Receiver<T>; N],
-    ) -> bool {
-        receivers.into_iter().any(outbound_receiver_can_yield)
-    }
-    fn high_outbound_pending<T>(
-        hi_consensus_safety_rx: &post_channel::Receiver<T>,
-        hi_control_rx: &post_channel::Receiver<T>,
-        hi_consensus_rx: &post_channel::Receiver<T>,
-        hi_consensus_payload_rx: &post_channel::Receiver<T>,
-        hi_consensus_chunk_rx: &post_channel::Receiver<T>,
-    ) -> bool {
-        !hi_consensus_safety_rx.is_empty()
-            || !hi_control_rx.is_empty()
-            || !hi_consensus_rx.is_empty()
-            || !hi_consensus_payload_rx.is_empty()
-            || !hi_consensus_chunk_rx.is_empty()
-    }
+
+    #[cfg(test)]
     fn low_outbound_pending<T>(
         lo_block_sync_rx: &post_channel::Receiver<T>,
         lo_tx_gossip_rx: &post_channel::Receiver<T>,
@@ -4811,6 +4645,7 @@ mod run {
             || !lo_health_rx.is_empty()
             || !lo_other_rx.is_empty()
     }
+    #[cfg(test)]
     fn maybe_take_low_after_hi<T>(
         hi_budget: &mut u8,
         low_rr: &mut u8,
@@ -4847,6 +4682,7 @@ mod run {
         *hi_budget = HI_BUDGET_FALLBACK;
         None
     }
+    #[cfg(test)]
     async fn recv_low_rr<T>(
         low_rr: &mut u8,
         lo_block_sync_rx: &mut post_channel::Receiver<T>,
@@ -4961,10 +4797,13 @@ mod run {
         })
         .await;
     }
-    // Traits to unify bounded/unbounded try_recv across feature flags at module scope
+
+    // Synthetic channel fixtures use Tokio receivers in place of owned post channels.
+    #[cfg(test)]
     pub(super) trait TryRecvExt<T> {
         fn try_recv_now(&mut self) -> Option<T>;
     }
+    #[cfg(test)]
     impl<T> TryRecvExt<T> for tokio::sync::mpsc::Receiver<T> {
         fn try_recv_now(&mut self) -> Option<T> {
             self.try_recv().ok()
@@ -5023,6 +4862,7 @@ mod run {
     /// contain multiple Norito-framed messages concatenated back-to-back.
     /// This reduces the encrypted frame rate and therefore lowers Tokio IO
     /// driver overhead under high message volumes (e.g. `NPoS` consensus).
+    #[cfg(test)]
     struct MessageReader<E: Enc, M: Pload + ClassifyTopic> {
         read: Box<dyn AsyncRead + Send + Unpin>,
         buffer: bytes::BytesMut,
@@ -5039,6 +4879,7 @@ mod run {
         last_malformed_payload: Option<MalformedPayloadFrameContext>,
         last_topic_cap_violation: Option<InboundTopicCapViolation>,
     }
+    #[cfg(test)]
     impl<E: Enc, M: Pload + ClassifyTopic> MessageReader<E, M> {
         const U32_SIZE: usize = core::mem::size_of::<u32>();
         #[cfg(test)]
@@ -5118,34 +4959,6 @@ mod run {
                 &mut self.buffer,
                 retained_cap.saturating_add(Self::U32_SIZE),
             );
-        }
-        fn copy_to_aligned_scratch<'a>(
-            scratch: &'a mut Vec<u8>,
-            src: &[u8],
-            align: usize,
-        ) -> &'a [u8] {
-            debug_assert!(align.is_power_of_two());
-            let len = src.len();
-            if len == 0 || align <= 1 {
-                scratch.clear();
-                scratch.extend_from_slice(src);
-                return scratch.as_slice();
-            }
-            let extra = align.saturating_sub(1);
-            let needed = len.saturating_add(extra);
-            if scratch.len() < needed {
-                scratch.resize(needed, 0);
-            }
-            let base = scratch.as_ptr() as usize;
-            let misalignment = base % align;
-            let offset = if misalignment == 0 {
-                0
-            } else {
-                align - misalignment
-            };
-            let end = offset.saturating_add(len);
-            scratch[offset..end].copy_from_slice(src);
-            &scratch[offset..end]
         }
         #[expect(
             clippy::too_many_lines,
@@ -5278,7 +5091,7 @@ mod run {
                     && !frame.is_empty()
                     && !((frame.as_ptr() as usize).is_multiple_of(align));
                 let decode_frame = if misaligned {
-                    Self::copy_to_aligned_scratch(decode_scratch, frame, align)
+                    copy_to_aligned_scratch(decode_scratch, frame, align)
                 } else {
                     frame
                 };
@@ -5511,6 +5324,7 @@ mod run {
             Ok(true)
         }
     }
+    #[cfg(test)]
     struct MessageSender<E: Enc> {
         write: Box<dyn AsyncWrite + Send + Unpin>,
         cryptographer: Cryptographer<E>,
@@ -5582,6 +5396,7 @@ mod run {
         high_availability_burst: usize,
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg(test)]
     enum HighBatchClass {
         ConsensusSafety,
         Control,
@@ -5591,12 +5406,14 @@ mod run {
         Other,
     }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg(test)]
     enum DeferredPool {
         ConsensusSafety,
         High,
         Low,
     }
     #[derive(Debug)]
+    #[cfg(test)]
     struct DeferredPlaintext {
         bytes: Vec<u8>,
         ownership: Vec<OutboundPostOwnership>,
@@ -5604,15 +5421,18 @@ mod run {
         high_class: Option<HighBatchClass>,
     }
     #[derive(Debug)]
+    #[cfg(test)]
     struct OwnedOutboundFrame {
         bytes: BytesMut,
         ownership: Vec<OutboundPostOwnership>,
     }
+    #[cfg(test)]
     impl OwnedOutboundFrame {
         fn len(&self) -> usize {
             self.bytes.len()
         }
     }
+    #[cfg(test)]
     impl HighBatchClass {
         fn should_isolate_plaintext(self) -> bool {
             matches!(
@@ -5625,6 +5445,7 @@ mod run {
             )
         }
     }
+    #[cfg(test)]
     fn classify_high_batch(topic: Topic) -> HighBatchClass {
         match topic {
             Topic::ConsensusSafety => HighBatchClass::ConsensusSafety,
@@ -5635,6 +5456,7 @@ mod run {
             _ => HighBatchClass::Other,
         }
     }
+    #[cfg(test)]
     impl<E: Enc> MessageSender<E> {
         const U32_SIZE: usize = core::mem::size_of::<u32>();
         const FRAME_POOL_MAX: usize = 32;
@@ -5717,6 +5539,7 @@ mod run {
                 high_availability_burst: 0,
             }
         }
+        #[cfg(test)]
         fn retained_message_buffer_cap(&self) -> usize {
             retained_message_buffer_cap(self.max_frame_bytes)
         }
@@ -5932,28 +5755,7 @@ mod run {
         {
             self.prepare_or_defer_with_ownership(msg, priority, vec![ownership.into()])
         }
-        /// Admit a peer-protocol message that did not arrive through a post
-        /// channel (currently ping/pong) into the same process-wide owner.
-        /// `Ok(false)` means the ordinary class is saturated; callers may skip
-        /// this advisory protocol message without disturbing queued traffic.
-        fn prepare_internal_or_defer<T>(
-            &mut self,
-            msg: &T,
-            priority: Priority,
-            budget: &Arc<SharedByteBudget>,
-        ) -> Result<bool, Error>
-        where
-            T: Pload + ClassifyTopic,
-        {
-            let plaintext_bytes = checked_encoded_frame_len::<T, E>(msg, self.max_frame_bytes)?;
-            let stream_wire_bytes =
-                crate::frame_queue_charge_for::<E>(plaintext_bytes).ok_or(Error::FrameTooLarge)?;
-            let Some(byte_lease) = budget.try_reserve(stream_wire_bytes, false) else {
-                return Ok(false);
-            };
-            self.prepare_owned_or_defer(msg, priority, byte_lease)?;
-            Ok(true)
-        }
+
         fn prepare_or_defer_with_ownership<T>(
             &mut self,
             msg: &T,
@@ -6685,6 +6487,7 @@ mod run {
     /// stream. The inner selection keeps both write futures live; alternating
     /// the biased first branch still provides deterministic local fairness
     /// when both writers are continuously ready.
+    #[cfg(test)]
     async fn send_one_ready_stream<E: Enc>(
         high: &mut MessageSender<E>,
         low: Option<&mut MessageSender<E>>,
@@ -6717,12 +6520,15 @@ mod run {
             (false, false) => None,
         }
     }
+    #[cfg(test)]
     type PeerStreamReadResult<T> =
         Result<Option<(Message<T>, usize, InboundFrameRetention)>, Error>;
+    #[cfg(test)]
     enum PeerStreamRead<T> {
         High(PeerStreamReadResult<T>),
         Low(PeerStreamReadResult<T>),
     }
+    #[cfg(test)]
     enum PeerStreamIo<T> {
         Read(PeerStreamRead<T>),
         Outbound {
@@ -6732,6 +6538,7 @@ mod run {
     }
     /// Poll both reliable inbound streams, using `prefer_low` only to resolve a
     /// simultaneous-ready tie.
+    #[cfg(test)]
     async fn read_one_ready_stream<E: Enc, T: Pload + ClassifyTopic>(
         high: &mut MessageReader<E, Message<T>>,
         low: Option<&mut MessageReader<E, Message<T>>>,
@@ -6756,6 +6563,7 @@ mod run {
     }
     /// Poll read and write directions together so preference never becomes a
     /// guard that can deadlock a full-duplex connection.
+    #[cfg(test)]
     async fn next_peer_stream_io<E: Enc, T: Pload + ClassifyTopic>(
         high_reader: &mut MessageReader<E, Message<T>>,
         low_reader: Option<&mut MessageReader<E, Message<T>>>,
@@ -7016,7 +6824,31 @@ mod run {
     ) -> Result<(), Error> {
         encode_wire_message(message, output).map_err(Error::NoritoCodec)
     }
-    pub(super) fn receive_credit_decode<T: Pload + ClassifyTopic, E: Enc>(
+    fn copy_to_aligned_scratch<'a>(scratch: &'a mut Vec<u8>, src: &[u8], align: usize) -> &'a [u8] {
+        debug_assert!(align.is_power_of_two());
+        let len = src.len();
+        if len == 0 || align <= 1 {
+            scratch.clear();
+            scratch.extend_from_slice(src);
+            return scratch.as_slice();
+        }
+        let extra = align.saturating_sub(1);
+        let needed = len.saturating_add(extra);
+        if scratch.len() < needed {
+            scratch.resize(needed, 0);
+        }
+        let base = scratch.as_ptr() as usize;
+        let misalignment = base % align;
+        let offset = if misalignment == 0 {
+            0
+        } else {
+            align - misalignment
+        };
+        let end = offset.saturating_add(len);
+        scratch[offset..end].copy_from_slice(src);
+        &scratch[offset..end]
+    }
+    pub(super) fn receive_credit_decode<T: Pload + ClassifyTopic>(
         frame: &[u8],
         admitted: crate::TransportAdmissionClass,
         caps: crate::network::TopicFrameCaps,
@@ -7042,11 +6874,12 @@ mod run {
         let raw_topic = T::inbound_topic(payload, flags)
             .map_err(Error::NoritoCodec)?
             .ok_or(Error::Format)?;
-        let limits =
-            inbound_frame_decode_limits::<T>(frame, padding, caps).map_err(|_| Error::Format)?;
+        let limits = inbound_frame_decode_limits::<T>(frame, padding, caps).map_err(|error| {
+            iroha_logger::debug!(%error, "Rejected grant-framed peer payload");
+            Error::Format
+        })?;
         let mut scratch = Vec::new();
-        let aligned =
-            MessageReader::<E, T>::copy_to_aligned_scratch(&mut scratch, frame, alignment);
+        let aligned = copy_to_aligned_scratch(&mut scratch, frame, alignment);
         let decoded =
             decode_inbound_frame_with_limits::<T>(aligned, limits).map_err(Error::NoritoCodec)?;
         if decoded.admission_class() != admitted || decoded.topic() != raw_topic {
@@ -7093,7 +6926,7 @@ mod run {
             |limits| ncore::decode_from_bytes_with_limits::<T>(frame, limits),
         )
     }
-    #[cfg(any(feature = "quic", test))]
+    #[cfg(test)]
     fn decode_inbound_frame<T: Pload + ClassifyTopic>(
         frame: &[u8],
         padding: usize,
@@ -7153,6 +6986,23 @@ mod run {
     }
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn aligned_decode_scratch_preserves_bytes_and_reuses_storage() {
+            let mut scratch = Vec::new();
+            for alignment in [1, 2, 4, 8, 16, 32, 64, 128] {
+                for length in [0, 1, 7, 257, 1024, 3] {
+                    let payload = (0..length)
+                        .map(|index| (index % 251) as u8)
+                        .collect::<Vec<_>>();
+                    let decoded = super::copy_to_aligned_scratch(&mut scratch, &payload, alignment);
+                    assert_eq!(decoded, payload);
+                    if !decoded.is_empty() {
+                        assert_eq!((decoded.as_ptr() as usize) % alignment, 0);
+                    }
+                }
+            }
+        }
+
         use super::*;
         use crate::Priority;
         use bytes::Bytes;
@@ -7709,65 +7559,73 @@ mod run {
         }
         #[tokio::test(flavor = "current_thread")]
         async fn closed_dispatch_target_releases_source_and_dispatch_ownership() {
-            let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
-            let source_lease = source_budget.try_reserve(1, false).expect("source lease");
-            let peer = Peer::new(
-                "127.0.0.1:17450".parse().expect("peer address"),
-                random_node_key_pair().public_key().clone(),
-            );
-            let pending = PendingInbound {
-                message: PeerMessage::from_inbound_frame(
-                    peer,
-                    Dummy,
-                    1,
-                    1,
-                    InboundFrameRetention::new(source_lease, 0),
-                ),
-                topic: Topic::Control,
-                priority: Priority::High,
-            };
-            let dispatch_budgets =
-                InboundDispatchByteBudgets::new(1, 1, 0).expect("dispatch owner geometry");
-            let high_budget = Arc::clone(&dispatch_budgets.high);
-            let (safety, _safety_rx) = mpsc::channel(1);
-            let (high, high_rx) = mpsc::channel(1);
-            let (low, _low_rx) = mpsc::channel(1);
-            drop(high_rx);
-            let senders = PeerMessageSenders {
-                payload: mpsc::channel(1).0,
-                availability: mpsc::channel(1).0,
-                block_sync: mpsc::channel(1).0,
-                recovery_control: mpsc::channel(1).0,
-                recovery_data: mpsc::channel(1).0,
-                control: mpsc::channel(1).0,
-                safety,
-                high,
-                low,
-                dispatch_budgets,
-                source_credits: AuthenticatedSourceCredits::new(1),
-                topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
-                delivery_drain: Arc::new(InboundDeliveryDrain::new()),
-            };
-            let (pending_tx, pending_rx) = mpsc::unbounded_channel();
-            pending_tx
-                .send(pending)
-                .expect("queue source-retained item");
-            drop(pending_tx);
-            let worker = tokio::spawn(run_inbound_dispatch_lane(
-                pending_rx,
-                senders,
-                InboundDispatchLane::High,
-            ));
-            tokio::time::timeout(Duration::from_secs(1), worker)
-                .await
-                .expect("closed target must stop the worker")
-                .expect("dispatch worker must not panic");
-            assert_eq!(source_budget.retained_total(), 0);
-            assert_eq!(
-                high_budget.retained_total(),
-                0,
-                "failed channel send must drop the transferred dispatch lease"
-            );
+            for lane in [InboundDispatchLane::High, InboundDispatchLane::Low] {
+                let source_budget = SharedByteBudget::new(1, 0).expect("source owner");
+                let source_lease = source_budget.try_reserve(1, false).expect("source lease");
+                let peer = Peer::new(
+                    "127.0.0.1:17450".parse().expect("peer address"),
+                    random_node_key_pair().public_key().clone(),
+                );
+                let pending = PendingInbound {
+                    message: PeerMessage::from_inbound_frame(
+                        peer,
+                        Dummy,
+                        1,
+                        1,
+                        InboundFrameRetention::new(source_lease, 0),
+                    ),
+                    topic: if matches!(lane, InboundDispatchLane::Low) {
+                        Topic::TxGossip
+                    } else {
+                        Topic::Control
+                    },
+                    priority: if matches!(lane, InboundDispatchLane::Low) {
+                        Priority::Low
+                    } else {
+                        Priority::High
+                    },
+                };
+                let dispatch_budgets =
+                    InboundDispatchByteBudgets::new(1, 1, 0).expect("dispatch owner geometry");
+                let dispatch_budget =
+                    dispatch_budgets.budget(!matches!(lane, InboundDispatchLane::Low));
+                let (safety, _safety_rx) = mpsc::channel(1);
+                let (high, high_rx) = mpsc::channel(1);
+                let (low, low_rx) = mpsc::channel(1);
+                drop(high_rx);
+                drop(low_rx);
+                let senders = PeerMessageSenders {
+                    payload: mpsc::channel(1).0,
+                    availability: mpsc::channel(1).0,
+                    block_sync: mpsc::channel(1).0,
+                    recovery_control: mpsc::channel(1).0,
+                    recovery_data: mpsc::channel(1).0,
+                    control: mpsc::channel(1).0,
+                    safety,
+                    high,
+                    low,
+                    dispatch_budgets,
+                    source_credits: AuthenticatedSourceCredits::new(1),
+                    topic_frame_caps: crate::network::TopicFrameCaps::uniform(1),
+                    delivery_drain: Arc::new(InboundDeliveryDrain::new()),
+                };
+                let (pending_tx, pending_rx) = mpsc::unbounded_channel();
+                pending_tx
+                    .send(pending)
+                    .expect("queue source-retained item");
+                drop(pending_tx);
+                let worker = tokio::spawn(run_inbound_dispatch_lane(pending_rx, senders, lane));
+                tokio::time::timeout(Duration::from_secs(1), worker)
+                    .await
+                    .expect("closed target must stop the worker")
+                    .expect("dispatch worker must not panic");
+                assert_eq!(source_budget.retained_total(), 0);
+                assert_eq!(
+                    dispatch_budget.retained_total(),
+                    0,
+                    "failed channel send must drop the transferred dispatch lease"
+                );
+            }
         }
         #[tokio::test(flavor = "current_thread")]
         async fn authenticated_source_credit_precedes_network_and_subscriber_backlogs() {
@@ -9035,6 +8893,64 @@ mod run {
                 "the admitted safety frame must reach the high writer"
             );
             assert!(low.ready(), "the cancelled low send must retain its batch");
+        }
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_io_arbiter_reports_the_completed_stream_and_write_result() {
+            for send_low in [false, true] {
+                for prefer_inbound in [false, true] {
+                    let output = Arc::new(Mutex::new(Vec::new()));
+                    let cipher =
+                        Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[46; 32])
+                            .expect("valid fixture key");
+                    let (read, _remote) = tokio::io::duplex(1024);
+                    let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                        MessageReader::new(Box::new(read), cipher.clone(), 1024);
+                    let mut high = MessageSender::new(
+                        Box::new(CollectingWrite {
+                            buffer: Arc::clone(&output),
+                        }),
+                        cipher.clone(),
+                        1024,
+                    );
+                    let mut low = MessageSender::new(
+                        Box::new(CollectingWrite {
+                            buffer: Arc::clone(&output),
+                        }),
+                        cipher,
+                        1024,
+                    );
+                    if send_low {
+                        low.prepare_message(&Message::Data(RoutedMsg::TxGossip(1)), Priority::Low)
+                            .expect("queue low frame");
+                    } else {
+                        high.prepare_message(
+                            &Message::Data(RoutedMsg::Consensus(1)),
+                            Priority::High,
+                        )
+                        .expect("queue high frame");
+                    }
+                    let selected = tokio::time::timeout(
+                        Duration::from_secs(1),
+                        next_peer_stream_io(
+                            &mut reader,
+                            None,
+                            &mut high,
+                            Some(&mut low),
+                            prefer_inbound,
+                            false,
+                            send_low,
+                        ),
+                    )
+                    .await
+                    .expect("writable stream must progress despite pending read");
+                    let PeerStreamIo::Outbound { sent_low, result } = selected else {
+                        panic!("only the outbound stream is ready");
+                    };
+                    assert_eq!(sent_low, send_low);
+                    result.expect("completed write must succeed");
+                    assert!(!output.lock().expect("output lock").is_empty());
+                }
+            }
         }
         #[tokio::test(flavor = "current_thread")]
         async fn outbound_backpressure_io_arbiter_reads_when_preferred_write_is_stalled() {
@@ -11516,8 +11432,8 @@ mod run {
                 .current_frame_retention
                 .as_ref()
                 .expect("complete synthetic frame retention")
-                .source
-                .leases
+                ._source
+                ._leases
                 .len();
             assert_eq!(
                 reservations, 1,
@@ -13943,6 +13859,7 @@ pub mod message {
                 delivery_drain: None,
             }
         }
+        #[cfg(test)]
         pub(super) fn from_inbound_frame(
             peer: Peer,
             payload: T,
@@ -14196,24 +14113,12 @@ mod cryptographer {
                 .decrypt_easy(DEFAULT_AAD.as_ref(), data)
                 .map_err(Into::into)
         }
-        /// Decrypt bytes into a reusable buffer.
-        ///
-        /// # Errors
-        /// Forwards [`SymmetricEncryptor::decrypt_easy_into`] error
-        #[cfg(feature = "quic")]
-        pub fn decrypt_into<'a>(
-            &self,
-            data: &[u8],
-            out: &'a mut Vec<u8>,
-        ) -> Result<&'a [u8], Error> {
-            self.encryptor
-                .decrypt_easy_into(DEFAULT_AAD.as_ref(), data, out)
-                .map_err(Into::into)
-        }
+
         /// Decrypt bytes directly in their source-owned envelope.
         ///
         /// # Errors
         /// Forwards [`SymmetricEncryptor::decrypt_easy_in_place`] errors.
+        #[cfg(test)]
         pub fn decrypt_in_place<'a>(&self, data: &'a mut [u8]) -> Result<&'a mut [u8], Error> {
             self.encryptor
                 .decrypt_easy_in_place(DEFAULT_AAD.as_ref(), data)
@@ -14232,6 +14137,7 @@ mod cryptographer {
         ///
         /// # Errors
         /// Forwards [`SymmetricEncryptor::encrypt_easy_into`] error
+        #[cfg(test)]
         pub fn encrypt_into<'a>(
             &self,
             data: &[u8],

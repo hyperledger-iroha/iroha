@@ -592,6 +592,527 @@ def _historical_hydration_registration_source_errors(
     return errors
 
 
+def _fixed_scaling_release_contract_errors(repo_root: Path, source: str) -> list[str]:
+    """Check implemented fixed-collector source contracts, without gate qualification.
+
+    The outer bootstrap creates the handoff and publication. External runner
+    environment inputs never grant that authority. These are static checks;
+    process inheritance, native replay and the complete preflight need execution.
+    """
+    errors: list[str] = []
+    prefix = "fixed scaling release contract: "
+
+    def require(value: bool, description: str) -> None:
+        if not value:
+            errors.append(prefix + description)
+
+    def tree(relative: str) -> ast.Module | None:
+        path = repo_root / relative
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("not a regular source file")
+            return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+            errors.append(prefix + relative + " must be valid regular Python source")
+            return None
+
+    def assignment(parsed: ast.Module, name: str):
+        found = [node.value for node in parsed.body if isinstance(node, ast.Assign)
+                 and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                 and node.targets[0].id == name]
+        if len(found) != 1:
+            return None
+        try:
+            return ast.literal_eval(found[0])
+        except (ValueError, TypeError, SyntaxError):
+            return None
+
+    def owner(parsed: ast.AST, name: str) -> ast.AST:
+        found = [node for node in getattr(parsed, "body", ())
+                 if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name == name]
+        require(len(found) == 1, "one exact source owner required: " + name)
+        return found[0] if len(found) == 1 else ast.Module(body=[], type_ignores=[])
+
+    def statement_count(parsed: ast.AST, expected: str) -> int:
+        wanted = ast.dump(ast.parse(expected).body[0], include_attributes=False)
+        return sum(ast.dump(node, include_attributes=False) == wanted for node in ast.walk(parsed))
+
+    def statement(parsed: ast.AST, expected: str, description: str, count: int = 1) -> None:
+        require(statement_count(parsed, expected) == count, description)
+
+    # Only these three external extra-environment surfaces accept caller input.
+    # The six-key internal map below has a separate originating parent owner.
+    for relative, name in (
+        ("scripts/bootstrap_sumeragi_v2_release.py", "_RUNNER_ENV_ALLOWLIST"),
+        ("scripts/validate_sumeragi_v2_release_bootstrap.py", "_RUNNER_EXTRA_ENV"),
+        ("scripts/write_sumeragi_v2_release_receipt.py", "_BOOTSTRAP_RUNNER_ENV_ALLOWLIST"),
+    ):
+        parsed = tree(relative)
+        if parsed is None:
+            continue
+        values = assignment(parsed, name)
+        require(type(values) is set and all(type(value) is str for value in values)
+                and not any(value.startswith("IROHA_RELEASE_SCALING_") for value in values),
+                relative + " must reject every external scaling trust input")
+
+    expected_options = ('--candidate-identity',
+ '--sealed-identity',
+ '--release-root',
+ '--bootstrap-completion',
+ '--bootstrap-evidence-dir',
+ '--bootstrap-identity',
+ '--bootstrap-attestation',
+ '--bootstrap-transcript',
+ '--expected-bootstrap-completion-sha256',
+ '--bootstrap-candidate-root',
+ '--bootstrap-runner',
+ '--signature-attestation',
+ '--signature-transcript',
+ '--signature-raw-commit',
+ '--signature-cargo-lock',
+ '--signature-allowed-signers',
+ '--signature-revocation',
+ '--signature-git',
+ '--signature-ssh-keygen',
+ '--expected-git-sha256',
+ '--expected-ssh-keygen-sha256',
+ '--expected-allowed-signers-sha256',
+ '--expected-revocation-sha256',
+ '--expected-signer-fingerprint',
+ '--corridor-completion',
+ '--formal-completion',
+ '--formal-replay-source-receipt',
+ '--formal-replay-release-root',
+ '--expected-formal-replay-signature-sha256',
+ '--formal-replay-principal',
+ '--seed-completion',
+ '--chaos-completion',
+ '--g4p-completion',
+ '--g12-seed-completion',
+ '--g12-fault-soak-completion',
+ '--scaling-execution-record',
+ '--expected-scaling-execution-sha256',
+ '--sdk-dependency-archive',
+ '--sdk-dependency-input-inventory',
+ '--sdk-dependency-final-work-inventory',
+ '--runtime-tool-probe-manifest',
+ '--runtime-tool-probe-result',
+ '--repository-root',
+ '--output',
+ '--verify-existing',
+ '--validation-ack',
+ '--source-manifest-sha256')
+    for relative, name in (
+        ("scripts/bootstrap_sumeragi_v2_release.py", "_VALIDATOR_OPTION_ORDER"),
+        ("scripts/write_sumeragi_v2_release_receipt_corridor_log.py", "_RECEIPT_VALIDATION_OPTION_ORDER"),
+        ("scripts/copy_sumeragi_v2_release_cargo_cache.py", "VALIDATOR_OPTION_ORDER"),
+    ):
+        parsed = tree(relative)
+        if parsed is not None:
+            require(assignment(parsed, name) == expected_options,
+                    relative + " must use the canonical 47-option record contract")
+
+    for fragment, count, description in (
+        ('release_initial_without_gate {release_gate_fd}<&-', 1, "initial children must exclude the handoff descriptor"),
+        ('release_prepare_without_gate {release_gate_fd}<&-', 1, "sealed preparation must exclude the handoff descriptor"),
+        ('"$release_python_bin" -I -B -S "$release_scaling_handoff_helper" \\\n      --gate-fd "$release_gate_fd" \\\n      --invocation-sha256 "$release_gate_invocation_sha256" \\\n      --challenge "$release_gate_challenge"', 1, "one isolated parent handoff request is required"),
+        ('exec {release_gate_fd}<&-\n  release_gate_active=0', 1, "the handoff channel must close before publication"),
+        ('readonly release_scaling_execution_record="$release_bootstrap_evidence_dir/scaling-execution.json"', 1, "the record path must be fixed by the parent"),
+        ('if [[ ! -s "$release_scaling_execution_record" || -L "$release_scaling_execution_record" ]]; then\n      echo "original parent scaling execution record is missing" >&2\n      sealed_status=2', 1, "missing parent record must reject receipt publication"),
+        ('release_scaling_execution_sha256="$(sha256_file "$release_scaling_execution_record")"\n      readonly release_scaling_execution_sha256', 1, "record digest must derive from original published bytes"),
+        ('--scaling-execution-record "$release_scaling_execution_record" \\\n      --expected-scaling-execution-sha256 "$release_scaling_execution_sha256"', 2, "receipt and final cache seal must carry the same two record arguments"),
+        ('--g4p-completion "$multilane_four_peer_completion_path" \\\n      --g12-seed-completion "$nexus_cross_completion_path" \\\n      --g12-fault-soak-completion "$nexus_cross_soak_completion_path"', 1, "the original G-4P and G-12P receipt joins must remain exact"),
+        ('--sdk-dependency-archive "$release_sdk_archive" \\\n      --sdk-dependency-input-inventory "$release_sdk_inventory" \\\n      --sdk-dependency-final-work-inventory \\\n        "$release_sdk_work_final_inventory" \\\n      --runtime-tool-probe-manifest \\\n        "$release_runtime_tool_probe_manifest" \\\n      --runtime-tool-probe-result "$release_runtime_tool_probe_result"', 1, "the unrelated SDK and runtime-tool receipt inputs must remain exact"),
+    ):
+        require(source.count(fragment) == count, description)
+    for retired in ("--scaling-evidence-manifest", "--expected-scaling-trial-harness-sha256",
+                    "--expected-scaling-configuration-sha256", "--expected-scaling-irohad-sha256",
+                    "--expected-scaling-iroha-cli-sha256", "preflight-multilane-scaling pytest 53"):
+        require(retired not in source, "retired scaling receipt/preflight surface remains: " + retired)
+
+    parsed = tree("scripts/bootstrap_sumeragi_v2_release.py")
+    if parsed is not None:
+        main = owner(parsed, "bootstrap")
+        statement(main, "scaling_invocation = allocate_release_invocation_root(candidate, evidence, scaling_cargo_cache)",
+                  "bootstrap must allocate the original invocation root")
+        statement(main, "scaling_handoff = FixedScalingHandoff(scaling_operation.invocation_sha256, scaling_operation)",
+                  "handoff must retain the original operation")
+        statement(main, """scaling_environment = {
+            'IROHA_RELEASE_INVOCATION_ROOT': str(scaling_invocation.path),
+            'IROHA_RELEASE_TEMP_BASE': str(scaling_invocation.base),
+            'IROHA_RELEASE_SCALING_GATE_FD': str(scaling_handoff.runner_descriptor),
+            'IROHA_RELEASE_SCALING_INVOCATION_SHA256': scaling_operation.invocation_sha256,
+            'IROHA_RELEASE_SCALING_CHALLENGE': scaling_handoff.challenge,
+            'IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256': archives['scaling_handoff_helper'].sha256,
+        }""", "internal handoff must derive all six exact values from original parent owners")
+        runner_markers = [node for node in ast.walk(main) if isinstance(node, ast.Dict)
+            and any(isinstance(key, ast.Constant) and key.value == "scaling_handoff" for key in node.keys)]
+        require(len(runner_markers) == 1 and any(
+            isinstance(key, ast.Constant) and key.value == "scaling_handoff"
+            and isinstance(value, ast.Name) and value.id == "scaling_environment"
+            for key, value in zip(runner_markers[0].keys, runner_markers[0].values)) if runner_markers else False,
+            "authenticated runner marker must retain the internally created handoff map")
+        statement(main, "original_scaling_observation = scaling_handoff.revalidate_observation()",
+                  "final validation must start from original handoff observations")
+        statement(main, "scaling_execution = scaling_operation.revalidate_final(original_scaling_observation)",
+                  "final record must rejoin the same original parent operation")
+        statement(main, "_scaling_require(scaling_operation.revalidate_final(scaling_handoff.revalidate_observation()) is scaling_execution)",
+                  "receipt acknowledgment, completion and final publication must keep the same original record", 3)
+        handoff = owner(parsed, "FixedScalingHandoff")
+        execute = owner(handoff, "_execute")
+        statement(execute, """result = _run_bounded(launch.python, launch.argv[1:], cwd=launch.cwd,
+            environment=dict(launch.environment), timeout_seconds=launch.timeout_seconds,
+            maximum_output_bytes=launch.maximum_output_bytes,
+            pass_fds=(launch.launch_input_fd, launch.seed_fd), observation=self._command,
+            deadline_ns=launch.deadline_ns)""", "collector must use original input FDs and the unchanged absolute deadline")
+        statement(execute, """if self._command._process is None or (self._command._reaped and self._command.terminal is not None):
+            _scaling_require(self._operation.child_finished(launch, self._command.terminal) is None)
+            self._child_finished = True""", "only proved no-spawn or the original terminal reap may release borrowed inputs")
+        statement(execute, "_scaling_require(self._operation.verify_publication(launch, observation) is None)",
+                  "artifact observations must be verified by the original operation")
+
+    parsed = tree("scripts/write_sumeragi_v2_release_receipt_gate_evidence.py")
+    if parsed is not None:
+        archive = owner(parsed, "_validate_fixed_scaling_archive")
+        statement(archive, "selected = _validate_scaling_parent_inputs(api, record, bootstrap_evidence, bootstrap_authentication)",
+                  "receipt archive must bind the authenticated original parent selection")
+        statement(archive, """preflight_context = dict(source_root=_release_root(repo_root), candidate_identity=sealed,
+            invocation_sha256=runner['scaling_handoff']['IROHA_RELEASE_SCALING_INVOCATION_SHA256'],
+            timeout_seconds=runner['scaling_preflight_timeout_seconds'])""",
+            "preflight archive context must come from authenticated source and runner")
+        statement(archive, "preflight = api.inspect_preflight_archive(preflight_root, record, **preflight_context)",
+                  "receipt must validate the complete selected-source preflight")
+        statement(archive, "_replay_fixed_scaling_native(api, checked, record, root, kagami, checker_environment)",
+                  "receipt archive must replay native evidence against retained Kagami")
+        statement(archive, """if api.inspect_parent_archive(root, record, sealed) != checked or api.capture_public_archive(root, record) != before:
+            raise ReceiptError('fixed scaling archive changed during native replay')""",
+            "receipt must repeat original archive inspection after native replay")
+        statement(archive, """if _validate_scaling_parent_inputs(api, record, bootstrap_evidence, bootstrap_authentication) != selected:
+            raise ReceiptError('original scaling inputs changed during replay')""",
+            "receipt must retain parent plan and budget through replay")
+        statement(archive, """if api.inspect_preflight_archive(preflight_root, record, **preflight_context) != preflight or api.capture_preflight_archive(preflight_root, record, **preflight_context) != preflight_before:
+            raise ReceiptError('complete scaling preflight changed during native replay')""",
+            "receipt must recheck complete preflight after native replay")
+        selected = owner(parsed, "_validate_scaling_parent_inputs")
+        statement(selected, "handoff = authentication['runner']['scaling_handoff']",
+                  "receipt invocation binding must come from the authenticated internal handoff")
+        statement(selected, """if record.document['execution']['invocation_sha256'] != handoff['IROHA_RELEASE_SCALING_INVOCATION_SHA256']:
+            raise ReceiptError('scaling record invocation differs from original handoff')""",
+            "receipt record must match the original parent invocation")
+        statement(selected, """if type(timeout) is not int or record.document['preflight']['scope']['timeout_seconds'] != timeout:
+            raise ReceiptError('scaling preflight timeout differs from original runner')""",
+            "receipt preflight timeout must match the original runner")
+    parsed = tree("scripts/bootstrap_sumeragi_v2_release_receipt_replay.py")
+    if parsed is not None:
+        terminal = owner(parsed, "_validate_terminal_fixed_scaling")
+        statement(terminal, "scaling_record_api.inspect_parent_archive(scaling_root, scaling_record, scaling_identity)",
+                  "terminal bootstrap validation must inspect the same fixed archive")
+        statement(terminal, """if scaling_record.sha256 != scaling_execution.sha256 or receipt_evidence['multilane_scaling'] != scaling_projection:
+            raise BootstrapError('terminal scaling projection differs from original parent publication')""",
+            "terminal receipt must equal the original parent record projection")
+        statement(terminal, "scaling_record_api.inspect_preflight_archive(preflight_root, scaling_record, **preflight_context)",
+                  "terminal receipt must inspect the complete preflight archive")
+        statement(terminal, """if scaling_record_api.capture_preflight_archive(preflight_root, scaling_record, **preflight_context) != (preflight_files, preflight_directories):
+            raise BootstrapError('terminal scaling preflight archive changed during capture')""",
+            "terminal receipt must recapture preflight after its publication fence")
+    parsed = tree('scripts/nexus/scaling_release_record.py')
+    if parsed is not None:
+        decoder = owner(parsed, 'decode_parent_execution')
+        statement(decoder, "preflight = validate_preflight_binding(value['preflight'])",
+                  "parent record must require the canonical preflight binding")
+        statement(decoder, "_require(preflight['scope']['completed_ns'] <= start)",
+                  "preflight must finish before the original collector start")
+    return errors
+
+
+def _rust_async_release_gate_contract_errors(repo_root: Path, source: str) -> list[str]:
+    """Bind all thirteen async SDK/query regressions to five counted release legs."""
+    errors: list[str] = []
+    required_shell = (
+        '# Async SDK and Native query boundaries are mandatory counted release legs.\n'
+        'rust_async_sdk_tests=(\n'
+        '  query::asynchronous::tests::collects_typed_pages_with_fresh_signed_nonces_and_exact_cursor_authority\n'
+        '  query::asynchronous::tests::singular_parameters_preserve_json_negotiation_and_output_type\n'
+        '  query::asynchronous::tests::singular_shape_mismatch_is_an_error_without_panic_or_retry\n'
+        '  query::asynchronous::tests::start_failure_is_dispatched_once_for_transport_and_decode_errors\n'
+        '  query::asynchronous::tests::malformed_and_lost_continuations_terminally_consume_the_cursor\n'
+        '  query::asynchronous::tests::cancelled_continuation_cannot_replay_the_signed_nonce\n'
+        '  query::asynchronous::tests::invalid_fetch_size_fails_before_query_dispatch\n'
+        '  query::asynchronous::tests::singular_constraints_check_across_empty_and_nonempty_pages\n'
+        '  query::asynchronous::tests::compatibility_failure_uses_async_probe_and_never_submits_the_query\n'
+        '  client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation\n'
+        '  blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io\n'
+        ')\n'
+        'for required_test in "${rust_async_sdk_tests[@]}"; do\n'
+        '  if ! grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_list"; then\n'
+        '    echo "missing required Rust async SDK test: ${required_test}" >&2\n'
+        '    exit 1\n'
+        '  fi\n'
+        '  if grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_ignored_list"; then\n'
+        '    echo "required Rust async SDK test is ignored: ${required_test}" >&2\n'
+        '    exit 1\n'
+        '  fi\n'
+        'done\n'
+        'rust_async_request_wire_test="query::builder::tests::encoded_request_is_shared_with_synchronous_execution"\n'
+        'rust_async_request_wire_list="$(\n'
+        '  run_cargo test --locked --offline -p iroha_data_model --lib \\\n'
+        '    "$rust_async_request_wire_test" -- --list --exact\n'
+        ')"\n'
+        'rust_async_request_wire_ignored_list="$(\n'
+        '  run_cargo test --locked --offline -p iroha_data_model --lib \\\n'
+        '    "$rust_async_request_wire_test" -- --list --exact --ignored\n'
+        ')"\n'
+        'if ! grep -Fqx -- "${rust_async_request_wire_test}: test" <<<"$rust_async_request_wire_list" \\\n'
+        '  || grep -Fqx -- "${rust_async_request_wire_test}: test" <<<"$rust_async_request_wire_ignored_list"; then\n'
+        '  echo "required query request wire test is missing or ignored" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        'rust_async_native_typed_test="typed_musubi_queries_distinguish_found_absent_and_stale_results"\n'
+        'if ! grep -Fqx -- "${rust_async_native_typed_test}: test" <<<"$multilane_native_release_test_list" \\\n'
+        '  || grep -Fqx -- "${rust_async_native_typed_test}: test" <<<"$multilane_native_release_ignored_test_list"; then\n'
+        '  echo "required Native typed query test is missing or ignored" >&2\n'
+        '  exit 1\n'
+        'fi\n'
+        'run_corridor_leg \\\n'
+        '  sumeragi-async-query-rust cargo-exact 9 \\\n'
+        '  "cargo test --locked --offline -p iroha --lib query::asynchronous::tests:: -- --test-threads=1" \\\n'
+        '  run_cargo test --locked --offline -p iroha --lib query::asynchronous::tests:: -- --test-threads=1\n'
+        'run_corridor_leg \\\n'
+        '  sumeragi-async-diagnostics-rust cargo-exact 1 \\\n'
+        '  "cargo test --locked --offline -p iroha --lib client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation -- --exact --test-threads=1" \\\n'
+        '  run_cargo test --locked --offline -p iroha --lib client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation -- --exact --test-threads=1\n'
+        'run_corridor_leg \\\n'
+        '  sumeragi-blocking-boundary-rust cargo-exact 1 \\\n'
+        '  "cargo test --locked --offline -p iroha --lib blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io -- --exact --test-threads=1" \\\n'
+        '  run_cargo test --locked --offline -p iroha --lib blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io -- --exact --test-threads=1\n'
+        'run_corridor_leg \\\n'
+        '  query-request-wire-rust cargo-exact 1 \\\n'
+        '  "cargo test --locked --offline -p iroha_data_model --lib query::builder::tests::encoded_request_is_shared_with_synchronous_execution -- --exact --test-threads=1" \\\n'
+        '  run_cargo test --locked --offline -p iroha_data_model --lib query::builder::tests::encoded_request_is_shared_with_synchronous_execution -- --exact --test-threads=1\n'
+        'run_corridor_leg \\\n'
+        '  native-amx-typed-query-rust cargo-exact 1 \\\n'
+        '  "cargo test --locked --offline -p integration_tests --test native_amx_routing typed_musubi_queries_distinguish_found_absent_and_stale_results -- --exact --test-threads=1" \\\n'
+        '  run_cargo test --locked --offline -p integration_tests --test native_amx_routing typed_musubi_queries_distinguish_found_absent_and_stale_results -- --exact --test-threads=1\n'
+    )
+    required_receipt = (
+        '    # Bind each newly required Rust query boundary to its actual crate/target.\n'
+        '    legs.extend(\n'
+        '        (\n'
+        '            (\n'
+        '                "sumeragi-async-query-rust",\n'
+        '                "cargo-exact",\n'
+        '                9,\n'
+        '                "cargo test --locked --offline -p iroha --lib query::asynchronous::tests:: -- --test-threads=1",\n'
+        '            ),\n'
+        '            (\n'
+        '                "sumeragi-async-diagnostics-rust",\n'
+        '                "cargo-exact",\n'
+        '                1,\n'
+        '                "cargo test --locked --offline -p iroha --lib client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation -- --exact --test-threads=1",\n'
+        '            ),\n'
+        '            (\n'
+        '                "sumeragi-blocking-boundary-rust",\n'
+        '                "cargo-exact",\n'
+        '                1,\n'
+        '                "cargo test --locked --offline -p iroha --lib blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io -- --exact --test-threads=1",\n'
+        '            ),\n'
+        '            (\n'
+        '                "query-request-wire-rust",\n'
+        '                "cargo-exact",\n'
+        '                1,\n'
+        '                "cargo test --locked --offline -p iroha_data_model --lib query::builder::tests::encoded_request_is_shared_with_synchronous_execution -- --exact --test-threads=1",\n'
+        '            ),\n'
+        '            (\n'
+        '                "native-amx-typed-query-rust",\n'
+        '                "cargo-exact",\n'
+        '                1,\n'
+        '                "cargo test --locked --offline -p integration_tests --test native_amx_routing typed_musubi_queries_distinguish_found_absent_and_stale_results -- --exact --test-threads=1",\n'
+        '            ),\n'
+        '        )\n'
+        '    )\n'
+    )
+    if source.count(required_shell) != 1:
+        errors.append("Rust async query release must admit and execute all thirteen exact required tests")
+    receipt = repo_root / "scripts/write_sumeragi_v2_release_receipt_corridor_log.py"
+    if receipt.is_symlink() or not receipt.is_file():
+        errors.append("Rust async query release receipt component is unavailable")
+    else:
+        try:
+            receipt_source = receipt.read_text(encoding="utf-8")
+        except OSError:
+            errors.append("Rust async query release receipt component is unreadable")
+        else:
+            if receipt_source.count(required_receipt) != 1:
+                errors.append("Rust async query release receipt must bind all five exact counted commands")
+    # Receipt names are independent of reported aggregate counts.
+    parent = repo_root / "scripts/write_sumeragi_v2_release_receipt.py"
+    named_gate = repo_root / "scripts/write_sumeragi_v2_release_receipt_gate_evidence.py"
+    expected_names = {'sumeragi-async-query-rust': ('query::asynchronous::tests::collects_typed_pages_with_fresh_signed_nonces_and_exact_cursor_authority',
+                               'query::asynchronous::tests::singular_parameters_preserve_json_negotiation_and_output_type',
+                               'query::asynchronous::tests::singular_shape_mismatch_is_an_error_without_panic_or_retry',
+                               'query::asynchronous::tests::start_failure_is_dispatched_once_for_transport_and_decode_errors',
+                               'query::asynchronous::tests::malformed_and_lost_continuations_terminally_consume_the_cursor',
+                               'query::asynchronous::tests::cancelled_continuation_cannot_replay_the_signed_nonce',
+                               'query::asynchronous::tests::invalid_fetch_size_fails_before_query_dispatch',
+                               'query::asynchronous::tests::singular_constraints_check_across_empty_and_nonempty_pages',
+                               'query::asynchronous::tests::compatibility_failure_uses_async_probe_and_never_submits_the_query'),
+ 'sumeragi-async-diagnostics-rust': ('client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation',),
+ 'sumeragi-blocking-boundary-rust': ('blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io',),
+ 'query-request-wire-rust': ('query::builder::tests::encoded_request_is_shared_with_synchronous_execution',),
+ 'native-amx-typed-query-rust': ('typed_musubi_queries_distinguish_found_absent_and_stale_results',)}
+    try:
+        if parent.is_symlink() or named_gate.is_symlink():
+            raise ValueError("symlinked receipt source")
+        tree = ast.parse(parent.read_text(encoding="utf-8"))
+        definitions = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                       and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                       and node.targets[0].id == "_RUST_ASYNC_GATE_TESTS"]
+        if len(definitions) != 1 or ast.literal_eval(definitions[0]) != expected_names:
+            raise ValueError("wrong exact async test inventory")
+        named_source = named_gate.read_text(encoding="utf-8")
+        if named_source.count("        **_RUST_ASYNC_GATE_TESTS,\n") != 1:
+            raise ValueError("async names missing from exact Cargo validation")
+        required_check = (
+            '            passing_tests = [\n'
+            '                match.group(1)\n'
+            '                for line in lines\n'
+            '                if (match := re.fullmatch(\n'
+            '                    r"test (.+) \\.\\.\\. ok", line\n'
+            '                )) is not None\n'
+            '            ]\n'
+            '            if sorted(passing_tests) != sorted(exact_cargo_tests[leg_id]):\n'
+            '                raise ReceiptError(\n'
+            '                    f"corridor exact Cargo leg {leg_id} contains an unexpected named result"\n'
+            '                )\n'
+        )
+        if named_source.count(required_check) != 1:
+            raise ValueError("unexpected named results are not rejected")
+    except (OSError, SyntaxError, ValueError, TypeError) as error:
+        errors.append("Rust async query release exact named receipt is invalid: " + str(error))
+    return errors
+
+
+def _fixed_scaling_preflight_inventory_errors(release_path: Path) -> list[str]:
+    """Check the originating full preflight connection and its exact inventory.
+
+    This is a static source predicate, never evidence that any unit executed.
+    Runtime acceptance also requires every original process and exact node result.
+    """
+    import hashlib
+    import json
+    root = release_path.parent.parent
+    errors = []
+    def fail(message): errors.append(f'{release_path}: {message}')
+    try:
+        owner_path = root/'scripts/nexus/scaling_release_preflight.py'
+        protocol_path = root/'scripts/nexus/scaling_preflight_archive.py'
+        inventory_path = root/'pytests/scripts/scaling_preflight/inventory.json'
+        driver_path = root/'pytests/scripts/run_scaling_collector_preflight.py'
+        bootstrap = (root/'scripts/bootstrap_sumeragi_v2_release.py').read_text()
+        source = owner_path.read_text()
+        protocol = protocol_path.read_text()
+        driver = driver_path.read_text()
+        shell = release_path.read_text()
+        require_names = ('PHASE_COUNTS','REQUIRED_PYTEST_SUITES','REQUIRED_MIGRATION_OUTCOMES',
+                         'NATIVE_FIXTURES','DATA_FIXTURES')
+        table = {node.targets[0].id: ast.literal_eval(node.value)
+            for node in ast.parse(protocol).body if isinstance(node,ast.Assign)
+            and len(node.targets) == 1 and isinstance(node.targets[0],ast.Name)
+            and node.targets[0].id in require_names}
+        if set(table) != set(require_names): raise ValueError('preflight source constants missing')
+        raw = inventory_path.read_bytes()
+        if not 0 < len(raw) <= 8*1024*1024: raise ValueError('preflight inventory size')
+        def pairs(rows):
+            result = {}
+            for key,value in rows:
+                if key in result: raise ValueError('duplicate inventory field')
+                result[key] = value
+            return result
+        inventory = json.loads(raw,object_pairs_hook=pairs)
+        if type(inventory) is not dict or set(inventory) != {
+                'schema','sources','phases','pytest_suites','migrated_outcomes','pending_outcomes'}:
+            raise ValueError('preflight inventory fields')
+        if inventory['schema'] != 'iroha.sumeragi_v2.fixed_scaling.preflight.v1':
+            raise ValueError('preflight inventory schema')
+        suites = inventory['pytest_suites']
+        if type(suites) is not dict or tuple(sorted(suites)) != table['REQUIRED_PYTEST_SUITES']:
+            raise ValueError('full collector suite inventory differs')
+        nodes = []
+        for name,values in suites.items():
+            if type(values) is not list or not values or values != sorted(set(values)):
+                raise ValueError('empty or duplicate preflight suite')
+            if any(type(node) is not str or len(node) != 64 or any(c not in '0123456789abcdef' for c in node) for node in values):
+                raise ValueError('foreign preflight node')
+            nodes.extend(values)
+        if len(nodes) < 4027 or len(nodes) != len(set(nodes)):
+            raise ValueError('partial collector inventory')
+        if type(inventory['phases']) is not dict or set(inventory['phases']) != set(table['PHASE_COUNTS']):
+            raise ValueError('mandatory isolated phase missing')
+        for phase,count in table['PHASE_COUNTS'].items():
+            values = inventory['phases'][phase]
+            if type(values) is not list or len(values) != count or values != sorted(set(values)):
+                raise ValueError('isolated phase node inventory differs')
+        phase_manifest = json.loads((root/'pytests/scripts/scaling_preflight/phase_nodes.json').read_bytes())
+        if inventory['phases'] != phase_manifest: raise ValueError('phase producer/consumer node mismatch')
+        pending = inventory['pending_outcomes']
+        migrated = inventory['migrated_outcomes']
+        if type(pending) is not list or type(migrated) is not dict:
+            raise ValueError('outcome mapping is absent')
+        pending_ids = {row['id'] for row in pending}
+        if len(pending_ids) != len(pending) or set(migrated)&pending_ids or (
+                set(migrated)|pending_ids != set(table['REQUIRED_MIGRATION_OUTCOMES'])):
+            raise ValueError('required historical assertions were dropped')
+        if len(set(migrated.values())) != len(migrated) or not set(migrated.values()) <= set(nodes):
+            raise ValueError('migrated outcome has no unique selected node')
+        if type(inventory['sources']) is not dict or not set(suites) <= set(inventory['sources']):
+            raise ValueError('test source binding is absent')
+        if 'scripts/nexus/scaling_preflight_archive.py' not in inventory['sources']:
+            raise ValueError('shared preflight archive protocol binding is absent')
+        if not set((*table['NATIVE_FIXTURES'],*table['DATA_FIXTURES'])) <= set(inventory['sources']):
+            raise ValueError('required preflight data fixture binding is absent')
+        for name,digest in inventory['sources'].items():
+            path = Path(name)
+            if path.is_absolute() or '..' in path.parts or str(path) != name:
+                raise ValueError('unsafe preflight source path')
+            file = root/path
+            if file.is_symlink() or not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != digest:
+                raise ValueError('preflight source binding changed: '+name)
+        tree = ast.parse(bootstrap)
+        cls = next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name == 'BootstrapScalingOperation')
+        prepare = next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name == 'prepare')
+        calls = [n for n in ast.walk(prepare) if isinstance(n,ast.Call)]
+        construct = [n for n in calls if ast.unparse(n.func) == 'preflight.CompleteScalingPreflight']
+        run = [n for n in calls if ast.unparse(n.func) == 'self._preflight.run']
+        prepared = [n for n in calls if ast.unparse(n.func) == 'provisioning.PreparedScalingInputs.prepare']
+        if len(construct) != 1 or len(run) != 1 or len(prepared) != 1 or not construct[0].lineno < run[0].lineno < prepared[0].lineno:
+            raise ValueError('original parent preflight must precede experiment admission')
+        if ast.unparse(construct[0].args[5]) != 'self._preflight_timeout' or (
+                '"scaling_preflight_timeout_seconds": args.scaling_preflight_timeout_seconds' not in bootstrap
+                or 'preflight_timeout_seconds=preflight_timeout_seconds' not in bootstrap
+                or '_DEFAULT_SCALING_PREFLIGHT_TIMEOUT_SECONDS = 28_800' not in bootstrap):
+            raise ValueError('preflight total policy must be separate, bounded and source-bound')
+        if not all(fragment in source for fragment in (
+                'deadline_ns=self._deadline','pass_fds=()',
+                'self._api.command_owner()', 'command._reaped is True',
+                "require(not self._inventory['pending_outcomes']",
+                'contract.PythonTestDependencies.provision(',
+                'contract.PythonDependencies.provision(')):
+            raise ValueError('original bounded preflight ownership is incomplete')
+        if ("os.environ['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'" not in driver
+                or "'--disable-plugin-autoload'" not in driver
+                or 'PythonTestDependencies.admit(paths)' not in driver):
+            raise ValueError('pytest must use admitted dependencies without plugin discovery')
+        if ('sys.path.append(str(args.dependency_root))' in driver or
+                'fixed scaling preflight inventory is not integrated' in shell or
+                'scaling-handoff.py' not in shell or
+                'original protected parent runs the complete source-bound scaling preflight' not in shell):
+            raise ValueError('shell must reach the original parent preflight handoff')
+        if pending:
+            fail(f'complete fixed scaling preflight has {len(pending)} unresolved assertion outcomes')
+    except (OSError,ValueError,TypeError,KeyError,StopIteration,SyntaxError,RecursionError) as error:
+        fail('fixed scaling preflight contract is invalid: '+str(error))
+    return errors
+
 def _production_liveness_release_inventory_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -1848,66 +2369,12 @@ def _production_liveness_release_inventory_errors(
                 f"must execute exactly {command!r}"
             )
 
-    scaling_release_fragments = (
-        "multilane_scaling_contract_files=(\n"
-        "  scripts/tests/validate_multilane_scaling_evidence_test.py\n"
-        "  scripts/tests/run_multilane_scaling_gate_test.py\n"
-        ")",
-        "preflight-multilane-scaling pytest 53 \\\n"
-        '  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest '
-        '-q -p no:cacheprovider ${multilane_scaling_contract_files[*]}"',
-        'scripts/nexus/validate_multilane_scaling_evidence.py \\\n'
-        '    "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \\\n'
-        '    --report "$scaling_preflight_report" \\\n'
-        '    --expected-source-revision "$release_head_commit" \\\n'
-        '    --expected-workspace-source-sha256 "$release_source_manifest_sha256"',
-        '--expected-validator-sha256 "$(\n'
-        '      sha256_file scripts/nexus/validate_multilane_scaling_evidence.py\n'
-        '    )" \\\n'
-        '    --expected-trial-harness-sha256 \\\n'
-        '      "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \\\n'
-        '    --expected-configuration-sha256 \\\n'
-        '      "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \\\n'
-        '    --expected-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
-        '    --expected-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \\\n'
-        '    --expected-repository-root "$repo_root" \\\n'
-        '    --quiet',
-        'IROHA_RELEASE_SCALING_CONFIGURATION_SHA256="$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \\\n'
-        '    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST="$release_scaling_evidence_manifest" \\\n'
-        '    IROHA_RELEASE_SCALING_IROHAD_SHA256="$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
-        '    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \\\n'
-        '    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256"',
-        '--g4p-completion "$multilane_four_peer_completion_path" \\\n'
-        '      --g12-seed-completion "$nexus_cross_completion_path" \\\n'
-        '      --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
-        '      --scaling-evidence-manifest "$release_scaling_evidence_manifest" \\\n'
-        '      --sdk-dependency-archive "$release_sdk_archive" \\\n'
-        '      --sdk-dependency-input-inventory "$release_sdk_inventory" \\\n'
-        '      --sdk-dependency-final-work-inventory \\\n'
-        '        "$release_sdk_work_final_inventory" \\\n'
-        '      --runtime-tool-probe-manifest \\\n'
-        '        "$release_runtime_tool_probe_manifest" \\\n'
-        '      --runtime-tool-probe-result "$release_runtime_tool_probe_result" \\\n'
-        '      --expected-scaling-trial-harness-sha256 \\\n'
-        '        "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \\\n'
-        '      --expected-scaling-configuration-sha256 \\\n'
-        '        "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \\\n'
-        '      --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
-        '      --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256"',
-    )
-    for fragment in scaling_release_fragments:
-        if source.count(fragment) != 1:
-            errors.append(
-                f"{release_path}: source-bound G-4P/G-12P/G-SCALE receipt corridor "
-                f"must contain exactly {fragment!r}"
-            )
-    scaling_environment = {
-        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
-        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
-        "IROHA_RELEASE_SCALING_IROHAD_SHA256",
-        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
-        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
-    }
+    errors.extend(_rust_async_release_gate_contract_errors(repo_root, source))
+    errors.extend(_fixed_scaling_release_contract_errors(repo_root, source))
+    errors.extend(_fixed_scaling_preflight_inventory_errors(release_path))
+    # External runner-environment values never carry the internally created
+    # original-parent handoff map. All scaling names must be absent here.
+    scaling_environment = set()
     formal_replay_environment = {
         "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
         "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
@@ -1973,7 +2440,7 @@ def _production_liveness_release_inventory_errors(
         if admitted_scaling != scaling_environment:
             errors.append(
                 f"{contract_path}: authenticated release environment must admit "
-                "exactly the five source-bound G-SCALE trust inputs"
+                "no external G-SCALE trust inputs; the handoff belongs to the original parent"
             )
         admitted_formal_replay = {
             value
@@ -2095,13 +2562,13 @@ def _production_liveness_release_inventory_errors(
                     "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
+                    "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
+                    "fd19b43e1499942b42a1d67bf64d4069cfa1a0a7c24a452f8f698753e7c46d3e"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
+                    "d32bb675f783227f514f00f542ea5fef78507f08f4587fff684057fbe4c1ce9c"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -2162,10 +2629,6 @@ def _production_liveness_release_inventory_errors(
                     "_corridor_artifacts",
                     "_seed_run_logs",
                     "_seed_localnet_manifests",
-                    "_scan_scaling_bundle",
-                    "_capture_scaling_bundle",
-                    "_load_scaling_json",
-                    "_scaling_ref_path",
                     "_path_contract_artifact",
                     "_sdk_relative_path",
                     "_sdk_inventory_records",
@@ -2178,7 +2641,6 @@ def _production_liveness_release_inventory_errors(
                     "_sdk_validate_tar",
                     "_sdk_public_archive",
                     "_validate_sdk_dependency_evidence",
-                    "_validate_scaling_evidence",
                     "_read_g12_snapshot",
                     "_decode_g12_tsv",
                     "_g12_completion_fields",
@@ -2188,6 +2650,13 @@ def _production_liveness_release_inventory_errors(
                     "_validate_g4p_evidence",
                     "_validate_g12_evidence",
                     "_runtime_tool_probe_evidence",
+                    "_scaling_record_support",
+                    "_verify_scaling_record_runtime",
+                    "_scaling_execution_record",
+                    "_fixed_scaling_root",
+                    "_replay_fixed_scaling_native",
+                    "_validate_fixed_scaling_archive",
+                    "_validate_scaling_parent_inputs",
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
                     "_validate_framework_python_input_records",
@@ -2382,7 +2851,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "d1cf09532bdbf00d3ed259d42895692c44aaf635899d325316488b4e42ffda56"
+            "06e5d09c2971525119a68c874937547f47ed20d2a061f4738673a6c44b97d239"
         ),
     }
     expected_bootstrap_component_symbols = {
@@ -2390,6 +2859,7 @@ def _production_liveness_release_inventory_errors(
             "_framework_python_input_records",
             "_validate_framework_python_macho_closure",
             "_framework_python_marker_record",
+            "_validate_terminal_fixed_scaling",
             "_validate_terminal_release_evidence",
             "_retained_release_layout",
             "_receipt_validation_failure",
@@ -2400,7 +2870,6 @@ def _production_liveness_release_inventory_errors(
             "_validate_retained_source",
             "_receipt_artifact_path",
             "_receipt_nested_artifact_path",
-            "_receipt_scaling_manifest_path",
             "_run_protected_receipt_validator",
             "_validate_command_record",
             "_validate_sanitized_operation",

@@ -1171,7 +1171,6 @@ mod tests {
             core::num::NonZeroU64::new(height).expect("block height must be non-zero"),
             None,
             None,
-            None,
             0,
             0,
         )

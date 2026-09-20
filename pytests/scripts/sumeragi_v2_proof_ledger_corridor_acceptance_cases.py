@@ -164,6 +164,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         kura_relative,
         *KURA_PRODUCTION_COMPONENT_FILES,
         lane_geometry_relative,
+        Path("crates/iroha_core/src/kura/lane_geometry/retirement_maintenance.rs"),
         release_relative,
     ):
         destination = fidelity_root / relative
@@ -319,23 +320,90 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     runner_path = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     bash = Path(shutil.which("bash") or "").resolve(strict=True)
+    shell = subprocess.run(
+        [str(bash), "-c", 'printf "%s\\n" "${BASH_VERSINFO[0]}"'],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, timeout=10, check=False,
+    )
+    assert shell.returncode == 0 and shell.stderr == ""
+    assert int(shell.stdout.strip()) >= 5, "release corridor tests require Bash 5 or newer"
+
+    # This negative boundary uses the real parent-owned channel. The collector
+    # operation is deliberately unreachable: no bootstrap aliases were admitted.
+    from sumeragi_v2_release_scaling_selection_test import bootstrap_definitions
+
+    bootstrap = bootstrap_definitions()
+
+    class RejectedBeforeScaling:
+        prepared = False
+        closed = False
+
+        def prepare(self):
+            self.prepared = True
+            raise AssertionError("alias rejection must precede scaling preparation")
+
+        def close(self):
+            assert not self.closed
+            self.closed = True
+
+    invocation_base = tmp_path / "shell-gate"
+    invocation_base.mkdir(mode=0o700)
+    invocation = invocation_base / "invocation"
+    invocation.mkdir(mode=0o700)
+    invocation_bytes = b'{"fixture":"reject-before-bootstrap-aliases"}\n'
+    (invocation / "invocation.json").write_bytes(invocation_bytes)
+    invocation_sha256 = hashlib.sha256(invocation_bytes).hexdigest()
+    helper_sha256 = hashlib.sha256(
+        (ROOT_DIR / "scripts/sumeragi_v2_release_scaling_handoff.py").read_bytes()
+    ).hexdigest()
+    base_environment = {"HOME": os.environ.get("HOME", str(ROOT_DIR)), "PATH": os.defpath}
+    missing_channel = subprocess.run(
+        [str(bash), str(runner_path), "--release"],
+        cwd=ROOT_DIR, env={**base_environment, "IROHA_RELEASE_SEALED_WORKTREE": "0"},
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, timeout=10, check=False,
+    )
+    assert missing_channel.returncode != 0
+    assert "production release requires one bounded inherited gate descriptor" in missing_channel.stderr
+
     for sealed_value in ("0", "1"):
-        direct_environment = {
-            "HOME": os.environ.get("HOME", str(ROOT_DIR)),
-            "IROHA_RELEASE_SEALED_WORKTREE": sealed_value,
-            "PATH": os.defpath,
-        }
-        direct = subprocess.run(
-            [str(bash), str(runner_path), "--release"],
-            cwd=ROOT_DIR,
-            env=direct_environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=10,
-            check=False,
-        )
+        direct_environment = {**base_environment, "IROHA_RELEASE_SEALED_WORKTREE": sealed_value}
+        operation = RejectedBeforeScaling()
+        handoff = bootstrap.FixedScalingHandoff(invocation_sha256, operation)
+        descriptor = handoff.runner_descriptor
+        inherited = ()
+        if sealed_value == "0":
+            inherited = (descriptor,)
+            direct_environment.update({
+                "IROHA_RELEASE_SCALING_GATE_FD": str(descriptor),
+                "IROHA_RELEASE_SCALING_CHALLENGE": handoff.challenge,
+                "IROHA_RELEASE_SCALING_INVOCATION_SHA256": handoff.invocation_sha256,
+                "IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256": helper_sha256,
+                "IROHA_RELEASE_INVOCATION_ROOT": str(invocation),
+                "IROHA_RELEASE_TEMP_BASE": str(invocation_base),
+            })
+        try:
+            with subprocess.Popen(
+                [str(bash), str(runner_path), "--release"],
+                cwd=ROOT_DIR, env=direct_environment, pass_fds=inherited,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True,
+            ) as process:
+                handoff._started(process)
+                try:
+                    stdout, stderr = process.communicate(timeout=10)
+                finally:
+                    # Reap the same original process before releasing its channels,
+                    # including if the bounded output collection raises.
+                    status = handoff.wait_runner(process)
+                direct = subprocess.CompletedProcess(process.args, status, stdout, stderr)
+                assert handoff.observation is None
+                assert handoff.command_observation is None
+        finally:
+            handoff.close()
+        assert operation.closed and not operation.prepared
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
         assert direct.returncode != 0
         expected_diagnostic = (
             "production release requires matching bootstrap path aliases"
@@ -1702,14 +1770,9 @@ kura.claim_autonomous_lifecycle_process_generation(
     formal_definition = release_source.index("run_release_formal_gate() {")
     formal_gate = release_source.index("run_sumeragi_v2_formal_release.sh")
     formal_call = release_source.index("\n  run_release_formal_gate\n", formal_gate)
-    scaling_definition = release_source.index("run_release_scaling_gate() {")
-    scaling_gate = release_source.index(
-        "validate_multilane_scaling_evidence.py", scaling_definition
-    )
     g12_soak = release_source.index(
         'verify_release_identity "after G-12P two-hour rotating-validator fault soak"'
     )
-    scaling_call = release_source.index("\n  run_release_scaling_gate\n", g12_soak)
     chaos_gate = release_source.index("run_sumeragi_v2_100k_chaos.sh")
     final_manifest = release_source.index("final_release_source_manifest_sha256")
     final_proof_check = release_source.index("final_proof_evidence_args=(")
@@ -1752,10 +1815,42 @@ kura.claim_autonomous_lifecycle_process_generation(
         < aggregate_receipt
         < protected_receipt_validation
     )
-    assert scaling_definition < scaling_gate < g12_soak < scaling_call < pr_branch
+    def assert_parent_scaling_order(source: str) -> None:
+        # The inner corridor finishes its soak before returning; only the outer
+        # parent can request the one fixed experiment, before receipt publication.
+        child = source.index(
+            '"$release_child_bin/bash" '
+            '"$sealed_repo_root/scripts/run_sumeragi_v2_release_gates.sh" --release'
+        )
+        waited = source.index("  sealed_status=$?", child)
+        helper = source.index('  readonly release_scaling_handoff_helper=')
+        call_marker = '"$release_python_bin" -I -B -S "$release_scaling_handoff_helper"'
+        assert source.count(call_marker) == 1
+        call = source.index(call_marker)
+        closed = source.index('  exec {release_gate_fd}<&-\n')
+        receipt = source.index("write_sumeragi_v2_release_receipt.py", waited)
+        assert child < waited < helper < call < closed < receipt
+        assert 'if ((sealed_status == 0)); then' in source[helper:call]
+        assert 'sealed_status=$release_scaling_handoff_status' in source[call:closed]
+        assert '--gate-fd "$release_gate_fd"' in source[call:closed]
+        assert '--invocation-sha256 "$release_gate_invocation_sha256"' in source[call:closed]
+        assert '--challenge "$release_gate_challenge"' in source[call:closed]
+
+    assert_parent_scaling_order(release_source)
+    handoff_call = '"$release_python_bin" -I -B -S "$release_scaling_handoff_helper"'
+    close_call = '  exec {release_gate_fd}<&-\n'
+    for changed in (
+        release_source.replace(handoff_call, ":", 1),
+        release_source.replace(handoff_call, handoff_call + "\n" + handoff_call, 1),
+        release_source.replace(close_call, "", 1).replace(handoff_call, close_call + handoff_call, 1),
+    ):
+        with pytest.raises((AssertionError, ValueError)):
+            assert_parent_scaling_order(changed)
+    assert g12_soak < pr_branch
     assert "run_release_scaling_and_formal_gates" not in release_source
+    assert "run_release_scaling_gate" not in release_source
+    assert "validate_multilane_scaling_evidence.py" not in release_source
     assert release_source.count("\n  run_release_formal_gate\n") == 1
-    assert release_source.count("\n  run_release_scaling_gate\n") == 1
     assert seed_matrix < pr_branch < pr_fast_formal
     final_proof_region = release_source[
         final_proof_check : final_proof_invocation
@@ -1777,12 +1872,19 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert '"${final_proof_evidence_args[@]}"' in final_proof_region
     assert "/tmp/iroha-sumeragi-v2-release-host-" not in release_source
     assert "IROHA_RELEASE_AGGREGATE_RECEIPT_PATH_FILE" not in release_source
-    assert "release_invocation_base=/private/tmp" in release_source
-    assert "release_invocation_base=/tmp" in release_source
-    assert (
-        'tempfile.mkdtemp(prefix="iroha-sumeragi-v2-release.", dir=base)'
-        in release_source
+    bootstrap_source = Path(bootstrap.__file__).read_text(encoding="utf-8")
+    allocation = next(
+        ast.get_source_segment(bootstrap_source, node)
+        for node in ast.parse(bootstrap_source).body
+        if isinstance(node, ast.FunctionDef) and node.name == "allocate_release_invocation_root"
     )
+    assert "preferred=Path('/private/tmp')" in allocation
+    assert "else Path('/tmp')" in allocation
+    assert "name='iroha-sumeragi-v2-release.'+secrets.token_hex(16)" in allocation
+    assert "os.mkdir(name,_DIRECTORY_MODE,dir_fd=base_fd)" in allocation
+    assert "owner.validate()" in allocation
+    assert 'release_invocation_root="$(canonical_path "$IROHA_RELEASE_INVOCATION_ROOT")"' in release_source
+    assert 'release_invocation_base="$(canonical_path "$IROHA_RELEASE_TEMP_BASE")"' in release_source
     assert (
         '"$release_invocation_base" "$repo_root" '
         '"$release_bootstrap_evidence_dir" \\\n'
@@ -1986,8 +2088,89 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 84
+        == 88
     )
+    # Each new async boundary has one counted crate/target command. Exercise
+    # omission and ignored-admission mutations without manufacturing Cargo logs.
+    async_legs = [
+        [
+            "sumeragi-async-query-rust",
+            "cargo-exact",
+            9,
+            "cargo test --locked --offline -p iroha --lib query::asynchronous::tests:: -- --test-threads=1",
+        ],
+        [
+            "sumeragi-async-diagnostics-rust",
+            "cargo-exact",
+            1,
+            "cargo test --locked --offline -p iroha --lib client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation -- --exact --test-threads=1",
+        ],
+        [
+            "sumeragi-blocking-boundary-rust",
+            "cargo-exact",
+            1,
+            "cargo test --locked --offline -p iroha --lib blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io -- --exact --test-threads=1",
+        ],
+        [
+            "query-request-wire-rust",
+            "cargo-exact",
+            1,
+            "cargo test --locked --offline -p iroha_data_model --lib query::builder::tests::encoded_request_is_shared_with_synchronous_execution -- --exact --test-threads=1",
+        ],
+        [
+            "native-amx-typed-query-rust",
+            "cargo-exact",
+            1,
+            "cargo test --locked --offline -p integration_tests --test native_amx_routing typed_musubi_queries_distinguish_found_absent_and_stale_results -- --exact --test-threads=1",
+        ],
+    ]
+    actual_async_legs = [
+        list(leg)
+        for leg in receipt_module._corridor_legs()
+        if leg[0] in {row[0] for row in async_legs}
+    ]
+    assert actual_async_legs == async_legs
+    assert sum(row[2] for row in actual_async_legs) == 13
+    async_gate_root = tmp_path / "async-gate-contract"
+    async_receipt = async_gate_root / "scripts/write_sumeragi_v2_release_receipt_corridor_log.py"
+    async_receipt.parent.mkdir(parents=True)
+    original_async_receipt = (ROOT_DIR / "scripts/write_sumeragi_v2_release_receipt_corridor_log.py").read_text()
+    async_receipt.write_text(original_async_receipt)
+    for relative in (
+        "scripts/write_sumeragi_v2_release_receipt.py",
+        "scripts/write_sumeragi_v2_release_receipt_gate_evidence.py",
+    ):
+        (async_gate_root / relative).write_bytes((ROOT_DIR / relative).read_bytes())
+    assert module._rust_async_release_gate_contract_errors(async_gate_root, release_source) == []
+    for selector in [
+        "query::asynchronous::tests::collects_typed_pages_with_fresh_signed_nonces_and_exact_cursor_authority",
+        "query::asynchronous::tests::singular_parameters_preserve_json_negotiation_and_output_type",
+        "query::asynchronous::tests::singular_shape_mismatch_is_an_error_without_panic_or_retry",
+        "query::asynchronous::tests::start_failure_is_dispatched_once_for_transport_and_decode_errors",
+        "query::asynchronous::tests::malformed_and_lost_continuations_terminally_consume_the_cursor",
+        "query::asynchronous::tests::cancelled_continuation_cannot_replay_the_signed_nonce",
+        "query::asynchronous::tests::invalid_fetch_size_fails_before_query_dispatch",
+        "query::asynchronous::tests::singular_constraints_check_across_empty_and_nonempty_pages",
+        "query::asynchronous::tests::compatibility_failure_uses_async_probe_and_never_submits_the_query",
+        "client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation",
+        "blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io",
+        "query::builder::tests::encoded_request_is_shared_with_synchronous_execution",
+        "typed_musubi_queries_distinguish_found_absent_and_stale_results",
+    ]:
+        assert selector in release_source
+        changed = release_source.replace(selector, selector + "_unselected", 1)
+        assert module._rust_async_release_gate_contract_errors(async_gate_root, changed)
+    ignored_guard = 'if grep -Fqx -- "${required_test}: test" <<<"$rust_sdk_diagnostics_ignored_list"; then'
+    assert release_source.count(ignored_guard) == 2
+    # Mutate only the async block; preserve the earlier fourteen-case guard.
+    async_start = release_source.index("# Async SDK and Native query boundaries")
+    changed = release_source[:async_start] + release_source[async_start:].replace(ignored_guard, "if false; then", 1)
+    assert module._rust_async_release_gate_contract_errors(async_gate_root, changed)
+    for leg_id, _kind, count, command in async_legs:
+        async_receipt.write_text(original_async_receipt.replace(command, command + " --ignored", 1))
+        assert module._rust_async_release_gate_contract_errors(async_gate_root, release_source)
+    async_receipt.write_text(original_async_receipt)
+    assert module._rust_async_release_gate_contract_errors(async_gate_root, release_source) == []
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
     ) == (
@@ -2291,10 +2474,10 @@ kura.claim_autonomous_lifecycle_process_generation(
         '"preflight-release-receipt",\n                "pytest",\n                362,'
         in receipt_source
     )
-    assert "did not run exactly 5507 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 5507" in release_source
+    assert "did not run exactly 6172 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 6172" in release_source
     assert (
-        "^5507 passed in [0-9]+([.][0-9]+)?s( "
+        "^6172 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2312,6 +2495,9 @@ kura.claim_autonomous_lifecycle_process_generation(
         "pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py",
         "pytests/scripts/sumeragi_v2_multilane_native_merge_manifest_test.py",
         "pytests/scripts/sumeragi_v2_multilane_passive_recovery_contract_test.py",
+        "pytests/scripts/sumeragi_v2_multilane_semantic_binding_reconciliation_test.py",
+        "pytests/scripts/sumeragi_v2_multilane_kura_native_reconciliation_test.py",
+        "pytests/scripts/sumeragi_v2_multilane_kura_inflight_reconciliation_test.py",
     ):
         assert contract_file in release_source
         assert contract_file in receipt_source
@@ -2343,18 +2529,20 @@ kura.claim_autonomous_lifecycle_process_generation(
     proof_fidelity_receipt_nodes = tuple(
         proof_fidelity_receipt_command[len(proof_fidelity_command_prefix) :].split()
     )
-    assert len(proof_fidelity_runner_nodes) == 18
-    assert len(set(proof_fidelity_runner_nodes)) == 18
+    assert len(proof_fidelity_runner_nodes) == 24
+    assert len(set(proof_fidelity_runner_nodes)) == 24
     assert proof_fidelity_runner_nodes == proof_fidelity_receipt_nodes
     proof_fidelity_receipt_legs = [
         leg for leg in receipt_module._corridor_legs()
         if leg[0] == "preflight-proof-fidelity"
     ]
     assert proof_fidelity_receipt_legs == [(
-        "preflight-proof-fidelity", "pytest", 5507,
+        "preflight-proof-fidelity", "pytest", 6172,
         proof_fidelity_command_prefix + " ".join(proof_fidelity_runner_nodes),
     )], "proof-fidelity receipt must bind the exact counted selector inventory"
     for selector in (
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::test_current_reviewed_include_components_have_exact_owner_and_source",
+        "pytests/scripts/sumeragi_v2_multilane_models_test.py::test_current_reviewed_include_closure_rejects_missing_duplicate_and_extra_source",
         "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
         "test_inflight_composed_contract_rejects_legacy_layout_only_claim",
         "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
@@ -2379,11 +2567,13 @@ kura.claim_autonomous_lifecycle_process_generation(
         "test_wire_release_invariant_rejects_ledger_weakening",
         "pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::"
         "test_wire_release_invariant_rejects_semantic_source_mutation",
+        "pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::"
+        "test_api_authority_separation_requires_async_diagnostics_owner",
     ):
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                5507,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                6172,'
         in receipt_source
     )
     assert "did not run exactly 55 passing tests" in release_source
@@ -2466,39 +2656,47 @@ kura.claim_autonomous_lifecycle_process_generation(
             and receipt_command == command
             for receipt_leg_id, kind, expected_count, receipt_command in receipt_module._corridor_legs()
         )
-    assert (
-        'scripts/nexus/validate_multilane_scaling_evidence.py \\\n'
-        '    "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"'
-        in release_source
+    # The receipt consumes the retained parent execution record. Its original
+    # source/image/worker bindings replace independently supplied CLI digests.
+    assert '--scaling-execution-record "$release_scaling_execution_record"' in release_source
+    assert '--expected-scaling-execution-sha256 "$release_scaling_execution_sha256"' in release_source
+    assert 'readonly release_scaling_execution_record="$release_bootstrap_evidence_dir/scaling-execution.json"' in release_source
+    assert 'release_scaling_execution_sha256="$(sha256_file "$release_scaling_execution_record")"' in release_source
+    assert "execution_record_path=scaling_execution_record_path" in receipt_source
+    assert "expected_execution_sha256=expected_scaling_execution_sha256" in receipt_source
+    assert "api.inspect_preflight_archive(preflight_root, record, **preflight_context)" in receipt_source
+    assert "api.capture_preflight_archive(preflight_root, record, **preflight_context)" in receipt_source
+    assert "_validate_scaling_parent_inputs(api, record, bootstrap_evidence, bootstrap_authentication)" in receipt_source
+    assert "_replay_fixed_scaling_native(api, checked, record, root, kagami, checker_environment)" in receipt_source
+    operation_source = (ROOT_DIR / "scripts/sumeragi_v2_release_scaling_operation.py").read_text(encoding="utf-8")
+    source_join = next(
+        ast.get_source_segment(operation_source, node)
+        for node in ast.walk(ast.parse(operation_source))
+        if isinstance(node, ast.FunctionDef) and node.name == "_join_source_inputs"
     )
-    assert '--expected-source-revision "$release_head_commit"' in release_source
-    assert (
-        '--expected-workspace-source-sha256 "$release_source_manifest_sha256"'
-        in release_source
-    )
-    assert "--expected-validator-sha256" in release_source
-    for expected_flag in (
-        "--expected-trial-harness-sha256",
-        "--expected-configuration-sha256",
-        "--expected-irohad-sha256",
-        "--expected-iroha-cli-sha256",
-        "--expected-repository-root",
+    for binding in (
+        "value['source_revision'] == expected.source_revision",
+        "value['workspace_source_sha256'] == expected.workspace_source_sha256",
+        "source['executable_images'] == images",
+        "identity['software']['irohad_sha256'] == images['daemon']",
+        "identity['software']['iroha_cli_sha256'] == images['cli']",
+        "workers == expected.worker_sources",
     ):
-        assert expected_flag in release_source
-    assert (
-        '--g4p-completion "$multilane_four_peer_completion_path" \\\n'
-        '      --g12-seed-completion "$nexus_cross_completion_path" \\\n'
-        '      --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
-        '      --scaling-evidence-manifest "$release_scaling_evidence_manifest"'
-        in release_source
-    )
-    for expected_flag in (
-        "--expected-scaling-trial-harness-sha256",
-        "--expected-scaling-configuration-sha256",
-        "--expected-scaling-irohad-sha256",
+        assert binding in source_join
+    assert "_sha(self._inputs.plan_bytes), _sha(self._inputs.budget_bytes)" in operation_source
+    assert "self._inputs.kagami_sha256, self._collector, artifacts, inventory, checked, replays" in operation_source
+    for argument in (
+        '--g4p-completion "$multilane_four_peer_completion_path"',
+        '--g12-seed-completion "$nexus_cross_completion_path"',
+        '--g12-fault-soak-completion "$nexus_cross_soak_completion_path"',
+    ):
+        assert argument in release_source
+    for retired_flag in (
+        "--scaling-evidence-manifest", "--expected-scaling-trial-harness-sha256",
+        "--expected-scaling-configuration-sha256", "--expected-scaling-irohad-sha256",
         "--expected-scaling-iroha-cli-sha256",
     ):
-        assert expected_flag in release_source
+        assert retired_flag not in release_source
 
     g4p_fidelity_root = tmp_path / "g4p-validator-argument-source-fidelity"
     for relative in _release_inventory_fixture_paths(module, (
@@ -2536,7 +2734,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         g4p_fidelity_root
     )
     assert not any(
-        "source-bound G-4P/G-12P/G-SCALE receipt corridor" in error
+        "the original G-4P and G-12P receipt joins must remain exact" in error
         for error in baseline_errors
     ), baseline_errors
     assert not any(
@@ -2610,7 +2808,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         g4p_fidelity_root
     )
     assert any(
-        "source-bound G-4P/G-12P/G-SCALE receipt corridor" in error
+        "the original G-4P and G-12P receipt joins must remain exact" in error
         for error in mutated_errors
     ), mutated_errors
     g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
@@ -2855,7 +3053,7 @@ kura.claim_autonomous_lifecycle_process_generation(
                 canonical_late_lane_recovery, encoding="utf-8"
             )
 
-    scaling_environment = {
+    retired_scaling_environment = {
         "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
         "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
         "IROHA_RELEASE_SCALING_IROHAD_SHA256",
@@ -2887,7 +3085,34 @@ kura.claim_autonomous_lifecycle_process_generation(
             value
             for value in allowlist
             if value.startswith("IROHA_RELEASE_SCALING_")
-        } == scaling_environment
+        } == set()
+        assert retired_scaling_environment.isdisjoint(allowlist)
+    scaling_environment = {
+        "IROHA_RELEASE_SCALING_GATE_FD", "IROHA_RELEASE_SCALING_INVOCATION_SHA256",
+        "IROHA_RELEASE_SCALING_CHALLENGE", "IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256",
+    }
+    validator_tree = ast.parse((ROOT_DIR / "scripts/validate_sumeragi_v2_release_bootstrap.py").read_text(encoding="utf-8"))
+    handoff_keys = next(
+        ast.literal_eval(node.value) for node in validator_tree.body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "_SCALING_HANDOFF_KEYS"
+    )
+    assert handoff_keys == scaling_environment | {"IROHA_RELEASE_INVOCATION_ROOT", "IROHA_RELEASE_TEMP_BASE"}
+    parent_environment = next(
+        node.value for node in ast.walk(ast.parse(bootstrap_source))
+        if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "scaling_environment"
+    )
+    assert isinstance(parent_environment, ast.Dict)
+    assert {ast.literal_eval(key) for key in parent_environment.keys} == handoff_keys
+    assert {ast.literal_eval(key): ast.unparse(value) for key, value in zip(parent_environment.keys, parent_environment.values)} == {
+        "IROHA_RELEASE_INVOCATION_ROOT": "str(scaling_invocation.path)",
+        "IROHA_RELEASE_TEMP_BASE": "str(scaling_invocation.base)",
+        "IROHA_RELEASE_SCALING_GATE_FD": "str(scaling_handoff.runner_descriptor)",
+        "IROHA_RELEASE_SCALING_INVOCATION_SHA256": "scaling_operation.invocation_sha256",
+        "IROHA_RELEASE_SCALING_CHALLENGE": "scaling_handoff.challenge",
+        "IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256": "archives['scaling_handoff_helper'].sha256",
+    }
     assert "resolve_java.sh" in formal_launcher_source
     assert '"preflight-formal-launcher"' in receipt_source
     assert 'if [[ "$profile" == "--release" ]]; then' in release_source
@@ -2922,8 +3147,8 @@ kura.claim_autonomous_lifecycle_process_generation(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 197 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 197 tests to be runnable" in harness_source
+    assert "expected exactly 224 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 224 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)

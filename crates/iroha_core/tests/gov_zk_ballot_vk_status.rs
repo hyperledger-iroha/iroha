@@ -43,7 +43,7 @@ fn zk_ballot_rejects_when_vk_not_active() {
     });
     state.set_gov(gov_cfg);
     // Begin a block/tx
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let perm = Permission::new(

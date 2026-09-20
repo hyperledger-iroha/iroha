@@ -13,8 +13,9 @@ use crate::sumeragi::output_guard::ConsensusOutputGuard;
 #[must_use = "failed lifecycle preactivation setup requires process restart"]
 pub(in crate::sumeragi) enum ProductionLifecyclePreActivationErrorV1 {
     /// The canonical output corridor was already fail-stop closed.
-    #[error("canonical consensus output is closed")]
-    OutputClosed,
+    /// Retains a worker cause even if the closed guard prevents completion drain.
+    #[error("{0}")]
+    OutputClosed(String),
     /// Executor and service process identities no longer describe one stack.
     #[error("launched lifecycle lost its exact executor/service ownership")]
     OwnershipMismatch,
@@ -170,9 +171,11 @@ impl LaunchedProductionLifecycleV1 {
         E: From<ProductionLifecyclePreActivationErrorV1>,
     {
         let output_guard = self.services.lifecycle_output_guard();
-        let initial_admission = output_guard
-            .acquire()
-            .ok_or_else(|| E::from(ProductionLifecyclePreActivationErrorV1::OutputClosed))?;
+        let initial_admission = output_guard.acquire().ok_or_else(|| {
+            E::from(ProductionLifecyclePreActivationErrorV1::OutputClosed(
+                output_guard.restart_error(),
+            ))
+        })?;
         let setup = ProductionLifecyclePreActivationFailStopScopeV1::new(Arc::clone(&output_guard));
         drop(initial_admission);
         let preflight_failure = if !self
@@ -210,9 +213,11 @@ impl LaunchedProductionLifecycleV1 {
         if let Some(error) = postflight_failure {
             return Err(E::from(error));
         }
-        let final_admission = output_guard
-            .acquire()
-            .ok_or_else(|| E::from(ProductionLifecyclePreActivationErrorV1::OutputClosed))?;
+        let final_admission = output_guard.acquire().ok_or_else(|| {
+            E::from(ProductionLifecyclePreActivationErrorV1::OutputClosed(
+                output_guard.restart_error(),
+            ))
+        })?;
         setup.complete();
         drop(final_admission);
         Ok(value)

@@ -3004,12 +3004,27 @@ fn smoke_diagnostic_partial_and_interrupted_sinks_preserve_complete_record() {
 }
 
 #[cfg(feature = "atomic-private-settlement-smoke")]
-fn run_n3_real_process_smoke() -> Result<()> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum N3SettlementExperimentV1 {
+    HappyDay,
+    RestartRecovery,
+}
+
+#[cfg(feature = "atomic-private-settlement-smoke")]
+fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Result<()> {
     let _diagnostics = SmokeDiagnosticScopeV1::start();
     let (bound, request_sha) = read_bound_real_process_request()?;
     let RealProcessBoundRequestV1::Smoke(smoke_request) = bound else {
         return Err(eyre!("positive smoke received a non-smoke request"));
     };
+    let expected_kind = match experiment {
+        N3SettlementExperimentV1::HappyDay => "happy_day",
+        N3SettlementExperimentV1::RestartRecovery => "smoke",
+    };
+    ensure!(
+        smoke_request.kind == expected_kind,
+        "request names a different N=3 experiment"
+    );
     let evidence_root = fault_evidence_root().wrap_err("initialize smoke evidence directory")?;
     let mut evidence_files = vec![write_smoke_evidence(
         &evidence_root,
@@ -3038,6 +3053,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "aps-smoke:{}:{}:{}",
         smoke_request.seed, smoke_request.run, smoke_request.invocation_nonce
     ));
+    let startup_started = Instant::now();
     let startup_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::NetworkStartup, None);
     let started = sandbox::start_network_blocking_or_skip(builder, context)?;
     let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, context)?
@@ -3045,7 +3061,15 @@ fn run_n3_real_process_smoke() -> Result<()> {
         return Err(eyre!("required sixteen-process smoke network was skipped"));
     };
     verify_controller_readiness(&network, &runtime)?;
-    let initial_inventory = smoke_process_inventory(&network, &runtime, shape)?;
+    let startup_deadline = startup_started
+        .checked_add(network.peer_startup_timeout())
+        .ok_or_else(|| eyre!("smoke startup deadline exceeds the monotonic clock range"))?;
+    let initial_inventory = smoke_process_inventory(
+        &network,
+        &runtime,
+        shape,
+        SmokeInventoryReadinessV1::StartupUntil(startup_deadline),
+    )?;
     evidence_files.push(write_smoke_evidence(
         &evidence_root,
         "processes-before.json",
@@ -3407,7 +3431,6 @@ fn run_n3_real_process_smoke() -> Result<()> {
     );
     finality_timing.complete();
     workflow_timing.complete();
-    observer.complete_phase()?;
     evidence_files.push(write_smoke_evidence(
         &evidence_root,
         "state-finalized.json",
@@ -3418,6 +3441,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "receipt.json",
         &receipt,
     )?);
+    observer.complete_phase()?;
     let signed_finality_timing =
         SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::SignedFinalityEvidence, None);
     let (finality, files) = collect_signed_rs16_finality(
@@ -3499,6 +3523,54 @@ fn run_n3_real_process_smoke() -> Result<()> {
         )?);
     }
     replay_timing.complete();
+    if experiment == N3SettlementExperimentV1::HappyDay {
+        let final_inventory = smoke_process_inventory(
+            &network,
+            &runtime,
+            shape,
+            SmokeInventoryReadinessV1::Immediate,
+        )?;
+        ensure!(
+            initial_inventory
+                .iter()
+                .zip(&final_inventory)
+                .all(|(before, after)| before.peer_id == after.peer_id
+                    && before.configuration_sha256 == after.configuration_sha256
+                    && before.executable_sha256 == after.executable_sha256
+                    && before.pid == after.pid),
+            "happy-day experiment changed a validator process, identity or configuration"
+        );
+        evidence_files.push(write_smoke_evidence(
+            &evidence_root,
+            "processes-after.json",
+            &final_inventory,
+        )?);
+        write_real_process_result(&RealProcessSmokeResultV1 {
+            version: 1,
+            protocol: "AtomicPrivateSettlementV1".to_owned(),
+            kind: "happy_day".to_owned(),
+            request: smoke_request,
+            request_sha256: request_sha,
+            network_id: norito::json::to_value(&network.network_id())?,
+            participants: shape.participants,
+            processes: shape.process_count(),
+            restarted: 0,
+            activation_height: activated_height,
+            authority_context_height,
+            finalized_height: receipt.finalized_height,
+            signed_rs16_observations: finality.observations,
+            continuous_checks: summaries.iter().map(|row| row.check_count).sum::<u64>(),
+            passed: true,
+            artifacts: evidence_files,
+        })?;
+        println!(
+            "APS happy_day completed: participants={} processes={} finalized_height={}",
+            shape.participants,
+            shape.process_count(),
+            receipt.finalized_height
+        );
+        return Ok(());
+    }
     let mut restarts = Vec::new();
 
     // Recover each durable store while preserving a live 3-of-4 quorum in
@@ -3566,7 +3638,12 @@ fn run_n3_real_process_smoke() -> Result<()> {
     );
     recovered_finality_timing.complete();
     evidence_files.extend(files);
-    let recovered_inventory = smoke_process_inventory(&network, &runtime, shape)?;
+    let recovered_inventory = smoke_process_inventory(
+        &network,
+        &runtime,
+        shape,
+        SmokeInventoryReadinessV1::Immediate,
+    )?;
     ensure!(
         initial_inventory
             .iter()
@@ -3621,8 +3698,23 @@ fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
     let handle = thread::Builder::new()
         .name("atomic-private-settlement-n3".to_owned())
         .stack_size(TEST_STACK_BYTES)
-        .spawn(run_n3_real_process_smoke)
+        .spawn(|| run_n3_real_process_experiment(N3SettlementExperimentV1::RestartRecovery))
         .expect("spawn release smoke thread");
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[cfg(feature = "atomic-private-settlement-smoke")]
+#[test]
+#[ignore = "starts 16 real validators and completes a three-dataspace happy-day payment"]
+fn atomic_private_settlement_n3_happy_day() -> Result<()> {
+    let handle = thread::Builder::new()
+        .name("atomic-private-settlement-n3-happy-day".to_owned())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(|| run_n3_real_process_experiment(N3SettlementExperimentV1::HappyDay))
+        .expect("spawn happy-day settlement thread");
     match handle.join() {
         Ok(result) => result,
         Err(panic) => std::panic::resume_unwind(panic),

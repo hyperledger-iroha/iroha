@@ -1,3 +1,17 @@
+fn published_fixture_geometry_maps(kura: &Kura) -> (BTreeMap<LaneId, Hash>, BTreeMap<LaneId, u64>) {
+    let entries = kura.lane_storage_entries.lock();
+    (
+        entries
+            .values()
+            .map(|entry| (entry.lane_id, entry.incarnation))
+            .collect(),
+        entries
+            .values()
+            .map(|entry| (entry.lane_id, entry.activation_height))
+            .collect(),
+    )
+}
+
 #[test]
 fn partial_stage_discard_recovers_committed_replacement_before_returning() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
@@ -1263,7 +1277,12 @@ fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
         (qc_target.saturating_sub(64)..=qc_target).contains(&qc_len),
         "geometry QC encoding is {qc_len} bytes"
     );
-    let carrier = attach_merge_reference(&sccp_block, &entry);
+    let mut carrier = attach_merge_reference(&sccp_block, &entry);
+    // Context changes invalidate completed outputs. Rebuild and sign this
+    // structural storage fixture only after its final merge reference is bound.
+    attach_ok_results_to_block(Arc::make_mut(&mut carrier));
+    crate::bridge::validate_sccp_commitment_root_for_signed_block(&carrier)
+        .expect("final referenced carrier retains its successful SCCP records");
     let record =
         Kura::prepare_retained_block_record(Path::new("joint-envelope"), carrier.hash(), &carrier)
             .expect("prepare semantically valid max-count SCCP archive with bounded reference");
@@ -1862,80 +1881,110 @@ fn v2_finality_write_ignores_preplanted_predictable_temp_symlink() {
     );
 }
 #[test]
-fn lane_segment_reconciliation_provisions_and_retires_storage() {
+fn lane_reference_publication_provisions_and_retains_retired_instances() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let store_root = temp_dir.path().join("kura");
-    let lane_count = NonZeroU32::new(4).expect("non-zero lane count");
+    let lane_count = NonZeroU32::new(4).unwrap();
     let lane0 = ModelLaneConfig::default();
     let lane1 = ModelLaneConfig {
-        id: LaneId::from(1),
-        alias: "beta".to_string(),
+        id: LaneId::new(1),
+        alias: "beta".to_owned(),
         ..ModelLaneConfig::default()
     };
-    let initial_catalog =
-        LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()]).expect("catalog");
-    let initial_lane_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-    let kura_cfg = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let (kura, _) = test_kura_with_default_lane_markers(&kura_cfg, &initial_lane_config);
-    let lane1_entry = initial_lane_config
-        .entry(LaneId::from(1))
-        .expect("lane 1 entry");
-    let lane1_blocks = lane1_entry.blocks_dir(&store_root);
-    assert!(
-        lane1_blocks.exists(),
-        "expected lane 1 blocks directory to be provisioned"
-    );
+    let initial_catalog = LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()]).unwrap();
+    let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
+    let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &initial);
+    let old = kura
+        .lane_storage_entry(lane1.id)
+        .expect("actual published lane1 identity");
+    let old_blocks = old.blocks_dir(&store_root);
+    assert!(old_blocks.is_dir());
     let lane2 = ModelLaneConfig {
-        id: LaneId::from(2),
-        alias: "gamma".to_string(),
+        id: LaneId::new(2),
+        alias: "gamma".to_owned(),
         ..ModelLaneConfig::default()
     };
-    let extended_catalog = LaneCatalog::new(
-        lane_count,
-        vec![lane0.clone(), lane1.clone(), lane2.clone()],
+    let extended = RuntimeLaneConfig::from_catalog(
+        &LaneCatalog::new(
+            lane_count,
+            vec![lane0.clone(), lane1.clone(), lane2.clone()],
+        )
+        .unwrap(),
+    );
+    let (initial_incarnations, initial_activations) = published_fixture_geometry_maps(&kura);
+    let mut extended_incarnations = initial_incarnations.clone();
+    extended_incarnations.insert(lane2.id, Hash::new(b"explicit lane2 incarnation"));
+    let mut extended_activations = initial_activations.clone();
+    extended_activations.insert(lane2.id, 0);
+    kura.apply_lane_geometry_transition(
+        &initial,
+        &extended,
+        &initial_incarnations,
+        &extended_incarnations,
+        &initial_activations,
+        &extended_activations,
+        &BTreeSet::new(),
     )
-    .expect("catalog");
-    let extended_lane_config = RuntimeLaneConfig::from_catalog(&extended_catalog);
-    let lane2_entry = extended_lane_config
-        .entry(LaneId::from(2))
-        .expect("lane 2 entry");
-    kura.reconcile_lane_segments_for_testing(&[lane2_entry], &[], &[])
-        .expect("provision lane 2");
-    let lane2_blocks = lane2_entry.blocks_dir(&store_root);
+    .expect("journal exact lane2 creation");
+    kura.mark_lane_geometry_catalog_published(
+        &extended,
+        &extended_incarnations,
+        &extended_activations,
+        None,
+    )
+    .expect("publish exact lane2 reference");
+    let added = kura.lane_storage_entry(lane2.id).unwrap();
+    let added_blocks = added.blocks_dir(&store_root);
+    for name in [INDEX_FILE_NAME, DATA_FILE_NAME, HASHES_FILE_NAME] {
+        assert!(
+            added_blocks.join(name).is_file(),
+            "new lane structure missing {name}"
+        );
+    }
+    assert!(added.merge_log_path(&store_root).is_file());
+    let retired =
+        RuntimeLaneConfig::from_catalog(&LaneCatalog::new(lane_count, vec![lane0, lane2]).unwrap());
+    let mut retired_incarnations = extended_incarnations.clone();
+    retired_incarnations.remove(&lane1.id);
+    let mut retired_activations = extended_activations.clone();
+    retired_activations.remove(&lane1.id);
+    kura.apply_lane_geometry_transition(
+        &extended,
+        &retired,
+        &extended_incarnations,
+        &retired_incarnations,
+        &extended_activations,
+        &retired_activations,
+        &BTreeSet::new(),
+    )
+    .expect("journal exact retirement");
+    kura.mark_lane_geometry_catalog_published(
+        &retired,
+        &retired_incarnations,
+        &retired_activations,
+        None,
+    )
+    .expect("publish retirement reference");
     assert!(
-        lane2_blocks.join(INDEX_FILE_NAME).exists(),
-        "lane 2 index file missing"
+        kura.lane_storage_entry(lane1.id).is_err(),
+        "retirement removes active admission"
     );
     assert!(
-        lane2_blocks.join(DATA_FILE_NAME).exists(),
-        "lane 2 data file missing"
+        old_blocks.is_dir() && old.merge_log_path(&store_root).is_file(),
+        "retirement retains the exact instance until authenticated collection"
     );
-    assert!(
-        lane2_blocks.join(HASHES_FILE_NAME).exists(),
-        "lane 2 hashes file missing"
-    );
-    assert!(
-        lane2_entry.merge_log_path(&store_root).exists(),
-        "lane 2 merge ledger missing"
-    );
-    kura.reconcile_lane_segments_for_testing(&[], &[lane1_entry], &[])
-        .expect("retire lane 1");
-    assert!(
-        !lane1_blocks.exists(),
-        "lane 1 blocks directory should be retired"
-    );
-    let retired_blocks_root = store_root.join("retired").join("blocks");
-    let retired_entries: Vec<_> = std::fs::read_dir(&retired_blocks_root)
-        .expect("retired blocks dir")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("collect retired entries");
-    assert!(
-        !retired_entries.is_empty(),
-        "expected retired lane directory to be archived"
+    kura.restore_published_lane_geometry_for_test(&retired)
+        .expect("reference recovery is idempotent");
+    assert!(kura.lane_storage_entry(lane1.id).is_err());
+    assert_eq!(
+        kura.lane_storage_entry(LaneId::new(2)).unwrap().identity,
+        added.identity
     );
 }
+
 #[test]
-fn blank_kura_lane_segment_reconciliation_is_noop() {
+fn blank_kura_reference_publication_uses_only_isolated_storage() {
     static CWD_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
         std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
     struct WorkingDirGuard(std::path::PathBuf);
@@ -1958,17 +2007,47 @@ fn blank_kura_lane_segment_reconciliation_is_noop() {
     };
     let catalog = LaneCatalog::new(lane_count, vec![lane0, lane1]).expect("catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let entry = lane_config.entry(LaneId::from(1)).expect("lane entry");
-    let kura = Kura::blank_kura_for_testing();
-    kura.reconcile_lane_segments_for_testing(&[entry], &[], &[])
-        .expect("no-op reconcile");
+    let config = kura_config_for_path(Path::new("ignored-relative-fixture-root"), BLOCKS_IN_MEMORY);
+    let kura = Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &catalog)
+        .expect("admit the exact catalog before creating the isolated canonical store");
+    kura.bind_lane_storage_network(test_network_id(b"blank-reference-fixture"))
+        .unwrap();
+    let initial = RuntimeLaneConfig::default();
+    let initial_incarnations = BTreeMap::from([(LaneId::SINGLE, Hash::new(b"blank-primary"))]);
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        initial.primary(),
+        initial_incarnations[&LaneId::SINGLE],
+        LaneLifecycleParameterV1::catalog_hash(&catalog),
+    )
+    .expect("publish the initial exact reference before extending it");
+    let extended_incarnations = BTreeMap::from([
+        (LaneId::SINGLE, initial_incarnations[&LaneId::SINGLE]),
+        (LaneId::new(1), Hash::new(b"blank-secondary")),
+    ]);
+    kura.apply_lane_geometry_transition(
+        &initial,
+        &lane_config,
+        &initial_incarnations,
+        &extended_incarnations,
+        &BTreeMap::from([(LaneId::SINGLE, 0)]),
+        &BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 0)]),
+        &BTreeSet::new(),
+    )
+    .expect("publish exact reference under the isolated Kura root");
+    assert_eq!(
+        kura.lane_storage_entry(LaneId::new(1)).unwrap().incarnation,
+        extended_incarnations[&LaneId::new(1)]
+    );
+    let published = kura.lane_storage_entry(LaneId::new(1)).unwrap();
+    assert!(published.blocks_dir(&kura.store_root()).is_dir());
+    assert!(published.merge_log_path(&kura.store_root()).is_file());
     assert!(
         !temp_dir.path().join("blocks").exists(),
-        "blank kura must not create lane block directories"
+        "blank Kura must not create lane block directories in the working directory"
     );
     assert!(
         !temp_dir.path().join("merge_ledger").exists(),
-        "blank kura must not create merge-ledger log directories"
+        "blank Kura must not create merge-ledger log directories in the working directory"
     );
 }
 #[test]
@@ -1990,10 +2069,6 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
     let kura_cfg = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &configured)
         .expect("init Kura");
-    let stale_dir = configured
-        .entry(stale_config_lane.id)
-        .expect("stale configured lane")
-        .blocks_dir(&store_root);
     let restored_lane = ModelLaneConfig {
         id: LaneId::new(1),
         alias: "restored-elastic-lane".to_owned(),
@@ -2011,6 +2086,17 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
     ]);
     let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0), (stale_config_lane.id, 0)]);
     let configured_lineage_root = Hash::new(b"snapshot restore configured lineage");
+    let network_id = test_network_id(b"kura-v2-finality-test");
+    kura.bind_lane_storage_network(network_id)
+        .expect("bind explicit snapshot network");
+    let stale_identity = LaneStorageIdentity {
+        network_id,
+        lane_id: stale_config_lane.id,
+        dataspace_id: stale_config_lane.dataspace_id,
+        incarnation: stale_incarnation,
+        activation_height: 0,
+    };
+    let stale_dir = stale_identity.blocks_dir(&store_root);
     let baseline = kura
         .lane_geometry_journal_state_for_test()
         .expect("read configured catalog baseline")
@@ -2097,19 +2183,21 @@ fn snapshot_lane_restore_uses_exact_height_and_authenticated_lineage() {
     let restored_entry = kura
         .lane_storage_entry(restored_lane.id)
         .expect("restored lane must be addressable");
-    assert_eq!(restored_entry.alias, restored_lane.alias);
+    assert_eq!(restored_entry.lane_id, restored_lane.id);
+    assert_eq!(restored_entry.incarnation, restored_incarnation);
+    assert_eq!(restored_entry.activation_height, 1);
     assert!(restored_entry.blocks_dir(&store_root).exists());
     assert!(
         kura.lane_storage_entry(stale_config_lane.id).is_err(),
         "static-only lane must not remain active after snapshot restore"
     );
     assert!(
-        !stale_dir.exists(),
-        "replaying the authenticated post-transition cursor must retire the stale lane again"
+        stale_dir.is_dir(),
+        "replaying the cursor removes the old reference while retaining its exact instance"
     );
 }
 #[test]
-fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
+fn authenticated_snapshot_lane_restore_rejects_primary_identity_drift_atomically() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let store_root = temp_dir.path().join("kura");
     let configured_catalog = LaneCatalog::new(nonzero!(1_u32), vec![ModelLaneConfig::default()])
@@ -2122,6 +2210,14 @@ fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
     let configured_incarnations = BTreeMap::from([(LaneId::SINGLE, configured_incarnation)]);
     let configured_activations = BTreeMap::from([(LaneId::SINGLE, 0)]);
     let configured_lineage_root = Hash::new(b"configured primary restore lineage");
+    kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+        .unwrap();
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        configured.primary(),
+        configured_incarnation,
+        LaneLifecycleParameterV1::catalog_hash(&configured_catalog),
+    )
+    .expect("establish exact configured H0 anchor");
     kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
         &configured,
         &configured_incarnations,
@@ -2149,176 +2245,191 @@ fn authenticated_snapshot_lane_restore_rejects_primary_path_drift_atomically() {
         0,
         Hash::new(b"drifted primary lineage"),
     )
-    .expect_err("primary storage path drift must fail closed");
+    .expect_err("primary identity drift must fail closed");
     assert_eq!(
         kura.lane_storage_entry(LaneId::SINGLE)
             .expect("configured primary remains installed")
-            .alias,
-        configured.primary().alias
+            .incarnation,
+        configured_incarnation
     );
 }
 #[test]
-fn lane_segment_reconciliation_propagates_failure() {
+fn lane_instance_creation_conflict_preserves_storage_and_reference_authority() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let store_root = temp_dir.path().join("kura");
     let initial_catalog =
-        LaneCatalog::new(nonzero!(1_u32), vec![ModelLaneConfig::default()]).expect("catalog");
-    let initial_lane_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-    let kura_cfg = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &initial_lane_config)
-            .expect("init kura");
-    let extended_catalog = LaneCatalog::new(
-        nonzero!(2_u32),
-        vec![
-            ModelLaneConfig::default(),
-            ModelLaneConfig {
-                id: LaneId::from(1),
-                alias: "conflict".to_string(),
-                ..ModelLaneConfig::default()
-            },
-        ],
-    )
-    .expect("catalog");
-    let extended_lane_config = RuntimeLaneConfig::from_catalog(&extended_catalog);
-    let conflicting_entry = extended_lane_config
-        .entry(LaneId::from(1))
-        .expect("lane entry");
-    let conflict_dir = conflicting_entry.blocks_dir(&store_root);
-    if let Some(parent) = conflict_dir.parent() {
-        std::fs::create_dir_all(parent).expect("create parent dir");
-    }
-    std::fs::File::create(&conflict_dir).expect("seed conflicting file");
-    let canonical_conflict_dir =
-        std::fs::canonicalize(&conflict_dir).expect("canonicalize conflicting file");
-    let err = kura
-        .reconcile_lane_segments_for_testing(&[conflicting_entry], &[], &[])
-        .expect_err("expected lane provisioning to surface error");
-    match err {
-        Error::MkDir(_, path) => assert_eq!(path, canonical_conflict_dir),
-        other => panic!("unexpected error: {other:?}"),
-    }
+        LaneCatalog::new(nonzero!(2_u32), vec![ModelLaneConfig::default()]).unwrap();
+    let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
+    let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &initial);
+    let (initial_incarnations, initial_activations) = published_fixture_geometry_maps(&kura);
+    let added = ModelLaneConfig {
+        id: LaneId::new(1),
+        alias: "conflict".to_owned(),
+        ..ModelLaneConfig::default()
+    };
+    let extended = RuntimeLaneConfig::from_catalog(
+        &LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![ModelLaneConfig::default(), added.clone()],
+        )
+        .unwrap(),
+    );
+    let mut incarnations = initial_incarnations.clone();
+    let incarnation = Hash::new(b"occupied exact lane instance");
+    incarnations.insert(added.id, incarnation);
+    let mut activations = initial_activations.clone();
+    activations.insert(added.id, 0);
+    let identity = LaneStorageIdentity {
+        network_id: kura.lane_storage_entry(LaneId::SINGLE).unwrap().network_id,
+        lane_id: added.id,
+        dataspace_id: added.dataspace_id,
+        incarnation,
+        activation_height: 0,
+    };
+    let conflict = identity.blocks_dir(&store_root);
+    fs::create_dir_all(conflict.parent().unwrap()).unwrap();
+    fs::write(&conflict, b"foreign-instance-target").unwrap();
+    let journal_before = fs::read(store_root.join("lane_geometry_journal.norito"))
+        .expect("read authenticated geometry journal");
+    let error = kura
+        .apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &incarnations,
+            &initial_activations,
+            &activations,
+            &BTreeSet::new(),
+        )
+        .expect_err("occupied target must fail before a creation intent is published");
+    assert!(
+        matches!(error, Error::IO(ref source, _) if source.kind() == ErrorKind::InvalidData),
+        "wrong target kind must remain an explicit storage error: {error:?}"
+    );
+    assert_eq!(fs::read(&conflict).unwrap(), b"foreign-instance-target");
+    assert!(!identity.merge_log_path(&store_root).exists());
+    assert!(kura.lane_storage_entry(added.id).is_err());
+    assert_eq!(
+        fs::read(store_root.join("lane_geometry_journal.norito"))
+            .expect("read authenticated geometry journal"),
+        journal_before
+    );
 }
+
 #[test]
-fn lane_segment_relabel_updates_primary_directory() {
+fn lane_alias_changes_preserve_instance_and_canonical_storage() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let store_root = temp_dir.path().join("kura");
-    let initial_catalog = LaneCatalog::new(
-        nonzero!(1_u32),
-        vec![ModelLaneConfig {
-            alias: "Alpha Lane".to_string(),
-            ..ModelLaneConfig::default()
-        }],
-    )
-    .expect("initial catalog");
-    let initial_lane_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
-    let initial_entry = initial_lane_config
-        .entry(LaneId::SINGLE)
-        .expect("lane entry");
-    let kura_cfg = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &initial_lane_config)
-            .expect("init kura");
-    let old_dir = initial_entry.blocks_dir(&kura.store_root);
-    let old_merge = initial_entry.merge_log_path(&kura.store_root);
-    assert!(old_dir.exists(), "expected initial lane directory to exist");
-    assert!(old_merge.exists(), "expected initial merge log to exist");
-    let updated_catalog = LaneCatalog::new(
-        nonzero!(1_u32),
-        vec![ModelLaneConfig {
-            alias: "Payments Lane".to_string(),
-            ..ModelLaneConfig::default()
-        }],
-    )
-    .expect("updated catalog");
-    let updated_lane_config = RuntimeLaneConfig::from_catalog(&updated_catalog);
-    let updated_entry = updated_lane_config
-        .entry(LaneId::SINGLE)
-        .expect("lane entry");
-    let incarnation = Hash::new(b"authenticated primary relabel incarnation");
-    let incarnations = BTreeMap::from([(LaneId::SINGLE, incarnation)]);
-    let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
-    let lineage_root = Hash::new(b"authenticated primary relabel lineage");
-    kura.apply_lane_geometry_transition_at_height_with_lineage_roots(
-        &initial_lane_config,
-        &updated_lane_config,
+    let catalog = |alias: &str| {
+        LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![ModelLaneConfig {
+                alias: alias.to_owned(),
+                ..ModelLaneConfig::default()
+            }],
+        )
+        .unwrap()
+    };
+    let initial = RuntimeLaneConfig::from_catalog(&catalog("Alpha Lane"));
+    let updated = RuntimeLaneConfig::from_catalog(&catalog("Payments Lane"));
+    let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &initial);
+    let original = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
+    let (incarnations, activations) = published_fixture_geometry_maps(&kura);
+    let blocks = original.blocks_dir(&store_root);
+    let merge = original.merge_log_path(&store_root);
+    let (canonical_blocks, canonical_merge) = Kura::canonical_storage_paths(&kura.store_root);
+    assert!(blocks.is_dir() && merge.is_file());
+    let marker_bytes = fs::read(blocks.join(".lane-incarnation.norito")).unwrap();
+    let merge_bytes = fs::read(&merge).unwrap();
+    let reference_before = fs::read(store_root.join("lane_geometry_journal.norito"))
+        .expect("read exact reference journal");
+    kura.apply_lane_geometry_transition(
+        &initial,
+        &updated,
         &incarnations,
         &incarnations,
-        &activation_heights,
-        &activation_heights,
-        lineage_root,
-        lineage_root,
+        &activations,
+        &activations,
         &BTreeSet::new(),
-        1,
     )
-    .expect("apply authenticated lane-storage relabel");
-    kura.mark_lane_geometry_catalog_published_with_lineage_root(
-        &updated_lane_config,
-        &incarnations,
-        &activation_heights,
-        lineage_root,
-        None,
-    )
-    .expect("publish authenticated lane-storage relabel");
-    let new_dir = updated_entry.blocks_dir(&kura.store_root);
-    let new_merge = updated_entry.merge_log_path(&kura.store_root);
-    assert!(
-        new_dir.exists(),
-        "expected relabelled lane directory to exist"
-    );
-    assert!(!old_dir.exists(), "expected old lane directory to be moved");
+    .expect("alias-only geometry has no storage work");
+    kura.mark_lane_geometry_catalog_published(&updated, &incarnations, &activations, None)
+        .expect("alias update preserves the same storage reference");
+    let current = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
+    assert_eq!(current.identity, original.identity);
+    assert_eq!(current.blocks_dir(&store_root), blocks);
+    assert_eq!(current.merge_log_path(&store_root), merge);
     assert_eq!(
-        *kura.active_blocks_dir.lock(),
-        new_dir,
-        "active lane path should be updated"
+        fs::read(blocks.join(".lane-incarnation.norito")).unwrap(),
+        marker_bytes
+    );
+    assert_eq!(fs::read(&merge).unwrap(), merge_bytes);
+    assert_eq!(
+        fs::read(store_root.join("lane_geometry_journal.norito"))
+            .expect("read exact reference journal"),
+        reference_before
+    );
+    assert_eq!(*kura.active_blocks_dir.lock(), canonical_blocks);
+    assert_eq!(kura.block_store.lock().path_to_blockchain, canonical_blocks);
+    assert_eq!(*kura.active_merge_path.lock(), canonical_merge);
+
+    // A real identity replacement still has its own exact no-clobber admission boundary.
+    let replacement = RuntimeLaneConfig::from_catalog(&catalog("Treasury Lane"));
+    let replacement_identity = LaneStorageIdentity {
+        incarnation: Hash::new(b"rejected replacement identity"),
+        activation_height: 1,
+        ..original.identity
+    };
+    let replacement_blocks = replacement_identity.blocks_dir(&store_root);
+    fs::create_dir(&replacement_blocks).unwrap();
+    fs::write(replacement_blocks.join("sentinel"), b"foreign replacement").unwrap();
+    let replacement_incarnations =
+        BTreeMap::from([(LaneId::SINGLE, replacement_identity.incarnation)]);
+    let replacement_activations = BTreeMap::from([(LaneId::SINGLE, 1)]);
+    let error = kura
+        .apply_lane_geometry_transition_at_height(
+            &updated,
+            &replacement,
+            &incarnations,
+            &replacement_incarnations,
+            &activations,
+            &replacement_activations,
+            &BTreeSet::from([LaneId::SINGLE]),
+            1,
+        )
+        .expect_err("occupied replacement cannot be adopted or overwrite the old instance");
+    assert!(
+        matches!(error, Error::IO(ref source, _) if source.kind() == ErrorKind::AlreadyExists
+        && source.to_string().contains("new lane instance target already contains storage")),
+        "replacement must reach exact target preflight: {error:?}"
     );
     assert_eq!(
-        kura.block_store.lock().path_to_blockchain,
-        new_dir,
-        "block store should retarget to new directory"
+        kura.lane_storage_entry(LaneId::SINGLE).unwrap().identity,
+        original.identity
     );
-    assert!(new_merge.exists(), "expected relabelled merge log to exist");
-    assert!(!old_merge.exists(), "expected old merge log to be moved");
     assert_eq!(
-        *kura.active_merge_path.lock(),
-        new_merge,
-        "active merge log path should be updated"
+        fs::read(replacement_blocks.join("sentinel")).unwrap(),
+        b"foreign replacement"
     );
-    let rejected_catalog = LaneCatalog::new(
-        nonzero!(1_u32),
-        vec![ModelLaneConfig {
-            alias: "Treasury Lane".to_string(),
-            ..ModelLaneConfig::default()
-        }],
-    )
-    .expect("rejected catalog");
-    let rejected_lane_config = RuntimeLaneConfig::from_catalog(&rejected_catalog);
-    let rejected_entry = rejected_lane_config
-        .entry(LaneId::SINGLE)
-        .expect("rejected lane entry");
-    kura.fail_next_relabel_after_block_move
-        .store(true, Ordering::Release);
-    assert!(matches!(
-        kura.relabel_lane_segments(&[(updated_entry, rejected_entry)]),
-        Err(Error::IO(_, _))
-    ));
-    let rejected_dir = rejected_entry.blocks_dir(&kura.store_root);
-    let rejected_merge = rejected_entry.merge_log_path(&kura.store_root);
-    assert!(
-        new_dir.exists(),
-        "failed relabel must restore the prior block path"
+    assert!(!replacement_identity.merge_log_path(&store_root).exists());
+    assert_eq!(
+        fs::read(blocks.join(".lane-incarnation.norito")).unwrap(),
+        marker_bytes
     );
-    assert!(
-        new_merge.exists(),
-        "failed relabel must retain the prior merge path"
+    assert_eq!(fs::read(&merge).unwrap(), merge_bytes);
+    assert_eq!(
+        fs::read(store_root.join("lane_geometry_journal.norito"))
+            .expect("read exact reference journal"),
+        reference_before
     );
-    assert!(!rejected_dir.exists());
-    assert!(!rejected_merge.exists());
-    assert_eq!(*kura.active_blocks_dir.lock(), new_dir);
-    assert_eq!(kura.block_store.lock().path_to_blockchain, new_dir);
-    assert_eq!(*kura.active_merge_path.lock(), new_merge);
+    assert_eq!(*kura.active_blocks_dir.lock(), canonical_blocks);
+    assert_eq!(kura.block_store.lock().path_to_blockchain, canonical_blocks);
+    assert_eq!(*kura.active_merge_path.lock(), canonical_merge);
     assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
 }
+
 #[test]
 fn block_bytes_returns_memory_mapped_slice() {
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -2446,6 +2557,7 @@ fn background_budget_eviction_case() -> BackgroundBudgetEvictionCase {
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
             .expect("initialize kura");
+    establish_dummy_store_primary_anchor(&kura);
     let mut blocks = DummyBlocks::new();
     let block1 = blocks.next();
     let block2 = blocks.next();
@@ -2496,8 +2608,7 @@ impl From<(u64, u64)> for BlockIndex {
     }
 }
 fn primary_blocks_dir(dir: &TempDir) -> PathBuf {
-    let lane_cfg = RuntimeLaneConfig::default();
-    let blocks_dir = lane_cfg.primary().blocks_dir(dir.path());
+    let blocks_dir = Kura::canonical_storage_paths(dir.path()).0;
     std::fs::create_dir_all(&blocks_dir).unwrap();
     blocks_dir
 }

@@ -498,7 +498,6 @@ pub(crate) fn with_validation_fee_payout_state_at_height(
         std::num::NonZeroU64::new(height).expect("test height is non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );

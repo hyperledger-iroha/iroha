@@ -4,7 +4,8 @@ use super::{
     Actor, BlockCommitReport, block_counts_as_non_empty, reconcile_last_reported_block_with_kura,
 };
 use crate::state::{
-    TelemetryStatusTarget, write_telemetry_journal_prefix, write_telemetry_journal_row,
+    TelemetryStatusSourceError, TelemetryStatusTarget, write_telemetry_journal_prefix,
+    write_telemetry_journal_row,
 };
 use iroha_crypto::Hash;
 use std::num::NonZeroUsize;
@@ -41,7 +42,10 @@ pub enum StatusSnapshotError {
     /// The original service deadline expired; no late response is accepted.
     #[error("telemetry status deadline elapsed")]
     DeadlineElapsed,
-    /// State publication was busy or no longer retained the captured prefix.
+    /// State publication or a journal read was busy; no snapshot was published.
+    #[error("State publication is busy")]
+    StateBusy,
+    /// The captured journal target, position, or witness could not be used.
     #[error("State journal snapshot is unavailable")]
     StateUnavailable,
     /// A previously classified State checkpoint changed.
@@ -56,9 +60,20 @@ pub enum StatusSnapshotError {
     /// A counter cannot represent the fully classified prefix.
     #[error("classified status counter overflow")]
     CounterOverflow,
-    /// The shared metric counters are not the actor's committed prefix.
+    /// The shared counters or complete Network output projection are inconsistent.
     #[error("classified status counters differ from the owned prefix")]
     CounterMismatch,
+}
+
+impl From<TelemetryStatusSourceError> for StatusSnapshotError {
+    fn from(error: TelemetryStatusSourceError) -> Self {
+        match error {
+            TelemetryStatusSourceError::Busy => Self::StateBusy,
+            TelemetryStatusSourceError::TargetChanged
+            | TelemetryStatusSourceError::InvalidPosition
+            | TelemetryStatusSourceError::Encoding => Self::StateUnavailable,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -77,6 +92,31 @@ fn add(total: &mut u64, value: u64) -> Result<(), StatusSnapshotError> {
     Ok(())
 }
 
+/// Classify complete Network inputs only, after validating every typed output
+/// and its cache. Pipeline/Time rows remain part of the executed body but never
+/// add submitted-transaction counts. This check grants no execution authority.
+fn network_result_counts(
+    block: &iroha_data_model::block::SignedBlock,
+) -> Result<(u64, u64), StatusSnapshotError> {
+    block
+        .validate_output_merkle_cache()
+        .map_err(|_| StatusSnapshotError::CounterMismatch)?;
+    let mut accepted = 0;
+    let mut rejected = 0;
+    for index in 0..block.network_entrypoint_count() {
+        let index = u32::try_from(index).map_err(|_| StatusSnapshotError::CounterOverflow)?;
+        let (_, output) = block
+            .network_output_at(index)
+            .ok_or(StatusSnapshotError::CounterMismatch)?;
+        if output.result.is_err() {
+            add(&mut rejected, 1)?;
+        } else {
+            add(&mut accepted, 1)?;
+        }
+    }
+    Ok((accepted, rejected))
+}
+
 impl Actor {
     /// Finish one finite captured target even when its original HTTP waiter expires.
     /// Verified chunk progress survives; unverified chunk counters never publish.
@@ -88,7 +128,7 @@ impl Actor {
             let chunk = self
                 .state
                 .telemetry_journal_chunk(target, self.last_sync_block)
-                .map_err(|_| StatusSnapshotError::StateUnavailable)?;
+                .map_err(StatusSnapshotError::from)?;
             if chunk.checkpoint != self.last_sync_hash {
                 return Err(StatusSnapshotError::CheckpointChanged);
             }
@@ -123,15 +163,10 @@ impl Actor {
                         {
                             return Err(StatusSnapshotError::JournalMismatch);
                         }
-                        let external = block.external_transactions().len();
-                        let rejected = block
-                            .results()
-                            .take(external)
-                            .filter(|r| r.is_err())
-                            .count();
-                        let approved = external
-                            .checked_sub(rejected)
-                            .ok_or(StatusSnapshotError::CounterMismatch)?;
+                        // TODO: replace get_block with the precharged exact-finalized
+                        // body reader and actor-owned decode/work reservation. The
+                        // journal authenticates proposal hashes, not output bytes.
+                        let (approved, rejected) = network_result_counts(&block)?;
                         let mut report = reported
                             .filter(|r| r.height == height)
                             .unwrap_or_else(|| BlockCommitReport::new(&header, &self.time_source));
@@ -142,10 +177,8 @@ impl Actor {
                         );
                         Ok((
                             header.hash(),
-                            u64::try_from(approved)
-                                .map_err(|_| StatusSnapshotError::CounterOverflow)?,
-                            u64::try_from(rejected)
-                                .map_err(|_| StatusSnapshotError::CounterOverflow)?,
+                            approved,
+                            rejected,
                             block_counts_as_non_empty(block.as_ref()),
                             report,
                         ))
@@ -299,5 +332,227 @@ mod tests {
             Err(StatusSnapshotError::CounterOverflow)
         ));
         assert_eq!(value, u64::MAX);
+    }
+
+    // Structural output fixture only; no producer, State policy or finality claim.
+    fn classified_fixture() -> iroha_data_model::block::SignedBlock {
+        use iroha_crypto::HashOf;
+        use iroha_data_model::{
+            Level, NetworkId,
+            block::{BlockHeader, builder::BlockBuilder, execution_output::*},
+            events::time::{TimeEvent, TimeInterval},
+            isi::Log,
+            transaction::{
+                FeePaymentIntent, TransactionBuilder,
+                signed::{
+                    SealedTransactionCommitmentPayload, SealedTransactionReveal,
+                    SignedSealedTransactionCommitment, TransactionResult,
+                    compute_sealed_transaction_commitment,
+                },
+            },
+        };
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+        use std::num::NonZeroU64;
+        let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"classified output fixture genesis",
+        )));
+        let signed = |message: &str| {
+            TransactionBuilder::new(
+                network,
+                ALICE_ID.clone(),
+                FeePaymentIntent::authority(vec![], None),
+            )
+            .with_instructions([Log::new(Level::INFO, message.to_owned())])
+            .sign(ALICE_KEYPAIR.private_key())
+        };
+        let reveal = signed("sealed classified source");
+        let salt = [0x45; 32];
+        let commitment = compute_sealed_transaction_commitment(&network, &reveal, salt, 5);
+        let commitment = SignedSealedTransactionCommitment::sign(
+            SealedTransactionCommitmentPayload {
+                network_id: network,
+                authority: ALICE_ID.clone(),
+                commitment,
+                reveal_after_height: 2,
+                reveal_deadline_height: 5,
+                nonce: None,
+            },
+            ALICE_KEYPAIR.private_key(),
+        );
+        let mut builder = BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            Some(HashOf::from_untyped_unchecked(Hash::new(b"parent"))),
+            None,
+            10,
+            0,
+        ));
+        builder.push_sealed_transaction_commitment(commitment);
+        builder.push_transaction(signed("external classified source"));
+        builder.push_sealed_transaction_reveal(SealedTransactionReveal::new(
+            compute_sealed_transaction_commitment(&network, &reveal, salt, 5),
+            reveal,
+            salt,
+        ));
+        let mut block = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
+        let trigger = |name: &str| TriggerUseV1 {
+            trigger_id: name.parse().unwrap(),
+            registered_at_height: 0,
+            action_hash: Hash::new(name.as_bytes()),
+        };
+        let rows = vec![
+            ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 0,
+                result: TransactionResult::new(Ok(vec![])),
+                completions: vec![],
+            }),
+            ExecutionOutputV1::network_output_limit_rejection(1),
+            ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 2,
+                result: TransactionResult::new(Ok(vec![])),
+                completions: vec![],
+            }),
+            ExecutionOutputV1::pipeline_output_limit_rejection(PipelineInvocationV1 {
+                event: PipelineEventPositionV1::BlockApproved,
+                candidate_index: 0,
+                trigger: trigger("classified_pipeline"),
+            }),
+            ExecutionOutputV1::time_output_limit_rejection(TimeInvocationV1 {
+                schedule_index: 0,
+                event: TimeEvent {
+                    interval: TimeInterval {
+                        since_ms: 9,
+                        length_ms: 1,
+                    },
+                },
+                trigger: trigger("classified_time"),
+            }),
+        ];
+        attach_classified_rows(&mut block, rows);
+        block
+    }
+
+    fn attach_classified_rows(
+        block: &mut iroha_data_model::block::SignedBlock,
+        rows: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+    ) {
+        block
+            .set_execution_outputs(
+                rows,
+                0,
+                Default::default(),
+                vec![],
+                Default::default(),
+                Default::default(),
+                vec![],
+                &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn network_counters_include_sealed_sources_and_exclude_all_internal_failures() {
+        use iroha_data_model::block::execution_output::{ExecutionOutputV1, TimeExecutionOutputV1};
+        use iroha_data_model::transaction::{ExecutionStep, TransactionResult};
+        use iroha_data_model::trigger::DataTriggerStep;
+        let mut block = classified_fixture();
+        assert_eq!(block.external_transactions().len(), 2);
+        assert_eq!(block.network_entrypoint_count(), 3);
+        assert_eq!(block.execution_outputs().len(), 5);
+        assert_eq!(network_result_counts(&block).unwrap(), (2, 1));
+        // Internal success and failure are equally excluded from transaction counters.
+        let mut rows = block.execution_outputs().to_vec();
+        let ExecutionOutputV1::Time(time) = &rows[4] else {
+            unreachable!()
+        };
+        rows[4] = ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+            invocation: time.invocation.clone(),
+            result: TransactionResult::new(Ok(vec![DataTriggerStep {
+                id: time.invocation.trigger.trigger_id.clone(),
+                instructions: ExecutionStep(vec![].into()),
+            }])),
+            failure_root: None,
+            completions: vec![],
+        });
+        attach_classified_rows(&mut block, rows);
+        assert_eq!(network_result_counts(&block).unwrap(), (2, 1));
+        assert!(block_counts_as_non_empty(&block));
+    }
+
+    #[test]
+    fn internal_only_activity_has_zero_network_transaction_counters() {
+        let mut block = classified_fixture();
+        let rows = block.execution_outputs()[3..].to_vec();
+        block.set_external_entrypoints(vec![]);
+        attach_classified_rows(&mut block, rows);
+        assert_eq!(network_result_counts(&block).unwrap(), (0, 0));
+        assert!(block_counts_as_non_empty(&block));
+    }
+
+    #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
+    #[norito_schema(
+        name = "iroha_core::telemetry::classified_status::tests::MutableClassifiedBlock"
+    )]
+    struct MutableClassifiedBlock {
+        signatures: std::collections::BTreeSet<iroha_data_model::block::BlockSignature>,
+        payload: iroha_data_model::block::BlockPayload,
+        result: Option<iroha_data_model::block::BlockResult>,
+    }
+
+    #[test]
+    fn counters_refuse_missing_outputs_stale_cache_and_foreign_complete_projection() {
+        use iroha_crypto::HashOf;
+        use iroha_data_model::block::{SignedBlock, execution_output::ExecutionOutputV1};
+        use norito::codec::{DecodeAll as _, Encode as _};
+        let original = classified_fixture();
+        for mutation in 0..6 {
+            let mut encoded =
+                MutableClassifiedBlock::decode_all(&mut original.encode().as_slice()).unwrap();
+            if mutation == 0 {
+                encoded.result = None;
+            } else {
+                let result = encoded.result.as_mut().unwrap();
+                match mutation {
+                    1 => result.output_merkle = Default::default(),
+                    2 => {
+                        result.outputs.remove(0);
+                    }
+                    3 => {
+                        let ExecutionOutputV1::Network(row) = &mut result.outputs[1] else {
+                            unreachable!()
+                        };
+                        row.input_index = 2;
+                    }
+                    4 => {
+                        let ExecutionOutputV1::Time(row) = &mut result.outputs[4] else {
+                            unreachable!()
+                        };
+                        row.invocation.trigger.registered_at_height =
+                            original.header().height().get();
+                    }
+                    5 => {
+                        encoded.payload.header.set_execution_context_hash(Some(
+                            HashOf::from_untyped_unchecked(Hash::new(
+                                b"foreign classified context",
+                            )),
+                        ));
+                    }
+                    _ => unreachable!(),
+                }
+                if mutation != 1 {
+                    result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
+                }
+            }
+            let malformed = SignedBlock::decode_all(&mut encoded.encode().as_slice()).unwrap();
+            let before = malformed.encode_wire().unwrap();
+            assert!(
+                matches!(
+                    network_result_counts(&malformed),
+                    Err(StatusSnapshotError::CounterMismatch)
+                ),
+                "mutation {mutation}"
+            );
+            assert_eq!(malformed.encode_wire().unwrap(), before);
+        }
+        assert_eq!(network_result_counts(&original).unwrap(), (2, 1));
     }
 }

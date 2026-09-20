@@ -8777,14 +8777,40 @@ class ToriiClient(
         page_size: Optional[int] = None,
         cursor: Optional[str] = None,
     ):
-        """Yield Connect applications by chasing the cursor returned from `/v1/connect/app/apps`."""
+        """Yield Connect applications by following the registry's pagination cursors.
 
-        remaining = None if limit is None else int(limit)
+        ``limit`` must be a non-negative integer and caps the total result count;
+        zero performs no requests. ``page_size`` must be a positive integer and
+        caps each page, further bounded by the remaining result count. A repeated
+        cursor raises ``RuntimeError`` before another page is requested.
+        """
+
+        if limit is not None:
+            if isinstance(limit, bool) or not isinstance(limit, int):
+                raise TypeError("limit must be a non-negative integer")
+            if limit < 0:
+                raise ValueError("limit must be a non-negative integer")
+        if page_size is not None:
+            if isinstance(page_size, bool) or not isinstance(page_size, int):
+                raise TypeError("page_size must be a positive integer")
+            if page_size <= 0:
+                raise ValueError("page_size must be a positive integer")
+        if cursor is not None and not isinstance(cursor, str):
+            raise TypeError("cursor must be a string when provided")
+        if limit == 0:
+            return
+
+        remaining = limit
         next_cursor = cursor
+        seen_cursors = set()
+        if next_cursor is not None:
+            seen_cursors.add(next_cursor)
         while True:
             effective_limit = page_size
-            if effective_limit is None and remaining is not None:
-                effective_limit = remaining
+            if remaining is not None:
+                effective_limit = (
+                    remaining if page_size is None else min(page_size, remaining)
+                )
             page = self.list_connect_apps(limit=effective_limit, cursor=next_cursor)
             for record in page.items:
                 if remaining is not None and remaining <= 0:
@@ -8795,6 +8821,11 @@ class ToriiClient(
             if not page.next_cursor or (remaining is not None and remaining <= 0):
                 return
             next_cursor = page.next_cursor
+            if next_cursor in seen_cursors:
+                raise RuntimeError(
+                    f"connect app registry returned duplicate cursor {next_cursor!r}"
+                )
+            seen_cursors.add(next_cursor)
 
     def get_connect_app(self, app_id: str) -> Optional[ConnectAppRecord]:
         """Fetch a single Connect app definition."""

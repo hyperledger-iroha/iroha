@@ -37,7 +37,7 @@ fn core_host_from_state_enforces_space_directory_policy() {
     *state.nexus.get_mut() = nexus;
     anchor_axt_test_header(
         &mut state,
-        BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0),
+        BlockHeader::new(nonzero!(1_u64), None, None, 0, 0),
     );
     assert!(
         state
@@ -713,7 +713,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
         }],
         commit_height: 1,
     };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let committed_header = header.clone();
     let mut block = state.block(header);
     let mut stx = block.transaction();

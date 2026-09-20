@@ -715,7 +715,6 @@ fn reopen_with_persisted_prepare_intent(
         NonZeroU64::new(round.height).expect("fixture height is non-zero"),
         None,
         None,
-        None,
         4_000 + u64::from(marker),
         round.view,
     );
@@ -2731,7 +2730,7 @@ fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
         pending_kura_apply,
         leader_wire_launch_prepared,
         ..
-    } = &mut runtime_startup.state
+    } = runtime_startup.state.as_mut()
     else {
         panic!("durable-only pending Kura startup must remain recovered")
     };
@@ -2964,7 +2963,6 @@ impl SumeragiV2Adapter {
                 .as_ref()
                 .map(|qc| qc.subject.block_hash),
             None,
-            None,
             9_731,
             0,
         );
@@ -3179,8 +3177,27 @@ fn same_round_timeout_cancellation_uses_exact_durable_proposal_intent() {
 }
 
 #[cfg(feature = "bls")]
+fn run_same_round_timeout_recovery_test_on_stack(body: impl FnOnce() + Send + 'static) {
+    // Cold recovery uses the same bounded stack policy as the production consensus owner.
+    let result = crate::sumeragi::sumeragi_thread_builder("same-round-timeout-cold-owner")
+        .spawn(body)
+        .expect("spawn cold Timeout recovery with the Sumeragi stack budget")
+        .join();
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
 #[test]
 fn same_round_timeout_cold_owner_cancels_exact_retained_proposal() {
+    run_same_round_timeout_recovery_test_on_stack(
+        same_round_timeout_retained_proposal_recovery_fixture,
+    );
+}
+
+#[cfg(feature = "bls")]
+fn same_round_timeout_retained_proposal_recovery_fixture() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     use super::super::v2_lifecycle_coordinator::{
         LifecycleOutputServiceDispositionV1, RecoveredLifecycleOutputSettlementV1,
@@ -3351,9 +3368,11 @@ fn same_round_timeout_cold_owner_reconciles_standalone_broadcast() {
 #[cfg(feature = "bls")]
 #[test]
 fn same_round_timeout_cold_owner_rejects_foreign_standalone_broadcast() {
-    terminal_standalone_timeout_recovery_fixture(1);
-    terminal_standalone_timeout_recovery_fixture(2);
-    terminal_standalone_timeout_recovery_fixture(4);
+    run_same_round_timeout_recovery_test_on_stack(|| {
+        terminal_standalone_timeout_recovery_fixture(1);
+        terminal_standalone_timeout_recovery_fixture(2);
+        terminal_standalone_timeout_recovery_fixture(4);
+    });
 }
 
 #[cfg(feature = "bls")]
@@ -3517,19 +3536,23 @@ fn terminal_standalone_timeout_recovery_fixture(case: u8) {
 #[cfg(feature = "bls")]
 #[test]
 fn same_round_timeout_cold_owner_preserves_retired_terminal_validation_history() {
-    same_round_timeout_retired_history_fixture(false);
+    run_same_round_timeout_recovery_test_on_stack(|| {
+        same_round_timeout_retired_history_fixture(false);
+    });
 }
 
 #[cfg(feature = "bls")]
 #[test]
 fn same_round_timeout_cold_owner_publishes_broadcast_after_retired_validation_history() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("the test logger requires a Tokio reactor");
-    let _entered = runtime.enter();
-    let _logger = iroha_logger::test_logger();
-    same_round_timeout_retired_history_fixture(true);
+    run_same_round_timeout_recovery_test_on_stack(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the test logger requires a Tokio reactor");
+        let _entered = runtime.enter();
+        let _logger = iroha_logger::test_logger();
+        same_round_timeout_retired_history_fixture(true);
+    });
 }
 
 #[cfg(feature = "bls")]
@@ -3548,7 +3571,6 @@ fn same_round_timeout_retired_history_fixture(publish_timeout: bool) {
     };
     let header = BlockHeader::new(
         NonZeroU64::new(context.height).unwrap(),
-        None,
         None,
         None,
         98_114,

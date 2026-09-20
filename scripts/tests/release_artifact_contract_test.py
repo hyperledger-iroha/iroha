@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +26,67 @@ def test_source_date_epoch_renders_canonical_rfc3339() -> None:
     assert contract.parse_source_date_epoch("0") == 0
     assert contract.format_source_date_epoch(0) == "1970-01-01T00:00:00Z"
     assert contract.format_source_date_epoch(1) == "1970-01-01T00:00:01Z"
+
+
+def test_private_directory_tree_ignores_permissive_umask_and_reuses_exact_owner(tmp_path: Path) -> None:
+    anchor = tmp_path / "anchor"
+    anchor.mkdir(mode=0o755)
+    anchor_mode = stat.S_IMODE(anchor.stat().st_mode)
+    leaf = anchor / "one" / "two" / "three"
+    original_umask = os.umask(0o002)
+    try:
+        assert contract.ensure_private_directory(leaf, anchor=anchor) == leaf
+        assert os.umask(0o002) == 0o002
+        before = [(path, path.stat().st_ino, path.stat().st_mode) for path in
+                  (anchor / "one", anchor / "one/two", leaf)]
+        assert all(stat.S_IMODE(mode) == 0o700 for _, _, mode in before)
+        assert contract.ensure_private_directory(leaf, anchor=anchor) == leaf
+        assert [(path, path.stat().st_ino, path.stat().st_mode) for path, _, _ in before] == before
+        assert stat.S_IMODE(anchor.stat().st_mode) == anchor_mode
+    finally:
+        os.umask(original_umask)
+
+
+@pytest.mark.parametrize("mode", (0o755, 0o775))
+def test_private_directory_tree_refuses_existing_unsafe_owner_without_repair(tmp_path: Path, mode: int) -> None:
+    anchor = tmp_path / "anchor"
+    anchor.mkdir(mode=0o700)
+    unsafe = anchor / "existing"
+    unsafe.mkdir(mode=mode)
+    unsafe.chmod(mode)
+    with pytest.raises(contract.ReleaseArtifactError):
+        contract.ensure_private_directory(unsafe / "child", anchor=anchor)
+    assert stat.S_IMODE(unsafe.stat().st_mode) == mode
+    assert not (unsafe / "child").exists()
+
+
+def test_private_directory_tree_refuses_links_and_missing_or_foreign_anchors(tmp_path: Path) -> None:
+    anchor = tmp_path / "anchor"
+    anchor.mkdir(mode=0o700)
+    other = tmp_path / "other"
+    other.mkdir(mode=0o700)
+    (anchor / "link").symlink_to(other, target_is_directory=True)
+    for path, selected in ((anchor / "link/child", anchor), (other / "child", anchor),
+                           (tmp_path / "missing/child", tmp_path / "missing")):
+        with pytest.raises(contract.ReleaseArtifactError):
+            contract.ensure_private_directory(path, anchor=selected)
+    assert list(other.iterdir()) == []
+    assert not (tmp_path / "missing").exists()
+
+
+def test_private_directory_anchor_mode_change_before_open_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    anchor = tmp_path / "anchor"
+    anchor.mkdir(mode=0o755)
+    real_open = contract.os.open
+    def change_before_open(path, flags, *args, **kwargs):
+        if path == "anchor" and "dir_fd" in kwargs:
+            anchor.chmod(0o775)
+        return real_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(contract.os, "open", change_before_open)
+    with pytest.raises(contract.ReleaseArtifactError, match="custody changed"):
+        contract.ensure_private_directory(anchor / "child", anchor=anchor)
+    assert stat.S_IMODE(anchor.stat().st_mode) == 0o775
+    assert not (anchor / "child").exists()
 
 
 def test_stable_hash_rejects_hardlinked_files(tmp_path: Path) -> None:
@@ -168,3 +231,124 @@ def test_release_manifest_reader_requires_exact_canonical_bytes() -> None:
     ).encode()
     with pytest.raises(contract.ReleaseArtifactError, match="not in canonical"):
         contract.load_canonical_release_manifest(compact)
+
+
+def test_stable_open_rechecks_consumed_content_when_timestamps_collide(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "artifact.bin"
+    original = b"original content"
+    artifact.write_bytes(original)
+    expected = contract.stable_hash_path(artifact)
+    real_stat, real_fstat = os.stat, os.fstat
+
+    def colliding_times(info):
+        if (info.st_dev, info.st_ino) != (expected.device, expected.inode):
+            return info
+        fields = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+        return SimpleNamespace(**(fields | {
+            "st_mtime_ns": expected.mtime_ns,
+            "st_ctime_ns": expected.ctime_ns,
+        }))
+
+    # Deterministically model an allowed filesystem timestamp collision; preserve
+    # every other identity field. The original source bytes are already consumed.
+    monkeypatch.setattr(contract.os, "stat", lambda *a, **k: colliding_times(real_stat(*a, **k)))
+    monkeypatch.setattr(contract.os, "fstat", lambda *a, **k: colliding_times(real_fstat(*a, **k)))
+    with pytest.raises(contract.ReleaseArtifactError, match="changed while it was streamed"):
+        with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
+            assert os.read(fd, expected.size) == original
+            artifact.write_bytes(b"x" * expected.size)
+            assert artifact.stat().st_mtime_ns == expected.mtime_ns
+            assert artifact.stat().st_ctime_ns == expected.ctime_ns
+    assert artifact.read_bytes() != original
+
+
+def test_stable_open_final_hash_preserves_offset_and_bounds_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "artifact.bin"
+    payload = b"a" * (2 * 1024 * 1024 + 17)
+    artifact.write_bytes(payload)
+    expected = contract.stable_hash_path(artifact)
+    original_pread = os.pread
+    requests = []
+
+    def bounded_read(fd: int, size: int, offset: int) -> bytes:
+        assert os.lseek(fd, 0, os.SEEK_CUR) == 3
+        chunk = original_pread(fd, size, offset)
+        assert os.lseek(fd, 0, os.SEEK_CUR) == 3
+        requests.append((size, offset, len(chunk)))
+        return chunk
+
+    monkeypatch.setattr(contract.os, "pread", bounded_read)
+    with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
+        assert os.read(fd, 3) == payload[:3]
+    assert all(0 < size <= 1024 * 1024 for size, _, _ in requests)
+    assert sum(length for _, _, length in requests) == expected.size
+    assert requests[-1] == (1, expected.size, 0)
+    assert sum(size for size, _, _ in requests) == expected.size + 1
+
+
+@pytest.mark.parametrize("replacement", (b"", b"short", b"x" * 64))
+def test_stable_open_rejects_truncation_or_growth_with_bounded_final_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: bytes,
+) -> None:
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"original content")
+    expected = contract.stable_hash_path(artifact)
+    original_pread = os.pread
+    requests = []
+
+    def bounded_read(fd: int, size: int, offset: int) -> bytes:
+        requests.append((size, offset))
+        return original_pread(fd, size, offset)
+
+    monkeypatch.setattr(contract.os, "pread", bounded_read)
+    with pytest.raises(contract.ReleaseArtifactError, match="changed while it was streamed"):
+        with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
+            assert os.read(fd, expected.size) == b"original content"
+            artifact.write_bytes(replacement)
+    assert requests
+    assert all(0 < size <= 1024 * 1024 and offset + size <= expected.size + 1
+               for size, offset in requests)
+    if len(replacement) > expected.size:
+        assert sum(size for size, _ in requests) == expected.size + 1
+
+
+@pytest.mark.parametrize("mutation", ("mode", "path"))
+def test_stable_open_keeps_metadata_and_path_checks_after_final_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    artifact = tmp_path / "artifact.bin"
+    payload = b"original content"
+    artifact.write_bytes(payload)
+    expected = contract.stable_hash_path(artifact)
+    original_pread = os.pread
+    changed = False
+
+    def mutate_after_hash(fd: int, size: int, offset: int) -> bytes:
+        nonlocal changed
+        chunk = original_pread(fd, size, offset)
+        if offset == expected.size and size == 1 and not chunk:
+            changed = True
+            if mutation == "mode":
+                artifact.chmod(0o400)
+            else:
+                replacement = artifact.with_suffix(".next")
+                replacement.write_bytes(payload)
+                replacement.chmod(expected.mode)
+                os.replace(replacement, artifact)
+        return chunk
+
+    monkeypatch.setattr(contract.os, "pread", mutate_after_hash)
+    with pytest.raises(contract.ReleaseArtifactError, match="changed while it was streamed"):
+        with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
+            assert os.read(fd, expected.size) == payload
+    assert changed

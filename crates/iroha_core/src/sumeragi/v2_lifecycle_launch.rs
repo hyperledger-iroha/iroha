@@ -80,12 +80,13 @@ use crate::{
         v2_worker::{
             DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
             LifecycleCompletionTakeV1, LifecycleDecisionApplyDeferredRetryV1,
-            PreparedCertifiedFetchBodyPersistenceCompletion,
+            LocalLifecycleValidateRetryV1, PreparedCertifiedFetchBodyPersistenceCompletion,
             PreparedDeferredLifecycleValidateCompletionV1,
             PreparedLifecycleDecisionApplyCompletionV1, PreparedLifecycleValidateCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
-            RecoveredLifecycleProposalExactOutputCaptureV1, V2CleanupSupervisor,
+            RecoveredLifecycleProposalExactOutputCaptureV1, RetainedLocalLifecycleValidateV1,
+            V2CleanupSupervisor,
         },
     },
 };
@@ -274,6 +275,8 @@ enum PendingLifecycleCompletionV1 {
     RecoveredSign(PreparedRecoveredLifecycleSignCompletionV1),
     /// One executed lifecycle Validate awaits same-address Ready publication.
     Validate(PreparedLifecycleValidateCompletionV1),
+    /// Original dispatch remains parked on an exact local resource condition.
+    LocalValidate(RetainedLocalLifecycleValidateV1),
     /// One just-published Validate carrier must resolve at the same Ready
     /// address before any physical completion or Runtime turn can intervene.
     ReadyValidateSuccessor(ReadyValidateSuccessorV1),
@@ -328,6 +331,7 @@ impl PendingLifecycleCompletionV1 {
             | Self::CertifiedFetch(_)
             | Self::RecoveredDecisionFetch(_)
             | Self::Validate(_)
+            | Self::LocalValidate(_)
             | Self::ReadyValidateSuccessor(_)
             | Self::DeferredValidate(_)
             | Self::RegisteredDeferredValidate(_) => None,
@@ -635,6 +639,25 @@ impl ProductionLifecycleServeRetirementAuthenticationPermitV1 {
         }
     }
 }
+#[cfg(test)]
+impl LaunchedProductionLifecycleV1 {
+    /// Observe the exact row and registry without exposing live publication owners.
+    pub(super) fn validate_row_and_registry_for_test(
+        &self,
+        ordinal: u128,
+    ) -> (super::LifecycleRecord, String) {
+        (
+            self.owner.coordinator.records[&ordinal].clone(),
+            format!("{:?}", self.owner.registry.registry_for_test()),
+        )
+    }
+
+    /// Observe whether the launched driver has taken custody of a completion.
+    pub(super) fn has_pending_lifecycle_completion_for_test(&self) -> bool {
+        self.pending_lifecycle_completion.is_some()
+    }
+}
+
 impl LaunchedProductionLifecycleV1 {
     /// Settle the parked recovered Decision Fetch into one durable Store successor.
     ///

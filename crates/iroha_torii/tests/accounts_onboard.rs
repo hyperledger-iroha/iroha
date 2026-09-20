@@ -12,7 +12,6 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
-    smartcontracts::Execute,
     state::{LaneAuthorityRoute, State, StateReadOnly, World, WorldReadOnly},
     tx::{AcceptedTransaction, TransactionBuilder},
 };
@@ -243,37 +242,21 @@ fn build_onboarding_test_context_at(
         &nexus.registry,
     ));
     state.install_lane_manifests(&lane_manifests);
-    let mut seed_builder = TransactionBuilder::new(
-        network_id,
-        authority_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "onboarding anchor".to_owned())]);
-    seed_builder.set_creation_time(anchor_time);
-    let seed_tx = seed_builder.sign(authority_key_pair.private_key());
-    let leader = &validator_keys[0];
-    let unverified = BlockBuilder::new_with_time_source(
-        vec![AcceptedTransaction::new_unchecked(Cow::Owned(seed_tx))],
-        iroha_primitives::time::TimeSource::new_fixed(anchor_time),
-    )
-    .chain(0, state.view().latest_block().as_deref())
-    .sign(leader.private_key())
-    .unpack(|_| {});
-    let mut state_block = state.block(unverified.header());
-    state_block.chain_id = chain_id.clone();
-    {
-        let mut transaction = state_block.transaction();
-        for key_pair in &validator_keys {
+    let mut genesis_instructions: Vec<iroha_data_model::prelude::InstructionBox> =
+        vec![Log::new(Level::INFO, "onboarding anchor".to_owned()).into()];
+    for key_pair in &validator_keys {
+        genesis_instructions.push(
             RegisterPeerWithPop::new(
                 PeerId::new(key_pair.public_key().clone()),
                 iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
                     .expect("validator proof of possession"),
             )
-            .execute(&authority_id, &mut transaction)
-            .expect("register fixture peer and its live consensus key");
-            let validator = AccountId::new(key_pair.public_key().clone());
-            // Use the genesis instructions so validator rows, bonded shares, escrow,
-            // and quantity-ledger mutations are committed as one consistent state.
+            .into(),
+        );
+        let validator = AccountId::new(key_pair.public_key().clone());
+        // Authenticate and execute validator rows, bonded shares, escrow, and
+        // quantity-ledger mutations together in the signed genesis transaction.
+        genesis_instructions.push(
             RegisterPublicLaneValidator {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
@@ -282,22 +265,23 @@ fn build_onboarding_test_context_at(
                 initial_stake: Quantity::from(1_000_u32),
                 metadata: Default::default(),
             }
-            .execute(&authority_id, &mut transaction)
-            .expect("register and bond fixture validator");
+            .into(),
+        );
+        genesis_instructions.push(
             ActivatePublicLaneValidator {
                 lane_id: LaneId::SINGLE,
                 validator,
             }
-            .execute(&authority_id, &mut transaction)
-            .expect("activate fixture validator at genesis");
-        }
-        transaction.apply();
+            .into(),
+        );
     }
-    let valid = unverified
-        .validate_and_record_transactions(&mut state_block)
-        .unpack(|_| {});
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    iroha_torii::test_utils::finalize_committed_block(&state, state_block, committed);
+    fixtures::commit_genesis_fixture(
+        &state,
+        &authority_id,
+        &authority_key_pair,
+        genesis_instructions,
+        iroha_primitives::time::TimeSource::new_fixed(anchor_time),
+    );
     let committee = state
         .resolve_lane_committee(LaneAuthorityRoute::new(
             LaneId::SINGLE,

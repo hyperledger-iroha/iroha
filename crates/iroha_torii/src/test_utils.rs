@@ -2,6 +2,12 @@
 //!
 //! These helpers are intended for crate integration tests to avoid duplicating
 //! queue-drain and state-apply boilerplate when exercising app API endpoints.
+#[cfg(test)]
+#[path = "finality_test_support.rs"]
+mod finality;
+#[cfg(test)]
+pub(crate) use finality::torii_proof_finality_for_block;
+
 use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
@@ -12,12 +18,14 @@ use iroha_core::{
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+#[cfg(test)]
+use iroha_data_model::block::SignedBlock;
 use iroha_data_model::{
     NetworkId, Registrable,
     account::AccountId,
     block::{
         BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
-        ExternalExecutionRouteLeg, ExternalExecutionRouteRole, SignedBlock,
+        ExternalExecutionRouteLeg, ExternalExecutionRouteRole,
     },
     content::ContentAuthMode,
     isi::smart_contract_code::{
@@ -47,6 +55,33 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+/// Attach a complete structural output collection for transport/projection tests.
+/// Each successful fixture row represents one declared fragment. This helper
+/// does not execute State or authenticate economic results or finality.
+#[cfg(test)]
+pub(crate) fn attach_fixture_execution_outputs(
+    block: &mut SignedBlock,
+    rows: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+) {
+    let fragments = u64::try_from(rows.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+    block
+        .set_execution_outputs(
+            rows,
+            fragments,
+            Default::default(),
+            vec![],
+            Default::default(),
+            Default::default(),
+            vec![],
+            &iroha_data_model::block::output_budget::ExecutionOutputLimits {
+                max_outputs: 1024,
+                max_output_bytes: 1024 * 1024,
+                max_total_output_bytes: 2 * 1024 * 1024,
+                max_executed_wire_bytes: 4 * 1024 * 1024,
+            },
+        )
+        .unwrap();
+}
 /// Exact genesis-lineage identity used by [`mk_minimal_root_cfg`].
 #[must_use]
 pub fn signed_query_network_id() -> NetworkId {
@@ -163,12 +198,11 @@ fn apply_accepted_fixture_block(
         .unpack(|_| {});
     let committed_block = valid_block.commit_unchecked().unpack(|_| {});
     let block_ref = committed_block.as_ref();
-    for (idx, tx) in block_ref.external_transactions().enumerate() {
-        if let Some(error) = block_ref.error(idx) {
-            panic!(
-                "transaction at height {expected_height} with hash {} rejected: {error:?}",
-                tx.hash()
-            );
+    for (hash, _, result) in crate::canonical_history::signed_calls(block_ref)
+        .expect("complete fixture output ownership")
+    {
+        if let Err(error) = result.as_ref() {
+            panic!("transaction at height {expected_height} with hash {hash} rejected: {error:?}");
         }
     }
     finalize_committed_block(state, state_block, committed_block);
@@ -219,23 +253,18 @@ pub fn drain_queue_and_apply_all(
     }
     total
 }
-/// Apply the bookkeeping for a fully committed block: update transaction heights,
-/// advance block hashes, and persist the block into Kura.
+/// Publish an executed fixture block through genuine durable finality.
+///
+/// Core binds the original captured witness and result wire to the fixture
+/// certificate, persists it, and applies the same publication checks as runtime.
 pub fn finalize_committed_block(
     state: &Arc<State>,
-    mut state_block: StateBlock<'_>,
+    state_block: StateBlock<'_>,
     committed_block: CommittedBlock,
 ) {
-    let signed_block: SignedBlock = committed_block.as_ref().clone();
     state
-        .view()
-        .kura()
-        .store_block(Arc::new(signed_block))
-        .expect("store committed test block before publishing its state height");
-    state_block
-        .block_hashes
-        .push_for_tests(committed_block.as_ref().hash());
-    state_block.commit().unwrap();
+        .commit_executed_block_for_testing(state_block, committed_block)
+        .expect("publish the exact executed fixture block with durable finality");
 }
 /// Build a minimal self-describing contract artifact containing a single HALT.
 pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {

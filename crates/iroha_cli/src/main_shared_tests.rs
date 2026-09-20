@@ -1034,6 +1034,15 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
     let local = [
         "--runtime-client-config",
         "/private/runtime/client.toml",
+        "--maintenance-admin-config",
+        "/private/runtime/administrator.toml",
+        "--epoch-supervisor-plan",
+        "/private/runtime/supervisor-plan.json",
+        "--epoch-seed-sources",
+        "/private/runtime/epoch-seed-1",
+        "/private/runtime/epoch-seed-2",
+        "/private/runtime/epoch-seed-3",
+        "/private/runtime/epoch-seed-4",
         "--validator-client-config",
         "/private/runtime/client-1.toml",
         "/private/runtime/client-2.toml",
@@ -1048,6 +1057,13 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
         "/private/runtime/validator-2.service",
         "/private/runtime/validator-3.service",
         "/private/runtime/validator-4.service",
+        "--beacon-inputs",
+        "/private/runtime/beacon-inputs.json",
+        "--beacon-validator-unit",
+        "/private/runtime/validator-1.beacon.service",
+        "/private/runtime/validator-2.beacon.service",
+        "/private/runtime/validator-3.beacon.service",
+        "/private/runtime/validator-4.beacon.service",
         "--edge-unit",
         "/private/runtime/edge.service",
         "--known-hosts",
@@ -1058,7 +1074,7 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
     for subcommand in ["assemble", "authorize"] {
         let mut argv = vec!["iroha", "taira", "public-reset", subcommand];
         if subcommand == "assemble" {
-            argv.extend(["--inventory-draft", "/private/runtime/inventory-draft.json"]);
+            argv.extend(["--intent", "/private/runtime/intent.json"]);
         } else {
             argv.extend([
                 "--inventory",
@@ -1909,6 +1925,191 @@ fn fee_quote_may_replace_limits_but_not_payer_or_gas_bound() {
     let wrong_gas = FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(41));
     assert!(!requested.has_same_payer_and_gas_bound(&wrong_gas));
 }
+#[test]
+fn authorized_transaction_lifetime_uses_exact_creation_and_preserves_shorter_ttl() {
+    let config = fallback_config();
+    let mut builder = TransactionBuilder::new(
+        config.network_id,
+        config.account,
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "bounded transaction".to_owned())]);
+    builder.set_ttl(Duration::from_millis(120_000));
+    let original = builder.into_payload().unwrap();
+    for (creation, configured, expiry, expected) in [
+        (1_000, 120_000, 74_000, 73_000),
+        (1_000, 50, 74_000, 50),
+        (1_000, 120_000, 1_001, 1),
+        (u64::MAX - 1, 120_000, u64::MAX, 1),
+    ] {
+        let mut payload = original.clone();
+        payload.creation_time_ms = creation;
+        payload.time_to_live_ms = NonZeroU64::new(configured);
+        let mut expected_payload = payload.clone();
+        expected_payload.time_to_live_ms = NonZeroU64::new(expected);
+        bound_transaction_payload_lifetime(&mut payload, expiry).unwrap();
+        assert_eq!(payload, expected_payload);
+        assert!(payload.creation_time_ms.checked_add(expected).unwrap() <= expiry);
+    }
+}
+
+#[test]
+fn authorized_transaction_lifetime_rejects_empty_window_and_missing_ttl() {
+    let config = fallback_config();
+    let mut builder = TransactionBuilder::new(
+        config.network_id,
+        config.account,
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "bounded transaction".to_owned())]);
+    builder.set_creation_time(Duration::from_millis(1_000));
+    builder.set_ttl(Duration::from_millis(120_000));
+    let original = builder.into_payload().unwrap();
+    for expiry in [0, 999, 1_000] {
+        let mut payload = original.clone();
+        assert!(bound_transaction_payload_lifetime(&mut payload, expiry).is_err());
+        assert_eq!(payload, original);
+    }
+    let mut missing = original;
+    missing.time_to_live_ms = None;
+    assert!(bound_transaction_payload_lifetime(&mut missing, 2_000).is_err());
+    assert_eq!(missing.time_to_live_ms, None);
+}
+
+#[test]
+fn fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry() {
+    use iroha::data_model::{
+        nexus::FeeDebitSource,
+        transaction::{TransactionAdmissionIntent, TransactionPayload},
+    };
+    use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation};
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    // Exercise both existing entry points too: neither may inherit Ordinary.
+    for mode in 0..3 {
+        let mut config = fallback_config();
+        let discriminant = config.account_chain_discriminant;
+        let _profile = ChainDiscriminantGuard::enter(discriminant);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let _profile = ChainDiscriminantGuard::enter(discriminant);
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let header_end = loop {
+                let read = stream.read(&mut buffer).unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+            assert!(headers.starts_with("POST /v1/fees/quote "));
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            while request.len() < header_end + length {
+                let read = stream.read(&mut buffer).unwrap();
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let request: json::Value =
+                json::from_slice(&request[header_end..header_end + length]).unwrap();
+            let payload: TransactionPayload =
+                json::from_value(request.get("payload").unwrap().clone()).unwrap();
+            let quote = FeeQuoteResponse {
+                intent: payload.fee_payment_intent().clone(),
+                observation: FeeQuoteObservation {
+                    ledger_time_ms: 1,
+                    next_block_height: 7,
+                    route_dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                components: Vec::new(),
+                capacities: Vec::new(),
+                decision: FeeQuoteDecision::Accepted {
+                    debit_source: FeeDebitSource::Account(payload.authority().clone()),
+                    program_revision: None,
+                },
+            };
+            quote.validate_for_draft(&payload).unwrap();
+            let body = json::to_vec(&quote).unwrap();
+            thread::sleep(Duration::from_millis(25));
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            stream.write_all(&body).unwrap();
+            payload
+        });
+        config.torii_api_url = Url::parse(&format!("http://{address}/")).unwrap();
+        let client = BlockingClient::from_client(Client::builder(config).build().unwrap()).unwrap();
+        let executable = Executable::from(vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "exact quoted payload".to_owned(),
+        ))]);
+        let fees = FeePaymentIntent::authority(Vec::new(), None);
+        let expiry = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+            + 10_000;
+        let (transaction, quote) = match mode {
+            0 => quote_and_sign_transaction_with_admission_and_expiry(
+                &client,
+                executable,
+                fees,
+                Metadata::default(),
+                TransactionAdmissionIntent::Ordinary,
+                expiry,
+            ),
+            1 => quote_and_sign_transaction_with_expiry(
+                &client,
+                executable,
+                fees,
+                Metadata::default(),
+                expiry,
+            ),
+            _ => quote_and_sign_transaction(&client, executable, fees, Metadata::default()),
+        }
+        .unwrap();
+        let quoted = server.join().unwrap();
+        assert_eq!(
+            transaction.payload(),
+            &quoted,
+            "quote and signature must bind the same payload"
+        );
+        transaction.verify_signature().unwrap();
+        quote
+            .validate_for_signed_payload(transaction.payload())
+            .unwrap();
+        assert_eq!(
+            transaction.admission_intent(),
+            if mode == 0 {
+                TransactionAdmissionIntent::Ordinary
+            } else {
+                TransactionAdmissionIntent::QueuePlanSynced
+            }
+        );
+        if mode != 2 {
+            assert!(quoted.creation_time_ms + quoted.time_to_live_ms.unwrap().get() <= expiry);
+        }
+    }
+}
+
 #[test]
 fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
     use std::{
@@ -2764,15 +2965,21 @@ fn transaction_get_uses_exact_authenticated_details_and_preserves_rejection() {
     let result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
         ValidationFail::NotPermitted("fixture contract permission denied".to_owned()),
     )));
+    let output = iroha::data_model::block::execution_output::ExecutionOutputV1::Network(
+        iroha::data_model::block::execution_output::NetworkExecutionOutputV1 {
+            input_index: 0,
+            result,
+            completions: Vec::new(),
+        },
+    );
     let transaction = CommittedTransaction {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"exact CLI transaction block")),
         entrypoint_hash: hash,
         entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
         entrypoint: TransactionEntrypoint::External(signed),
-        result_hash: result.hash(),
-        result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
-        result,
-        merge_inclusion: None,
+        output_hash: iroha_crypto::HashOf::new(&output),
+        output_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+        output,
     };
     for mismatched_hash in [false, true] {
         let details = iroha_torii_shared::PipelineTransactionDetailsResponse {
@@ -2785,7 +2992,6 @@ fn transaction_get_uses_exact_authenticated_details_and_preserves_rejection() {
                 hash.to_string()
             },
             transaction: transaction.clone(),
-            trigger_completions: Vec::new(),
         };
         let capabilities = iroha::http::Response::builder()
             .status(200)
@@ -3184,17 +3390,24 @@ fn ledger_asset_get_uses_exact_singular_query_and_preserves_missing_asset_diagno
             assert_eq!(query.asset_id(), &id);
             if missing {
                 let error = result.expect_err("singular missing asset must remain an error");
-                assert!(matches!(
-                    error.downcast_ref::<iroha::query::QueryError>(),
-                    Some(iroha::query::QueryError::Other(_))
-                ));
-                let rendered = format!("{error:#}");
-                assert!(rendered.contains("HTTP 404"));
-                assert!(rendered.contains("query_validation_failed"));
                 let expected = iroha::data_model::query::error::QueryExecutionFail::Find(
                     iroha::data_model::query::error::FindError::Asset(Box::new(id.clone())),
                 )
                 .to_string();
+                let Some(iroha::query::QueryError::Http {
+                    status,
+                    code,
+                    message,
+                }) = error.downcast_ref::<iroha::query::QueryError>()
+                else {
+                    panic!("expected typed HTTP query error, got {error:?}");
+                };
+                assert_eq!(*status, iroha::http::StatusCode::NOT_FOUND);
+                assert_eq!(code, "query_validation_failed");
+                assert_eq!(message, &expected);
+                let rendered = format!("{error:#}");
+                assert!(rendered.contains("HTTP 404"));
+                assert!(rendered.contains("query_validation_failed"));
                 assert!(rendered.contains(&expected));
                 assert!(!rendered.contains("live query store"));
                 assert!(context.output.is_none());

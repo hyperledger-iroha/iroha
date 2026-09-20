@@ -14,6 +14,17 @@ use iroha_core::{
         verify_stark_fri_envelope_with_limits,
     },
 };
+fn checked_zk_stark_keypair() -> iroha_crypto::KeyPair {
+    iroha_crypto::KeyPair::try_random().expect("generate checked ZK STARK keypair")
+}
+#[test]
+fn zk_stark_fixture_uses_checked_ed25519_keypair() {
+    let key_pair = checked_zk_stark_keypair();
+    assert_eq!(
+        key_pair.public_key().algorithm(),
+        iroha_crypto::Algorithm::Ed25519
+    );
+}
 fn test_digest(word: u64) -> iroha_data_model::privacy::GoldilocksDigest384V1 {
     iroha_data_model::privacy::GoldilocksDigest384V1::new([word; 6])
         .expect("canonical native STARK test digest")
@@ -550,31 +561,56 @@ fn expected_ivm_exec_public_inputs(
 }
 #[test]
 fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
+    use iroha_core::smartcontracts::Execute;
     use iroha_crypto::Hash;
     use iroha_data_model::{
         Registrable,
         account::Account,
         confidential::ConfidentialStatus,
         domain::Domain,
-        prelude::{AccountId, IvmBytecode, TransactionBuilder},
+        isi::{
+            smart_contract_code::{
+                ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
+            },
+            verifying_keys::RegisterVerifyingKey,
+        },
+        permission::Permission,
+        prelude::{AccountId, ContractAddress, Grant, IvmBytecode, TransactionBuilder},
         proof::{
             ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId, VerifyingKeyRecord,
         },
         transaction::{Executable, IvmProved},
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
+    use iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
+    use iroha_primitives::json::Json;
     use std::sync::Arc;
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
     let circuit_id = "ivm-execution-v1";
-    // Minimal ZK-mode IVM program: metadata + `HALT`.
-    let meta = ivm::ProgramMetadata {
-        max_cycles: 1,
-        mode: ivm::ivm_mode::ZK,
-        ..ivm::ProgramMetadata::default()
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let bytecode = IvmBytecode::from_compiled(program);
+    // Use the canonical contract artifact and dispatch boundary so this test reaches
+    // native proof rejection after successful execution and registry admission.
+    let compiler =
+        ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
+            force_zk: true,
+            max_cycles: 10_000,
+            mode: ivm::kotodama::compiler::CompilerMode::Production,
+            ..ivm::kotodama::compiler::CompilerOptions::default()
+        });
+    let (program, _) = compiler
+        .compile_source_with_manifest(
+            r#"
+seiyaku StarkProofRejection {
+    kotoage fn run() -> int authorize("CanRunStarkProofRejection") {
+        return 0;
+    }
+}
+"#,
+        )
+        .expect("compile canonical ZK-mode contract");
+    let verified_contract =
+        ivm::verify_contract_artifact(&program).expect("verify canonical contract artifact");
+    let code_hash = verified_contract.code_hash;
+    let bytecode = IvmBytecode::from_compiled(program.clone());
     let kp = checked_zk_stark_keypair();
     let authority = AccountId::new(kp.public_key().clone());
     let domain_id: iroha_model_base::domain::DomainId =
@@ -594,42 +630,103 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         vk_hash,
     );
     vk_record.status = ConfidentialStatus::Active;
+    vk_record.activation_height = Some(1);
+    vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("fixture VK length fits");
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
     vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box.clone());
-    {
-        let mut wb = world.block();
-        wb.verifying_keys_mut_for_testing()
-            .insert(vk_id.clone(), vk_record.clone());
-        wb.verifying_keys_by_circuit_mut_for_testing().insert(
-            (vk_record.circuit_id.clone(), vk_record.version),
-            vk_id.clone(),
-        );
-        wb.commit();
-    }
     let kura = Arc::new(iroha_core::kura::Kura::blank_kura_for_testing());
     let query = iroha_core::query::store::LiveQueryStore::start_test();
     let mut state = iroha_core::state::State::new_for_testing(world, Arc::clone(&kura), query);
     state.zk.halo2.enabled = false;
     state.zk.stark.enabled = true;
+    let network_id = *state.network_id_ref();
+    let contract_address = ContractAddress::derive(
+        &network_id,
+        &authority,
+        0,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+    )
+    .expect("derive canonical fixture contract address");
+    let header = iroha_data_model::block::BlockHeader::new(
+        core::num::NonZeroU64::new(1).expect("nonzero fixture height"),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = Box::new(state.block(header));
+    {
+        let mut stx = block.transaction();
+        for permission in [
+            CanRegisterSmartContractCode.into(),
+            Permission::new("CanManageVerifyingKeys".to_owned(), Json::new(())),
+            Permission::new("CanRunStarkProofRejection".to_owned(), Json::new(())),
+        ] {
+            Grant::account_permission(permission, authority.clone())
+                .execute(&authority, &mut stx)
+                .expect("grant fixture registration and entrypoint permissions");
+        }
+        RegisterSmartContractBytes {
+            code_hash,
+            code: program,
+        }
+        .execute(&authority, &mut stx)
+        .expect("register canonical contract bytes");
+        RegisterSmartContractCode {
+            manifest: verified_contract.manifest.signed(&kp),
+        }
+        .execute(&authority, &mut stx)
+        .expect("register canonical signed contract manifest");
+        stx.world.bind_inactive_contract_subject_for_testing(
+            contract_address.clone(),
+            authority.clone(),
+        );
+        ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            expected_revision: 1,
+            code_hash,
+        }
+        .execute(&authority, &mut stx)
+        .expect("activate canonical fixture contract");
+        RegisterVerifyingKey {
+            id: vk_id.clone(),
+            record: vk_record.clone(),
+        }
+        .execute(&authority, &mut stx)
+        .expect("register canonical execution verifier fixture");
+        stx.apply();
+    }
+    let mut metadata = iroha_model_base::metadata::Metadata::default();
+    metadata.insert(
+        "contract_address".parse().expect("metadata key"),
+        Json::new(contract_address.to_string()),
+    );
+    metadata.insert(
+        "contract_entrypoint".parse().expect("metadata key"),
+        Json::new("run"),
+    );
     const TEST_GAS_LIMIT: u64 = 50_000_000;
     // Derive the proved payload by executing the IVM program once.
     let tx = TransactionBuilder::new(
-        *state.network_id_ref(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
             core::num::NonZeroU64::new(TEST_GAS_LIMIT),
         ),
     )
+    .with_metadata(metadata.clone())
     .with_executable(Executable::Ivm(bytecode.clone()))
     .sign(kp.private_key());
     let proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution(
-        &state.view(),
-        &tx,
-        &vk_record,
+        &*block, &tx, &vk_record,
     )
-    .expect("derive proved payload");
+    .expect("derive proved payload through the authorized contract entrypoint");
+    assert!(
+        proved.overlay.is_empty(),
+        "no-op contract emits no instructions"
+    );
     // Compute the ivm-execution-v1 public inputs and package them as STARK wrapper columns.
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let summary = ivm_cache
@@ -680,13 +777,14 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     let attachments = ProofAttachmentList::try_from(vec![attachment])
         .expect("one attachment is a valid bounded proof list");
     let tx_proved = TransactionBuilder::new(
-        *state.network_id_ref(),
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(
             Vec::new(),
             core::num::NonZeroU64::new(TEST_GAS_LIMIT),
         ),
     )
+    .with_metadata(metadata)
     .with_executable(Executable::IvmProved(IvmProved {
         bytecode: proved.bytecode.clone(),
         overlay: proved.overlay.clone(),
@@ -695,9 +793,8 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     }))
     .with_attachments(attachments)
     .sign(kp.private_key());
-    let err =
-        iroha_core::pipeline::overlay::build_overlay_for_transaction(&tx_proved, &state.view())
-            .expect_err("synthetic STARK proved execution must be rejected");
+    let err = iroha_core::pipeline::overlay::build_overlay_for_transaction(&tx_proved, &*block)
+        .expect_err("synthetic STARK proved execution must be rejected");
     let err_text = format!("{err:?}");
     assert!(
         err_text.contains("proof rejected"),
@@ -745,14 +842,7 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     state.zk.verify_timeout = std::time::Duration::ZERO;
     state.gov.citizenship_bond_amount = 0_u64.into();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -865,14 +955,7 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = false;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -978,14 +1061,7 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = false;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -1096,14 +1172,7 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     state.zk.verify_timeout = std::time::Duration::ZERO;
     state.gov.citizenship_bond_amount = 0_u64.into();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));

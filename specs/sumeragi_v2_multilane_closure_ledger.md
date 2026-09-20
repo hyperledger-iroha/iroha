@@ -2343,15 +2343,25 @@ evidence-aware drain, archive, and useful autonomous execution through the
 canonical carrier. Body-pruning cases must establish the `ML-KURA-01`
 deterministic keeper set, authenticated direct adverts, local-keeper pinning,
 and recovery from every advertised keeper; tuple-count or test-only advert
-injection is insufficient. Required anchors include
-`nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart`,
+injection is insufficient. The executable MergeQC recreation and sidecar
+recovery scenarios have been retired: current authenticated execution rejects
+that authority. TODO: implement current-native four-peer lane recreation with
+stale-artifact rejection and restart recovery of missing execution evidence.
+The reserved required identities are
+`nexus_autoscale_native_four_peer_recreates_lane_and_rejects_stale_artifacts`
+and `nexus_autoscale_native_recovers_missing_execution_evidence_after_restart`
+in `integration_tests/tests/nexus/autoscale_localnet.rs`. They are currently
+unavailable, so the inventory guard and release launcher refuse G-4P before
+running Cargo. The receipt validator requires these exact identities and
+rejects evidence bearing the retired scenario names.
+
+The existing control-only
 `nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart`,
-and the strict autoscale cycle tests in
-`integration_tests/tests/nexus/autoscale_localnet.rs`, after their production
-prerequisites are reachable. A skipped test or test-only producer is a failure.
-The mandatory four-peer lifecycle and rotating-validator Native tests are now
-non-ignored and source-bound into the release runner, but no fresh completion
-artifact is recorded here. Rotating message-loss faults use the
+strict autoscale cycle tests, and rotating-validator Native AMX evidence remain
+valid requirements; they do not substitute for missing recreation/recovery
+qualification. All four mandatory release runs remain required. A skipped test
+or test-only producer is a failure, and no fresh completion artifact is recorded
+here. Rotating message-loss faults use the
 feature-isolated authenticated consensus message controller and must prove the
 installed hold/drop command and matched-message evidence before its atomic heal;
 retired `[sumeragi.debug.rbc]` keys are rejected configuration, not evidence.
@@ -2583,6 +2593,27 @@ source inspection and comment corrections alone cannot close these rows:
   assertions preserved. The older formal declarations are being rebound to
   the live driver; the test facade cannot establish production reachability.
 
+- **Released Validate-to-Apply diagnostics:** the two temporary test-only
+  failure traces in `PreparedLiveValidateApplyRegistryWork::into_released_typed_concrete`
+  are removed. Publication, staged coordinator/LedgerV1 checks and both
+  ownership-preserving rejection branches are unchanged. Existing
+  `resolved_live_validate_retained_terminal_publishes_one_current_commit_apply`,
+  `resolved_recovered_validate_retained_terminal_publishes_one_current_commit_apply`,
+  `resolved_published_validate_retained_terminal_publishes_one_current_commit_apply`,
+  `resolved_validate_retained_terminal_rejects_changed_outcome_digest_before_apply`
+  and `already_terminal_validate_cold_reopen_preserves_success_and_rejection`
+  cover the released-owner boundary. The direct-Serve source contracts bind
+  its preflight/publication chain. Fresh execution and formal evidence remain
+  Open under `ML-AUT-06`, `ML-LIFE-05` and `G-FORMAL`.
+- **Kura physical accounting:** the obsolete composition TODO is replaced with
+  the implemented ownership contract. `TotalDiskUsageMutation` owns exact
+  physical scopes and child completion; `reconcile_physical_resource_inventory`
+  atomically initializes the declared Kura-owned families after bounded
+  recovery. Delegated Sumeragi WAL, body and Certified-Serve stores retain
+  independent writers and are outside this metric. Missing declarations or
+  incomplete children leave affected families unavailable. The physical guard
+  and initialization tests cover this boundary; `G-SCALE` evidence remains Open.
+
 The `v2_ready_durable_validate_adapter_preview.rs` post-WAL-append TODO now has
 token-local test-only injection and
 `ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit`.
@@ -2613,6 +2644,11 @@ These are inspected test definitions, not fresh execution evidence.
   claimed by this reconciliation.
 
 ### Explicitly out of scope
+
+The generic runtime items below are outside this ledger's `ML-*` feature rows,
+not excluded from release qualification. The
+[2026-09-16 liveness redesign](sumeragi_liveness_redesign_goals.md) owns generic
+scheduling/lifecycle replacement and its assembled-runtime acceptance evidence.
 
 - **Generic finalized-view archive retention:** the TODO beside
   `provider_ingest_finalized_archive` in
@@ -2718,6 +2754,13 @@ remain required by the mapped rows.
   routing overrides when `nexus.enabled` is false. That preserves the
   configuration-only production boundary in `ML-LIFE-01`; it is not an
   environment-controlled autonomous-execution toggle.
+- Emergency Kura Fast startup is read-only. The production Sumeragi runner
+  closes consensus ingress and idles before active-height recovery, lifecycle
+  generation claims or lane hydration. It does not admit productive multilane
+  operation with omitted evidence; a Strict restart owns recovery and reopening.
+  `emergency_fast_idles_before_any_active_height_recovery` binds this ordering.
+  This intentional posture is not a bypass or an execution receipt for
+  `ML-AUT-06`, `ML-LIFE-01` or `ML-LIFE-05`; their evidence remains Open.
 - Queue durability ambiguity disables admission/selection until bounded
   restart recovery, and Kura retirement rejects obsolete, unexpected,
   malformed, temporary, hardlinked, or symlinked evidence. Those rejections

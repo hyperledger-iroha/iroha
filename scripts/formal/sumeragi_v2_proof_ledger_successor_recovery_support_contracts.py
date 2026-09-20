@@ -812,7 +812,7 @@ def _check_successor_snapshot_authority(
         "recover_active_height_with_plan snapshot authority",
         recovery,
         (
-            "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
+            "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan, &V2SnapshotStartupPolicy::from_state(state)?, )?;",
             "if record.context() != &bootstrap.context || record.proofs_of_possession() != bootstrap.validator_set_pops",
             "let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;",
             "RecoveredSuccessorActivationAuthority::SnapshotBootstrap( SnapshotSuccessorActivationAuthority::new(bootstrap), )",
@@ -1114,30 +1114,33 @@ def _persistent_recovery_cut_canonical_contracts():
         (key, "effects", name,
          (("impl", "V2EffectExecutor", "<", "SerializedV2Runtime", ">"),)
          if key == "publish_apply" else executor, before + (
+            "self.runtime_and_external_lifecycle_census()?",
             runtime_call,
-            "wal_step.complete(); if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close(error, services)); }",
+            "wal_step.complete()",
+            "runtime_result.map_err(|error| self.close(error, services))?",
+            "if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close(error, services)); }",
             consume_call,
         ))
         for key, name, before, runtime_call, consume_call in (
             ("publish_apply", "step_lifecycle_decision_apply_runtime_predecessor_after_cut", (),
-             "self.runtime.try_step_owed_fifo_predecessor(now, attestation.dispatch_key().lifecycle_ordinal())",
+             "runtime.try_step_owed_fifo_predecessor(now, attestation.dispatch_key().lifecycle_ordinal(), &external)",
              "self.consume_effects_with_runner_decision_cleanup("),
             ("publish_pre_timeout", "step_pre_timeout_locked_prepare_qc_after_debt", (),
-             "self.runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut)",
+             "runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut, &external)",
              "self.consume_pacemaker_effects_with_runner_decision_cleanup("),
             ("publish_pacemaker", "step_pacemaker_once", (),
-             "self.runtime.step_pacemaker_effects(now)",
+             "runtime.step_pacemaker_effects(now, &external)",
              "self.consume_pacemaker_effects_with_runner_decision_cleanup("),
             ("publish_capacity", "step_completion_capacity_relief", (),
-             "self.runtime.step_completion_capacity_relief_effects(now, blocked_ordinal)",
+             "runtime.step_completion_capacity_relief_effects(now, blocked_ordinal, &external)",
              "self.consume_effects_with_runner_decision_cleanup("),
             ("publish_step", "step", (
                 "self.ensure_open()?; if let Err(error) = self.finish_runtime_step_reconciliation(services) { return Err(self.close_after_transferring_runtime_terminals(error, services)); }",
                 "self.drain_retained_effect_batch(services, true)",
-             ), "self.runtime.step_effects(now)",
+             ), "runtime.step_effects(now, &external)",
              "self.consume_effects_with_runner_decision_cleanup("),
             ("publish_recovery", "step_pending_tip_recovery", (),
-             "self.runtime.step_recovery_effects(now)",
+             "runtime.step_recovery_effects(now, &external)",
              "self.consume_pending_tip_recovery_effects(effects, services)?"),
         )
     )
@@ -2583,7 +2586,7 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
             "certificate == &self.certificate",
             "self.validate_pending.project_validate_apply_successor(predecessor, &apply_effect)",
             "prepared._adapter.pending_live_decision_apply.take()",
-            "persisted_apply.complete_exact_apply(",
+            "persisted_apply.complete_exact_released_apply(",
             "predecessor",
             "&self.validate_pending",
             "child_pending",
@@ -2707,7 +2710,9 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
         pending_factory,
         "recovered Decision-Apply pending-Kura owner factory",
         (
-            "startup.open_production_lifecycle_owner_v1(",
+            "let Self { startup, replay } = self",
+            "startup.open_production_lifecycle_owner_with_pending_kura_v1(",
+            "config, reply_route_source_capacity, factory_inputs, body_store, Some(&replay)",
             "owner.with_pending_kura_apply_replay(replay)",
         ),
     )
@@ -3004,7 +3009,12 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
             "let successor_debt_is_exact = match successor_outputs",
             "self.pending_lifecycle_output_admissions.is_empty()",
             "self.lifecycle_decision_apply_successor_census_is_exact(attestation)",
-            "self.lifecycle_decision_apply_successor_batch_is_exact(attestation, batch)",
+            "match attestation.mode()",
+            "LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix",
+            "self.lifecycle_decision_apply_successor_batch_is_exact(attestation, batch,)",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit",
+            "self.retained_effect_batch.is_none()",
             "let pending_work_is_exact =",
             "self.pending_work() == self.pending_lifecycle_output_admissions.len()",
             "successor_debt_is_exact",
@@ -3347,12 +3357,12 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
         ),
     )
     _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
-        paths, errors, item, require_order, reject_tokens, require_tokens
+        paths, sources, errors, item, require_order, reject_tokens, require_tokens
     )
 
 
 def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
-    paths, errors, item, require_order, reject_tokens, require_tokens
+    paths, sources, errors, item, require_order, reject_tokens, require_tokens
 ) -> None:
     pending_runner = item("pending_runner", "run_pending_kura_lifecycle_height")
     require_order(
@@ -3365,7 +3375,9 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "let body_store = if emergency_fast",
             "V2BodyStore::open_emergency_fast_read_only(",
             "else",
-            "V2BodyStore::open_with_policy_and_capacity(",
+            ".mint_v2_body_store_directory_authority()",
+            "V2BodyStore::open_with_kura_authority_and_capacity(",
+            "kura.as_ref(), body_store_authority, context.clone(), signature_policy, body_store_capacity,",
             ".into_quarantined_recovered_startup()",
             "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
             ".bind_pending_kura_apply(pending_kura_apply)",
@@ -3437,7 +3449,8 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "dispatch_lane_work_effects(",
             "drained.is_some()",
             "reconcile_pending_kura_terminal_lane_output_handoffs(",
-            "if terminal_exact_output_pending",
+            "if block_sync_server.has_pending_historical_body_serve()",
+            "continue",
             "if !drained_terminal_ingress && !drained_terminal_relay",
             "break",
             "receiver.ensure_closed_drained_cut()",
@@ -3539,17 +3552,13 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
                 "pending-Kura lifecycle must assert unarmed clocks before and after "
                 f"activation; found {unarmed_count} assertions"
             )
-    pending_lifecycle_fixture = item(
-        "startup_test",
-        "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
-    )
+    pending_lifecycle_fixture = item("startup_test", "exercise_production_marker_replay_cases")
     require_order(
         "startup_test",
         pending_lifecycle_fixture,
         "production Kura-first pending-Kura lifecycle fixture",
         (
-            "(0xB5_u8, true, false, false, Some(false))",
-            "(0xB6_u8, true, false, false, Some(true))",
+            "for &(marker, persist_matching_outcome, shutdown_before_activation, shutdown_after_activation, pending_kura_finalize,) in cases",
             "semantic_probe.fail_after_kura_store_for_test()",
             "V2ApplyError::InjectedCrashAfterKuraStore",
             "drop(body_store)",
@@ -3560,9 +3569,10 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "exercise_pending_kura_production_lifecycle(",
         ),
     )
-    pending_behavior = item(
-        "wal_test",
+    pending_behavior = _require_lifecycle_stack_test_body(
+        paths["wal_test"], sources["wal_test"],
         "recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources",
+        errors, body_attributes=('#[cfg(feature = "bls")]',),
     )
     require_order(
         "wal_test",

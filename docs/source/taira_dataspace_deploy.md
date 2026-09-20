@@ -10,10 +10,61 @@ The command is a first-release additive workflow. It does not overwrite an
 existing lane, move a dataspace, repair an existing namespace, submit empty
 transactions, or create blocks to advance time.
 
+## Validator epoch maintenance
+
+The network operator must provision and commit the next mint-finality roster
+before each NPoS boundary. The native `iroha taira epoch-maintenance` workflow
+uses independently selected public genesis/peer trust and a bounded public
+schedule produced by `kagami kagemusha derive-mint-finality-epoch-schedule-v1`.
+Run its `maintain` command alongside application traffic with a separate ledger
+owner holding `CanSetParameters`; an HTTP operator credential alone cannot
+submit the maintenance transaction. The DPN deployment receives no validator
+seed material and does not manage validator epochs.
+
+For boundary height B, the next roster must have executed by B−1. Queued
+maintenance needs three canonical carrier heights, so preparation rejects a
+parent later than B−4. These carriers contain actual admission, availability and
+parameter execution work. A public API listener or one successful deployment
+phase does not establish that the next epoch has been prepared.
+
+The maintainer retains one exact signed transaction per network and target epoch,
+observes uncertain submissions, and verifies its successful authenticated
+execution on all four validators. It stages the following roster only after an
+actual epoch transition. Its finite schedule and invocation budget require
+explicit renewal and supervision; it does not create empty blocks to reach a
+future epoch. Provisioning public keys does not prove future election membership.
+The workflow supports the selected fixed four-validator configuration and
+rejects observed membership changes. The consensus boundary remains authoritative.
+
 ## Commands
 
-Export the target profile from the assembled native reset inventory and the
-`prepare-public-inputs` bundle. No new trust JSON needs to be handwritten:
+For an existing network, export the target profile from the retained public
+signed genesis, its independently selected public key, checked NetworkId and
+four public peer records:
+
+```sh
+iroha taira dataspace-deploy export-profile \
+  --network-id CHECKED_NETWORK_ID \
+  --genesis-signed /ABSOLUTE/PUBLIC/genesis.signed.nrt \
+  --genesis-public-key /ABSOLUTE/PUBLIC/genesis.public_key \
+  --peers /ABSOLUTE/PUBLIC/peers.json \
+  --output /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/deployment-profile.json
+```
+
+`peers.json` is an array of the existing profile's four peer records, each with
+`torii_origin`, `peer_id`, `node_fingerprint`, `build_fingerprint` and
+`config_fingerprint`. Select these public pins independently from approved
+validator deployment evidence. A historical build pin must not be reused after
+an upgrade, and untrusted HTTP discovery must not become the expected authority.
+The command verifies the native signed genesis, checked network, exact four-peer
+roster and node hashes, then publishes the native trust format without replacing
+an existing file. Its receipt hashes the exact public inputs and output. It loads
+no client configuration or credentials and makes no network request. Export does
+not establish authorization or deployment success; plan and apply still compare
+fresh signed attestations against every selected pin.
+
+When preparing a reset, the existing assembled inventory and complete
+`prepare-public-inputs` bundle can also export the target profile:
 
 ```sh
 iroha taira public-reset export-deployment-profile \
@@ -45,7 +96,7 @@ iroha --config CLIENT.toml \
   --operator-private-key-file /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/operator.key \
   taira dataspace-deploy init \
   --dataspace dpn --lane-id 6 --lane-profile restricted-full-replica \
-  --account-alias admin --lane-manifest LANE_MANIFEST.json \
+  --account-alias admin \
   --trust /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/deployment-profile.json \
   --payment-asset 6TEAJqbb8oEPmLncoNiMRbLEK6tw \
   --alias-create-maximum 0.5 --transaction-fee-maximum TX_FEE_CAP \
@@ -61,10 +112,19 @@ alias is additional, preserving any existing primary alias. `init` checks the
 native paid plan and atomically writes `deployment.json` inside the selected
 output directory; it submits nothing. In the example, that file is
 `/ABSOLUTE/OWNER_PRIVATE_DIRECTORY/manifest/deployment.json`; the `manifest`
-directory must be new. Supply the native inline lane manifest object in
-`LANE_MANIFEST.json`. The trust file
-contains the independently selected public genesis key, exact signed genesis
-wire and four public peer/fingerprint records.
+directory must be new. The inline lane manifest is generated from the signed
+genesis's registered and activated universal-lane validator accounts and peer
+bindings. The selected profile supplies each peer's Torii endpoint. Generation
+requires the exact four selected peers, four distinct accounts and quorum three;
+bindings absent, inactive or ambiguous in signed genesis fail before a deployment file is written.
+The trust file contains the independently selected public genesis key, exact
+signed genesis wire and four public peer/fingerprint records. Both generated and
+loaded deployment manifests pass the same native schema, alias and committee
+validation used by Core before any deployment phase can be planned. A loaded
+manifest must retain the exact generated committee and selected peer endpoints;
+edited committee inputs are rejected. The signed genesis bindings describe the
+proposed deployment intent. Core separately verifies current account, peer, role
+and key eligibility when activating the catalog; generation is not live authority.
 
 Public-reset inventories select each validator's canonical HTTPS root URL,
 including an explicit nondefault port when needed. Four distinct URLs may use
@@ -113,11 +173,31 @@ operation ID. If `operation_id` is null, the ID derives from the canonical
 intent and checked NetworkId;
 reordering the two alias intents does not generate another identity.
 
-`apply` resumes from the saved plan. It can advance through already applied
-phases and submit the next phase. If that transaction is still pending, it
-returns the current observations. Run `apply` again with the same operation ID
-to observe it and, once applied, advance. There is no polling loop and no
-transport retry implemented by this controller.
+`apply` resumes from the saved plan and waits for each retained transaction
+before advancing to the next phase. It polls the exact signed transaction using
+the same client and journal; observation never signs or submits a replacement.
+A pending operation can be resumed with the same operation ID.
+Phase and finality transitions appear on stderr; machine stdout remains one
+typed result. `apply` exits successfully only after authenticated completion
+with a named receipt. An incomplete result is printed before the command exits
+with an error, so automation can retain the report without mistaking it for a
+successful deployment. `status` reports an inspected operation's pending state
+without treating that state as a command failure.
+For a failed phase, the terminal error includes its transaction hash and the
+retained global/local `Rejected` or `Expired` observations, with source and any
+reported block height. For `Rejected`, one authenticated query requests the exact
+retained transaction's committed details. A matching rejected result supplies its
+native error chain; exact typed absence is reported as unavailable details. Other
+query or identity errors remain failures. `Expired` causes no details query, and
+no failed transaction is resubmitted. The formatter uses the retained report and
+never prints a signed payload or claims independently anchored completion.
+
+`apply` and `status` accept `--timeout-ms` (default `180000`). Each invocation
+creates one absolute deadline shared by its preflight, HTTP reads and proof
+verification. Pending-phase sleeps consume that same budget. The CLI checks
+the deadline before first dispatch and before admitting completion, so an
+expired budget cannot authorize a new submission or a late success. A caller
+with a broader workflow deadline must pass only its remaining milliseconds.
 
 `status` submits no ledger transactions. It can retain verified proofs, canonical
 carrier bytes and completion receipts in the local journal. It can inspect a
@@ -210,20 +290,34 @@ the same nonzero height, plus successful authenticated details containing the
 same native signed transaction bytes. These observations are labeled
 `applied_verification_pending`. `deployment_complete` remains false until the
 native completion layer validates independently anchored finality, the exact
-execution commitment/inclusion, and all four validators' state. A moving tip
-or unavailable proof keeps the phase observations and returns the actionable
+execution commitment/inclusion, and all four validators' state. An unavailable
+or invalid proof keeps the phase observations and returns the actionable
 `verification_error` field; subsequent status/apply resumes verification.
 The bounded proof synchronization layer can return `verification_sync_pending`
 while retaining its verified cache, without submitting another transaction.
+An authenticated peer still catching up, or a carrier newer than its captured
+tip, yields `verification_peer_pending`. The same pending result covers an
+exact HTTP 409 `ErrorEnvelope` with code `bridge_finality_attestation_failure`,
+whose sole `finality_attestation_failure` detail has reason `TipChanged` and its
+`tip_mismatch` payload: the requested, applied and consensus-decision heights
+differ. The SDK requires the payload and envelope to bind the request's height,
+challenge, node and network. This unsigned progress response never proves
+finality. Generic 404s, conflicting reasons or payloads, and invalid attestations
+remain errors. Apply retries only explicit
+progress outcomes within its deadline; other verification errors stop the call.
 A successful completion names its immutable `completion_receipt`; exact verified
 canonical carrier bytes are retained beside the proof cache and per-peer receipt.
+Independent peer reads run in a bounded four-worker group. One coordinator
+verifies the successor chain and owns journal publication. Completion requires
+all four peer checks. Each later completion uses a fresh challenge and fresh
+validator state; a saved completion receipt alone cannot establish current
+success.
 
 The typed `VerificationRequestV1` carries the original catalog/overlay
 baseline, expected additions and grant, paid alias intent, each retained wire
 SHA256/instruction vector/alias plan, pipeline observations, and committed
 transaction DTO. It appears in the `verification` field of `apply` and `status`
-output; `verification_request` is an internal Rust entry point, not a CLI
-subcommand. The integrated native completion layer verifies independently anchored
+output. The integrated native completion layer verifies independently anchored
 finality, the exact native `ExecutionCommitment` and canonical inclusion,
 and all four validators' final state against the independently selected trust
 profile. Neither a single peer observation nor a caller-supplied commitment is

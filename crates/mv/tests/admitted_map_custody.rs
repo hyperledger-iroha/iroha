@@ -1,0 +1,1414 @@
+//! Public closed map insertion with real MV credits and observed allocation custody.
+
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    borrow::Borrow,
+    cell::Cell,
+    cmp::Ordering,
+    future::Future,
+    mem::ManuallyDrop,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
+    },
+    task::{Context, Wake, Waker},
+};
+
+use concread::bptree::{
+    AllocationDemand, BptreeMap, BptreeMapCheckpoint, BptreeMapOwned, ClonePlanning,
+    InsertAdmissionError, NodeCloning, NodeFunding, OwnedWriteError, PlanningError, Prepaid,
+};
+use mv::allocation::{
+    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation,
+};
+
+static SERIAL: Mutex<()> = Mutex::new(());
+static RECORDS: [Record; 16_384] = [const { Record::new() }; 16_384];
+static NEXT_RECORD: AtomicUsize = AtomicUsize::new(0);
+static PANIC_CHARGE: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+struct Record {
+    pointer: AtomicUsize,
+    bytes: AtomicUsize,
+    alignment: AtomicUsize,
+    reclaiming: AtomicBool,
+    freed: AtomicBool,
+    refunded: AtomicBool,
+}
+
+impl Record {
+    const fn new() -> Self {
+        Self {
+            pointer: AtomicUsize::new(0),
+            bytes: AtomicUsize::new(0),
+            alignment: AtomicUsize::new(0),
+            reclaiming: AtomicBool::new(false),
+            freed: AtomicBool::new(false),
+            refunded: AtomicBool::new(false),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Expected {
+    id: usize,
+    layout: Layout,
+}
+
+thread_local! {
+    // Cursor and next-reader charges are split together before either shell is
+    // allocated. The observer records their actual requested layouts separately.
+    static EXPECTED: Cell<[Option<Expected>; 2]> = const { Cell::new([None; 2]) };
+    static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+struct ObservedAllocator;
+
+unsafe impl GlobalAlloc for ObservedAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: forward the caller's original layout to the actual allocator.
+        let pointer = unsafe { System.alloc(layout) };
+        let _ = ALLOCATIONS.try_with(|count| {
+            if let Some(value) = count.get() {
+                count.set(Some(value + 1));
+            }
+        });
+        if !pointer.is_null() {
+            let _ = EXPECTED.try_with(|pending| {
+                let mut slots = pending.get();
+                if let Some(index) = slots
+                    .iter()
+                    .position(|slot| slot.is_some_and(|entry| entry.layout == layout))
+                {
+                    let expected = slots[index].take().unwrap();
+                    let record = &RECORDS[expected.id];
+                    record.bytes.store(layout.size(), SeqCst);
+                    record.alignment.store(layout.align(), SeqCst);
+                    record.pointer.store(pointer as usize, SeqCst);
+                    pending.set(slots);
+                }
+            });
+        }
+        pointer
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        // Claim the live allocation before System can recycle its address.
+        // A concurrent replacement at that address has a different record and
+        // must not inherit this free witness. The witness itself remains false
+        // until the original physical deallocation has returned.
+        let original = RECORDS[..NEXT_RECORD.load(SeqCst)].iter().find(|record| {
+            record.pointer.load(SeqCst) == pointer as usize
+                && record.bytes.load(SeqCst) == layout.size()
+                && record.alignment.load(SeqCst) == layout.align()
+                && !record.freed.load(SeqCst)
+                && record
+                    .reclaiming
+                    .compare_exchange(false, true, SeqCst, SeqCst)
+                    .is_ok()
+        });
+        // SAFETY: this is the original allocation pointer and its supplied layout.
+        unsafe { System.dealloc(pointer, layout) };
+        if let Some(record) = original {
+            record.freed.store(true, SeqCst);
+        }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: ObservedAllocator = ObservedAllocator;
+
+fn reset() {
+    PANIC_CHARGE.store(usize::MAX, SeqCst);
+    assert!(EXPECTED.with(|pending| pending.get().iter().all(Option::is_none)));
+    for record in &RECORDS[..NEXT_RECORD.swap(0, SeqCst)] {
+        record.pointer.store(0, SeqCst);
+        record.bytes.store(0, SeqCst);
+        record.alignment.store(0, SeqCst);
+        record.reclaiming.store(false, SeqCst);
+        record.freed.store(false, SeqCst);
+        record.refunded.store(false, SeqCst);
+    }
+}
+
+fn counted<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    struct Window;
+    impl Drop for Window {
+        fn drop(&mut self) {
+            ALLOCATIONS.with(|count| count.set(None));
+        }
+    }
+    ALLOCATIONS.with(|count| assert!(count.replace(Some(0)).is_none()));
+    let window = Window;
+    let result = operation();
+    let allocations = ALLOCATIONS.with(|count| count.get().unwrap());
+    drop(window);
+    (result, allocations)
+}
+
+fn without_allocations<T>(operation: impl FnOnce() -> T) -> T {
+    let (result, allocations) = counted(operation);
+    assert_eq!(
+        allocations, 0,
+        "operation allocated after its admission boundary"
+    );
+    result
+}
+
+#[derive(Debug)]
+struct Charge {
+    id: usize,
+    credit: AllocationCharge,
+}
+
+impl Charge {
+    fn split(reservation: &mut AllocationReservation, layout: Layout) -> Self {
+        assert_ne!(layout.size(), 0, "these fixtures own nonempty storage");
+        let credit = reservation
+            .try_split(layout)
+            .expect("complete original demand");
+        let id = NEXT_RECORD.fetch_add(1, SeqCst);
+        assert!(id < RECORDS.len());
+        EXPECTED.with(|pending| {
+            let mut slots = pending.get();
+            let slot = slots.iter_mut().find(|slot| slot.is_none()).unwrap();
+            *slot = Some(Expected { id, layout });
+            pending.set(slots);
+        });
+        Self { id, credit }
+    }
+}
+
+impl Drop for Charge {
+    fn drop(&mut self) {
+        let record = &RECORDS[self.id];
+        assert_ne!(
+            record.pointer.load(SeqCst),
+            0,
+            "charged storage was never observed"
+        );
+        assert!(
+            record.freed.load(SeqCst),
+            "credits returned before actual System free"
+        );
+        assert_eq!(record.bytes.load(SeqCst), self.credit.layout().size());
+        assert_eq!(record.alignment.load(SeqCst), self.credit.layout().align());
+        assert!(
+            !record.refunded.swap(true, SeqCst),
+            "same charge refunded twice"
+        );
+        // The real original AllocationCharge is dropped after these witnesses.
+        assert!(
+            PANIC_CHARGE
+                .compare_exchange(self.id, usize::MAX, SeqCst, SeqCst)
+                .is_err(),
+            "injected original charge destructor panic",
+        );
+    }
+}
+
+#[derive(Debug)]
+struct Payload {
+    order: usize,
+    bytes: ManuallyDrop<Box<[u8]>>,
+    charge: ManuallyDrop<Charge>,
+}
+
+impl Payload {
+    fn allocate(order: usize, length: usize, charge: Charge) -> Self {
+        let mut bytes = Box::<[u8]>::new_uninit_slice(length);
+        for byte in &mut bytes {
+            byte.write(order as u8);
+        }
+        // SAFETY: every byte of this original exact-length allocation is initialized.
+        let bytes = unsafe { bytes.assume_init() };
+        Self {
+            order,
+            bytes: ManuallyDrop::new(bytes),
+            charge: ManuallyDrop::new(charge),
+        }
+    }
+
+    fn layout(&self) -> Layout {
+        Layout::array::<u8>(self.bytes.len()).unwrap()
+    }
+
+    fn pointer(&self) -> usize {
+        self.bytes.as_ptr() as usize
+    }
+
+    fn id(&self) -> usize {
+        self.charge.id
+    }
+}
+
+impl Drop for Payload {
+    fn drop(&mut self) {
+        // SAFETY: both fields are unique and destroyed once, actual Box first.
+        unsafe {
+            ManuallyDrop::drop(&mut self.bytes);
+            ManuallyDrop::drop(&mut self.charge);
+        }
+    }
+}
+
+impl Clone for Payload {
+    fn clone(&self) -> Self {
+        panic!("ordinary Clone bypassed the original admitted payload policy")
+    }
+}
+
+impl Borrow<usize> for Payload {
+    fn borrow(&self) -> &usize {
+        &self.order
+    }
+}
+
+impl PartialEq for Payload {
+    fn eq(&self, other: &Self) -> bool {
+        self.order == other.order
+    }
+}
+impl Eq for Payload {}
+impl PartialOrd for Payload {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Payload {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.order.cmp(&other.order)
+    }
+}
+
+#[derive(Default)]
+struct Counters {
+    admissions: AtomicUsize,
+    keys: AtomicUsize,
+    values: AtomicUsize,
+}
+
+struct Policy {
+    reservation: AllocationReservation,
+    counters: Arc<Counters>,
+    copies: usize,
+    fail_at: Option<usize>,
+}
+
+impl Policy {
+    fn admit(
+        budget: &AllocationBudget,
+        counters: &Arc<Counters>,
+        demand: AllocationDemand,
+        fail_at: Option<usize>,
+    ) -> Result<Self, AllocationRefusal> {
+        counters.admissions.fetch_add(1, SeqCst);
+        Ok(Self {
+            reservation: budget.try_reserve_bytes(demand.bytes())?,
+            counters: Arc::clone(counters),
+            copies: 0,
+            fail_at,
+        })
+    }
+
+    fn copy(&mut self, source: &Payload) -> Payload {
+        let charge = self.take_node_charge(source.layout());
+        let mut result = Payload::allocate(source.order, source.bytes.len(), charge);
+        result.bytes.copy_from_slice(&source.bytes);
+        self.copies += 1;
+        assert_ne!(
+            self.fail_at,
+            Some(self.copies),
+            "injected nested clone refusal"
+        );
+        result
+    }
+}
+
+impl NodeFunding for Policy {
+    type Charge = Charge;
+
+    fn take_node_charge(&mut self, layout: Layout) -> Charge {
+        Charge::split(&mut self.reservation, layout)
+    }
+}
+
+impl NodeCloning<Payload, Payload> for Policy {
+    fn clone_key(&mut self, key: &Payload) -> Payload {
+        self.counters.keys.fetch_add(1, SeqCst);
+        self.copy(key)
+    }
+
+    fn clone_value(&mut self, value: &Payload) -> Payload {
+        self.counters.values.fetch_add(1, SeqCst);
+        self.copy(value)
+    }
+}
+
+impl ClonePlanning<Payload, Payload> for Policy {
+    fn plan_key(key: &Payload, demand: &mut AllocationDemand) -> Result<(), PlanningError> {
+        demand.add_layout(key.layout())
+    }
+
+    fn plan_value(value: &Payload, demand: &mut AllocationDemand) -> Result<(), PlanningError> {
+        demand.add_layout(value.layout())
+    }
+}
+
+type Map = BptreeMap<Payload, Payload, Prepaid<Policy>>;
+type Owned = BptreeMapOwned<Payload, Payload, Prepaid<Policy>>;
+
+fn input(budget: &AllocationBudget, order: usize) -> (Payload, Payload) {
+    // The large, irregular keys also occur at child minima. Their cloning demand
+    // cannot be approximated from the selected leaf or an average payload size.
+    let key_len = if order.is_multiple_of(7) {
+        2049
+    } else {
+        17 + order % 31
+    };
+    let value_len = 49 + (order * 37) % 503;
+    let key_layout = Layout::array::<u8>(key_len).unwrap();
+    let value_layout = Layout::array::<u8>(value_len).unwrap();
+    let mut reservation = budget
+        .try_reserve_layouts([key_layout, value_layout])
+        .unwrap();
+    let key = Payload::allocate(order, key_len, Charge::split(&mut reservation, key_layout));
+    let value = Payload::allocate(
+        order,
+        value_len,
+        Charge::split(&mut reservation, value_layout),
+    );
+    (key, value)
+}
+
+fn map(budget: &AllocationBudget, counters: &Arc<Counters>) -> Map {
+    budget.with_deferred_refund_notifications(|| {
+        Map::try_new_with_node_custody(|demand| Policy::admit(budget, counters, demand, None))
+            .unwrap()
+    })
+}
+
+fn insert(map: &Map, budget: &AllocationBudget, counters: &Arc<Counters>, order: usize) -> Owned {
+    let (key, value) = input(budget, order);
+    let start = NEXT_RECORD.load(SeqCst);
+    let mut planned_allocations = 0;
+    let ((owner, previous), allocations) = counted(|| {
+        budget.with_deferred_refund_notifications(|| {
+            map.try_insert_admitted(key, value, |demand| {
+                planned_allocations = demand.allocations();
+                Policy::admit(budget, counters, demand, None)
+            })
+            .unwrap_or_else(|(_, error)| panic!("admission failed: {error:?}"))
+        })
+    });
+    assert!(previous.is_none());
+    assert_eq!(
+        allocations,
+        NEXT_RECORD.load(SeqCst) - start,
+        "unowned insertion allocation"
+    );
+    assert!(allocations <= planned_allocations);
+    assert_live_credits(budget);
+    owner
+}
+
+fn commit(map: &Map, budget: &AllocationBudget, owner: Owned) {
+    without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            let writer = map
+                .try_write_owned(owner)
+                .unwrap_or_else(|_| panic!("original owner refused"));
+            writer.commit();
+        });
+    });
+}
+
+fn assert_live_credits(budget: &AllocationBudget) {
+    assert!(EXPECTED.with(|pending| pending.get().iter().all(Option::is_none)));
+    let bytes: usize = RECORDS[..NEXT_RECORD.load(SeqCst)]
+        .iter()
+        .filter(|record| !record.refunded.load(SeqCst))
+        .map(|record| record.bytes.load(SeqCst))
+        .sum();
+    assert_eq!(
+        budget.reserved_bytes(),
+        bytes,
+        "unused operation credit escaped the handoff"
+    );
+}
+
+fn reclaimed_since(start: usize) {
+    for record in &RECORDS[start..NEXT_RECORD.load(SeqCst)] {
+        assert_ne!(record.pointer.load(SeqCst), 0);
+        assert!(record.freed.load(SeqCst));
+        assert!(record.refunded.load(SeqCst));
+    }
+}
+
+#[test]
+fn complete_demand_refusal_allocates_nothing_and_retries_the_original_input_after_release() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let (key, value) = input(&budget, 7);
+    let pointers = (key.pointer(), value.pointer());
+    let blocking_credit = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let mut demand_bytes = 0;
+    let ((key, value), error) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            map.try_insert_admitted(key, value, |demand| {
+                demand_bytes = demand.bytes();
+                Policy::admit(&budget, &counters, demand, None)
+            })
+            .err()
+            .expect("original capacity must refuse the complete operation")
+        })
+    });
+    let InsertAdmissionError::Refused(AllocationRefusal::Capacity {
+        requested_bytes, ..
+    }) = error
+    else {
+        panic!("refusal must originate in the original full budget");
+    };
+    assert_eq!(requested_bytes, demand_bytes);
+    assert!(demand_bytes > 0);
+    assert_eq!((key.pointer(), value.pointer()), pointers);
+    assert!(map.read().is_empty());
+    budget.with_deferred_refund_notifications(|| drop(blocking_credit));
+    let (owner, old) = budget.with_deferred_refund_notifications(|| {
+        map.try_insert_admitted(key, value, |demand| {
+            Policy::admit(&budget, &counters, demand, None)
+        })
+        .unwrap_or_else(|_| panic!("released original capacity must admit retry"))
+    });
+    assert!(old.is_none());
+    assert_eq!(owner.get(&7).unwrap().pointer(), pointers.1);
+    assert_live_credits(&budget);
+    commit(&map, &budget, owner);
+    assert_eq!(map.read().get(&7).unwrap().pointer(), pointers.1);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn nonuniform_nested_payloads_split_and_grow_while_original_readers_retain_actual_credits() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(32 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    for order in 0..48 {
+        let owner = insert(&map, &budget, &counters, order * 2);
+        commit(&map, &budget, owner);
+    }
+    let original = map.read();
+    let old_value = original.get(&0).unwrap();
+    let old_id = old_value.id();
+    let old_pointer = old_value.pointer();
+    // Interleave both edges and interior splits. 128 entries cannot fit beneath
+    // one eight-child branch in this engine, so this reaches a new root level.
+    for order in 0..128 {
+        if order < 96 && order % 2 == 0 {
+            continue;
+        }
+        let owner = insert(&map, &budget, &counters, order);
+        commit(&map, &budget, owner);
+    }
+    assert_eq!(map.read().len(), 128);
+    assert_eq!(original.len(), 48);
+    assert_eq!(old_value.pointer(), old_pointer);
+    assert!(!RECORDS[old_id].freed.load(SeqCst));
+    assert!(!RECORDS[old_id].refunded.load(SeqCst));
+    assert_ne!(map.read().get(&0).unwrap().pointer(), old_pointer);
+    assert!(
+        counters.keys.load(SeqCst) > counters.values.load(SeqCst),
+        "separators use explicit key cloning"
+    );
+    for (expected, (key, value)) in map.read().iter().enumerate() {
+        assert_eq!(key.order, expected);
+        assert_eq!(value.order, expected);
+        assert!(value.bytes.iter().all(|byte| *byte == expected as u8));
+    }
+    let retained = budget.reserved_bytes();
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(original)));
+    assert!(RECORDS[old_id].freed.load(SeqCst));
+    assert!(RECORDS[old_id].refunded.load(SeqCst));
+    assert!(budget.reserved_bytes() < retained);
+    assert_live_credits(&budget);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn detached_public_owner_rejects_foreign_and_busy_maps_without_readmission_or_copy() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let original = map(&budget, &counters);
+    let decoy = map(&budget, &counters);
+    let owner = insert(&original, &budget, &counters, 1);
+    let competing = insert(&original, &budget, &counters, 2);
+    let pointer = owner.get(&1).unwrap().pointer();
+    let admissions = counters.admissions.load(SeqCst);
+    let records = NEXT_RECORD.load(SeqCst);
+    let owner = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            let (owner, error) = decoy.try_write_owned(owner).err().expect("foreign owner");
+            assert_eq!(error, OwnedWriteError::Changed);
+            let held = original
+                .try_write_owned(competing)
+                .unwrap_or_else(|_| panic!("same base"));
+            let (owner, error) = original.try_write_owned(owner).err().expect("held writer");
+            assert_eq!(error, OwnedWriteError::Busy);
+            assert_eq!(owner.get(&1).unwrap().pointer(), pointer);
+            drop(held);
+            let acquired = original
+                .try_write_owned(owner)
+                .unwrap_or_else(|_| panic!("released writer"));
+            assert_eq!(acquired.get(&1).unwrap().pointer(), pointer);
+            acquired.detach()
+        })
+    });
+    assert_eq!(counters.admissions.load(SeqCst), admissions);
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    assert_eq!(owner.get(&1).unwrap().pointer(), pointer);
+    commit(&original, &budget, owner);
+    assert_eq!(original.read().get(&1).unwrap().pointer(), pointer);
+    assert!(original.read().get(&2).is_none());
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop((decoy, original))));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn replacement_and_detached_successor_keep_their_original_storage_after_map_drop() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let first = insert(&map, &budget, &counters, 7);
+    commit(&map, &budget, first);
+    let original_id = map.read().get(&7).unwrap().id();
+    let (key, value) = input(&budget, 7);
+    let replacement_pointer = value.pointer();
+    let (owner, previous) = budget.with_deferred_refund_notifications(|| {
+        map.try_insert_admitted(key, value, |demand| {
+            Policy::admit(&budget, &counters, demand, None)
+        })
+        .unwrap_or_else(|_| panic!("replacement demand must fit"))
+    });
+    let previous = previous.expect("the original entry was replaced in the private cursor");
+    let previous_id = previous.id();
+    assert_ne!(
+        previous_id, original_id,
+        "published storage was copied by the explicit policy"
+    );
+    assert_eq!(owner.to_snapshot().len(), 1);
+    assert_eq!(owner.get(&7).unwrap().pointer(), replacement_pointer);
+    assert_live_credits(&budget);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    // The detached cursor retains its real original root and base generation.
+    // The returned value independently retains its actual nested allocation.
+    assert!(!RECORDS[original_id].freed.load(SeqCst));
+    assert!(!RECORDS[previous_id].freed.load(SeqCst));
+    assert_eq!(owner.get(&7).unwrap().pointer(), replacement_pointer);
+    assert!(previous.bytes.iter().all(|byte| *byte == 7));
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(owner)));
+    assert!(RECORDS[original_id].freed.load(SeqCst));
+    assert!(!RECORDS[previous_id].freed.load(SeqCst));
+    assert_live_credits(&budget);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(previous)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn every_partial_leaf_clone_unwind_reclaims_new_storage_and_preserves_published_references() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for fail_at in 1..=4 {
+        reset();
+        let budget = AllocationBudget::new(1 << 20);
+        let counters = Arc::new(Counters::default());
+        let map = map(&budget, &counters);
+        for order in [0, 1] {
+            let owner = insert(&map, &budget, &counters, order);
+            commit(&map, &budget, owner);
+        }
+        let original = map.read();
+        let old = original.get(&0).unwrap();
+        let pointer = old.pointer();
+        let baseline = budget.reserved_bytes();
+        let start = NEXT_RECORD.load(SeqCst);
+        let (key, value) = input(&budget, 9);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            budget.with_deferred_refund_notifications(|| {
+                let _ = map.try_insert_admitted(key, value, |demand| {
+                    Policy::admit(&budget, &counters, demand, Some(fail_at))
+                });
+            });
+        }));
+        assert!(result.is_err());
+        assert!(map.is_poisoned());
+        assert_eq!(old.pointer(), pointer);
+        assert_eq!(map.read().get(&0).unwrap().pointer(), pointer);
+        assert_eq!(original.len(), 2);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        reclaimed_since(start);
+        let (key, value) = input(&budget, 10);
+        let ((key, value), error) = without_allocations(|| {
+            budget.with_deferred_refund_notifications(|| {
+                map.try_insert_admitted(key, value, |_| -> Result<Policy, ()> {
+                    panic!("poisoned writer must not readmit")
+                })
+                .err()
+                .expect("poison is explicit")
+            })
+        });
+        assert!(matches!(error, InsertAdmissionError::Poisoned));
+        budget.with_deferred_refund_notifications(|| drop((key, value, original)));
+        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+struct Reenter {
+    map: Arc<Map>,
+    budget: AllocationBudget,
+    input: Mutex<Option<(Payload, Payload)>>,
+    wakes: AtomicUsize,
+    writer_released: AtomicBool,
+}
+
+impl Wake for Reenter {
+    fn wake(self: Arc<Self>) {
+        let mut slot = self.input.lock().unwrap();
+        let (key, value) = slot.take().unwrap();
+        let (input, error) = self.budget.with_deferred_refund_notifications(|| {
+            self.map
+                .try_insert_admitted(key, value, |_| Err::<Policy, _>(()))
+                .err()
+                .expect("read-only reentrant probe refuses admission")
+        });
+        self.writer_released
+            .store(matches!(error, InsertAdmissionError::Refused(())), SeqCst);
+        *slot = Some(input);
+        self.wakes.fetch_add(1, SeqCst);
+    }
+}
+
+#[test]
+fn old_reader_and_abort_refunds_wake_only_after_the_original_writer_unlocks() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = Arc::new(map(&budget, &counters));
+    let owner = insert(&map, &budget, &counters, 1);
+    commit(&map, &budget, owner);
+    let old = map.read();
+    let old_id = old.get(&1).unwrap().id();
+    let owner = insert(&map, &budget, &counters, 2);
+    commit(&map, &budget, owner);
+    let unpublished = insert(&map, &budget, &counters, 3);
+    let wake = Arc::new(Reenter {
+        map: Arc::clone(&map),
+        budget: budget.clone(),
+        input: Mutex::new(Some(input(&budget, 99))),
+        wakes: AtomicUsize::new(0),
+        writer_released: AtomicBool::new(false),
+    });
+    drop(wake.input.lock().unwrap());
+    let waker = Waker::from(Arc::clone(&wake));
+    let mut context = Context::from_waker(&waker);
+    let mut wait = None;
+    budget.with_deferred_refund_notifications(|| {
+        let held = map
+            .try_write_owned(unpublished)
+            .unwrap_or_else(|_| panic!("original writer"));
+        let blocking_credit = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        let AllocationRefusal::Capacity { release, .. } = budget.try_reserve_bytes(1).unwrap_err()
+        else {
+            panic!("original budget must be full");
+        };
+        let mut pending = Box::pin(release.wait_for_release());
+        assert!(pending.as_mut().poll(&mut context).is_pending());
+        wait = Some(pending);
+        without_allocations(|| {
+            drop(old);
+            assert!(RECORDS[old_id].freed.load(SeqCst));
+            assert!(RECORDS[old_id].refunded.load(SeqCst));
+            assert!(budget.reserved_bytes() < budget.limit_bytes());
+            assert_eq!(wake.wakes.load(SeqCst), 0);
+            drop(held);
+            drop(blocking_credit);
+            assert_eq!(wake.wakes.load(SeqCst), 0);
+        });
+    });
+    assert_eq!(wake.wakes.load(SeqCst), 1);
+    assert!(wake.writer_released.load(SeqCst));
+    assert!(
+        wait.as_mut()
+            .unwrap()
+            .as_mut()
+            .poll(&mut context)
+            .is_ready()
+    );
+    assert_eq!(map.read().len(), 2);
+    assert!(map.read().get(&3).is_none());
+    budget.with_deferred_refund_notifications(|| drop((wait, waker, wake)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+fn edit(
+    map: &Map,
+    budget: &AllocationBudget,
+    counters: &Arc<Counters>,
+    owner: Owned,
+    key: Payload,
+    value: Payload,
+) -> (Owned, Option<Payload>) {
+    let start = NEXT_RECORD.load(SeqCst);
+    let mut planned_allocations = 0;
+    let (result, allocations) = counted(|| {
+        budget.with_deferred_refund_notifications(|| {
+            map.try_insert_owned_admitted(owner, key, value, |demand| {
+                planned_allocations = demand.allocations();
+                Policy::admit(budget, counters, demand, None)
+            })
+            .unwrap_or_else(|(_, error)| panic!("retained edit refused: {error:?}"))
+        })
+    });
+    assert_eq!(
+        allocations,
+        NEXT_RECORD.load(SeqCst) - start,
+        "unowned retained-edit allocation"
+    );
+    assert!(allocations <= planned_allocations);
+    assert_live_credits(budget);
+    result
+}
+
+#[test]
+fn retained_successor_grows_and_replaces_entries_before_one_atomic_publication() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(32 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let original = map.read();
+    let mut owner = insert(&map, &budget, &counters, 0);
+    let mut pointers = [0; 128];
+    pointers[0] = owner.get(&0).unwrap().pointer();
+    for index in 1..128 {
+        let order = index * 73 % 128;
+        let (key, value) = input(&budget, order);
+        pointers[order] = value.pointer();
+        let (next, previous) = edit(&map, &budget, &counters, owner, key, value);
+        assert!(previous.is_none());
+        owner = next;
+        assert_eq!(owner.to_snapshot().len(), index + 1);
+        assert!(
+            map.read().is_empty(),
+            "an intermediate private edit became visible"
+        );
+    }
+    for (order, pointer) in pointers.into_iter().enumerate() {
+        assert_eq!(
+            owner.get(&order).unwrap().pointer(),
+            pointer,
+            "private entry copied again"
+        );
+    }
+    let (key, value) = input(&budget, 7);
+    let replacement = value.pointer();
+    let (owner, previous) = edit(&map, &budget, &counters, owner, key, value);
+    let previous = previous.expect("same private entry replacement");
+    assert_eq!(previous.pointer(), pointers[7]);
+    assert_eq!(owner.to_snapshot().len(), 128);
+    budget.with_deferred_refund_notifications(|| drop(previous));
+    commit(&map, &budget, owner);
+    assert!(original.is_empty());
+    let published = map.read();
+    assert_eq!(published.len(), 128);
+    assert_eq!(published.get(&7).unwrap().pointer(), replacement);
+    without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| drop((published, original)))
+    });
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn retained_capacity_refusal_preserves_private_entries_and_input_then_retries() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let owner = insert(&map, &budget, &counters, 0);
+    let private_pointer = owner.get(&0).unwrap().pointer();
+    let (key, value) = input(&budget, 7);
+    let pointers = (key.pointer(), value.pointer());
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let records = NEXT_RECORD.load(SeqCst);
+    let ((owner, (key, value)), error) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            map.try_insert_owned_admitted(owner, key, value, |demand| {
+                Policy::admit(&budget, &counters, demand, None)
+            })
+            .err()
+            .expect("full capacity must refuse retained edit")
+        })
+    });
+    assert!(matches!(
+        error,
+        InsertAdmissionError::Refused(AllocationRefusal::Capacity { .. })
+    ));
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    assert_eq!((key.pointer(), value.pointer()), pointers);
+    assert_eq!(owner.get(&0).unwrap().pointer(), private_pointer);
+    assert_eq!(owner.to_snapshot().len(), 1);
+    assert!(map.read().is_empty());
+    assert!(!map.is_poisoned());
+    budget.with_deferred_refund_notifications(|| drop(blocker));
+    let (owner, previous) = edit(&map, &budget, &counters, owner, key, value);
+    assert!(previous.is_none());
+    assert_eq!(owner.get(&7).unwrap().pointer(), pointers.1);
+    commit(&map, &budget, owner);
+    assert_eq!(map.read().len(), 2);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+}
+
+#[test]
+fn retained_edits_refuse_foreign_busy_and_changed_generations_before_admission() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(2 << 20);
+    let counters = Arc::new(Counters::default());
+    let original = map(&budget, &counters);
+    let foreign = map(&budget, &counters);
+    let owner = insert(&original, &budget, &counters, 0);
+    let competing = insert(&original, &budget, &counters, 1);
+    let (key, value) = input(&budget, 7);
+    let pointers = (
+        key.pointer(),
+        value.pointer(),
+        owner.get(&0).unwrap().pointer(),
+    );
+    let never = |_| -> Result<Policy, ()> { panic!("invalid owner was readmitted") };
+    let (owner, key, value) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            let ((owner, (key, value)), error) = foreign
+                .try_insert_owned_admitted(owner, key, value, never)
+                .err()
+                .unwrap();
+            assert!(matches!(error, InsertAdmissionError::Changed));
+            let held = original
+                .try_write_owned(competing)
+                .unwrap_or_else(|_| panic!("competing writer"));
+            let ((owner, (key, value)), error) = original
+                .try_insert_owned_admitted(owner, key, value, never)
+                .err()
+                .unwrap();
+            assert!(matches!(error, InsertAdmissionError::Busy));
+            held.commit();
+            let ((owner, (key, value)), error) = original
+                .try_insert_owned_admitted(owner, key, value, never)
+                .err()
+                .unwrap();
+            assert!(matches!(error, InsertAdmissionError::Changed));
+            assert_eq!(
+                (
+                    key.pointer(),
+                    value.pointer(),
+                    owner.get(&0).unwrap().pointer()
+                ),
+                pointers
+            );
+            (owner, key, value)
+        })
+    });
+    assert_eq!(original.read().len(), 1);
+    assert!(original.read().get(&1).is_some());
+    assert!(original.read().get(&0).is_none());
+    without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| drop((owner, key, value, original, foreign)))
+    });
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn fully_exhausted_budget_can_abort_all_retained_edits_without_allocating() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let original = insert(&map, &budget, &counters, 255);
+    commit(&map, &budget, original);
+    let baseline = budget.reserved_bytes();
+    let original_pointer = map.read().get(&255).unwrap().pointer();
+    let start = NEXT_RECORD.load(SeqCst);
+    let mut owner = insert(&map, &budget, &counters, 0);
+    for order in 1..64 {
+        let (key, value) = input(&budget, order);
+        let (next, previous) = edit(&map, &budget, &counters, owner, key, value);
+        assert!(previous.is_none());
+        owner = next;
+    }
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    let blocked_bytes = blocker.remaining_bytes();
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(owner)));
+    assert_eq!(budget.reserved_bytes(), baseline + blocked_bytes);
+    assert_eq!(map.read().get(&255).unwrap().pointer(), original_pointer);
+    assert_eq!(map.read().len(), 1);
+    reclaimed_since(start);
+    budget.with_deferred_refund_notifications(|| drop(blocker));
+    assert_live_credits(&budget);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+}
+
+#[test]
+fn later_copy_unwind_aborts_the_whole_private_successor_and_preserves_published_storage() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for fail_at in 1..=4 {
+        reset();
+        let budget = AllocationBudget::new(8 << 20);
+        let counters = Arc::new(Counters::default());
+        let map = map(&budget, &counters);
+        for order in 0..48 {
+            let owner = insert(&map, &budget, &counters, order);
+            commit(&map, &budget, owner);
+        }
+        let old = map.read();
+        let original_pointer = old.get(&0).unwrap().pointer();
+        let baseline = budget.reserved_bytes();
+        let start = NEXT_RECORD.load(SeqCst);
+        let owner = insert(&map, &budget, &counters, 100);
+        let (key, value) = input(&budget, 0);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            budget.with_deferred_refund_notifications(|| {
+                let _ = map.try_insert_owned_admitted(owner, key, value, |demand| {
+                    Policy::admit(&budget, &counters, demand, Some(fail_at))
+                });
+            });
+        }));
+        assert!(
+            result.is_err(),
+            "the untouched published leaf must be copied"
+        );
+        assert!(map.is_poisoned());
+        assert_eq!(map.read().get(&0).unwrap().pointer(), original_pointer);
+        assert_eq!(map.read().len(), 48);
+        assert!(map.read().get(&100).is_none());
+        assert_eq!(budget.reserved_bytes(), baseline);
+        reclaimed_since(start);
+        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(old)));
+        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn private_leaf_split_unwind_reclaims_all_previous_edits_without_publication() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let probe = map(&budget, &counters);
+    let mut owner = insert(&probe, &budget, &counters, 0);
+    let mut split = None;
+    for order in 1..16 {
+        let before = counters.keys.load(SeqCst);
+        let (key, value) = input(&budget, order);
+        let (next, previous) = edit(&probe, &budget, &counters, owner, key, value);
+        assert!(previous.is_none());
+        owner = next;
+        let copies = counters.keys.load(SeqCst) - before;
+        if copies > 0 {
+            split = Some((order, copies));
+            break;
+        }
+    }
+    let (split_at, copies) = split.expect("first private leaf split within both node geometries");
+    budget.with_deferred_refund_notifications(|| drop((owner, probe)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+    for fail_at in 1..=copies {
+        reset();
+        let map = map(&budget, &counters);
+        let baseline = budget.reserved_bytes();
+        let start = NEXT_RECORD.load(SeqCst);
+        let mut owner = insert(&map, &budget, &counters, 0);
+        for order in 1..split_at {
+            let (key, value) = input(&budget, order);
+            let (next, previous) = edit(&map, &budget, &counters, owner, key, value);
+            assert!(previous.is_none());
+            owner = next;
+        }
+        let (key, value) = input(&budget, split_at);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            budget.with_deferred_refund_notifications(|| {
+                let _ = map.try_insert_owned_admitted(owner, key, value, |demand| {
+                    Policy::admit(&budget, &counters, demand, Some(fail_at))
+                });
+            });
+        }));
+        assert!(result.is_err());
+        assert!(map.is_poisoned());
+        assert!(map.read().is_empty());
+        assert_eq!(budget.reserved_bytes(), baseline);
+        reclaimed_since(start);
+        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn retired_tracking_charge_unwind_sees_installed_bookkeeping_and_aborts_all_private_nodes() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let baseline = budget.reserved_bytes();
+    let start = NEXT_RECORD.load(SeqCst);
+    let owner = insert(&map, &budget, &counters, 0);
+    // Original insertion records its two incoming payloads first, then the
+    // original first_seen tracking allocation before any shell or node copy.
+    let first_tracking = start + 2;
+    assert!(!RECORDS[first_tracking].freed.load(SeqCst));
+    let (key, value) = input(&budget, 1);
+    PANIC_CHARGE.store(first_tracking, SeqCst);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        budget.with_deferred_refund_notifications(|| {
+            let _ = map.try_insert_owned_admitted(owner, key, value, |demand| {
+                Policy::admit(&budget, &counters, demand, None)
+            });
+        });
+    }));
+    assert!(result.is_err());
+    assert_eq!(
+        PANIC_CHARGE.load(SeqCst),
+        usize::MAX,
+        "the old tracking charge must unwind"
+    );
+    assert!(map.is_poisoned());
+    assert!(map.read().is_empty());
+    assert_eq!(budget.reserved_bytes(), baseline);
+    reclaimed_since(start);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+fn checkpoint_insert(
+    checkpoint: &mut BptreeMapCheckpoint<'_, Payload, Payload, Policy>,
+    budget: &AllocationBudget,
+    counters: &Arc<Counters>,
+    order: usize,
+) -> Option<Payload> {
+    let (key, value) = input(budget, order);
+    let start = NEXT_RECORD.load(SeqCst);
+    let mut bound = 0;
+    let (result, allocations) = counted(|| {
+        checkpoint
+            .try_insert_admitted(key, value, |demand| {
+                bound = demand.allocations();
+                Policy::admit(budget, counters, demand, None)
+            })
+            .unwrap_or_else(|(_, error)| panic!("checkpoint demand refused: {error:?}"))
+    });
+    assert!(allocations <= bound);
+    assert_eq!(allocations, NEXT_RECORD.load(SeqCst) - start);
+    assert_live_credits(budget);
+    result
+}
+
+#[test]
+fn full_budget_checkpoint_abort_restores_original_private_entries_buffers_and_credits() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let first_record = NEXT_RECORD.load(SeqCst);
+    let owner = insert(&map, &budget, &counters, 0);
+    let parent_pointer = owner.get(&0).unwrap().pointer();
+    let parent_first = first_record + 2;
+    let parent_last = first_record + 3;
+    let baseline = budget.reserved_bytes();
+    let start = NEXT_RECORD.load(SeqCst);
+    budget.with_deferred_refund_notifications(|| {
+        let mut writer = map
+            .try_write_owned(owner)
+            .unwrap_or_else(|_| panic!("original writer"));
+        let mut child = without_allocations(|| writer.checkpoint().unwrap());
+        for order in 1..80 {
+            assert!(checkpoint_insert(&mut child, &budget, &counters, order).is_none());
+        }
+        assert_eq!(child.to_snapshot().len(), 80);
+        assert!(!RECORDS[parent_first].freed.load(SeqCst));
+        assert!(!RECORDS[parent_last].freed.load(SeqCst));
+        let blocker = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        let blocked_bytes = blocker.remaining_bytes();
+        without_allocations(|| drop(child));
+        assert_eq!(budget.reserved_bytes(), baseline + blocked_bytes);
+        assert_eq!(writer.get(&0).unwrap().pointer(), parent_pointer);
+        assert_eq!(writer.len(), 1);
+        assert!(!RECORDS[parent_first].freed.load(SeqCst));
+        assert!(!RECORDS[parent_last].freed.load(SeqCst));
+        reclaimed_since(start);
+        drop(blocker);
+        without_allocations(|| writer.commit());
+    });
+    assert_eq!(map.read().len(), 1);
+    assert_eq!(map.read().get(&0).unwrap().pointer(), parent_pointer);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn nested_checkpoint_apply_abort_and_sibling_apply_preserve_original_parent_until_commit() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(16 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let old = map.read();
+    let owner = insert(&map, &budget, &counters, 0);
+    let parent_pointer = owner.get(&0).unwrap().pointer();
+    let baseline = budget.reserved_bytes();
+    budget.with_deferred_refund_notifications(|| {
+        let mut writer = map
+            .try_write_owned(owner)
+            .unwrap_or_else(|_| panic!("original writer"));
+        let mut outer = writer.checkpoint().unwrap();
+        let mut nested = outer.checkpoint().unwrap();
+        for order in 1..40 {
+            assert!(checkpoint_insert(&mut nested, &budget, &counters, order).is_none());
+        }
+        without_allocations(|| nested.apply());
+        assert_eq!(outer.to_snapshot().len(), 40);
+        let outer_pointer = outer.get(&0).unwrap().pointer();
+        let outer_baseline = budget.reserved_bytes();
+        let mut aborted = outer.checkpoint().unwrap();
+        let previous = checkpoint_insert(&mut aborted, &budget, &counters, 0).unwrap();
+        drop(previous);
+        assert!(checkpoint_insert(&mut aborted, &budget, &counters, 999).is_none());
+        without_allocations(|| drop(aborted));
+        assert_eq!(outer.get(&0).unwrap().pointer(), outer_pointer);
+        assert!(outer.get(&999).is_none());
+        assert_eq!(budget.reserved_bytes(), outer_baseline);
+        let mut applied = outer.checkpoint().unwrap();
+        for order in (40..80).rev() {
+            assert!(checkpoint_insert(&mut applied, &budget, &counters, order).is_none());
+        }
+        without_allocations(|| applied.apply());
+        assert_eq!(outer.to_snapshot().len(), 80);
+        without_allocations(|| drop(outer));
+        assert_eq!(writer.get(&0).unwrap().pointer(), parent_pointer);
+        assert_eq!(writer.len(), 1);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        let (key, value) = input(&budget, 6);
+        assert!(
+            writer
+                .try_insert_admitted(key, value, |demand| {
+                    Policy::admit(&budget, &counters, demand, None)
+                })
+                .unwrap_or_else(|_| panic!("admitted edit under the original writer"))
+                .is_none()
+        );
+        let mut sibling = writer.checkpoint().unwrap();
+        assert!(checkpoint_insert(&mut sibling, &budget, &counters, 7).is_none());
+        without_allocations(|| sibling.apply());
+        assert!(old.is_empty());
+        assert!(map.read().is_empty());
+        without_allocations(|| writer.commit());
+    });
+    assert!(old.is_empty());
+    assert_eq!(map.read().len(), 3);
+    assert!(map.read().get(&6).is_some());
+    assert!(map.read().get(&7).is_some());
+    assert!(map.read().get(&1).is_none());
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(old)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn caught_checkpoint_edit_panic_cannot_read_detach_or_publish_the_original_cursor() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for detach in [false, true] {
+        reset();
+        let budget = AllocationBudget::new(2 << 20);
+        let counters = Arc::new(Counters::default());
+        let map = map(&budget, &counters);
+        let initial = insert(&map, &budget, &counters, 0);
+        commit(&map, &budget, initial);
+        let original_pointer = map.read().get(&0).unwrap().pointer();
+        let baseline = budget.reserved_bytes();
+        let start = NEXT_RECORD.load(SeqCst);
+        let owner = insert(&map, &budget, &counters, 1);
+        budget.with_deferred_refund_notifications(|| {
+            let mut writer = map
+                .try_write_owned(owner)
+                .unwrap_or_else(|_| panic!("original writer"));
+            let mut child = writer.checkpoint().unwrap();
+            let (key, value) = input(&budget, 7);
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let _ = child.try_insert_admitted(key, value, |demand| {
+                        Policy::admit(&budget, &counters, demand, Some(1))
+                    });
+                }))
+                .is_err()
+            );
+            assert!(catch_unwind(AssertUnwindSafe(|| child.get(&0))).is_err());
+            assert!(catch_unwind(AssertUnwindSafe(|| child.to_snapshot().len())).is_err());
+            assert!(catch_unwind(AssertUnwindSafe(|| child.apply())).is_err());
+            assert!(catch_unwind(AssertUnwindSafe(|| writer.get(&0))).is_err());
+            let refused = catch_unwind(AssertUnwindSafe(|| {
+                if detach {
+                    drop(writer.detach());
+                } else {
+                    writer.commit();
+                }
+            }));
+            assert!(refused.is_err());
+        });
+        assert!(map.is_poisoned());
+        assert_eq!(map.read().get(&0).unwrap().pointer(), original_pointer);
+        assert_eq!(map.read().len(), 1);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        reclaimed_since(start);
+        without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+        reclaimed_since(0);
+    }
+}
+
+#[test]
+fn checkpoint_capacity_refusal_keeps_child_state_and_original_input_for_retry() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let owner = insert(&map, &budget, &counters, 0);
+    budget.with_deferred_refund_notifications(|| {
+        let mut writer = map
+            .try_write_owned(owner)
+            .unwrap_or_else(|_| panic!("original writer"));
+        let mut child = writer.checkpoint().unwrap();
+        assert!(checkpoint_insert(&mut child, &budget, &counters, 1).is_none());
+        let original = child.get(&1).unwrap().pointer();
+        let (key, value) = input(&budget, 7);
+        let pointers = (key.pointer(), value.pointer());
+        let blocker = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        let ((key, value), error) = without_allocations(|| {
+            child
+                .try_insert_admitted(key, value, |demand| {
+                    Policy::admit(&budget, &counters, demand, None)
+                })
+                .expect_err("original full budget")
+        });
+        assert!(matches!(
+            error,
+            InsertAdmissionError::Refused(AllocationRefusal::Capacity { .. })
+        ));
+        assert_eq!((key.pointer(), value.pointer()), pointers);
+        assert_eq!(child.to_snapshot().len(), 2);
+        assert_eq!(child.get(&1).unwrap().pointer(), original);
+        drop(blocker);
+        assert!(
+            child
+                .try_insert_admitted(key, value, |demand| {
+                    Policy::admit(&budget, &counters, demand, None)
+                })
+                .unwrap_or_else(|_| panic!("same input retry"))
+                .is_none()
+        );
+        assert_eq!(child.get(&7).unwrap().pointer(), pointers.1);
+        without_allocations(|| child.apply());
+        without_allocations(|| writer.commit());
+    });
+    assert_eq!(map.read().len(), 3);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn checkpoint_buffer_refund_panic_restores_parent_ownership_and_forbids_publication() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(1 << 20);
+    let counters = Arc::new(Counters::default());
+    let map = map(&budget, &counters);
+    let owner = insert(&map, &budget, &counters, 0);
+    let parent_id = owner.get(&0).unwrap().id();
+    let baseline = budget.reserved_bytes();
+    let start = NEXT_RECORD.load(SeqCst);
+    budget.with_deferred_refund_notifications(|| {
+        let mut writer = map
+            .try_write_owned(owner)
+            .unwrap_or_else(|_| panic!("original writer"));
+        let mut child = writer.checkpoint().unwrap();
+        let (key, value) = input(&budget, 1);
+        // Both buffers grow on this first child edit. Its first recorded charge
+        // is the new first_seen buffer; the checkpoint retains the displaced one.
+        let child_buffer = NEXT_RECORD.load(SeqCst);
+        assert!(
+            child
+                .try_insert_admitted(key, value, |demand| {
+                    Policy::admit(&budget, &counters, demand, None)
+                })
+                .unwrap_or_else(|_| panic!("child edit"))
+                .is_none()
+        );
+        PANIC_CHARGE.store(child_buffer, SeqCst);
+        assert!(catch_unwind(AssertUnwindSafe(|| drop(child))).is_err());
+        assert_eq!(PANIC_CHARGE.load(SeqCst), usize::MAX);
+        assert_eq!(budget.reserved_bytes(), baseline);
+        assert!(!RECORDS[parent_id].freed.load(SeqCst));
+        reclaimed_since(start);
+        assert!(map.read().is_empty());
+        assert!(catch_unwind(AssertUnwindSafe(|| writer.len())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| writer.commit())).is_err());
+    });
+    assert!(map.is_poisoned());
+    assert!(map.read().is_empty());
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(map)));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

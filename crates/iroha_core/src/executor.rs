@@ -89,6 +89,12 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Arc, Mutex},
 };
+#[path = "executor_execution_fee.rs"]
+mod execution_fee;
+pub(crate) use execution_fee::{ExecutionFeeMeter, ExecutionFeeSettlementError};
+#[path = "executor_execution_effects.rs"]
+mod execution_effects;
+pub(crate) use execution_effects::ExecutionEffects;
 /// One-shot proof that the executor debited one exact sponsored fee charge.
 pub(crate) struct VerifiedFeeSponsorCharge {
     submitting_authority: AccountId,
@@ -967,11 +973,12 @@ pub(crate) fn denying_executor_for_testing(message: &str) -> Executor {
 }
 const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
-/// Execute a single instruction in a detached overlay, recording only the state deltas.
+#[cfg(test)]
+/// Execute a single instruction in a detached overlay for delta regression tests.
 ///
-/// This helper is used by the parallel validator to pre-apply side-effect-free instructions without
+/// This regression-test helper pre-applies side-effect-free instructions without
 /// borrowing a live `StateBlock`. Unsupported instructions return `ValidationFail::InternalError`
-/// so the caller can conservatively fall back to sequential execution.
+/// to preserve the reference fallback boundary exercised by the tests.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn execute_instruction_detached(
     authority: &AccountId,
@@ -1460,6 +1467,7 @@ fn extract_permission_or_role_mutation(
             is_revoke: true,
         })
 }
+#[cfg(test)]
 fn mutates_contract_deployment_permission(instruction: &InstructionBox) -> bool {
     matches!(
         extract_permission_or_role_mutation(instruction),
@@ -2437,6 +2445,9 @@ fn overlay_build_error_to_validation_fail(
     error: crate::pipeline::overlay::OverlayBuildError,
 ) -> ValidationFail {
     match error {
+        crate::pipeline::overlay::OverlayBuildError::ExecutionOwner(message) => {
+            ValidationFail::InternalError(message)
+        }
         crate::pipeline::overlay::OverlayBuildError::HeaderPolicy(error) => {
             ValidationFail::IvmAdmission(error)
         }
@@ -4324,6 +4335,7 @@ pub(crate) fn validate_transaction_fee_admission(
     .map_err(nexus_fee_admission_error_to_validation_fail)?;
     Ok(())
 }
+#[cfg(test)]
 fn applied_overlay_base_gas(
     transaction: &SignedTransaction,
     overlay: &crate::pipeline::overlay::TxOverlay,
@@ -4375,33 +4387,11 @@ fn applied_overlay_base_gas(
     Ok((gas_used, instruction_count))
 }
 
-/// Reserve an overlay transaction's deterministic base gas before applying its effects.
+#[cfg(test)]
+/// Reference gas and Nexus fee settlement for overlay regression tests.
 ///
-/// Trigger work executed by an overlay is metered relative to this reservation, so neither a
-/// nested callback nor a later transaction can execute past the shared block limit.
-pub(crate) fn precharge_gas_for_applied_overlay(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    transaction: &SignedTransaction,
-    overlay: &crate::pipeline::overlay::TxOverlay,
-) -> Result<(), ValidationFail> {
-    if is_initial_genesis_context(state_transaction) {
-        return Ok(());
-    }
-    if state_transaction.last_tx_gas_used != 0 {
-        return Err(ValidationFail::InternalError(
-            "overlay base gas must be reserved before transaction effects".to_owned(),
-        ));
-    }
-    let (gas_used, _) = applied_overlay_base_gas(transaction, overlay)?;
-    Executor::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-    state_transaction.last_tx_gas_used = gas_used;
-    Ok(())
-}
-
-/// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
-///
-/// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
-/// fee-accounting behavior that `execute_transaction` performs for each committed transaction.
+/// The tests apply overlays directly and use this helper to exercise fee accounting
+/// independently of `Executor::execute_transaction`.
 pub(crate) fn charge_fees_for_applied_overlay(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -4411,16 +4401,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
     charge_fees_for_applied_overlay_inner(state_transaction, authority, transaction, overlay, false)
 }
 
-/// Settle an overlay whose base gas was reserved before its effects were applied.
-pub(crate) fn charge_fees_for_precharged_overlay(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    authority: &AccountId,
-    transaction: &SignedTransaction,
-    overlay: &crate::pipeline::overlay::TxOverlay,
-) -> Result<(), ValidationFail> {
-    charge_fees_for_applied_overlay_inner(state_transaction, authority, transaction, overlay, true)
-}
-
+#[cfg(test)]
 fn charge_fees_for_applied_overlay_inner(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -4613,6 +4594,7 @@ pub(crate) fn charge_fees_for_rejected_live_batch(
         LiveGasAccounting::Initialize,
     )
 }
+#[cfg(test)]
 fn live_batch_overlay_byte_size(instructions: &[InstructionBox]) -> u64 {
     instructions.iter().fold(0_u64, |total, instruction| {
         total.saturating_add(u64::try_from(instruction.encode().len()).unwrap_or(u64::MAX))
@@ -4628,24 +4610,6 @@ fn live_batch_contract_execution_limit(
         .unwrap_or(u64::MAX)
         .saturating_sub(direct_gas_used)
         .min(block_remaining_at_start.saturating_sub(accountable_gas_used))
-}
-fn enforce_live_batch_overlay_limits(
-    max_instructions: usize,
-    max_bytes: u64,
-    instruction_count: usize,
-    byte_size: u64,
-) -> Result<(), ValidationFail> {
-    if max_instructions > 0 && instruction_count > max_instructions {
-        return Err(ValidationFail::NotPermitted(format!(
-            "overlay exceeds max instructions: {instruction_count} > {max_instructions}"
-        )));
-    }
-    if max_bytes > 0 && byte_size > max_bytes {
-        return Err(ValidationFail::NotPermitted(format!(
-            "overlay exceeds max bytes: {byte_size} > {max_bytes}"
-        )));
-    }
-    Ok(())
 }
 /// Return whether live execution rejected only because its retained overlay crossed a configured
 /// preparation limit.
@@ -5469,6 +5433,11 @@ impl Executor {
             ));
         }
         if let Some(replay) = ivm_proved_replay.as_ref() {
+            if state_transaction.last_tx_gas_used != replay.gas_used {
+                return Err(ValidationFail::InternalError(
+                    "proved replay lost its retained execution work".into(),
+                ));
+            }
             crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
                 replay.completed_axt.len(),
                 state_transaction,
@@ -5492,7 +5461,16 @@ impl Executor {
         // Preserve deterministic work accounting even if an instruction later
         // rejects. The block corridor decides whether the rejected live
         // transaction is fee-eligible and carries these counters forward.
-        state_transaction.last_tx_gas_used = used;
+        if ivm_proved_replay.is_some() {
+            // The verifier's actual run already transferred its work, before
+            // any AXT, gas or effect admission below could reject the replay.
+            state_transaction.admit_replayed_execution_effects(instructions.iter())?;
+        } else {
+            // A refused authored set never starts, so it creates no work/fee basis.
+            state_transaction.admit_authored_execution_effects(&instructions)?;
+            state_transaction.last_tx_gas_used = used;
+            state_transaction.record_execution_fee_instructions(instructions.len(), used)?;
+        }
         let confidential_delta = crate::gas::sum_confidential_gas_costs(instructions.iter());
         if confidential_delta > 0 {
             state_transaction.record_confidential_gas_delta(confidential_delta);
@@ -5949,7 +5927,10 @@ impl Executor {
             .map_err(|err| {
                 ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
             })?;
-        let run_result = runtime.run_with_host(&mut host);
+        let run_result = match state_transaction.execution_cycle_budget()? {
+            Some(budget) => runtime.run_with_host_and_cycle_budget(&mut host, budget),
+            None => runtime.run_with_host(&mut host),
+        };
         let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
         if let Err(err) = run_result {
             let error =
@@ -5959,6 +5940,9 @@ impl Executor {
             // business state but uses this counter for block budgeting and rejected fees.
             state_transaction.last_tx_gas_used =
                 state_transaction.last_tx_gas_used.saturating_add(gas_used);
+            if trigger_context.is_none() {
+                state_transaction.record_execution_fee_vm_work(gas_used)?;
+            }
             return Err(error);
         }
         let next_nft_sequence = trigger_context.map(|_| host.next_nft_sequence());
@@ -5972,6 +5956,9 @@ impl Executor {
         // Retain completed VM work even when artifact validation or application later fails.
         state_transaction.last_tx_gas_used =
             state_transaction.last_tx_gas_used.saturating_add(gas_used);
+        if trigger_context.is_none() {
+            state_transaction.record_execution_fee_vm_work(gas_used)?;
+        }
         let artifacts = artifacts?;
         let validation_outcome = crate::validation_fee::enforce_opaque_deferred_instruction_groups(
             &artifacts.queued_instructions_by_authority(),
@@ -6079,8 +6066,24 @@ impl Executor {
     /// Execute [`SignedTransaction`].
     /// # Errors
     /// Returns an error when IVM preparation or execution fails, or the executor denies the operation.
-    #[allow(clippy::too_many_lines)]
     pub fn execute_transaction(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        transaction: SignedTransaction,
+        ivm_cache: &mut IvmCache,
+    ) -> Result<(), ValidationFail> {
+        let result =
+            self.execute_transaction_body(state_transaction, authority, transaction, ivm_cache);
+        let effects = state_transaction.finish_execution_effect_budget();
+        state_transaction.close_execution_fee_meter();
+        effects?;
+        result
+    }
+
+    /// Run one admitted signed body under its actual root effect and fee owners.
+    #[allow(clippy::too_many_lines)]
+    fn execute_transaction_body(
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -6149,6 +6152,8 @@ impl Executor {
             bytes.copy_from_slice(tx_hash.as_ref());
             bytes
         };
+        state_transaction.begin_execution_fee_meter(&transaction, tx_bytes_len, skip_nexus_fee)?;
+        state_transaction.begin_execution_effect_budget(&transaction)?;
         // Disallow direct signing with multisig accounts; only explicit multisig
         // proposal/approval envelopes with bundled multisig signatures are allowed.
         {
@@ -6454,13 +6459,36 @@ impl Executor {
                 summary.code_hash,
             )
             .map_err(overlay_build_error_to_validation_fail)?;
-            let replay = crate::pipeline::overlay::verify_ivm_proved_execution(
+            let mut replay_work = crate::pipeline::overlay::IvmProvedReplayWork::default();
+            let replay_result = crate::pipeline::overlay::verify_ivm_proved_execution(
                 state_transaction,
                 &transaction,
                 proved,
                 &summary,
-            )
-            .map_err(overlay_build_error_to_validation_fail)?;
+                state_transaction.execution_cycle_budget()?,
+                &mut replay_work,
+            );
+            let observed_gas = replay_work
+                .gas_used()
+                .map_err(|message| ValidationFail::InternalError(message.into()))?;
+            if let Some(gas) = observed_gas {
+                // Transfer actual work before any fallible binding or replay
+                // admission. Even an otherwise valid replay can exceed AXT or
+                // remaining block capacity; its completed VM work still exists.
+                state_transaction.last_tx_gas_used =
+                    state_transaction.last_tx_gas_used.saturating_add(gas);
+                match &replay_result {
+                    Ok(replay) => state_transaction
+                        .record_execution_fee_instructions(replay.queued.len(), gas)?,
+                    Err(_) => state_transaction.record_execution_fee_vm_work(gas)?,
+                }
+            }
+            let replay = replay_result.map_err(overlay_build_error_to_validation_fail)?;
+            if observed_gas != Some(replay.gas_used) {
+                return Err(ValidationFail::InternalError(
+                    "verified replay lost its actual gas owner".into(),
+                ));
+            }
             sccp_ivm_proved_execution_binding = Some(
                 crate::pipeline::overlay::sccp_ivm_proved_execution_binding(
                     state_transaction,
@@ -6615,19 +6643,12 @@ impl Executor {
                     )));
                 }
                 let mut gas_used = explicit_gas;
-                let max_overlay_instructions = state_transaction.pipeline.overlay_max_instructions;
-                let max_overlay_bytes = state_transaction.pipeline.overlay_max_bytes;
-                let mut overlay_instruction_count = explicit_instructions.len();
-                let mut overlay_byte_size = live_batch_overlay_byte_size(&explicit_instructions);
-                enforce_live_batch_overlay_limits(
-                    max_overlay_instructions,
-                    max_overlay_bytes,
-                    overlay_instruction_count,
-                    overlay_byte_size,
-                )?;
+                state_transaction.admit_authored_execution_effects(&explicit_instructions)?;
                 // Native ISIs are metered as one authored set, matching the existing
                 // `Executable::Instructions` rejected-business fee behavior.
                 state_transaction.last_tx_gas_used = explicit_gas;
+                state_transaction
+                    .record_execution_fee_instructions(explicit_instructions.len(), explicit_gas)?;
                 let confidential_delta =
                     crate::gas::sum_confidential_gas_costs(explicit_instructions.iter());
                 if confidential_delta > 0 {
@@ -6657,19 +6678,6 @@ impl Executor {
                                 None,
                             )?;
                             gas_used = gas_used.saturating_add(outcome.gas_used);
-                            overlay_instruction_count = overlay_instruction_count
-                                .saturating_add(outcome.executed_instructions.len());
-                            overlay_byte_size = overlay_byte_size.saturating_add(
-                                live_batch_overlay_byte_size(&outcome.executed_instructions),
-                            );
-                            if let Err(error) = enforce_live_batch_overlay_limits(
-                                max_overlay_instructions,
-                                max_overlay_bytes,
-                                overlay_instruction_count,
-                                overlay_byte_size,
-                            ) {
-                                return Err(error);
-                            }
                         }
                     }
                 }
@@ -6793,18 +6801,34 @@ impl Executor {
                                 "invalid ZK snapshot state: {err}"
                             ))
                         })?;
-                        if let Err(err) = runtime.run_with_host(&mut host) {
-                            return Err(
+                        let run_result = match state_transaction.execution_cycle_budget()? {
+                            Some(budget) => {
+                                runtime.run_with_host_and_cycle_budget(&mut host, budget)
+                            }
+                            None => runtime.run_with_host(&mut host),
+                        };
+                        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
+                        if let Err(err) = run_result {
+                            let error =
                                 crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
                                     &runtime, &err,
-                                ),
-                            );
+                                );
+                            drop(host);
+                            // The actual VM consumed this work even though business effects
+                            // will roll back. Retain it before returning the original failure.
+                            state_transaction.last_tx_gas_used = gas_used;
+                            state_transaction.record_execution_fee_vm_work(gas_used)?;
+                            return Err(error);
                         }
-                        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
-                        let artifacts = host.into_execution_artifacts(None)?;
+                        let artifacts = host.into_execution_artifacts(None);
+                        // Consume the host borrow, then retain root work before artifact
+                        // validation/application can reject. Later nested work must not be
+                        // overwritten by a post-application root-gas assignment.
+                        state_transaction.last_tx_gas_used = gas_used;
+                        state_transaction.record_execution_fee_vm_work(gas_used)?;
+                        let artifacts = artifacts?;
                         let _executed =
                             artifacts.apply_to_transaction(state_transaction, authority)?;
-                        state_transaction.last_tx_gas_used = gas_used;
                         Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
                         if should_charge_pipeline_gas_asset(
                             skip_nexus_fee,
@@ -6976,18 +7000,27 @@ impl Executor {
                     .map_err(|err| {
                         ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
                     })?;
-                if let Err(err) = runtime.run_with_host(&mut host) {
-                    return Err(
-                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &runtime, &err,
-                        ),
-                    );
-                }
+                let run_result = match state_transaction.execution_cycle_budget()? {
+                    Some(budget) => runtime.run_with_host_and_cycle_budget(&mut host, budget),
+                    None => runtime.run_with_host(&mut host),
+                };
                 let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
-                // Drain and apply queued ISIs deterministically via executor.
-                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
-                let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
+                if let Err(err) = run_result {
+                    let error = crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                        &runtime, &err,
+                    );
+                    drop(host);
+                    state_transaction.last_tx_gas_used = gas_used;
+                    state_transaction.record_execution_fee_vm_work(gas_used)?;
+                    return Err(error);
+                }
+                // Retain completed root work before artifact validation/application;
+                // a rejected artifact must not make an executed raw contract free.
+                let artifacts = host.into_execution_artifacts(contract_runtime_context);
                 state_transaction.last_tx_gas_used = gas_used;
+                state_transaction.record_execution_fee_vm_work(gas_used)?;
+                let artifacts = artifacts?;
+                let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if should_charge_pipeline_gas_asset(
@@ -7619,7 +7652,7 @@ impl Executor {
             Self::Initial => Ok(()),
             Self::UserProvided(loaded_executor) => {
                 let curr_block = latest_block.map_or_else(
-                    || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
+                    || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0),
                     core::convert::identity,
                 );
                 let context = ExecutorContext {
@@ -7885,7 +7918,7 @@ fn dispatch_instruction_with_ivm(
     instruction: InstructionBox,
 ) -> Result<(), ValidationFail> {
     let curr_block = state_transaction.latest_block().map_or_else(
-        || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
+        || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0),
         |b| b.header(),
     );
     let context = ExecutorContext {
@@ -8633,6 +8666,23 @@ pub mod executor_norito {
         };
         norito::to_bytes(&dto)
     }
+    /// Hash the executor's borrowed semantic payload for the private World delta.
+    /// Loaded VM variants, caches and pool history are not State values.
+    pub(crate) fn net_state_hash(executor: &Executor) -> Result<iroha_crypto::Hash, String> {
+        const DOMAIN: &[u8] = b"iroha:world-net-delta:executor:v1\0";
+        match executor {
+            Executor::Initial => Ok(iroha_crypto::Hash::new_from_chunks(&[DOMAIN, &[0]])),
+            Executor::UserProvided(loaded) => {
+                let raw = crate::state::world_projection::hash_value(loaded.raw_executor.as_ref())?;
+                Ok(iroha_crypto::Hash::new_from_chunks(&[
+                    DOMAIN,
+                    &[1],
+                    raw.as_ref(),
+                ]))
+            }
+        }
+    }
+
     /// Deserialize Norito bytes into a materialized `Executor`.
     ///
     /// For `UserProvided` DTO, loads the IVM program to construct a `LoadedExecutor`.
@@ -8692,6 +8742,37 @@ pub mod executor_norito {
                 _ => panic!("expected Initial variant"),
             }
         }
+        #[test]
+        fn net_state_hash_binds_raw_executor_and_ignores_loaded_runtime_cache() {
+            let first = denying_executor_for_testing("projection one");
+            let same = denying_executor_for_testing("projection one");
+            let other = denying_executor_for_testing("projection two");
+            let expected = net_state_hash(&first).unwrap();
+            assert_eq!(expected, net_state_hash(&same).unwrap());
+            assert_ne!(expected, net_state_hash(&other).unwrap());
+            assert_ne!(expected, net_state_hash(&Executor::Initial).unwrap());
+            let Executor::UserProvided(loaded) = &first else {
+                panic!("fixture must load its actual executor");
+            };
+            let parameters = iroha_data_model::parameter::SmartContractParameters::default();
+            let before = loaded.runtime_pool_snapshot();
+            {
+                let _lease = loaded
+                    .checkout_runtime_for_gas_limit(
+                        parameters.fuel().get(),
+                        parameters.memory().get(),
+                    )
+                    .unwrap();
+                assert_eq!(expected, net_state_hash(&first).unwrap());
+            }
+            assert_ne!(
+                before,
+                loaded.runtime_pool_snapshot(),
+                "actual runtime pool changed"
+            );
+            assert_eq!(expected, net_state_hash(&first).unwrap());
+        }
+
         #[test]
         fn userprovided_encodes_but_load_may_fail() {
             // Construct a dummy data-model executor with some bytecode; loading may fail,
@@ -8834,7 +8915,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
         );
         state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
             .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
         state
@@ -8858,7 +8939,7 @@ mod tests {
             )
             .with_executable(executable)
             .sign(ALICE_KEYPAIR.private_key());
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let mut transaction = block.transaction();
             let mut cache = IvmCache::new();
             crate::executor::Executor::Initial
@@ -8901,8 +8982,7 @@ mod tests {
             )
             .expect("valid generic IVM trigger action"),
         );
-        let mut setup_block =
-            state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut setup_block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         {
             let mut setup_tx = setup_block.transaction();
             Register::trigger(trigger)
@@ -8914,7 +8994,7 @@ mod tests {
             .commit_world_overlay_for_testing()
             .expect("commit trigger fixture");
 
-        let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, 0, 0));
         let nested_ivm_gas = {
             let mut baseline_tx = block.transaction();
             baseline_tx
@@ -8974,7 +9054,7 @@ mod tests {
             )
             .expect("valid failing trigger action"),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_tx = block.transaction();
         Register::trigger(trigger)
             .execute(&ALICE_ID, &mut state_tx)
@@ -9107,7 +9187,7 @@ mod tests {
         let fixture = initial_batch_fixture();
         let authority = fixture.source.clone();
         let state = state_for_testing(fixture.world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut tx = block.transaction();
         let request = QueryRequest::Singular(query);
         assert!(
@@ -9412,6 +9492,8 @@ mod tests {
         ));
     }
     include!("executor_account_lineage_tests.rs");
+    include!("executor_raw_ivm_work_tests.rs");
+    include!("executor_effect_budget_tests.rs");
     include!("executor_sorafs_repair_tests.rs");
     include!("executor_stream_token_custody_permission_tests.rs");
     include!("executor_sorafs_market_tests.rs");
@@ -9448,7 +9530,7 @@ mod tests {
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         assert!(
             state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty(),
@@ -9587,7 +9669,7 @@ mod tests {
             [],
         );
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let instruction: InstructionBox = CreateKaigi {
             call: NewKaigi::with_defaults(call_id, host.clone()),
@@ -9633,7 +9715,7 @@ mod tests {
             [],
         );
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let instruction: InstructionBox = CreateKaigi {
             call: NewKaigi::with_defaults(call_id, intruder.clone()),
@@ -9680,7 +9762,7 @@ mod tests {
             [],
         );
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let instruction = SetKeyValue::domain(domain_id, key, Json::new("forged record")).into();
 
@@ -9824,7 +9906,7 @@ mod tests {
         let authority = checked_account_id();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let instruction: InstructionBox = ApplyThresholdKeyLifecycleCertificateV1 {
             certificate: ThresholdKeyLifecycleCertificateV1 {
@@ -9862,7 +9944,7 @@ mod tests {
         let authority = checked_account_id();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let key: Name = iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY
             .parse()
@@ -9892,7 +9974,7 @@ mod tests {
         let authority = checked_account_id();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         for key in [
             ASSET_TRANSFER_CONTROL_METADATA_KEY,
@@ -9942,7 +10024,7 @@ mod tests {
             [],
         );
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let error = super::Executor::Initial
             .execute_instruction(
@@ -10153,7 +10235,7 @@ mod tests {
         let evidence = initial_executor_consensus_evidence_fixture();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let evidence_key =
             initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
@@ -10195,7 +10277,7 @@ mod tests {
             BTreeSet::from([Permission::from(executor_permission::peer::CanManagePeers)]),
         );
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let evidence_key =
             initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
@@ -10238,7 +10320,7 @@ mod tests {
             (),
         );
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut state_transaction = block.transaction();
         let evidence_key =
             initial_executor_seed_pending_consensus_evidence(&mut state_transaction, &evidence);
@@ -10384,7 +10466,7 @@ mod tests {
             iroha_model_base::chain::ChainId::from("00000000-0000-0000-0000-000000000000"),
             network_id,
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.gov.citizenship_bond_amount = Quantity::zero();
         for (instruction, permission_name, _) in &probes {
@@ -10558,7 +10640,7 @@ mod tests {
             [],
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let custom_id: CustomParameterId = "attacker_parameter".parse().expect("parameter id");
         let set_parameter = iroha_data_model::isi::SetParameter::new(
@@ -10624,7 +10706,7 @@ mod tests {
             BTreeSet::from([executor_permission::parameter::CanSetHijiriParameters.into()]),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let parameters = HijiriParametersV1::try_new(
             1,
@@ -10771,7 +10853,7 @@ mod tests {
             ]),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         Register::trigger(Trigger::new(
             trigger_id.clone(),
@@ -11340,7 +11422,7 @@ mod tests {
             invalid_permissions.iter().cloned().collect(),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let role_id: RoleId = "governance_selector_sink".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), authority.clone()))
@@ -11414,7 +11496,7 @@ mod tests {
             canonical_permissions.iter().cloned().collect(),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let role_id: RoleId = "operational_governance_sink".parse().expect("role id");
         Register::role(Role::new(role_id.clone(), authority.clone()))
@@ -11504,7 +11586,7 @@ mod tests {
             .account_permissions
             .insert(issuer.clone(), BTreeSet::from([issuer_permission.clone()]));
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         assert!(
             !initial_permission_delegation_allowed(
@@ -11581,7 +11663,7 @@ mod tests {
             leaf_permissions.iter().cloned().collect(),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let admin_role: RoleId = "initial_dpn_role_admin".parse().expect("role id");
         Register::role(
@@ -11702,14 +11784,7 @@ mod tests {
             BTreeSet::from([account_alias_permission]),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(
-            nonzero!(2_u64),
-            None,
-            None,
-            None,
-            10_000,
-            0,
-        ));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 10_000, 0));
         let mut state_transaction = block.transaction();
         let malformed_permission =
             Permission::new("CanManageAssetDefinitionAlias".to_owned(), Json::new(()));
@@ -11899,7 +11974,7 @@ mod tests {
             BTreeSet::from([ordinary_permission.clone(), kagemusha_permission.clone()]),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let ordinary_role: RoleId = "initial_executor_ordinary_role".parse().expect("role id");
         Register::role(
@@ -12002,7 +12077,7 @@ mod tests {
             BTreeSet::from([exact.clone(), can_manage_roles]),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let reader_role: RoleId = "restricted_reader_role".parse().expect("role id");
         Register::role(
@@ -12213,7 +12288,7 @@ mod tests {
             [],
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.tx_call_hash = Some(Hash::prehashed([0xD8; Hash::LENGTH]));
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
@@ -12365,6 +12440,55 @@ mod tests {
             "sibling token reached the user executor: {error}",
         );
     }
+    // These private-call fixtures supply post-verification replay metadata.
+    // Their real signatures select the IvmProved root kind, but neither the Halt
+    // envelope nor the supplied commitments claim cryptographic replay verification.
+    fn supplied_replay_fixture_source(
+        state: &State,
+        authority: &AccountId,
+        keypair: &KeyPair,
+        overlay: Vec<InstructionBox>,
+    ) -> SignedTransaction {
+        let mut bytecode = ivm::ProgramMetadata::default().encode();
+        bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        TransactionBuilder::new(
+            state.network_id,
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000)),
+        )
+        .with_executable(Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: IvmBytecode::from_compiled(bytecode),
+                overlay: overlay.into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"supplied replay gas-policy fixture"),
+            },
+        ))
+        .sign(keypair.private_key())
+    }
+
+    fn bind_supplied_replay_fixture_root(
+        transaction: &mut StateTransaction<'_, '_>,
+        signed: &SignedTransaction,
+        replay: &crate::pipeline::overlay::IvmProvedReplay,
+    ) {
+        assert!(matches!(signed.instructions(), Executable::IvmProved(_)));
+        assert_eq!(
+            transaction.current_dataspace_id,
+            transaction.world.current_dataspace_id
+        );
+        transaction.current_tx_hash = Some(signed.hash());
+        transaction.tx_call_hash = Some(Hash::from(signed.hash_as_entrypoint()));
+        transaction
+            .begin_execution_effect_budget(signed)
+            .expect("bind exact supplied-replay root");
+        // Explicit supplied post-verification handoff, not measured VM work.
+        transaction.last_tx_gas_used = replay.gas_used;
+        transaction
+            .record_execution_fee_instructions(replay.queued.len(), replay.gas_used)
+            .expect("bind supplied replay fee work");
+    }
+
     #[test]
     fn proved_empty_overlay_accounts_verified_replay_gas() {
         let keypair = checked_keypair();
@@ -12372,13 +12496,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
-        let tx = TransactionBuilder::new(
-            state.network_id,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "gas fixture".to_owned())])
-        .sign(keypair.private_key());
+        let tx = supplied_replay_fixture_source(&state, &authority, &keypair, Vec::new());
         let replay_gas = 40_000;
         let (axt_descriptor, axt_binding) = ivm::axt::AxtDescriptor::builder()
             .dataspace(DataSpaceId::UNIVERSAL)
@@ -12408,9 +12526,10 @@ mod tests {
             gas_used: replay_gas,
             trace_hash: Hash::new(b"trace"),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
+        bind_supplied_replay_fixture_root(&mut state_tx, &tx, &replay);
         let tx_hash = tx.hash();
         super::Executor::Initial
             .execute_metered_instructions(
@@ -12432,6 +12551,9 @@ mod tests {
                 true,
             )
             .expect("empty proved overlay should retain replay gas");
+        state_tx
+            .finish_execution_effect_budget()
+            .expect("close supplied-replay root");
         assert_eq!(state_tx.last_tx_gas_used, replay_gas);
         state_tx.apply();
         assert_eq!(
@@ -12462,13 +12584,7 @@ mod tests {
         let mut world = World::with([domain], [account], []);
         bind_executor_test_contract(&mut world, &contract_address, &authority, code_hash);
         let state = state_for_testing(world);
-        let tx = TransactionBuilder::new(
-            state.network_id,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "proved durable fixture".to_owned())])
-        .sign(keypair.private_key());
+        let tx = supplied_replay_fixture_source(&state, &authority, &keypair, Vec::new());
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "write".to_owned(),
@@ -12504,9 +12620,10 @@ mod tests {
             gas_used: 0,
             trace_hash: Hash::new(b"trace"),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
+        bind_supplied_replay_fixture_root(&mut state_tx, &tx, &replay);
         let tx_hash = tx.hash();
         super::Executor::Initial
             .execute_metered_instructions(
@@ -12528,6 +12645,9 @@ mod tests {
                 true,
             )
             .expect("proved replay applies its authorized durable write");
+        state_tx
+            .finish_execution_effect_budget()
+            .expect("close supplied-replay root");
         assert_eq!(
             state_tx.world.smart_contract_state.get(&marker),
             Some(&stored)
@@ -12544,9 +12664,10 @@ mod tests {
             gas_used: 0,
             trace_hash: Hash::new(b"malformed-trace"),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut malformed_block = state.block(header);
         let mut malformed_tx = malformed_block.transaction();
+        bind_supplied_replay_fixture_root(&mut malformed_tx, &tx, &malformed_replay);
         let error = super::Executor::Initial
             .execute_metered_instructions(
                 &mut malformed_tx,
@@ -12567,6 +12688,9 @@ mod tests {
                 true,
             )
             .expect_err("post-verification replay metadata must retain an exact authorization map");
+        malformed_tx
+            .finish_execution_effect_budget()
+            .expect("close supplied-replay root");
         assert!(matches!(
             error,
             ValidationFail::InternalError(message)
@@ -12599,9 +12723,10 @@ mod tests {
             gas_used: 0,
             trace_hash: Hash::new(b"foreign-trace"),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut foreign_block = state.block(header);
         let mut foreign_tx = foreign_block.transaction();
+        bind_supplied_replay_fixture_root(&mut foreign_tx, &tx, &foreign_replay);
         let error = super::Executor::Initial
             .execute_metered_instructions(
                 &mut foreign_tx,
@@ -12622,6 +12747,9 @@ mod tests {
                 true,
             )
             .expect_err("one contract's snapshot must not authorize another state namespace");
+        foreign_tx
+            .finish_execution_effect_budget()
+            .expect("close supplied-replay root");
         assert!(matches!(
             error,
             ValidationFail::NotPermitted(message)
@@ -12643,13 +12771,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
-        let tx = TransactionBuilder::new(
-            state.network_id,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(Level::INFO, "gas fixture".to_owned())])
-        .sign(keypair.private_key());
+        let tx = supplied_replay_fixture_source(&state, &authority, &keypair, Vec::new());
         let marker: StatePath = "proved_replay_forbidden_marker"
             .parse()
             .expect("durable state marker");
@@ -12663,9 +12785,10 @@ mod tests {
             gas_used: 0,
             trace_hash: Hash::new(b"trace"),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
+        bind_supplied_replay_fixture_root(&mut state_tx, &tx, &replay);
         let tx_hash = tx.hash();
         let error = super::Executor::Initial
             .execute_metered_instructions(
@@ -12687,6 +12810,9 @@ mod tests {
                 true,
             )
             .expect_err("proved replay durable state writes require root authorization");
+        state_tx
+            .finish_execution_effect_budget()
+            .expect("close supplied-replay root");
         assert!(matches!(
             error,
             ValidationFail::NotPermitted(message)
@@ -12696,6 +12822,157 @@ mod tests {
             state_tx.world.smart_contract_state.get(&marker).is_none(),
             "rejected proved replay must apply no durable state"
         );
+    }
+    #[test]
+    fn supplied_replay_group_limits_preserve_work_and_refuse_before_effects() {
+        let instructions: Vec<InstructionBox> = ["replay_effect_first", "replay_effect_second"]
+            .into_iter()
+            .map(|key| {
+                SetKeyValue::account(ALICE_ID.clone(), key.parse().unwrap(), Json::new(true)).into()
+            })
+            .collect();
+        let exact_bytes: u64 = instructions
+            .iter()
+            .map(|instruction| u64::try_from(instruction.encode().len()).unwrap())
+            .sum();
+        let replay_gas = 40_000;
+        for (count_cap, byte_cap, expected_error) in [
+            (2, 0, None),
+            (
+                1,
+                0,
+                Some("overlay exceeds max instructions: 2 > 1".to_owned()),
+            ),
+            (0, exact_bytes, None),
+            (
+                0,
+                exact_bytes - 1,
+                Some(format!(
+                    "overlay exceeds max bytes: more than {}",
+                    exact_bytes - 1
+                )),
+            ),
+        ] {
+            let state = state_for_testing(World::with(
+                [],
+                [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+                [],
+            ));
+            let signed = supplied_replay_fixture_source(
+                &state,
+                &ALICE_ID,
+                &ALICE_KEYPAIR,
+                instructions.clone(),
+            );
+            let replay = crate::pipeline::overlay::IvmProvedReplay {
+                queued: instructions
+                    .iter()
+                    .cloned()
+                    .map(
+                        |instruction| crate::smartcontracts::ivm::host::QueuedInstruction {
+                            instruction,
+                            authority: ALICE_ID.clone(),
+                            contract_runtime_context: None,
+                            entrypoint_authorization: None,
+                        },
+                    )
+                    .collect(),
+                completed_axt: Vec::new(),
+                durable_state_overlay: BTreeMap::new(),
+                durable_state_authorizations: BTreeMap::new(),
+                access_log: None,
+                events_commitment: Hash::new(b"events"),
+                gas_used: replay_gas,
+                trace_hash: Hash::new(b"supplied replay trace"),
+            };
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let fragments = block.committed_fragment_count();
+            let mut transaction = block.transaction();
+            transaction.pipeline.overlay_max_instructions = count_cap;
+            transaction.pipeline.overlay_max_bytes = byte_cap;
+            bind_supplied_replay_fixture_root(&mut transaction, &signed, &replay);
+            let result = super::Executor::Initial.execute_metered_instructions(
+                &mut transaction,
+                &ALICE_ID,
+                &signed,
+                instructions.clone(),
+                Some(replay),
+                None,
+                None,
+                0,
+                [0_u8; Hash::LENGTH],
+                signed.hash(),
+                Some(50_000),
+                true,
+                None,
+                None,
+                None,
+                true,
+            );
+            let finished = transaction.finish_execution_effect_budget();
+            assert_eq!(
+                transaction.last_tx_gas_used, replay_gas,
+                "supplied completed replay work survives later group admission refusal"
+            );
+            let rejected = expected_error.is_some();
+            if let Some(expected) = expected_error {
+                for error in [
+                    result.expect_err("one-below replay group refuses"),
+                    finished.expect_err("refusal remains sticky at close"),
+                ] {
+                    assert!(
+                        matches!(error, ValidationFail::NotPermitted(ref actual) if actual == &expected),
+                        "{error:?}"
+                    );
+                }
+                assert!(transaction.execution_effect_limit_exceeded());
+                for key in ["replay_effect_first", "replay_effect_second"] {
+                    assert!(
+                        transaction
+                            .world
+                            .account(&ALICE_ID)
+                            .unwrap()
+                            .metadata()
+                            .get(key)
+                            .is_none(),
+                        "refused replay group must execute no first instruction"
+                    );
+                }
+                drop(transaction);
+            } else {
+                result.expect("exact replay group fits");
+                finished.expect("exact replay root closes");
+                assert!(!transaction.execution_effect_limit_exceeded());
+                for key in ["replay_effect_first", "replay_effect_second"] {
+                    assert_eq!(
+                        transaction
+                            .world
+                            .account(&ALICE_ID)
+                            .unwrap()
+                            .metadata()
+                            .get(key),
+                        Some(&Json::new(true))
+                    );
+                }
+                transaction.apply();
+            }
+            assert_eq!(
+                block.committed_fragment_count(),
+                fragments + usize::from(!rejected)
+            );
+            for key in ["replay_effect_first", "replay_effect_second"] {
+                assert_eq!(
+                    block
+                        .world
+                        .account(&ALICE_ID)
+                        .unwrap()
+                        .metadata()
+                        .get(key)
+                        .is_some(),
+                    !rejected
+                );
+            }
+        }
     }
     fn make_peer_id() -> iroha_model_base::peer::PeerId {
         let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -13021,7 +13298,7 @@ mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "genesis fee exemption".to_owned())])
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
         assert!(is_initial_genesis_context(&state_transaction));
@@ -13032,10 +13309,10 @@ mod tests {
     fn initial_genesis_context_rejects_height_one_replay_over_committed_history() {
         let (state, _, _, _, _, _, _) = pipeline_fee_state_fixture();
         state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
             .commit_empty_block_for_testing()
             .expect("commit the prior authenticated genesis block");
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let state_transaction = block.transaction();
         assert!(state_transaction._curr_block.is_genesis());
         assert!(
@@ -13055,7 +13332,7 @@ mod tests {
             "fee-free genesis execution".to_owned(),
         )])
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
         let mut ivm_cache = IvmCache::new();
@@ -13090,7 +13367,7 @@ mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let (payer_asset_id, payer_before, supply_before) =
             configure_direct_genesis_ivm_fee_fixture(
@@ -13162,7 +13439,7 @@ mod tests {
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let (payer_asset_id, payer_before, supply_before) =
             configure_direct_genesis_ivm_fee_fixture(
@@ -13245,7 +13522,7 @@ mod tests {
             "non-genesis fee validation".to_owned(),
         )])
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
         assert!(!is_initial_genesis_context(&state_transaction));
@@ -13287,7 +13564,7 @@ mod tests {
         )
         .with_instructions(instructions)
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_pipeline_fee_snapshot(&mut state_transaction, &tech_account, &gas_asset, 2);
         let error = validate_transaction_fee_admission(&mut state_transaction, &transaction)
@@ -13345,7 +13622,7 @@ mod tests {
         .with_instructions([Log::new(Level::INFO, "bounded".to_owned())])
         .sign(keypair.private_key());
         let tx_hash = transaction.hash();
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_pipeline_fee_snapshot(&mut state_transaction, &tech_account, &gas_asset, 2);
         let error = super::Executor::charge_pipeline_gas_asset_fee(
@@ -13393,7 +13670,7 @@ mod tests {
             program_id,
             lease_id,
         ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(10_u32)));
-        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_sponsored_pipeline_fee_transaction(
             &mut state_transaction,
@@ -13471,7 +13748,7 @@ mod tests {
             program_id,
             lease_id,
         ) = sponsored_pipeline_fee_fixture(None);
-        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_sponsored_pipeline_fee_transaction(
             &mut state_transaction,
@@ -13518,7 +13795,7 @@ mod tests {
             program_id,
             lease_id,
         ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(1_u32)));
-        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_sponsored_pipeline_fee_transaction(
             &mut state_transaction,
@@ -13595,7 +13872,7 @@ mod tests {
             program_id,
             _,
         ) = sponsored_pipeline_fee_fixture(Some(Quantity::from(10_u32)));
-        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_sponsored_pipeline_fee_transaction(
             &mut state_transaction,
@@ -13723,7 +14000,7 @@ mod tests {
         .with_instructions(instructions.clone())
         .sign(keypair.private_key());
         let overlay = crate::pipeline::overlay::TxOverlay::from_instructions(instructions);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_pipeline_fee_snapshot(&mut state_transaction, &initial_tech, &gas_asset, 1);
         state_transaction.tx_call_hash = Some(Hash::from(transaction.hash_as_entrypoint()));
@@ -13822,7 +14099,7 @@ mod tests {
             let parameter_id: CustomParameterId = "ivm_gas_units_per_gas"
                 .parse()
                 .expect("gas rate parameter id");
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let mut state_transaction = block.transaction();
             configure_pipeline_fee_snapshot(&mut state_transaction, &tech_account, &gas_asset, 1);
             state_transaction.world.parameters.get_mut().set_parameter(
@@ -14098,7 +14375,7 @@ mod tests {
         .with_instructions([Log::new(Level::INFO, "receipt guard".to_owned())])
         .sign(ALICE_KEYPAIR.private_key());
         let tx_hash = transaction.hash();
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_tx = block.transaction();
         state_tx.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
@@ -14181,7 +14458,7 @@ mod tests {
         .with_instructions([Log::new(Level::INFO, "bounded Nexus fee".to_owned())])
         .sign(keypair.private_key());
         let tx_hash = transaction.hash();
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
         state_transaction.nexus.fees.base_fee = Quantity::from(2_u32);
@@ -14627,7 +14904,7 @@ mod tests {
             ),
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         super::Executor::consume_fee_sponsor_relay_lease(
@@ -14921,7 +15198,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         // Build attachments with canonical envelope metadata so preverify
         // exercises deduplication after production-shaped proof admission.
@@ -15053,7 +15330,6 @@ mod tests {
                 std::num::NonZeroU64::new(block_height).expect("nonzero block height"),
                 None,
                 None,
-                None,
                 0,
                 0,
             );
@@ -15097,7 +15373,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -15168,7 +15444,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -15288,10 +15564,10 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
         state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
             .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         {
             let mut stx = block.transaction();
@@ -15339,7 +15615,7 @@ mod tests {
             DomainId::try_new("borrowed-overlay", "universal").expect("domain id");
         let owned_state = test_state();
         let mut owned_block =
-            owned_state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            owned_state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut owned_tx = owned_block.transaction();
         let owned_instruction = Register::domain(Domain::new(domain_id.clone())).into();
         executor
@@ -15348,7 +15624,7 @@ mod tests {
         assert!(owned_tx.world.domains.get(&domain_id).is_some());
         let overlay_state = test_state();
         let mut overlay_block =
-            overlay_state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            overlay_state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut overlay_tx = overlay_block.transaction();
         let overlay_instruction = Register::domain(Domain::new(domain_id.clone())).into();
         let overlay =
@@ -15374,7 +15650,7 @@ mod tests {
             query::store::LiveQueryStore::start_test(),
             ChainId::from("raw-domain-registration"),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         Grant::account_permission(CanRegisterDomain, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut state_transaction)
@@ -15420,7 +15696,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.tx_call_hash = Some(Hash::prehashed([0xE5; Hash::LENGTH]));
@@ -15497,10 +15773,10 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
         state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
             .commit_empty_block_for_testing()
             .expect("commit bootstrap block");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
         let asset_definition_id = AssetDefinitionId::from_uuid_bytes([
@@ -15558,7 +15834,7 @@ mod tests {
         let opaque_id = decoded.object().id().clone();
         assert_eq!(decoded.object().owning_domain.as_ref(), Some(&domain_id));
         assert!(decoded.object().alias.is_none());
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut transaction = block.transaction();
         super::Executor::Initial
             .execute_instruction(&mut transaction, &ALICE_ID, InstructionBox::from(decoded))
@@ -15592,7 +15868,7 @@ mod tests {
         );
         let owned_alias: iroha_data_model::asset::AssetDefinitionAlias =
             "coin#owned.universal".parse().expect("asset alias");
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         for (owning_domain, alias, expected) in [
             (
                 None,
@@ -15662,7 +15938,7 @@ mod tests {
             .build(&owner)],
         );
         let state = state_after_genesis(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut stx = block.transaction();
         let executor = super::Executor::Initial;
         let retail_pkr = AssetId::new(pkr.clone(), retail.clone());
@@ -15829,7 +16105,7 @@ mod tests {
             [],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
         let instruction = InstructionBox::from(Transfer::domain(
@@ -15902,7 +16178,7 @@ mod tests {
             [],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
@@ -16003,7 +16279,7 @@ mod tests {
             "fixture must prove that the attacker owns an active alias domain for the source"
         );
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 50, 0));
         let mut transaction = block.transaction();
         let transfer = Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
         let boxed = InstructionBox::from(transfer.clone());
@@ -16102,7 +16378,7 @@ mod tests {
         );
 
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 50, 0));
         let mut transaction = block.transaction();
         let trigger_id: TriggerId = "initial_exact_trigger_owner".parse().expect("trigger id");
         let registration = || {
@@ -16228,8 +16504,7 @@ mod tests {
                     iroha_model_base::chain::ChainId::from("00000000-0000-0000-0000-000000000000"),
                     network_id,
                 );
-                let mut block =
-                    state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+                let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
                 let mut transaction = block.transaction();
                 if matches!(provenance, Provenance::MissingReverse) {
                     transaction
@@ -16336,7 +16611,7 @@ mod tests {
             .contract_subject_addresses
             .insert(contract_subject.clone(), contract_address.clone());
         let state = state_for_testing(world);
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(Hash::new(b"contract-transfer-test"));
         let context = ContractRuntimeExecutionContext {
@@ -16456,7 +16731,7 @@ mod tests {
             [],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
         let instruction = InstructionBox::from(Transfer::asset_quantity(
@@ -16534,7 +16809,7 @@ mod tests {
             [],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
         let instruction = InstructionBox::from(Transfer::asset_quantity(
@@ -16584,7 +16859,7 @@ mod tests {
         let beneficiary_account = Account::new(beneficiary.clone()).build(&beneficiary);
         let world = World::with([domain], [alice_account, beneficiary_account], []);
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
             generate_denied_program("executor denies permission grants"),
@@ -16649,7 +16924,7 @@ mod tests {
                 [],
             );
             let state = state_after_genesis(world);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let contract_address = ContractAddress::derive(
                 &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                     .parse()
@@ -16745,7 +17020,7 @@ mod tests {
                 .build(&owner)],
             );
             let state = state_after_genesis(world);
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let instruction = match instruction_kind {
                 "availability" => InstructionBox::from(SetAssetTransferAvailability::new(
                     target,
@@ -16877,7 +17152,7 @@ mod tests {
             [asset_definition],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
         let instruction = InstructionBox::from(Transfer::asset_definition(
@@ -16939,7 +17214,7 @@ mod tests {
             [asset_definition],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = InstructionBox::from(Transfer::asset_definition(
             user1.clone(),
@@ -16990,7 +17265,7 @@ mod tests {
             [nft],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
         let instruction =
@@ -17039,7 +17314,7 @@ mod tests {
             [nft],
         );
         let state = state_after_genesis(world);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let instruction =
             InstructionBox::from(Transfer::nft(user1.clone(), nft_id.clone(), user2.clone()));
@@ -17071,7 +17346,7 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let chain: ChainId = "test-chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = SetKeyValue::nft(nft_id, "foo".parse().expect("key"), "value");
         let tx = TransactionBuilder::new(
@@ -17098,7 +17373,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut tx = block.transaction();
         let executor = super::Executor::default();
         let instr: InstructionBox = Log::new(Level::INFO, "bench profile".to_owned()).into();
@@ -17126,7 +17401,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let builder = TransactionBuilder::new(
             state.network_id,
@@ -17190,7 +17465,7 @@ mod tests {
     fn executor_result_test_context() -> ExecutorContext {
         ExecutorContext {
             authority: ALICE_ID.clone(),
-            curr_block: BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0),
+            curr_block: BlockHeader::new(nonzero!(1_u64), None, None, 0, 0),
         }
     }
     fn loaded_executor_with_result_prefix(
@@ -17709,7 +17984,7 @@ seiyaku GuardedValue {
         .with_metadata(raw_metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_tx = block.transaction();
         let mut ivm_cache = IvmCache::new();
         ivm::reset_argument_record_decode_count();
@@ -17740,6 +18015,8 @@ seiyaku GuardedValue {
                 .is_none(),
             "denied direct contract call must apply no queued effect"
         );
+        drop(state_tx);
+        let mut state_tx = block.transaction();
         let entrypoint_permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
                 contract: contract_address.clone(),
@@ -17749,6 +18026,8 @@ seiyaku GuardedValue {
         Grant::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("grant direct-call entrypoint permission");
+        state_tx.apply();
+        let mut state_tx = block.transaction();
         ivm::reset_argument_record_decode_count();
         super::Executor::Initial
             .execute_transaction(
@@ -17771,6 +18050,8 @@ seiyaku GuardedValue {
             .get(&metadata_marker)
             .cloned()
             .expect("authorized direct call writes its metadata marker");
+        state_tx.apply();
+        let mut state_tx = block.transaction();
         {
             let binding = state_tx
                 .world
@@ -17812,6 +18093,8 @@ seiyaku GuardedValue {
             2,
         )
         .expect("the half-open hold must not deny raw-IVM admission at its expiry height");
+        state_tx.apply();
+        let mut state_tx = block.transaction();
         ivm::reset_argument_record_decode_count();
         let held = super::Executor::Initial
             .execute_transaction(
@@ -17841,6 +18124,8 @@ seiyaku GuardedValue {
             Some(&authorized_marker),
             "a held direct call must apply no queued effect"
         );
+        drop(state_tx);
+        let mut state_tx = block.transaction();
         ivm::reset_argument_record_decode_count();
         let held_raw = super::Executor::Initial
             .execute_transaction(
@@ -17870,6 +18155,8 @@ seiyaku GuardedValue {
             Some(&authorized_marker),
             "held raw-IVM dispatch must apply no queued effect"
         );
+        drop(state_tx);
+        let mut state_tx = block.transaction();
         {
             let binding = state_tx
                 .world
@@ -17888,6 +18175,8 @@ seiyaku GuardedValue {
             .contract_code
             .remove(code_hash)
             .expect("remove live bytecode for warm-cache adversarial check");
+        state_tx.apply();
+        let mut state_tx = block.transaction();
         ivm::reset_argument_record_decode_count();
         let missing_code = super::Executor::Initial
             .execute_transaction(
@@ -17909,12 +18198,16 @@ seiyaku GuardedValue {
             Some(&authorized_marker),
             "missing live bytecode must apply no queued effect"
         );
+        drop(state_tx);
+        let mut state_tx = block.transaction();
         state_tx.world.contract_code.insert(code_hash, live_code);
         let live_manifest = state_tx
             .world
             .contract_manifests
             .remove(code_hash)
             .expect("remove live manifest for warm-cache adversarial check");
+        state_tx.apply();
+        let mut state_tx = block.transaction();
         ivm::reset_argument_record_decode_count();
         let missing_manifest = super::Executor::Initial
             .execute_transaction(
@@ -17936,6 +18229,8 @@ seiyaku GuardedValue {
             Some(&authorized_marker),
             "missing live manifest must apply no queued effect"
         );
+        drop(state_tx);
+        let mut state_tx = block.transaction();
         state_tx
             .world
             .contract_manifests
@@ -17943,6 +18238,8 @@ seiyaku GuardedValue {
         Revoke::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("revoke direct-call entrypoint permission");
+        state_tx.apply();
+        let mut state_tx = block.transaction();
         ivm::reset_argument_record_decode_count();
         let revoked = super::Executor::Initial
             .execute_transaction(
@@ -17968,6 +18265,8 @@ seiyaku GuardedValue {
             Some(&authorized_marker),
             "revoked direct contract call must preserve authorized state"
         );
+        drop(state_tx);
+        let mut state_tx = block.transaction();
         Grant::account_permission(entrypoint_permission, authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("restore direct-call entrypoint permission");
@@ -18008,6 +18307,8 @@ seiyaku GuardedValueRebound {
             binding.lifecycle.active_code_hash = Some(rebound_code_hash);
             binding.lifecycle.revision += 1;
         }
+        state_tx.apply();
+        let mut state_tx = block.transaction();
         ivm::reset_argument_record_decode_count();
         let rebound = super::Executor::Initial
             .execute_transaction(
@@ -18039,6 +18340,8 @@ seiyaku GuardedValueRebound {
             Some(&authorized_marker),
             "a live code rebind must apply no queued contract effect"
         );
+        drop(state_tx);
+        let mut state_tx = block.transaction();
         state_tx
             .world
             .contract_instances
@@ -18075,6 +18378,8 @@ seiyaku GuardedValueRebound {
             binding.lifecycle.active_code_hash = None;
             binding.lifecycle.revision += 1;
         }
+        state_tx.apply();
+        let mut state_tx = block.transaction();
         ivm::reset_argument_record_decode_count();
         let deactivated = super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
@@ -18217,7 +18522,7 @@ seiyaku OrderedBatchGuard {
             .into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_tx = block.transaction();
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
@@ -18299,7 +18604,7 @@ seiyaku OrderedBatchGuard {
         assert!(
             matches!(byte_cap_error, ValidationFail::NotPermitted(ref message)
                 if message.starts_with("overlay exceeds max bytes: ")
-                    && message.ends_with(&format!(" > {explicit_overlay_bytes}"))),
+                    && message == &format!("overlay exceeds max bytes: more than {explicit_overlay_bytes}")),
             "unexpected mixed-batch byte-cap error: {byte_cap_error}"
         );
         drop(byte_capped_state_tx);
@@ -18400,7 +18705,7 @@ seiyaku MeteredFailure {
             Kura::blank_kura_for_testing(),
             query::store::LiveQueryStore::start_test(),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let entrypoint_permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
@@ -18417,6 +18722,20 @@ seiyaku MeteredFailure {
             entrypoint: "run".to_owned(),
             arguments: None,
         };
+        // This private resolved-call fixture still owns one actual signed root;
+        // it tests cache release and failed VM work, not full source admission.
+        let signed = TransactionBuilder::new(
+            state.network_id,
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(10)),
+        )
+        .with_executable(Executable::ContractCall(invocation.clone()))
+        .sign(ALICE_KEYPAIR.private_key());
+        state_transaction.current_tx_hash = Some(signed.hash());
+        state_transaction.tx_call_hash = Some(Hash::from(signed.hash_as_entrypoint()));
+        state_transaction
+            .begin_execution_effect_budget(&signed)
+            .unwrap();
         let executor = state_transaction.world.executor.clone();
         let cache = state_transaction.ivm_cache;
         let resolved = {
@@ -18440,6 +18759,7 @@ seiyaku MeteredFailure {
                 None,
             )
             .expect_err("ten units of gas cannot complete the contract");
+        state_transaction.finish_execution_effect_budget().unwrap();
         assert!(
             error.to_string().contains("gas"),
             "unexpected VM failure: {error}"
@@ -18527,7 +18847,7 @@ seiyaku IdentityRequired {
                 .collect::<Vec<_>>()
         };
         for (label, transaction) in [("raw", raw), ("proved", proved)] {
-            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let mut state_tx = block.transaction();
             let mut ivm_cache = IvmCache::new();
             ivm::reset_argument_record_decode_count();
@@ -19024,7 +19344,7 @@ seiyaku ReviewedValue {
             .sign(ALICE_KEYPAIR.private_key())
         };
         let generic_metadata = Metadata::default();
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
@@ -19035,6 +19355,8 @@ seiyaku ReviewedValue {
                 &mut ivm_cache,
             )
             .expect("contract-less generic IVM must execute at pc zero");
+        state_transaction.apply();
+        let mut state_transaction = block.transaction();
         let mut reserved_metadata = generic_metadata;
         reserved_metadata.insert(
             "contract_manifest"
@@ -19054,6 +19376,8 @@ seiyaku ReviewedValue {
             error.to_string().contains("reserved `contract_manifest`"),
             "unexpected generic-metadata rejection: {error}"
         );
+        drop(state_transaction);
+        let mut state_transaction = block.transaction();
         state_transaction.world.contract_manifests.insert(
             generic_code_hash,
             iroha_data_model::smart_contract::manifest::ContractManifest {
@@ -19072,6 +19396,8 @@ seiyaku ReviewedValue {
                 provenance: None,
             },
         );
+        state_transaction.apply();
+        let mut state_transaction = block.transaction();
         let error = super::Executor::Initial
             .execute_transaction(
                 &mut state_transaction,
@@ -19081,10 +19407,14 @@ seiyaku ReviewedValue {
             )
             .expect_err("a manifest-bound hash must not execute as generic IVM");
         assert!(error.to_string().contains("contract manifest"));
+        drop(state_transaction);
+        let mut state_transaction = block.transaction();
         state_transaction
             .world
             .contract_manifests
             .remove(generic_code_hash);
+        state_transaction.apply();
+        let mut state_transaction = block.transaction();
         state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
         let error = super::Executor::Initial
             .execute_transaction(

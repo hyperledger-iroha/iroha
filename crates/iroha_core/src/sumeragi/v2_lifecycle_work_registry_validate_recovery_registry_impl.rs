@@ -1578,7 +1578,7 @@ impl ConcreteLifecycleWorkRegistry {
             ),
         };
         debug_assert!(work.validates_at(address));
-        let previous = self.entries.insert(address, work);
+        let previous = self.entries.insert(address, Box::new(work));
         debug_assert!(previous.is_none());
         InstalledRecoveredWalControlSignRegistryCut {
             registry: self,
@@ -1713,7 +1713,7 @@ impl ConcreteLifecycleWorkRegistry {
             )),
         };
         assert!(work.validates_at(child_address));
-        let previous = self.entries.insert(child_address, work);
+        let previous = self.entries.insert(child_address, Box::new(work));
         assert!(previous.is_none());
         Ok(InstalledRecoveredWalControlSignRegistryCut {
             registry: self,
@@ -1886,12 +1886,12 @@ impl ConcreteLifecycleWorkRegistry {
         assert!(next_sign_work.validates_at(next_sign_address));
         assert!(
             self.entries
-                .insert(broadcast_address, broadcast_work)
+                .insert(broadcast_address, Box::new(broadcast_work))
                 .is_none()
         );
         assert!(
             self.entries
-                .insert(next_sign_address, next_sign_work)
+                .insert(next_sign_address, Box::new(next_sign_work))
                 .is_none()
         );
         Ok(InstalledRecoveredWalControlSignRegistryCut {
@@ -1984,7 +1984,7 @@ impl ConcreteLifecycleWorkRegistry {
             ),
         };
         debug_assert!(work.validates_at(address));
-        let previous = self.entries.insert(address, work);
+        let previous = self.entries.insert(address, Box::new(work));
         debug_assert!(previous.is_none());
         Ok(InstalledRecoveredWalDecisionFetchRegistryCut {
             registry: self,
@@ -2102,7 +2102,7 @@ impl ConcreteLifecycleWorkRegistry {
             ),
         };
         debug_assert!(work.validates_at(store_address));
-        let previous = self.entries.insert(store_address, work);
+        let previous = self.entries.insert(store_address, Box::new(work));
         debug_assert!(previous.is_none());
         Ok(InstalledRecoveredWalDecisionFetchRegistryCut {
             registry: self,
@@ -2215,7 +2215,7 @@ impl ConcreteLifecycleWorkRegistry {
             kind: ConcreteLifecycleWorkKind::DurableValidateBody(carrier),
         };
         debug_assert!(work.validates_at(address));
-        assert!(self.entries.insert(address, work).is_none());
+        assert!(self.entries.insert(address, Box::new(work)).is_none());
         drop(fetch);
         drop(store);
         Ok(InstalledRecoveredWalDecisionFetchRegistryCut {
@@ -2454,7 +2454,7 @@ impl ConcreteLifecycleWorkRegistry {
             kind: ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(apply),
         };
         debug_assert!(work.validates_at(address));
-        let previous = self.entries.insert(address, work);
+        let previous = self.entries.insert(address, Box::new(work));
         debug_assert!(previous.is_none());
         (
             adapter,
@@ -2520,7 +2520,7 @@ impl ConcreteLifecycleWorkRegistry {
         };
         for (address, work) in batch.entries {
             staged.addresses.push(address);
-            let displaced = staged.entries.insert(address, work);
+            let displaced = staged.entries.insert(address, Box::new(work));
             debug_assert!(displaced.is_none(), "complete preflight fixed vacancy");
             if displaced.is_some() {
                 unreachable!("exclusive registry borrow cannot change after preflight")
@@ -2594,7 +2594,7 @@ impl ConcreteLifecycleWorkRegistry {
             self.entries
                 .get_mut(&prepared.producer_address)
                 .expect("terminal preflight retained the exact Producer carrier"),
-            replacement,
+            Box::new(replacement),
         );
         let staged_registry = StagedCertifiedServeTerminalProducer {
             entries: &mut self.entries,
@@ -2955,13 +2955,13 @@ impl ConcreteLifecycleWorkRegistry {
             .map_err(|(error, work)| {
                 let recovered = match work.kind {
                     ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion) => {
-                        PreparedDurableCertifiedBodyPipelineWorkV1::Fetch(completion)
+                        PreparedDurableCertifiedBodyPipelineWorkV1::Fetch(Box::new(completion))
                     }
                     ConcreteLifecycleWorkKind::DurableStoreBody(store) => {
-                        PreparedDurableCertifiedBodyPipelineWorkV1::Store(store)
+                        PreparedDurableCertifiedBodyPipelineWorkV1::Store(Box::new(store))
                     }
                     ConcreteLifecycleWorkKind::DurableValidateBody(validate) => {
-                        PreparedDurableCertifiedBodyPipelineWorkV1::Validate(validate)
+                        PreparedDurableCertifiedBodyPipelineWorkV1::Validate(Box::new(validate))
                     }
                     _ => unreachable!("recovered body install retains its closed carrier kind"),
                 };
@@ -3499,6 +3499,7 @@ impl ConcreteLifecycleWorkRegistry {
                         LifecycleWorkClass::Broadcast
                             | LifecycleWorkClass::EquivocationReport
                             | LifecycleWorkClass::InvalidBodyReport
+                            | LifecycleWorkClass::Apply
                     )
                     || extra.contains_record(record)
             })
@@ -3794,12 +3795,14 @@ impl ConcreteLifecycleWorkRegistry {
     ///
     /// Failure returns the move-only value to the caller so a higher-level
     /// admission transaction can roll back without cloning physical work.
+    /// The supplied allocation survives every check, rejection, and publication,
+    /// keeping both registry nodes and returned failure carriers bounded.
     pub(super) fn install(
         &mut self,
         address: ConcreteWorkAddress,
         expected_digest: LifecycleDigest,
-        work: ConcreteLifecycleWork,
-    ) -> Result<(), (RegistryError, ConcreteLifecycleWork)> {
+        work: Box<ConcreteLifecycleWork>,
+    ) -> Result<(), (RegistryError, Box<ConcreteLifecycleWork>)> {
         if ConcreteWorkAddress::new(address.owner, address.ordinal, address.slot) != Some(address) {
             return Err((RegistryError::InvalidAddress, work));
         }
@@ -3827,7 +3830,7 @@ impl ConcreteLifecycleWorkRegistry {
         &mut self,
         address: ConcreteWorkAddress,
         expected_digest: LifecycleDigest,
-        work: ConcreteLifecycleWork,
+        work: Box<ConcreteLifecycleWork>,
         publish: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, RegistryPublicationError<E>> {
         if let Err((error, work)) = self.install(address, expected_digest, work) {
@@ -3891,7 +3894,7 @@ impl ConcreteLifecycleWorkRegistry {
                 ));
             }
         };
-        match self.install_before_publication(address, expected_digest, work, publish) {
+        match self.install_before_publication(address, expected_digest, Box::new(work), publish) {
             Ok(published) => Ok(published),
             Err(RegistryPublicationError::Install(error, work)) => {
                 let (effect, pending) = work.into_pair();
@@ -3968,7 +3971,12 @@ impl ConcreteLifecycleWorkRegistry {
                         ));
                     }
                 };
-                match self.install_before_publication(address, expected_digest, work, publish) {
+                match self.install_before_publication(
+                    address,
+                    expected_digest,
+                    Box::new(work),
+                    publish,
+                ) {
                     Ok(published) => Ok(published),
                     Err(RegistryPublicationError::Install(error, work)) => {
                         let (effect, pending) = work.into_pair();
@@ -4023,7 +4031,12 @@ impl ConcreteLifecycleWorkRegistry {
                         work.admission,
                     ));
                 }
-                match self.install_before_publication(address, expected_digest, work, publish) {
+                match self.install_before_publication(
+                    address,
+                    expected_digest,
+                    Box::new(work),
+                    publish,
+                ) {
                     Ok(published) => Ok(published),
                     Err(RegistryPublicationError::Install(error, work)) => {
                         let ConcreteLifecycleWorkKind::DurableLiveWalSign(work) = work.kind else {
@@ -4084,10 +4097,10 @@ impl ConcreteLifecycleWorkRegistry {
                 validate,
             ));
         }
-        let work = match ConcreteLifecycleWork::from_recovered_durable_validate(carrier) {
+        let work = match ConcreteLifecycleWork::from_recovered_durable_validate(Box::new(carrier)) {
             Ok(work) => work,
             Err(carrier) => {
-                let validate = PreparedDurableValidateAdmissionV1::from_returned_carrier(carrier)
+                let validate = PreparedDurableValidateAdmissionV1::from_returned_carrier(*carrier)
                     .expect("origin-specific conversion returns an origin-specific carrier");
                 return Err(DurableValidateRegistryPublicationErrorV1::Install(
                     RegistryError::CorruptWork,
@@ -4206,7 +4219,7 @@ impl ConcreteLifecycleWorkRegistry {
         }
         let incumbent = self
             .entries
-            .insert(address, replacement)
+            .insert(address, Box::new(replacement))
             .expect("validated replacement address retains its incumbent");
         let staged = StagedRegistryReplacement {
             entries: &mut self.entries,

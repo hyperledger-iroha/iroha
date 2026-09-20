@@ -17,6 +17,69 @@ use iroha_torii_shared::{
 };
 use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+#[test]
+fn canonical_output_contract_has_one_details_owner_and_header_without_result_root() {
+    let schemas = openapi_schemas();
+    let details = &schemas["PipelineTransactionDetailsResponse"];
+    let expected = BTreeSet::from(["hash", "transaction"]);
+    assert_eq!(details["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(
+        details["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+    assert_eq!(
+        details["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field.as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+
+    let header = iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(1).unwrap(),
+        None,
+        None,
+        0,
+        0,
+    );
+    let encoded = norito::json::to_value(&header).unwrap();
+    let actual = encoded
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(!actual.contains("result_merkle_root"));
+    let contract = &schemas["BlockHeader"];
+    assert_eq!(contract["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(
+        contract["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        actual
+    );
+    assert_eq!(
+        contract["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field.as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        actual
+    );
+}
+
 const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
     "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
 const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";

@@ -1471,6 +1471,7 @@ match inbound.message() {
             inbound, executor.current_tag().view(),
         )?;
         let _ = service_historical_recovery_tick(lane_work, services)?;
+        dispatch_lane_work_effects(lane_work, services, lane_output_limit)?;
         finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
     }
     BlockMessage::V2(_) => {}
@@ -3770,12 +3771,136 @@ _LIFECYCLE_SERVE_RECONCILED_OWNER_PATHS = {
 }
 
 
+_LIFECYCLE_OWNER_DERIVED_SCHEDULER_PATHS = {
+    "turn": "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+    "height": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
+    "ordinary": "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+    "worker_ownership": "crates/iroha_core/src/sumeragi/v2_worker/lifecycle_serve_ownership.rs",
+}
+
+
+def _lifecycle_owner_derived_scheduler_errors(repo_root: Path = ROOT_DIR) -> list[str]:
+    """Check owner reads and scheduling boundaries, without asserting liveness proof."""
+
+    errors: list[str] = []
+    sources = {
+        role: _read_reviewed_rust_source(
+            repo_root, relative, errors, "owner-derived lifecycle scheduler",
+        )
+        for role, relative in _LIFECYCLE_OWNER_DERIVED_SCHEDULER_PATHS.items()
+    }
+    if errors:
+        return errors
+
+    def item(role, name, owner=None):
+        path, source = sources[role]
+        if owner is None:
+            return _require_rust_item(path, source, name, errors)
+        return _require_qualified_rust_item(
+            path, source, owner, name, errors, "owner-derived lifecycle scheduler",
+        )
+
+    def require(role, actual, description, expected, count=1):
+        _require_rust_token_sequence(
+            sources[role][0], actual, expected,
+            "owner-derived scheduler " + description, errors, count=count,
+        )
+
+    projection = item("turn", "producer_claim_projection", "LaunchedProductionLifecycleV1")
+    owner_reads = (
+        ("terminal Apply owner", "if self.executor.lifecycle_decision_apply_is_complete()"),
+        ("parked completion owner", "if let Some(pending) = self.pending_lifecycle_completion.as_ref()"),
+        ("source-bound successor fence", "match successor.reducer_fence_wait()"),
+        ("active coordinator lease", "if let Some(lease) = self.owner.coordinator.active_lease.as_ref()"),
+        ("unleased physical completion owner", ".has_unleased_lifecycle_completion_work()"),
+        ("exact Ready Apply key", "if let Some(key) = self.executor.live_lifecycle_decision_apply_key()"),
+        ("Ready Apply registry join", ".prepare_ready_live_decision_apply_reconciliation("),
+        ("exact Apply custody", "!self.executor.exactly_owns_live_lifecycle_decision_apply(&authority)"),
+        ("retained Serve worker owner", ".lifecycle_serve_ownership_snapshot()"),
+    )
+    for description, expected in owner_reads:
+        require("turn", projection, description, expected)
+    if projection is not None:
+        tokens = rust_code_tokens(projection.source)
+        cursor = 0
+        for description, expected in owner_reads:
+            needle = rust_code_tokens(expected)
+            match = next((index for index in range(cursor, len(tokens) - len(needle) + 1)
+                          if tokens[index:index + len(needle)] == needle), None)
+            if match is None:
+                errors.append(f"{sources['turn'][0]}: owner-derived scheduler priority lost {description}")
+                break
+            cursor = match + len(needle)
+    for expected in (
+        "LifecycleWorkClass::Apply => return Ok(Claim::AwaitingApplyCompletion)",
+        "LifecycleWorkClass::ProducerTurn => {}",
+        "_ => return Ok(Claim::AwaitingCompletion)",
+        "if authority.dispatch_key() != key",
+        "parent_ordinal: authority.validate_predecessor_ordinal()",
+        "child_ordinal: key.lifecycle_ordinal()",
+        "serve.authority == LifecycleServeAuthorityKindV1::Claimed",
+        '.any(|serve| serve.authority == LifecycleServeAuthorityKindV1::Claimed) { return Err("claimed Serve has no active lifecycle lease".to_owned()); }',
+        "if !serves.is_empty() { return Ok(Claim::AwaitingReplayCompletion); }",
+    ):
+        require("turn", projection, "typed owner classification", expected)
+
+    census = item("worker_ownership", "has_unleased_lifecycle_completion_work", "ProductionV2Services")
+    require("worker_ownership", census, "unleased custody survives physical completion", """
+self.io.as_ref().map(|io| {
+    let state = io.command_tx.queue.lock();
+    !state.lifecycle_validates.is_empty()
+        || state.work.values().any(|tracked| {
+            matches!(&tracked.descriptor, V2IoWorkDescriptor::PersistCertifiedFetchBody { .. })
+        })
+})
+""")
+    serve = item("worker_ownership", "lifecycle_serve_ownership_snapshot", "V2IoCommandQueue")
+    require("worker_ownership", serve, "Serve census reads retained exact index", """
+self.lock().lifecycle_serves.iter().map(|(&lifecycle_ordinal, tracked)| LifecycleServeOwnershipV1 {
+    lifecycle_ordinal, request_hash: tracked.request_hash, authority: tracked.authority,
+}).collect()
+""")
+
+    activated = item("turn", "producer_claim_projection", "ActivatedProductionLifecycleV1")
+    require("turn", activated, "activated owner forwards fresh projection", "self.launched.producer_claim_projection().map_err(")
+    require("turn", activated, "inconsistent owner fails closed", "self.launched.close_output_for_restart();")
+    drain = item("height", "drain_lifecycle_v2_ingress")
+    ordinary = item("ordinary", "run_lifecycle_active_height")
+    require("height", drain, "drain starts from actual owner", "let mut producer_claim = activated.producer_claim_projection()?;")
+    require("height", drain, "each rank re-reads actual owner", """
+while let Some(current_turn) = outer_turns.next_current() {
+    producer_claim = activated.producer_claim_projection()?;
+""")
+    require("ordinary", ordinary, "all ingress drains re-read actual owner", """
+terminal_finalization_cut.as_ref(),
+)?;
+producer_claim = activated.producer_claim_projection()?;
+""", count=3)
+    require("ordinary", ordinary, "Runtime refresh precedes Producer", """
+producer_claim = activated.producer_claim_projection()?;
+if producer_claim.requires_yield() {
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+}
+if terminal_finalization_cut.is_none()
+""")
+    for role, actual in (("height", drain), ("ordinary", ordinary)):
+        for forbidden in ("observe_completion", "observe_ingress", "drain_disposition.producer_claim()"):
+            if actual is not None and _token_sequence_count(rust_code_tokens(actual.source), rust_code_tokens(forbidden)):
+                errors.append(f"{sources[role][0]}: owner-derived scheduler retains shadow transition {forbidden}")
+    for name in ("observe_completion", "observe_ingress"):
+        for actual in rust_items(sources["height"][1], name):
+            if ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests") not in actual.brace_context:
+                errors.append(f"{sources['height'][0]}: shadow transition {name} escaped its test oracle")
+    return errors
+
+
 def _lifecycle_certified_serve_reconciled_owner_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
     """Check reviewed owner deltas independently of complete-item seals."""
 
-    errors: list[str] = []
+    errors: list[str] = _lifecycle_owner_derived_scheduler_errors(repo_root)
     sources = {}
     for role, relative in _LIFECYCLE_SERVE_RECONCILED_OWNER_PATHS.items():
         sources[role] = _read_reviewed_rust_source(
@@ -3789,7 +3914,13 @@ def _lifecycle_certified_serve_reconciled_owner_errors(
         if owner:
             attributes = (
                 "#[allow(clippy::result_large_err)]", "#[inline(never)]",
-            ) if role == "launch" else ()
+            ) if role == "launch" else (
+                ("#[cfg_attr(not(test), allow(dead_code))]", "#[allow(clippy::too_many_arguments)]")
+                if (role, owner, name) == (
+                    "turn", "ActivatedProductionLifecycleV1",
+                    "consume_prepared_ordinary_ingress_turn",
+                ) else ()
+            )
             item = _require_qualified_rust_item(
                 path, source, owner, name, errors, description,
                 expected_attributes=attributes,
@@ -3867,13 +3998,37 @@ let _ = settle_historical_body_serve_completion(
     receiver, block_sync_server, services, output_guard.as_ref(),
 )?;
 retry_recovered_decision_fetch_if_due(
-""")
+""", count=2)
     require("ordinary", None, "run_lifecycle_active_height",
             "active rollover retains historical output owner", """
 let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {
     activated.ready_for_finalized_rollover(&mut active_runner)?
 } else { false };
 """)
+    require("turn", "ActivatedProductionLifecycleV1", "consume_prepared_ordinary_ingress_turn",
+            "ordinary lane output forwards the exact runner budget", """
+consume_prepared_dequeued_v2_ingress(
+    handoff, &leader_wire_ingress_binding.ingress, executor, services,
+    lane_work, kura, local_key, block_sync_server, block_sync,
+    block_sync_request, npos_beacon, lane_output_limit,
+)
+""")
+    require("height", None, "drain_lifecycle_v2_ingress",
+            "all ordinary lane consumer paths forward the same output budget", """
+lane_work, kura, local_key, block_sync_server, block_sync,
+block_sync_request, npos_beacon, lane_output_limit,
+)
+""", count=3)
+    require("ordinary", None, "run_lifecycle_active_height",
+            "all ordinary batches preserve distinct ingress and output budgets", """
+drain_lifecycle_v2_ingress(
+    &mut activated, &mut active_runner, receiver, &mut lane_work,
+    kura.as_ref(), &common_config.key_pair, block_sync_server, block_sync,
+    &mut block_sync_request, npos_beacon, body_queue_capacity,
+    control_queue_capacity, terminal_finalization_cut.as_ref(),
+)?;
+""", count=3)
+
     require("ordinary", None, "run_lifecycle_active_height",
             "sidecar ingress needs typed permit and prepared owner", """
 } else if lane_only_completion_barrier {
@@ -3883,7 +4038,7 @@ let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_hi
         let _ = activated.consume_prepared_ordinary_ingress_turn(
             &mut active_runner, prepared, &mut lane_work, kura.as_ref(),
             &common_config.key_pair, block_sync_server, block_sync,
-            &mut block_sync_request, npos_beacon,
+            &mut block_sync_request, npos_beacon, control_queue_capacity,
         )?;
     }
 """)
@@ -3918,8 +4073,16 @@ if let Err(error) = activated.settle_certified_serve_completion_for_no_clock_rec
 """)
     require("pending", None, "run_pending_active_height",
             "pending rollover retains historical output owner", """
-let ready = ready_to_finish && !terminal_exact_output_pending
-    && !block_sync_server.has_pending_historical_body_serve();
+let ready = ready_to_finish && !block_sync_server.has_pending_historical_body_serve();
+""")
+    require("pending", None, "run_pending_active_height",
+            "pending rollover authenticates retained finalization custody", """
+if !ready {
+    let _ = wake_rx.recv_timeout(IDLE_POLL);
+    continue;
+}
+let finalization_ready = activated.ready_for_finalized_rollover(&mut active_runner)?;
+let rollover_ready = if finalization_ready {
 """)
     require("pending", None, "run_pending_active_height",
             "closed-prefix drain settles historical completion first", """
@@ -4017,20 +4180,17 @@ _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS = {'ordinary_loop': ('lifecycle_run_in
                    'Arc::clone(&output_guard), Arc::clone(&block_rx), '
                    'Arc::clone(&kura_replica_advert_refresh), exact_output_service_owner, '
                    ').with_kagemusha_mint_finality_authority(kagemusha_mint_finality_authority.clone());',
-                   'HeightRunOutcome::Terminal => { wait_for_terminal_shutdown(context.height, '
-                   'context.id(), &ingress_ready, &block_rx, &wake_rx, &shutdown_signal,); return '
-                   'Ok(()); } HeightRunOutcome::Shutdown => return Ok(()),',
+                   '        HeightRunOutcome::Terminal => {\n            if context.height != u64::MAX {\n                return Err(V2RunnerError::SuccessorRefinementRejected);\n            }\n            // The no-clock pending Apply has finalized its exact terminal tip.\n            startup_recovery.ready();\n            wait_for_terminal_shutdown(\n                context.height,\n                context.id(),\n                &ingress_ready,\n                &block_rx,\n                &wake_rx,\n                &shutdown_signal,\n            );\n            return Ok(());\n        }\n        HeightRunOutcome::Shutdown => return Ok(()),',
                    'let body_store = if emergency_fast { '
                    'V2BodyStore::open_emergency_fast_read_only(',
                    'into_quarantined_recovered_startup()',
                    'run_pending_active_height(activated, active_runner, &context, '
                    'verified_context.proofs_of_possession(),',
                    'HeightRunOutcome::Successor(successor) => successor,',
-                   'global_beacon_partial_signer, kagemusha_mint_finality_authority, network, '
-                   'block_rx, lane_relay_rx, pending_queue_plan_admission_dirty, wake_rx,')),
+                   'global_beacon_partial_signer, beacon_readiness, kagemusha_mint_finality_authority, network, block_rx, lane_relay_rx, pending_queue_plan_admission_dirty, wake_rx,')),
  'ordinary_active': ('lifecycle_run_inner.rs',
                      'run_lifecycle_active_height',
-                     ('let pending = lane_work.has_pending_historical_recovery()?;',
+                     ('let mut canonical_lane_body_recovered = false;',
                       'if ready_to_finish && '
                       '!block_sync_server.has_pending_historical_body_serve() { '
                       'activated.ready_for_finalized_rollover(&mut active_runner)? } else { false '
@@ -4041,22 +4201,16 @@ _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS = {'ordinary_loop': ('lifecycle_run_in
                       'super::preflight_finalized_lane_rollover(executor, services, &mut '
                       'lane_work, &mut canonical_lane_body_recovered,)',
                       'if finalization_ready && !rollover_ready {',
-                      'let drained = drain_decided_lane_recovery_ingress(receiver, executor, services, &mut '
-                      'lane_work, executor.current_tag().view(), kura.as_ref(), block_sync_server, '
-                      'DecidedLaneRecoveryIngressDrainMode::OpenPreflight,)',
-                      'let now = Instant::now(); if now >= next_lane_retransmit { '
-                      'lane_work.schedule_retransmission()?; next_lane_retransmit = '
-                      'deadline_after(now, retransmit_interval); } dispatch_lane_work_effects(&mut '
-                      'lane_work, services, control_queue_capacity)?; Ok::<_, '
-                      'V2RunnerError>(drained.is_some())',
+                      '            let drained_terminal_ingress =\n                drain_open_preflight_recovery_batch(receiver, control_queue_capacity, |mode| {\n                    cleanup_supervisor.reap_finished();\n                    if output_guard.restart_required() {\n                        return Err(V2RunnerError::RestartRequired);\n                    }\n                    if shutdown_signal.is_sent() {\n                        return Ok(false);\n                    }\n                    liveness_watchdog.poll(Instant::now());\n                    let drain_disposition = drain_lifecycle_v2_ingress(\n                        &mut activated,\n                        &mut active_runner,\n                        receiver,\n                        &mut lane_work,\n                        kura.as_ref(),\n                        &common_config.key_pair,\n                        block_sync_server,\n                        block_sync,\n                        &mut block_sync_request,\n                        npos_beacon,\n                        body_queue_capacity,\n                        control_queue_capacity,\n                        terminal_finalization_cut.as_ref(),\n                    )?;\n                    producer_claim = activated.producer_claim_projection()?;\n                    if let Some(reason) = drain_disposition.advance_executor_yield() {\n                        last_advance_executor_yield =\n                            Some(("open-preflight", reason, Instant::now()));\n                    }\n                    if drain_disposition.requires_yield()\n                        || producer_claim.requires_yield()\n                        || block_sync_server.has_pending_historical_body_serve()\n                    {\n                        return Ok(false);\n                    }\n                    let Some(cut) = terminal_finalization_cut.as_ref() else {\n                        return Err(V2RunnerError::Service(\n                            "open preflight recovery lost its terminal scheduler cut".to_owned(),\n                        ));\n                    };\n                    let _ = activated\n                        .reconcile_decided_lane_certified_serve(\n                            &mut active_runner,\n                            cut.decided_lane_recovery_permit(),\n                        )\n                        .map_err(V2RunnerError::Service)?;\n                    activated.with_runner_runtime(\n                        &mut active_runner,\n                        |_owner, executor, services, _local_proposal| {\n                            if !executor.ready_to_finish() {\n                                return Err(V2RunnerError::Service(\n                                    "open preflight recovery reopened executor ownership"\n                                        .to_owned(),\n                                ));\n                            }\n                            let _ = reconcile_terminal_lane_output_handoffs(\n                                cut.decided_lane_recovery_permit(),\n                                &mut lane_work,\n                                services,\n                                control_queue_capacity,\n                            )?;\n                            let drained = drain_decided_lane_recovery_ingress(\n                                receiver,\n                                executor,\n                                services,\n                                &mut lane_work,\n                                executor.current_tag().view(),\n                                kura.as_ref(),\n                                block_sync_server,\n                                mode,\n                            )?;\n                            dispatch_lane_work_effects(\n                                &mut lane_work,\n                                services,\n                                control_queue_capacity,\n                            )?;\n                            Ok::<_, V2RunnerError>(drained.is_some())\n                        },\n                    )\n                })? != 0;',
+                      '            activated.with_runner_runtime(\n                &mut active_runner,\n                |_owner, _executor, services, _local_proposal| {\n                    let now = Instant::now();\n                    if now >= next_lane_retransmit {\n                        lane_work.schedule_retransmission()?;\n                        next_lane_retransmit = deadline_after(now, retransmit_interval);\n                    }\n                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)\n                },\n            )?;',
                       'if !drained_terminal_ingress { let _ = wake_rx.recv_timeout(IDLE_POLL); } '
                       'continue;',
                       'let mut next_recovered_decision_fetch_retransmit = deadline_after(height_started_at, retransmit_interval);',
-                      'retry_recovered_decision_fetch_if_due(now, &mut next_recovered_decision_fetch_retransmit, retransmit_interval, executor, services,)?;',
+                      '        let now = Instant::now();\n        liveness_watchdog.poll(now);\n        activated.with_runner_runtime(\n            &mut active_runner,\n            |_owner, executor, services, _local_proposal| {\n                let _ = settle_historical_body_serve_completion(\n                    receiver,\n                    block_sync_server,\n                    services,\n                    output_guard.as_ref(),\n                )?;\n                retry_recovered_decision_fetch_if_due(\n                    now,\n                    &mut next_recovered_decision_fetch_retransmit,\n                    retransmit_interval,\n                    executor,\n                    services,\n                )?;\n                Ok::<_, V2RunnerError>(())\n            },\n        )?;',
                       'settle_apply_barrier_runner_decision_handoff(executor, services, local_proposal, &mut lane_work, output_guard.as_ref(), &permit,)?; let _ = reconcile_terminal_lane_output_handoffs(permit, &mut lane_work, services, control_queue_capacity,)?;',
                       'let ready_proposal_sign_preempts_producer = if executor_slice == AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary { let fence = executor.lifecycle_reducer_fence_observation(); match owner.ready_proposal_sign_preempts_bounded_producer_point(fence) { Ok(preempts) => preempts,',
                       'AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary if ready_proposal_sign_preempts_producer => { continue; }',
-                      'let terminal_exact_output_pending = activated.with_runner_runtime(&mut active_runner, |_owner, _executor, services, _local_proposal| { reconcile_terminal_lane_output_handoffs(cut.decided_lane_recovery_permit(), &mut lane_work, services, control_queue_capacity,) },)?; if terminal_exact_output_pending { let _ = wake_rx.recv_timeout(IDLE_POLL); continue; } if drained_terminal_ingress || drained_terminal_relay { continue; } receiver.ensure_closed_drained_cut().map_err(V2RunnerError::Service)?;')),
+                      '                let cut = terminal_finalization_cut\n                    .as_ref()\n                    .expect("rollover-ready closure authenticated the terminal cut above");\n                let _ = activated.with_runner_runtime(\n                    &mut active_runner,\n                    |_owner, _executor, services, _local_proposal| {\n                        reconcile_terminal_lane_output_handoffs(\n                            cut.decided_lane_recovery_permit(),\n                            &mut lane_work,\n                            services,\n                            control_queue_capacity,\n                        )\n                    },\n                )?;\n                // The finite ingress prefix must drain, but delivery to every peer\n                // is not a finality condition. The consuming rollover below owns\n                // exact output until its receipt- and lane-authenticated durable\n                // reconstruction handoff succeeds. Waiting for the network here\n                // would prevent that handoff when a validator is offline.\n                if block_sync_server.has_pending_historical_body_serve() {\n                    let _ = wake_rx.recv_timeout(IDLE_POLL);\n                    continue;\n                }\n                if drained_terminal_ingress || drained_terminal_relay {\n                    continue;\n                }\n                break;\n            }\n            receiver\n                .ensure_closed_drained_cut()\n                .map_err(V2RunnerError::Service)?;')),
  'pending_active': ('lifecycle_pending_kura.rs',
                     'run_pending_active_height',
                     ('let finalization_ready = activated.ready_for_finalized_rollover(&mut '
@@ -4071,6 +4225,177 @@ _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS = {'ordinary_loop': ('lifecycle_run_in
                      'activated.close_runner_ingress_for_finalized_drain(&mut active_runner, '
                      'receiver)?;'))}
 
+# Defining owners of the delegated recovery and exact-output handoff checks.
+_LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS.update({
+    'finalized_preflight': ('finalized_output_rollover.rs', 'preflight_finalized_lane_rollover', (
+        """
+if !executor.ready_to_finish() {
+        return Ok(false);
+    }
+    let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
+        V2RunnerError::Service("ready Sumeragi executor lost its durable finality owner".to_owned())
+    })?;
+    if !*canonical_lane_body_recovered {
+        let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
+        *canonical_lane_body_recovered = true;
+    }
+    let _ = lane_work.persist_anchored_sessions()?;
+    let _ = service_historical_recovery_tick(lane_work, services)?;
+    if lane_work.has_pending_historical_recovery()? {
+        return Ok(false);
+    }
+    lane_work
+        .durable_completion_matches_finality(artifact)
+        .map_err(V2RunnerError::from)
+""",
+    )),
+    'open_recovery_batch': ('decided_lane_recovery.rs', 'drain_open_preflight_recovery_batch', (
+        """
+let physical_cut = receiver.next_physical_admission_ordinal();
+    let budget = receiver.len().min(limit);
+    let mut drained = 0;
+    for _ in 0..budget {
+        if !service_one(DecidedLaneRecoveryIngressDrainMode::OpenPreflightBatch { physical_cut })? {
+            break;
+        }
+        drained += 1;
+    }
+    Ok(drained)
+""",
+    )),
+    'finalized_output_rollover': ('finalized_output_rollover.rs', 'rollover_finalized_height_outputs', (
+        """
+// Finality makes every current-height global/lane output either
+    // Kura-reconstructible or explicitly superseded. Move those owners across
+    // one local durable boundary before the successor opens the merge journal;
+    // no predecessor thread survives this function.
+    let _ = retry_exact_output_and_apply_sidecar_admissions(
+        &mut lane_work,
+        services,
+        control_queue_capacity,
+    )?;
+    let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
+    lane_work.persist_anchored_sessions()?;
+    let _ = service_historical_recovery_tick(&mut lane_work, services)?;
+    if lane_work.has_pending_historical_recovery()? {
+        return Err(V2RunnerError::Service(
+            "finalized lane output still owns predecessor-height recovery".to_owned(),
+        ));
+    }
+    if !lane_work.durable_completion_matches_finality(artifact)? {
+        return Err(V2RunnerError::Service(
+            "finalized lane output has not crossed its local durable completion boundary"
+                .to_owned(),
+        ));
+    }
+    lane_work.prepare_canonical_lane_rollover(artifact)?;
+    let durable_lane_authority = lane_work
+        .durable_lane_rollover_authority(artifact)?
+        .ok_or_else(|| {
+            V2RunnerError::Service(
+                "finalized lane output has not crossed its local durable reconstruction boundary"
+                    .to_owned(),
+            )
+        })?;
+    lane_work.prune_finalized_merge_sidecars()?;
+    lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;
+    drain_finalized_lane_work_output(
+        &mut lane_work,
+        services,
+        receipt,
+        artifact,
+        &durable_lane_authority,
+        control_queue_capacity,
+    )?;
+    if lane_work.has_pending_committed_output_handoff()?
+        || lane_work.effect_count() != 0
+        || services
+            .has_pending_exact_output()
+            .map_err(V2RunnerError::Service)?
+    {
+        return Err(V2RunnerError::Service(
+            "finalized output remained owned after durable handoff".to_owned(),
+        ));
+    }
+    let exact_output_handoff = services
+        .seal_applied_height_output_handoff(receipt, artifact, &durable_lane_authority)
+        .map_err(V2RunnerError::Service)?;
+    lane_work
+        .into_retained_merge_sidecars(exact_output_handoff, artifact, successor)
+        .map_err(V2RunnerError::from)
+""",
+    )),
+    'finalized_output_drain': ('finalized_output_rollover.rs', 'drain_finalized_lane_work_output', (
+        """
+loop {
+        let _ = apply_retired_merge_sidecar_requests(lane_work, services)?;
+        let _ = apply_obsolete_merge_sidecar_generation_hints(lane_work, services)?;
+        let _ = apply_acknowledged_merge_sidecar_closes(lane_work, services)?;
+        apply_certified_merge_sidecar_closed_prefixes(lane_work, services)?;
+        apply_certified_merge_sidecar_chunk_admissions(
+            lane_work,
+            services,
+            control_queue_capacity,
+        )?;
+        let retired = services
+            .handoff_applied_height_output_to_durable_reconstruction(
+                receipt,
+                artifact,
+                durable_lane_authority,
+            )
+            .map_err(V2RunnerError::Service)?;
+        apply_certified_merge_sidecar_chunk_admissions(
+            lane_work,
+            services,
+            control_queue_capacity,
+        )?;
+
+        let before = lane_work.effect_count();
+        let dispatched =
+            dispatch_lane_work_effects_with_progress(lane_work, services, control_queue_capacity)?;
+        let after = lane_work.effect_count();
+        let pending = services
+            .has_pending_exact_output()
+            .map_err(V2RunnerError::Service)?;
+        // Seal only after one quiescent pass. A just-dispatched reply route can
+        // become parked and therefore report no dispatchable pending work even
+        // though its move-only fanout still needs the next durable handoff.
+        if retired == 0 && dispatched == 0 && after == 0 && !pending {
+            return Ok(());
+        }
+        if retired == 0 && dispatched == 0 && after >= before {
+            return Err(V2RunnerError::Service(
+                "finalized lane output made no progress toward exact handoff".to_owned(),
+            ));
+        }
+    }
+""",
+    )),
+})
+
+# Additional authority edges from the reviewed loop projection migration.
+for _owner_key, _owner_edges in {
+'ordinary_loop': (
+    'beacon_readiness.begin_height(context.id()); close_ingress_for_rollover(&ingress_ready, &block_rx);',
+    'beacon_readiness.publish_for_height(&context, state.as_ref(), local_validator, global_beacon_partial_signer.as_deref(),); let mut npos_beacon = V2GlobalBeaconLifecycle::open_deferred(&context, Arc::clone(&state), local_validator, global_beacon_partial_signer.clone(),)',
+    'if let Some(startup_recovery) = startup_recovery.take() { startup_recovery.ready(); } let finalized = run_lifecycle_active_height(',
+),
+'pending_loop': (
+    'let shared_config = config.v2_config(block_cadence, context.mode)?; super::super::admission_capacity::require_local_payload_capacity(context.da_layout, &shared_config,).map_err(V2RunnerError::Service)?;',
+    'let reservation_reconciliation_pending = if emergency_fast { reservation_reconciliation_pending } else { if queue.lane_reservation_startup_reconciliation_pending() { return Err(V2RunnerError::Service("pending Kura startup returned without completing Queue reconciliation".to_owned(),)); } false };',
+),
+'ordinary_active': (
+    'let mut producer_claim = activated.producer_claim_projection()?;',
+    'producer_claim = activated.producer_claim_projection()?; if producer_claim.requires_yield() { let _ = wake_rx.recv_timeout(IDLE_POLL); continue; } if terminal_finalization_cut.is_none() {',
+    'if drain_disposition.requires_yield() || producer_claim.requires_yield() { let _ = wake_rx.recv_timeout(IDLE_POLL); continue; } let executor_ready = activated.with_runner_runtime(&mut active_runner, |_owner, executor, _services, _local_proposal| executor.ready_to_finish(),); if !executor_ready { output_guard.close_admission_for_restart(); return Err(V2RunnerError::RestartRequired); } if block_sync_server.has_pending_historical_body_serve() || !activated.ready_for_finalized_rollover(&mut active_runner)? { let _ = wake_rx.recv_timeout(IDLE_POLL); continue; }',
+    'if !terminal_planning_fenced { let active_view = activated.with_runner_runtime(&mut active_runner, |_owner, executor, _services, _local_proposal| { executor.local_proposal_directive().map(|directive| directive.tag().view()) },)?; if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel) || lane_work.queue_plan_admission_handoffs_need_refresh(active_view)? { lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)?; } }',
+),
+}.items():
+    _owner_path, _owner_symbol, _owner_required = _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS[_owner_key]
+    _LIFECYCLE_CONSTRUCTION_RECONCILED_OWNERS[_owner_key] = (
+        _owner_path, _owner_symbol, _owner_required + _owner_edges,
+    )
+
 def _lifecycle_construction_reconciled_owner_errors(root_dir: Path) -> list[str]:
     """Bind the current typed launch and closed predecessor-recovery corridor."""
     errors: list[str] = []
@@ -4079,7 +4404,8 @@ def _lifecycle_construction_reconciled_owner_errors(root_dir: Path) -> list[str]
         item = _require_rust_item(path, path.read_text(encoding="utf-8"), symbol, errors)
         _require_rust_item_context(
             path, item, (), f"lifecycle construction {key}", errors,
-            expected_attributes=("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",),
+            expected_attributes=("#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",)
+            if key in ("ordinary_loop", "pending_loop", "ordinary_active", "pending_active") else (),
         )
         for token in required:
             _require_rust_token_sequence(

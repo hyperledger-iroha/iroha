@@ -131,17 +131,23 @@ fn queue_plan_pending_resolution_decrements_only_exact_bound_route_counts() {
         );
         world.commit();
     }
-    assert!(state.lane_has_drain_blocking_evidence(
-        coordinator_route.lane_id,
-        coordinator_route.dataspace_id,
-        coordinator_route.lane_incarnation,
-    ));
     assert!(
-        !state.lane_has_drain_blocking_evidence(
-            participant_route.lane_id,
-            participant_route.dataspace_id,
-            participant_route.lane_incarnation,
-        ),
+        state
+            .lane_has_drain_blocking_evidence(
+                coordinator_route.lane_id,
+                coordinator_route.dataspace_id,
+                coordinator_route.lane_incarnation,
+            )
+            .expect("observe exact lane drain evidence")
+    );
+    assert!(
+        !state
+            .lane_has_drain_blocking_evidence(
+                participant_route.lane_id,
+                participant_route.dataspace_id,
+                participant_route.lane_incarnation,
+            )
+            .expect("observe exact lane drain evidence"),
         "resolving the only participant-bound obligation must unblock that route"
     );
     {
@@ -176,11 +182,13 @@ fn queue_plan_pending_resolution_decrements_only_exact_bound_route_counts() {
         world.commit();
     }
     assert!(
-        !state.lane_has_drain_blocking_evidence(
-            coordinator_route.lane_id,
-            coordinator_route.dataspace_id,
-            coordinator_route.lane_incarnation,
-        ),
+        !state
+            .lane_has_drain_blocking_evidence(
+                coordinator_route.lane_id,
+                coordinator_route.dataspace_id,
+                coordinator_route.lane_incarnation,
+            )
+            .expect("observe exact lane drain evidence"),
         "resolving the final coordinator-bound obligation must unblock that route"
     );
 }

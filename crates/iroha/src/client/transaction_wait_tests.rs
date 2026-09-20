@@ -165,7 +165,7 @@ fn transaction_wait_timeout_identifies_the_exact_pending_transaction() {
     for asynchronous in [false, true] {
         for (response, expected_status) in [
             (
-                json_response(StatusCode::NOT_FOUND, "transaction not observed"),
+                super::evidence_http_tests::scoped_pipeline_absence(&hash()),
                 "not_observed",
             ),
             (status("Queued", "queue"), "Queued"),
@@ -341,7 +341,7 @@ fn assert_unresolved(error: &eyre::Report, attempts: u64) {
 fn transaction_wait_zero_timeout_never_dispatches_an_initial_read() {
     for asynchronous in [false, true] {
         for response in [
-            json_response(StatusCode::NOT_FOUND, "transaction not observed"),
+            super::evidence_http_tests::scoped_pipeline_absence(&hash()),
             status("Queued", "queue"),
             status("Applied", "state"),
         ] {

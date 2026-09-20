@@ -324,46 +324,6 @@ pub mod isi {
             message.into().into(),
         ))
     }
-    fn validate_alias_registry_routing_activation(
-        custom: &iroha_data_model::parameter::CustomParameter,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
-
-        let Some(next) =
-            AliasRegistryRoutingActivationV1::from_custom_parameter(custom).map_err(|error| {
-                invalid_smart_contract_parameter(format!(
-                    "invalid alias registry routing activation: {error}"
-                ))
-            })?
-        else {
-            return Ok(());
-        };
-        let previous = state_transaction
-            .world
-            .parameters
-            .get()
-            .custom()
-            .get(custom.id())
-            .map(|installed| {
-                AliasRegistryRoutingActivationV1::from_custom_parameter(installed)?.ok_or_else(
-                    || {
-                        norito::json::Error::Message(
-                            "installed activation parameter identifier does not match its key"
-                                .to_owned(),
-                        )
-                    },
-                )
-            })
-            .transpose()
-            .map_err(|error| {
-                invalid_smart_contract_parameter(format!(
-                    "invalid installed alias registry routing activation: {error}"
-                ))
-            })?;
-        next.validate_installation(previous.as_ref(), state_transaction.block_height())
-            .map_err(invalid_smart_contract_parameter)
-    }
     fn validate_alias_dataspace_bootstrap_grant(
         custom: &iroha_data_model::parameter::CustomParameter,
         state_transaction: &StateTransaction<'_, '_>,
@@ -20719,6 +20679,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
+            state_transaction.validate_execution_output_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
                     return Err(InstructionExecutionError::InvalidParameter(
@@ -20749,7 +20710,6 @@ pub mod isi {
                         ));
                     }
                 }
-                validate_alias_registry_routing_activation(custom, state_transaction)?;
                 validate_alias_dataspace_bootstrap_grant(custom, state_transaction)?;
                 validate_governed_pipeline_gas_parameter(custom)?;
                 validate_hijiri_parameters(custom, state_transaction)?;
@@ -21045,6 +21005,8 @@ pub mod isi {
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,
+                Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
+                Block(block.execution_output) => BlockParameter::ExecutionOutput,
                 Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
                 Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
                 Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,
@@ -25056,7 +25018,6 @@ pub mod isi {
                     NonZeroU64::new(1).unwrap(),
                     None,
                     None,
-                    None,
                     0,
                     0,
                 );
@@ -25132,7 +25093,6 @@ pub mod isi {
                 let $state = blank_test_state();
                 let header = BlockHeader::new(
                     NonZeroU64::new(2).expect("nonzero height"),
-                    None,
                     None,
                     None,
                     0,
@@ -25246,7 +25206,6 @@ pub mod isi {
             let state = blank_test_state();
             let header = BlockHeader::new(
                 NonZeroU64::new(62).expect("nonzero lifecycle height"),
-                None,
                 None,
                 None,
                 0,
@@ -25380,7 +25339,6 @@ pub mod isi {
             let state = blank_test_state();
             let header = BlockHeader::new(
                 NonZeroU64::new(40).expect("nonzero lifecycle height"),
-                None,
                 None,
                 None,
                 0,
@@ -25619,19 +25577,11 @@ pub mod isi {
         });
 
         fn first_test_block_header() -> iroha_data_model::block::BlockHeader {
-            iroha_data_model::block::BlockHeader::new(
-                NonZeroU64::new(1).unwrap(),
-                None,
-                None,
-                None,
-                0,
-                0,
-            )
+            iroha_data_model::block::BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0)
         }
         fn first_test_block_header_with_checked_height() -> iroha_data_model::block::BlockHeader {
             iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(1).expect("nonzero height"),
-                None,
                 None,
                 None,
                 0,
@@ -28817,7 +28767,6 @@ pub mod isi {
                     NonZeroU64::new(1).expect("nonzero height"),
                     None,
                     None,
-                    None,
                     0,
                     0,
                 );
@@ -29026,7 +28975,6 @@ pub mod isi {
             let state = blank_test_state();
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(6).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -29506,7 +29454,6 @@ pub mod isi {
                 NonZeroU64::new(finality.finality_artifact.height + 1).expect("successor height"),
                 Some(finality.block_header.hash()),
                 None,
-                None,
                 u64::try_from(finality.block_header.creation_time().as_millis())
                     .expect("fixture time fits u64") + 1,
                 0,
@@ -29775,7 +29722,6 @@ pub mod isi {
                 NonZeroU64::new(8).expect("nonzero fixture height"),
                 None,
                 None,
-                None,
                 observation.masterchain.gen_utime_ms(),
                 0,
             );
@@ -30006,7 +29952,6 @@ pub mod isi {
                 NonZeroU64::new(2).unwrap(),
                 None,
                 None,
-                None,
                 0,
                 0,
             );
@@ -30043,7 +29988,6 @@ pub mod isi {
             }
             let replay_header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(2).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -30184,7 +30128,6 @@ seiyaku GovernanceLifecycle {
                 NonZeroU64::new(1).unwrap(),
                 None,
                 None,
-                None,
                 0,
                 0,
             ));
@@ -30242,7 +30185,6 @@ seiyaku GovernanceLifecycle {
             let state = blank_test_state();
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -30311,7 +30253,6 @@ seiyaku GovernanceLifecycle {
             let state = blank_test_state();
             let mut block = state.block(BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -30714,7 +30655,7 @@ seiyaku GovernanceLifecycle {
             let role = Role::new(role_id.clone(), authority.clone()).build(&authority);
             world.roles.insert(role_id.clone(), role);
             let state = State::new(world, kura, query_handle);
-            let header = BlockHeader::new(NonZeroU64::new(5).unwrap(), None, None, None, 0, 0);
+            let header = BlockHeader::new(NonZeroU64::new(5).unwrap(), None, None, 0, 0);
             let mut state_block = state.block(header);
             let mut stx = state_block.transaction();
             let perm = Permission::new("can_read_all_accounts".to_string(), Json::new(()));
@@ -32223,8 +32164,7 @@ seiyaku GovernanceLifecycle {
             let mut provisional_header = BlockHeader::new(
                 template_header.height(),
                 template_header.prev_block_hash(),
-                None,
-                None,
+                iroha_crypto::MerkleTree::root_from_typed_leaves([entry_hash]),
                 u64::try_from(template_header.creation_time().as_millis())
                     .expect("fixture creation time fits u64"),
                 template_header.view_change_index(),
@@ -32237,13 +32177,36 @@ seiyaku GovernanceLifecycle {
             );
             let mut block =
                 SignedBlock::presigned(signature, provisional_header, vec![transaction]);
-            block
-                .set_transaction_results(
-                    Vec::new(),
+            block.validate_proposal_commitments().expect(
+                "exact SCCP proposal commits to its authenticated transaction before outputs",
+            );
+            let signed_proposal_hash = block.hash();
+            {
+                let outputs = crate::execution_output_test_support::structural_network_outputs(
+                    &block,
                     &[entry_hash],
                     vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+                );
+                let fragments =
+                    u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count())
+                        .unwrap();
+                block.set_execution_outputs(
+                    outputs,
+                    fragments,
+                    Default::default(),
+                    Vec::new(),
+                    Default::default(),
+                    Default::default(),
+                    Vec::new(),
+                    &crate::execution_output_test_support::structural_output_limits(),
                 )
-                .expect("attach successful exact SCCP transaction result");
+            }
+            .expect("attach successful exact SCCP transaction result");
+            assert_eq!(
+                block.hash(),
+                signed_proposal_hash,
+                "installing SCCP outputs must preserve the signed proposal header"
+            );
             assert!(
                 provisional_finality
                     .finality_artifact
@@ -37076,7 +37039,6 @@ seiyaku GovernanceLifecycle {
                     NonZeroU64::new(1).unwrap(),
                     None,
                     None,
-                    None,
                     0,
                     0,
                 );
@@ -39068,58 +39030,6 @@ seiyaku GovernanceLifecycle {
             let params = stx.world.parameters.get().sumeragi().clone();
             assert_eq!(params.max_clock_drift_ms(), 333);
         });
-        world_test!(set_parameter_alias_registry_routing_activation_is_future_and_immutable {
-            use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
-
-            blank_state_transaction!(state, block, state_block, stx);
-            let carrier_height = stx.block_height();
-            let parameter_id = AliasRegistryRoutingActivationV1::parameter_id();
-            for invalid_height in [0, carrier_height] {
-                let invalid = AliasRegistryRoutingActivationV1::new(invalid_height)
-                    .into_custom_parameter();
-                SetParameter::new(Parameter::Custom(invalid))
-                    .expect_execute_err(&ALICE_ID, &mut stx, "activation cannot change its installation carrier");
-                assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
-            }
-            let activation = AliasRegistryRoutingActivationV1::new(carrier_height + 2);
-            let custom = activation.into_custom_parameter();
-            SetParameter::new(Parameter::Custom(custom.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "install future activation");
-            SetParameter::new(Parameter::Custom(custom.clone()))
-                .expect_execute(&ALICE_ID, &mut stx, "exact activation retry is idempotent");
-            for changed_height in [carrier_height + 1, carrier_height + 3] {
-                let changed = AliasRegistryRoutingActivationV1::new(changed_height)
-                    .into_custom_parameter();
-                let error = SetParameter::new(Parameter::Custom(changed))
-                    .expect_execute_err(&ALICE_ID, &mut stx, "installed activation cannot move in either direction");
-                assert_eq!(error, InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "alias registry routing activation is immutable once installed".into(),
-                    ),
-                ));
-                assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
-            }
-        });
-        world_test!(set_parameter_alias_registry_routing_activation_rejects_malformed_installed_state {
-            use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
-
-            blank_state_transaction!(state, block, state_block, stx);
-            let parameter_id = AliasRegistryRoutingActivationV1::parameter_id();
-            let malformed = iroha_data_model::parameter::CustomParameter::new(
-                parameter_id.clone(),
-                Json::from(norito::json!({"version": 1, "activation_height": 0})),
-            );
-            stx.world.parameters.get_mut().set_parameter(Parameter::Custom(malformed.clone()));
-            let valid = AliasRegistryRoutingActivationV1::new(stx.block_height() + 1)
-                .into_custom_parameter();
-            let error = SetParameter::new(Parameter::Custom(valid))
-                .expect_execute_err(&ALICE_ID, &mut stx, "malformed installed state is not silently overwritten");
-            assert!(matches!(&error,
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
-                    if reason.starts_with("invalid installed alias registry routing activation:")
-            ), "unexpected malformed activation error: {error:?}");
-            assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&malformed));
-        });
         world_test!(set_parameter_alias_dataspace_bootstrap_grant_is_immutable_and_requires_existing_owner {
             use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
 
@@ -39369,7 +39279,6 @@ seiyaku GovernanceLifecycle {
             let second_hash = seed_committed_world_test_block(&state);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(3).expect("nonzero height"),
-                None,
                 None,
                 None,
                 0,
@@ -41261,7 +41170,6 @@ seiyaku GovernanceLifecycle {
                 NonZeroU64::new(5).unwrap(),
                 None,
                 None,
-                None,
                 0,
                 0,
             );
@@ -41287,7 +41195,6 @@ seiyaku GovernanceLifecycle {
                 BTreeSet::from([kp_a.public_key().clone(), kp_b.public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(7).unwrap(),
-                None,
                 None,
                 None,
                 0,
@@ -41339,7 +41246,6 @@ seiyaku GovernanceLifecycle {
                 BTreeSet::from([kp.public_key().clone()]);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(9).unwrap(),
-                None,
                 None,
                 None,
                 0,

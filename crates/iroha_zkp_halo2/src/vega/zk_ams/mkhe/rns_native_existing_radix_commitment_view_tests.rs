@@ -406,7 +406,7 @@ fn existing_radix_boundary_is_private_move_only_non_authorizing_and_fail_closed(
     assert_eq!(INVENTORY_BYTES_V1, 385_968);
     assert_eq!(HEADER_BYTES_V1, 414);
     assert_eq!(MIN_WIRE_BYTES_V1, 386_415);
-    assert_eq!(RNS_NATIVE_EXISTING_RADIX_RESIDUAL_MAX_BYTES_V1, 1_817_839);
+    assert_eq!(RNS_NATIVE_EXISTING_RADIX_RESIDUAL_MAX_BYTES_V1, 1_816_543);
 
     let source = include_str!("rns_native_existing_radix_commitment_view.rs");
     let declaration = "pub(super) struct RnsNativeExistingRadixCommitmentPrerequisiteV1";

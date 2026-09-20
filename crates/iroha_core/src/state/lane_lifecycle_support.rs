@@ -1,5 +1,7 @@
 struct LaneTopologyDiff<'a> {
+    #[cfg(test)]
     added: Vec<&'a iroha_config::parameters::actual::LaneConfigEntry>,
+    #[cfg(test)]
     retired: Vec<&'a iroha_config::parameters::actual::LaneConfigEntry>,
     replacements: Vec<(
         &'a iroha_config::parameters::actual::LaneConfigEntry,
@@ -564,12 +566,6 @@ impl PendingAutoscaleTransition {
         !matches!(
             self,
             Self::DrainIntent { .. } | Self::DrainCommitment { .. }
-        )
-    }
-    const fn advances_autoscale_cooldown(&self) -> bool {
-        matches!(
-            self,
-            Self::DrainIntent { .. } | Self::ScaleOut { .. } | Self::ScaleIn { .. }
         )
     }
 }

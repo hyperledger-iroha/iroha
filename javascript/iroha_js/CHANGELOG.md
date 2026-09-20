@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Canonical request signing hashes the exact byte range of every ArrayBuffer
+  view, including DataView and wide typed arrays. Strict lossless JSON request
+  serialization rejects array accessors without invoking them and rejects
+  malformed Unicode in values and object keys before dispatch.
+
 - Added the browser `game` entry point for canonical generic game-session
   manifests, opaque inputs, signed checkpoints, invitation admission and native
   execution-proof outcomes. Browser transaction signing admits only the closed

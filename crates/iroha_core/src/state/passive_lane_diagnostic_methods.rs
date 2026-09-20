@@ -3,7 +3,7 @@ impl State {
         &self,
         session: &crate::lane_consensus::CommittedLaneBlockSession,
         current_state_height: u64,
-        current_state_hash: HashOf<BlockHeader>,
+        current_state_hash: Option<HashOf<BlockHeader>>,
     ) -> Option<crate::sumeragi::status::CommittedLaneBlockExecutionStatus> {
         use crate::sumeragi::status::CommittedLaneBlockExecutionStatus as ExecutionStatus;
         let proposal = &session.proposal;
@@ -41,27 +41,29 @@ impl State {
         {
             return Some(ExecutionStatus::AwaitingPredecessorApplication);
         }
-        if self
-            .kura
-            .read_preflighted_lane_block_execution_input_for_application_without_sidecar_repair(
-                proposal,
-                current_state_height,
-                Some(current_state_hash),
-            )
-            .is_some()
-        {
-            return Some(ExecutionStatus::PayloadPreflightedAwaitingStateApplication);
-        }
-        if self
-            .kura
-            .lane_block_execution_preflight_has_rejections_without_sidecar_repair(
-                proposal,
-                current_state_height,
-                Some(current_state_hash),
-            )
-            == Some(true)
-        {
-            return Some(ExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication);
+        if let Some(current_state_hash) = current_state_hash {
+            if self
+                .kura
+                .read_preflighted_lane_block_execution_input_for_application_without_sidecar_repair(
+                    proposal,
+                    current_state_height,
+                    Some(current_state_hash),
+                )
+                .is_some()
+            {
+                return Some(ExecutionStatus::PayloadPreflightedAwaitingStateApplication);
+            }
+            if self
+                .kura
+                .lane_block_execution_preflight_has_rejections_without_sidecar_repair(
+                    proposal,
+                    current_state_height,
+                    Some(current_state_hash),
+                )
+                == Some(true)
+            {
+                return Some(ExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication);
+            }
         }
         if self
             .kura

@@ -125,7 +125,6 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
         NonZeroU64::new(1).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -221,7 +220,6 @@ fn upgrade_execute_enforces_capability_at_the_mutation_boundary() {
         NonZeroU64::new(2).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -259,7 +257,6 @@ fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role
     );
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
-        None,
         None,
         None,
         0,
@@ -328,7 +325,6 @@ fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
-        None,
         None,
         None,
         0,
@@ -630,7 +626,6 @@ fn execute_verified_fee_sponsor_registration(
         NonZeroU64::new(1).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -751,7 +746,6 @@ fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
-        None,
         None,
         None,
         0,
@@ -908,7 +902,6 @@ fn prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap() {
         NonZeroU64::new(146).unwrap(),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1034,7 +1027,6 @@ fn prospective_fee_sponsor_enrollment_preserves_authority_and_closed_guards() {
         let (state, program_id, _) = staged_fee_sponsor_activation_fixture();
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(146).unwrap(),
-            None,
             None,
             None,
             0,
@@ -1194,7 +1186,6 @@ fn fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound() {
             NonZeroU64::new(146).expect("nonzero executing height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -1248,7 +1239,6 @@ fn fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards() {
         let (state, program_id, vault_key) = staged_fee_sponsor_activation_fixture();
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(146).expect("nonzero executing height"),
-            None,
             None,
             None,
             0,
@@ -1328,7 +1318,6 @@ fn post_genesis_authority_cannot_bootstrap_another_sponsors_program() {
         NonZeroU64::new(2).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1359,7 +1348,6 @@ fn replayed_genesis_header_cannot_regain_fee_sponsor_bootstrap_authority() {
     seed_committed_world_test_block(&state);
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
-        None,
         None,
         None,
         0,
@@ -1394,7 +1382,6 @@ fn post_genesis_fund_mismatch_preserves_balances_vault_and_transcripts() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(2).expect("nonzero height"),
-        None,
         None,
         None,
         0,
@@ -1488,7 +1475,6 @@ fn fee_sponsor_program_rejects_unregistered_payout_account() {
         NonZeroU64::new(1).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1547,7 +1533,6 @@ fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
-        None,
         None,
         None,
         0,
@@ -1675,7 +1660,6 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
         NonZeroU64::new(2).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1748,7 +1732,6 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
-        None,
         None,
         None,
         0,
@@ -1843,7 +1826,6 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     );
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
-        None,
         None,
         None,
         0,

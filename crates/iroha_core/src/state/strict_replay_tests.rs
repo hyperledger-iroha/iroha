@@ -13,7 +13,7 @@ use crate::{
         v2_effects::ApplyTask,
     },
 };
-use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
+use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     HasMetadata, Registrable,
@@ -177,7 +177,7 @@ impl RuntimeStateFingerprint {
                 .map(|entry| entry.as_ref().clone())
                 .collect(),
             runtime_debug: format!(
-                "merge={:?}|da={:?}|confidential={:?}|receipt={:?}|shard={:?}|pin={:?}|relays={:?}|settled={:?}|nexus={:?}|incarnations={:?}|lineage={:?}|activations={:?}",
+                "merge={:?}|da={:?}|confidential={:?}|receipt={:?}|shard={:?}|pin={:?}|relays={:?}|nexus={:?}|incarnations={:?}|lineage={:?}|activations={:?}",
                 state.merge_admission.read(),
                 state.da_commitments.read(),
                 state.da_confidential_compute.read(),
@@ -185,11 +185,10 @@ impl RuntimeStateFingerprint {
                 state.da_shard_cursors.read(),
                 state.da_pin_intents.read(),
                 state.lane_relays.read(),
-                state.settled_nexus_fee_receipts.read(),
                 state.nexus.read(),
-                state.lane_incarnations.read(),
-                state.lane_incarnation_lineage.read(),
-                state.lane_incarnation_activation_heights.read(),
+                state.lane_incarnations_snapshot(),
+                state.lane_incarnation_lineage_snapshot(),
+                state.lane_incarnation_activation_heights_snapshot(),
             ),
         }
     }
@@ -260,6 +259,7 @@ pub(super) struct AppliedReplayBlock {
     pub(super) checkpoint_hash: Hash,
 }
 pub(super) struct StrictReplayFixture {
+    pub(super) genesis: iroha_genesis::GenesisBlock,
     chain_id: ChainId,
     pub(super) genesis_account: AccountId,
     genesis_key: KeyPair,
@@ -616,6 +616,7 @@ impl StrictReplayFixture {
         let expected_snapshot =
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(state.as_ref());
         Self {
+            genesis,
             chain_id,
             genesis_account,
             genesis_key,
@@ -751,7 +752,6 @@ impl StrictReplayFixture {
         let mut header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
             Some(parent.hash()),
-            None,
             None,
             creation_time_ms,
             view,
@@ -896,8 +896,25 @@ impl StrictReplayFixture {
         // certificates and application receipt are independently durable. Close
         // that real protocol boundary before asking the producer for a successor.
         self.finalize_applied_lane_proposals(&second_block, lane_proposals);
-        assert_eq!(second_block.results().len(), 1);
-        assert!(second_block.results().all(|result| result.as_ref().is_ok()));
+        second_block
+            .validate_output_merkle_cache()
+            .expect("actual applied successor has canonical complete outputs");
+        assert_eq!(second_block.network_entrypoint_count(), 1);
+        assert_eq!(
+            second_block.execution_outputs().len(),
+            1,
+            "this actual successor fixture has no internal invocations"
+        );
+        let (_, network) = second_block
+            .network_output_at(0)
+            .expect("actual successor output joins its sole Network input");
+        assert!(network.result.is_ok());
+        assert!(
+            second_block
+                .execution_outputs()
+                .iter()
+                .all(|output| output.result().is_ok())
+        );
         AppliedReplayBlock {
             context: second_context,
             block: second_block,
@@ -1280,9 +1297,7 @@ impl StrictReplayFixture {
                 .with_authenticated_v2_commit_authority(&artifact);
         kura.store_commit_manifest(manifest)
             .expect("store malformed-SCCP manifest");
-        let blocks_dir = RuntimeLaneConfig::default()
-            .primary()
-            .blocks_dir(&kura.store_root());
+        let blocks_dir = Kura::canonical_storage_paths(&kura.store_root()).0;
         let retained_dir = blocks_dir.join("retained_blocks");
         std::fs::create_dir_all(&retained_dir).expect("create retained-block directory");
         let retained = CorruptedKuraRetainedBlockRecord {
@@ -1376,6 +1391,65 @@ macro_rules! strict_replay_test {
         }
     };
 }
+strict_replay_test!(
+    production_replay_retry_retains_the_original_complete_image,
+    {
+        let fixture = StrictReplayFixture::new();
+        let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
+        let before = StateFingerprint::capture(&replay_state);
+        let foreign_kura = fixture.exact_kura_copy();
+        let _ = super::replay_blocks_from_kura_range(&foreign_kura, &mut replay_state, 1, 1)
+            .expect_err("fresh replay requires the original State storage instance");
+        assert!(replay_state.pending_replay_publication.is_none());
+        before.assert_unchanged(&replay_state);
+        super::REPLAY_PUBLICATION_PAUSE_PREPARATION.with(|pause| pause.set(true));
+        let error = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+            .expect_err("pause after actual complete-range prevalidation");
+        assert!(format!("{error:#}").contains("injected local replay preparation refusal"));
+        before.assert_unchanged(&replay_state);
+        let original_image = std::ptr::from_ref(
+            replay_state
+                .pending_replay_publication
+                .as_ref()
+                .expect("original batch retained")
+                .receipt
+                .as_ref()
+                .expect("unconsumed receipt")
+                .final_state
+                .as_ref(),
+        ) as usize;
+        let _ = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 2)
+            .expect_err("changed range cannot replace retained execution");
+        let _ = super::replay_blocks_from_kura_range(&foreign_kura, &mut replay_state, 1, 1)
+            .expect_err("equal durable bytes on another Kura cannot replace original owner");
+        super::REPLAY_PUBLICATION_PAUSE_BEFORE_INSTALL.with(|pause| pause.set(true));
+        let _ = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+            .expect_err("second refusal retains same executed image");
+        assert_eq!(
+            std::ptr::from_ref(
+                replay_state
+                    .pending_replay_publication
+                    .as_ref()
+                    .unwrap()
+                    .receipt
+                    .as_ref()
+                    .unwrap()
+                    .final_state
+                    .as_ref()
+            ) as usize,
+            original_image
+        );
+        before.assert_unchanged(&replay_state);
+        super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+            .expect("resume original receipt and install exactly once");
+        assert!(replay_state.pending_replay_publication.is_none());
+        assert_eq!(replay_state.committed_height(), 1);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),
+            fixture.expected_snapshot
+        );
+    }
+);
 strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
     let fixture = StrictReplayFixture::new();
     let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
@@ -1453,21 +1527,35 @@ strict_replay_test!(
         let fixture = StrictReplayFixture::new();
         let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
         let frozen = replay_state.lane_manifests.read().clone();
+        let signed_policy = fixture.context.execution_policy_hash;
+        assert_eq!(
+            Hash::prehashed(replay_state.execution_policy_digest_v1().unwrap()),
+            signed_policy,
+            "the installed fixture registry must match signed genesis policy"
+        );
         replay_state.install_lane_manifests(&Arc::new(LaneManifestRegistry::empty()));
+        let missing_registry_policy =
+            Hash::prehashed(replay_state.execution_policy_digest_v1().unwrap());
+        assert_ne!(missing_registry_policy, signed_policy);
         let before = StateFingerprint::capture(&replay_state);
         let error = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
             .expect_err("replay must reject a durable block when its lane is absent");
         let diagnostic = format!("{error:?}");
+        // Manifest policy is authenticated by signed genesis. Its absence is a
+        // policy mismatch even if genesis instructions can execute without a
+        // normal transaction's lane admission check.
         assert!(
-            diagnostic.contains("first transaction error: tx#0"),
-            "replay rejection must identify the first failed transaction: {diagnostic}"
-        );
-        assert!(
-            diagnostic.contains("lane 0 is absent from the installed manifest registry snapshot"),
-            "replay rejection must expose the missing registry binding: {diagnostic}"
+            diagnostic.contains(&format!(
+                "Sumeragi v2 signed execution-policy hash {signed_policy} does not match staged state {missing_registry_policy}"
+            )),
+            "replay rejection must bind the missing registry to signed genesis policy: {diagnostic}"
         );
         before.assert_unchanged(&replay_state);
         replay_state.install_lane_manifests(&frozen);
+        assert_eq!(
+            Hash::prehashed(replay_state.execution_policy_digest_v1().unwrap()),
+            signed_policy,
+        );
         super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
             .expect("the identical durable block replays after the lane snapshot is installed");
         assert_eq!(replay_state.committed_height(), 1);

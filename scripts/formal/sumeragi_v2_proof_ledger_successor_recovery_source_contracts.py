@@ -3,7 +3,13 @@
 def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Bind recovered-height storage, lifecycle, and ingress sources."""
 
-    errors: list[str] = []
+    errors: list[str] = _certified_serve_directory_owner_errors(repo_root)
+    errors.extend(_recovered_successor_status_owner_errors(repo_root))
+    errors.extend(_terminal_validate_owner_errors(repo_root))
+    errors.extend(_recovered_chunk_signing_owner_errors(repo_root))
+    errors.extend(_fixture_delegation_owner_errors(repo_root))
+    errors.extend(_consumer_eligibility_owner_errors(repo_root))
+    errors.extend(_recovered_proposal_restart_closed_errors(repo_root))
 
     def load(relative: str) -> tuple[Path, str]:
         return _read_reviewed_rust_source(repo_root, relative, errors, "production successor-refinement source")
@@ -326,7 +332,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "payload_store_target: CompleteTipPayloadStoreOpenTargetV1<'_>",
                     "payload_store_target.authorizes(&complete_tip)",
                     "complete_tip.authorizes_predecessor_storage_inputs(",
-                    "Self::Kura(kura) => CertifiedServePayloadStoreV1::open_with_kura(kura, context)",
+                    "Self::Kura { kura, authority } => { CertifiedServePayloadStoreV1::open_with_kura_authority(kura, authority, context) }",
                     "payload_store_target.open(predecessor_root, verified_predecessor.context())?",
                     "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer )?",
                     "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads )?",
@@ -356,7 +362,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ledger_path,
                 ledger_source,
                 "CompleteTip restart publication authority",
-                "fn successor_descends_from_retirement(",
+                "fn frame_descends_from_retained_floor(",
                 "\n    fn matches_successor_owner_ledger(",
             )
             require_order(
@@ -364,6 +370,11 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "CompleteTip restart publication authority",
                 restart_publication,
                 (
+                    "ledger.context() == self.successor_store.context",
+                    "ledger.records.is_empty()",
+                    "ledger.producer_debts.is_empty() && ledger.high_water == self.retained_high_water",
+                    "record.ordinal() > self.retained_high_water",
+                    "record.owner().first_admission_ordinal() > self.retained_high_water",
                     "self.successor_ledger.frame_identity() == self.successor_frame_identity",
                     "self.frame_descends_from_retained_floor(&self.successor_ledger)",
                     "fn predecessor_remains_exact(&self) -> bool",
@@ -373,16 +384,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "fn authorizes_owner_open_successor(&self, successor: &LifecycleLedgerV1) -> bool",
                     "successor == &self.successor_ledger",
                     "self.successor_descends_from_retirement()",
-                    "self.successor_ledger.records.is_empty()",
-                    "self.successor_ledger.producer_debts.is_empty()",
-                    "self.successor_ledger.high_water == self.retained_high_water",
-                    "record.ordinal() > self.retained_high_water",
                     "fn authorizes_retained_successor(&self) -> bool",
                     "self.predecessor_remains_exact()",
                     "self.successor_descends_from_retirement()",
                     "self.complete_tip.authorizes_successor_lifecycle_target(",
                     "self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)",
-                    "fn authorizes_successor_status(",
+                    "fn authorizes_successor_status_with_decision(",
                     "self.authorizes_retained_successor()",
                     "self.complete_tip.successor_context_id() == successor.height_context_id",
                     ".checked_add(1)",
@@ -395,7 +402,6 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "CompleteTip restart publication authority",
                 restart_publication,
                 (
-                    "#[cfg(test)]",
                     "into_parts",
                     "fn root(",
                     "fn ledger(",
@@ -437,7 +443,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "self.authorizes_owner_open_successor(&successor_ledger)",
                     "successor.authorizes_complete_tip_owner_join(",
                     "self.matches_successor_owner_ledger(&mut owner, &successor_ledger)",
-                    "owner.timeout_supersession_successor.take()",
+                    "owner.owner_open_successor.take()",
                     "self.successor_frame_identity = successor_ledger.frame_identity()",
                     "self.successor_ledger = successor_ledger",
                     "self.exactly_matches_successor_owner(&mut owner)",
@@ -566,7 +572,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "storage.genesis_account.clone()",
                     "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
                     "body_store.into_revalidated_lifecycle_startup( &apply_service, &context, validation_authority )",
-                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, successor_floor, .. } = storage",
+                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, serve_payload_directory_authority, successor_floor, .. } = storage",
                     "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
                     "let owner = match successor_floor",
                     "owner.authenticate_recovered_successor_floor(floor)",
@@ -595,14 +601,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "RecoveredLifecycleStorageAuthorityV1",
                 "mint_from_recovered_height",
                 errors,
-                "side-effect-free recovered lifecycle storage mint",
+                "recovery-minted retained lifecycle directory owner",
             )
             reject_tokens(
                 adapter_path,
-                "side-effect-free recovered lifecycle storage mint",
+                "recovery-minted retained lifecycle directory owner",
                 storage_mint.source if storage_mint is not None else "",
                 (
-                    "mint_v2_certified_serve_payload_directory_authority",
                     "CertifiedServePayloadStoreV1::open",
                     "create_dir",
                 ),
@@ -672,7 +677,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             activation_behavior = _require_rust_item(
                 adapter_path,
                 adapter_source,
-                "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout",
+                "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body",
                 errors,
             )
             if activation_behavior is not None:
@@ -707,7 +712,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             finalization_behavior = _require_rust_item(
                 adapter_path,
                 adapter_source,
-                "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+                "exercise_production_marker_replay_cases",
                 errors,
             )
             if finalization_behavior is not None:
@@ -771,7 +776,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 )
             for literal in (
                 '"a caller-promoted marker cannot enter production quarantine"',
-                '"pre-promoted marker rejection must precede lifecycle-store creation"',
+                '"pre-promoted marker rejection must not create or change lifecycle storage"',
                 '"a body store outside the Kura layout must fail closed"',
                 '"a wrong body signature policy must fail closed"',
             ):
@@ -1069,14 +1074,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 "CompleteTip Serve payload directory census",
                 payload_census,
                 (
-                    "self.max_entries.checked_mul(2)",
-                    "self.bound_directory()?.inventory(traversal_capacity)?",
-                    "!has_canonical_hash_name(name, FILE_SUFFIX)",
-                    "payloads.len() >= self.max_entries",
-                    "self.load_leaf(&leaf)?",
-                    "self.path_for(payload.id()) != path",
-                    "payloads.insert(payload.id(), payload).is_some()",
-                    "Ok(payloads)",
+                    "let census = self.scan_payload_census(false)?",
+                    "census.terminal_companions != self.terminal_companions",
+                    "census.removed != self.removed",
+                    "census.quarantine != self.quarantine",
+                    "CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch",
+                    "Ok(census.payloads)",
                 ),
             )
             require_tokens(

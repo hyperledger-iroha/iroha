@@ -85,7 +85,9 @@ use super::v2_core::{
     plan_exact_body_retirement_accounting,
 };
 #[cfg(test)]
-use super::v2_runtime::{RuntimeSelectedOwnerKind, bind_adapter_effect_batch_ownership};
+use super::v2_runtime::{
+    RuntimeLifecycleOwner, RuntimeSelectedOwnerKind, bind_adapter_effect_batch_ownership,
+};
 #[cfg(test)]
 use super::v2_transport::authenticate_certified_body_request;
 use super::{
@@ -138,7 +140,7 @@ use super::{
         PreTimeoutLockedPrepareQcCutV1, PreparedCompletionCapacityReliefV1,
         RecoveredDurableValidateRetryFrontierV1, RetiredBodyPipelineCompletions,
         RuntimeCandidateAdmissionDisposition, RuntimeCandidateSemanticStatement, RuntimeClockError,
-        RuntimeEffectOwnership, RuntimeFetchAuthorityRelation, RuntimeLifecycleOwner,
+        RuntimeEffectOwnership, RuntimeExternalLifecycleCensus, RuntimeFetchAuthorityRelation,
         RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
         production_adapter_effect_candidate_admission_disposition,
         production_adapter_effect_candidate_semantic_identity,
@@ -915,6 +917,8 @@ impl EffectQueueConfig {
         {
             return Err(EffectExecutorError::InvalidQueueConfig);
         }
+        RuntimeExternalLifecycleCensus::capacity_for_pending_work(self.max_pending_work)
+            .map_err(|_| EffectExecutorError::InvalidQueueConfig)?;
         Ok(self)
     }
 }
@@ -1696,6 +1700,11 @@ pub(crate) trait V2EffectServices {
         previous: &BodyFetchTask,
         rebound: BodyFetchTask,
     ) -> Result<(), Self::Error>;
+    /// Inspect work whose authenticated response is owned by disk persistence.
+    ///
+    /// The existing physical index retains these IDs through acknowledgement.
+    /// This is a fresh custody projection, not a second request registry.
+    fn certified_fetch_persistence_work(&self) -> BTreeSet<EffectWorkId>;
     /// Cancel exact reconstruction work, whether still live or already held by
     /// the bounded queued-reconstruction completion handoff.
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error>;
@@ -2089,6 +2098,7 @@ pub(crate) trait EffectRuntime {
     fn freeze_pre_timeout_locked_prepare_qc_cut(
         &mut self,
         _now: Instant,
+        _external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<PreTimeoutLockedPrepareQcCutV1>, String> {
         Ok(None)
     }
@@ -2105,6 +2115,7 @@ pub(crate) trait EffectRuntime {
         &mut self,
         _now: Instant,
         _cut: &PreTimeoutLockedPrepareQcCutV1,
+        _external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
         Ok(None)
     }
@@ -2115,19 +2126,28 @@ pub(crate) trait EffectRuntime {
         &mut self,
         _now: Instant,
         _blocked_completion_lifecycle_ordinal: u128,
+        _external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
         Ok(None)
     }
-    fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
+    fn step_effects(
+        &mut self,
+        now: Instant,
+        _external: &RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<RuntimeStep<AdapterEffect>, String>;
     /// Run at most one absolute-timeout or authenticated Progress-root turn.
     fn step_pacemaker_effects(
         &mut self,
         _now: Instant,
+        _external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
         Ok(None)
     }
-    fn step_recovery_effects(&mut self, now: Instant)
-    -> Result<RuntimeStep<AdapterEffect>, String>;
+    fn step_recovery_effects(
+        &mut self,
+        now: Instant,
+        _external: &RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<RuntimeStep<AdapterEffect>, String>;
     /// Consume the exact positional lifecycle sidecar for one returned batch.
     fn take_effect_ownership(
         &mut self,
@@ -2146,19 +2166,6 @@ pub(crate) trait EffectRuntime {
     fn take_leader_wire_runtime_terminals(
         &mut self,
     ) -> Result<Vec<LeaderWireRuntimeTerminal>, String>;
-    /// Publish the bounded runnable owners retained outside runtime ingress
-    /// before the next clock arbitration. Passive network fetches rejoin only
-    /// through their exact completion owner.
-    fn set_external_lifecycle_owners(
-        &mut self,
-        owners: Vec<RuntimeLifecycleOwner>,
-    ) -> Result<(), String>;
-    /// Bind the runtime's external-owner bound to this executor's configured
-    /// asynchronous pending-work capacity.
-    fn configure_external_lifecycle_owner_capacity(
-        &mut self,
-        max_pending_work: usize,
-    ) -> Result<(), String>;
     /// Allocate the bounded `AssembleBody` root for a local proposal.
     fn mint_local_proposal_effect_ownership(
         &mut self,
@@ -2473,8 +2480,9 @@ impl EffectRuntime for SerializedV2Runtime {
     fn freeze_pre_timeout_locked_prepare_qc_cut(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<PreTimeoutLockedPrepareQcCutV1>, String> {
-        SerializedV2Runtime::freeze_pre_timeout_locked_prepare_qc_cut(self, now)
+        SerializedV2Runtime::freeze_pre_timeout_locked_prepare_qc_cut(self, now, external)
     }
     fn wire_previews_pre_timeout_locked_prepare_qc(
         &self,
@@ -2487,14 +2495,16 @@ impl EffectRuntime for SerializedV2Runtime {
         &mut self,
         now: Instant,
         cut: &PreTimeoutLockedPrepareQcCutV1,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
-        self.try_step_pre_timeout_locked_prepare_qc(now, cut)
+        self.try_step_pre_timeout_locked_prepare_qc(now, cut, external)
             .map_err(|error| error.to_string())
     }
     fn step_completion_capacity_relief_effects(
         &mut self,
         now: Instant,
         blocked_completion_lifecycle_ordinal: u128,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
         let Some(prepared): Option<PreparedCompletionCapacityReliefV1> = self
             .prepare_completion_capacity_relief(blocked_completion_lifecycle_ordinal)
@@ -2502,28 +2512,35 @@ impl EffectRuntime for SerializedV2Runtime {
         else {
             return Ok(None);
         };
-        self.step_prepared_completion_capacity_relief(now, prepared)
+        self.step_prepared_completion_capacity_relief(now, prepared, external)
             .map(Some)
             .map_err(|error| error.to_string())
     }
     fn lifecycle_live_clocks_are_armed(&self) -> bool {
         SerializedV2Runtime::lifecycle_live_clocks_are_armed(self)
     }
-    fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
-        self.step(now).map_err(|error| error.to_string())
+    fn step_effects(
+        &mut self,
+        now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<RuntimeStep<AdapterEffect>, String> {
+        self.step(now, external).map_err(|error| error.to_string())
     }
     fn step_pacemaker_effects(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<AdapterEffect>>, String> {
-        self.try_step_pacemaker_escape(now)
+        self.try_step_pacemaker_escape(now, external)
             .map_err(|error| error.to_string())
     }
     fn step_recovery_effects(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeStep<AdapterEffect>, String> {
-        self.step_recovery(now).map_err(|error| error.to_string())
+        self.step_recovery(now, external)
+            .map_err(|error| error.to_string())
     }
     fn take_effect_ownership(
         &mut self,
@@ -2545,18 +2562,7 @@ impl EffectRuntime for SerializedV2Runtime {
             self,
         ))
     }
-    fn set_external_lifecycle_owners(
-        &mut self,
-        owners: Vec<RuntimeLifecycleOwner>,
-    ) -> Result<(), String> {
-        SerializedV2Runtime::set_external_lifecycle_owners(self, owners)
-    }
-    fn configure_external_lifecycle_owner_capacity(
-        &mut self,
-        max_pending_work: usize,
-    ) -> Result<(), String> {
-        SerializedV2Runtime::configure_external_lifecycle_owner_capacity(self, max_pending_work)
-    }
+
     fn mint_local_proposal_effect_ownership(
         &mut self,
         tag: EventTag,
@@ -3258,11 +3264,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
         let executor_output_guard = Arc::clone(&output_guard);
         let lifecycle_body_store_identity = body_store.instance_identity();
-        let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            EffectExecutorError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
-            )
-        })?;
+        let construction = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
         if !body_store.matches_context(&context) {
             return Err(EffectExecutorError::BodyStore(
                 "pre-opened Sumeragi v2 body store changed its height context".to_owned(),
@@ -4638,9 +4642,22 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         if self.fatal_reason.is_some() || self.output_guard.restart_required() {
             return Err(NetworkIngressError::FailClosed);
         }
-        let result = self
-            .runtime
-            .enqueue_network_with_ingress_ownership(message, ingress_ownership);
+        let admission = match self.runtime_and_external_lifecycle_census() {
+            Ok((runtime, _, external)) => Ok(runtime.enqueue_network_with_ingress_ownership(
+                message,
+                ingress_ownership,
+                &external,
+            )),
+            Err(error) => Err(error),
+        };
+        let result = match admission {
+            Ok(result) => result,
+            Err(error) => {
+                self.output_guard.activate_restart_required();
+                self.fatal_reason.get_or_insert_with(|| error.to_string());
+                return Err(NetworkIngressError::FailClosed);
+            }
+        };
         if matches!(&result, Err(NetworkIngressError::FailClosed)) {
             self.output_guard.activate_restart_required();
             self.fatal_reason.get_or_insert_with(|| {
@@ -4681,7 +4698,18 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         if self.fatal_reason.is_some() || self.output_guard.restart_required() {
             return Err(NetworkIngressError::FailClosed);
         }
-        let result = self.runtime.enqueue_network(message);
+        let admission = match self.runtime_and_external_lifecycle_census() {
+            Ok((runtime, _, external)) => Ok(runtime.enqueue_network(message, &external)),
+            Err(error) => Err(error),
+        };
+        let result = match admission {
+            Ok(result) => result,
+            Err(error) => {
+                self.output_guard.activate_restart_required();
+                self.fatal_reason.get_or_insert_with(|| error.to_string());
+                return Err(NetworkIngressError::FailClosed);
+            }
+        };
         if matches!(&result, Err(NetworkIngressError::FailClosed)) {
             self.output_guard.activate_restart_required();
             self.fatal_reason.get_or_insert_with(|| {
@@ -5053,50 +5081,46 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             self.park_retained_effect_batch()
                 .map_err(|error| self.close(error, services))?;
         }
-        if let Err(error) = self.publish_external_lifecycle_owners() {
-            return Err(self.close(error, services));
-        }
-        let decision_before_step = self
-            .runtime
-            .decided_body()
-            .map_err(EffectExecutorError::Runtime)
-            .map_err(|error| self.close(error, services))?;
-        let wal_step = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
-        let step = match self
-            .runtime
-            .try_step_owed_fifo_predecessor(now, attestation.dispatch_key().lifecycle_ordinal())
-        {
-            Ok(step) => step,
-            Err(reason) => {
-                drop(wal_step);
-                return Err(self.close(EffectExecutorError::Runtime(reason.to_string()), services));
-            }
-        };
         #[cfg(test)]
-        let selected = self.runtime.last_scheduler_selection_for_test();
-        if step.is_some()
-            && let Err(reason) = self
-                .runtime
-                .take_lifecycle_apply_predecessor_scheduler_ownership(
+        let mut selected = None;
+        let runtime_result = (|| {
+            let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
+            let decision_before_step = runtime
+                .decided_body()
+                .map_err(EffectExecutorError::Runtime)?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
+            let step = match runtime.try_step_owed_fifo_predecessor(
+                now,
+                attestation.dispatch_key().lifecycle_ordinal(),
+                &external,
+            ) {
+                Ok(step) => step,
+                Err(reason) => {
+                    drop(wal_step);
+                    return Err(EffectExecutorError::Runtime(reason.to_string()));
+                }
+            };
+            #[cfg(test)]
+            {
+                selected = runtime.last_scheduler_selection_for_test();
+            }
+            if step.is_some()
+                && let Err(reason) = runtime.take_lifecycle_apply_predecessor_scheduler_ownership(
                     attestation.dispatch_key().lifecycle_ordinal(),
                 )
-        {
-            drop(wal_step);
-            return Err(self.close(
-                EffectExecutorError::Runtime(format!(
+            {
+                drop(wal_step);
+                return Err(EffectExecutorError::Runtime(format!(
                     "Sumeragi v2 pre-Apply runtime scheduler ownership was invalid: {reason:?}"
-                )),
-                services,
-            ));
-        }
-        wal_step.complete();
+                )));
+            }
+            wal_step.complete();
+            Ok::<_, EffectExecutorError>((decision_before_step, step))
+        })();
+        let (decision_before_step, step) =
+            runtime_result.map_err(|error| self.close(error, services))?;
         if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
@@ -5129,9 +5153,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                         ));
                     }
                     Err(error) => return Err(self.close(error, services)),
-                }
-                if let Err(error) = self.publish_external_lifecycle_owners() {
-                    return Err(self.close(error, services));
                 }
                 if let Err(error) = self.publish_status(services) {
                     return Err(self.close(error, services));
@@ -5175,9 +5196,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 )?;
                 match self.restore_parked_effect_batch_after_foreground_drain() {
                     Ok(true) => {
-                        if let Err(error) = self.publish_external_lifecycle_owners() {
-                            return Err(self.close(error, services));
-                        }
                         if let Err(error) = self.publish_status(services) {
                             return Err(self.close(error, services));
                         }
@@ -5526,7 +5544,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<(), EffectTransportError> {
         if self.output_guard.restart_required() {
             return Err(EffectTransportError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
+                self.output_guard.restart_error(),
             ));
         }
         if let Some(reason) = &self.fatal_reason {
@@ -5726,8 +5744,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             config,
         )
     }
+    /// Test-only constructor sharing the exact ordinary consumer output guard.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn ordinary_dispatch_executor_for_test(
+        runtime: R,
+        context: wire::HeightContext,
+        requester: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self::with_runtime_and_guard(
+            runtime,
+            BTreeMap::new(),
+            context,
+            requester,
+            local_validator,
+            output_guard,
+            EffectQueueConfig::default(),
+        )
+        .expect("real ordinary-dispatch executor with the shared guard")
+    }
+
     fn with_runtime_and_guard(
-        mut runtime: R,
+        runtime: R,
         recovered_bodies: BTreeMap<
             (wire::ConsensusRound, wire::BlockSubject),
             (wire::PayloadManifest, DurableBodyReceipt),
@@ -5752,9 +5791,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
         }
         let config = config.validate()?;
-        runtime
-            .configure_external_lifecycle_owner_capacity(config.max_pending_work)
-            .map_err(EffectExecutorError::Runtime)?;
         let reconciled_tag = runtime.authoritative_tag();
         let outstanding_requests =
             OutstandingCertifiedBodyRequests::new(config.max_certified_requests)
@@ -6059,12 +6095,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .retained_locked_body
             .as_ref()
             .is_some_and(|(subject, _)| *subject != replacement_subject);
+        let persisting = self.retained_certified_persistence_keys(services)?;
         let key_is_superseded = |round, subject| {
-            protected_lock_retires_body_key(
-                superseded,
-                (replacement_round, replacement_subject),
-                (round, subject),
-            )
+            !persisting.contains(&(round, subject))
+                && protected_lock_retires_body_key(
+                    superseded,
+                    (replacement_round, replacement_subject),
+                    (round, subject),
+                )
         };
         // The durable high-water mark is cleanup authority only. It may keep
         // one immutable Store task/replay alive while an older TC-carried
@@ -6112,8 +6150,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 superseded_keys.insert(key);
             }
         }
-        if let Some(cleanup_only_high) =
-            highest_prepare_body.filter(|highest| *highest != replacement)
+        if let Some(cleanup_only_high) = highest_prepare_body
+            .filter(|highest| *highest != replacement && !persisting.contains(highest))
         {
             // The durable high is retained only as bounded Store/Stored
             // cleanup lineage.  It can be newer than the first TC-selected
@@ -8202,63 +8240,62 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         });
         Ok(())
     }
-    /// Snapshot every runnable lifecycle owner retained beyond runtime ingress.
+    /// Borrow the runtime independently of its executor-owned lifecycle sources.
     ///
-    /// The executor's maps and retained effect batch are already bounded by
-    /// the configured pending-work/completion capacities. Deduplicating by the
-    /// immutable ordinal keeps a fan-out lifecycle constant-size for clock
-    /// arbitration; two different owners claiming one ordinal fail closed.
-    ///
-    /// A pending `FetchBody` is deliberately absent. Once its request has been
-    /// admitted it is passive network acquisition, not runnable actor work. Its
-    /// exact lifecycle owner remains in `pending_fetches` and is transferred to
-    /// the reserved `BodyAvailable` completion before the fetch is retired. The
-    /// completion therefore re-enters the scheduler at the original ordinal,
-    /// while a missing response cannot become a global-minimum barrier to the
-    /// timeout, proposal, QC, or retransmit which can resolve that acquisition.
-    fn external_lifecycle_owners(&self) -> Result<Vec<RuntimeLifecycleOwner>, EffectExecutorError> {
-        let mut owners = BTreeMap::<u128, RuntimeLifecycleOwner>::new();
-        let mut insert =
-            |owner: &RuntimeLifecycleOwner| match owners.get(&owner.lifecycle_ordinal()) {
-                Some(existing) if existing != owner => Err(EffectExecutorError::Contract(
-                    "two external lifecycle owners claimed one admission ordinal".to_owned(),
-                )),
-                Some(_) => Ok(()),
-                None => {
-                    owners.insert(owner.lifecycle_ordinal(), owner.clone());
-                    Ok(())
-                }
-            };
-        if let Some(batch) = &self.retained_effect_batch {
-            for owned in &batch.effects {
-                insert(owned.ownership.owner())?;
-            }
-        }
-        if let Some(batch) = &self.parked_effect_batch {
-            for owned in &batch.effects {
-                insert(owned.ownership.owner())?;
-            }
-        }
-        for pending in self.pending_signatures.values() {
-            insert(pending.ownership.owner())?;
-        }
-        for pending in self.pending_stores.values() {
-            insert(pending.task.ownership().owner())?;
-        }
-        for pending in self.pending_applications.values() {
-            insert(pending.ownership.owner())?;
-        }
-        for pending in self.pending_lifecycle_output_admissions.values() {
-            let owner = pending.lifecycle_owner();
-            insert(&owner)?;
-        }
-        Ok(owners.into_values().collect())
-    }
-    fn publish_external_lifecycle_owners(&mut self) -> Result<(), EffectExecutorError> {
-        let owners = self.external_lifecycle_owners()?;
-        self.runtime
-            .set_external_lifecycle_owners(owners)
-            .map_err(EffectExecutorError::Runtime)
+    /// The output guard is split too because its operation permit borrows it;
+    /// no whole-executor borrow may span subsequent reconciliation or callbacks.
+    /// Passive network Fetches retain acquisition authority but rejoin this census
+    /// only through their exact completion. Equal fanout owners are deduplicated;
+    /// conflicting claims at one immutable ordinal fail closed.
+    fn runtime_and_external_lifecycle_census(
+        &mut self,
+    ) -> Result<
+        (
+            &mut R,
+            &ConsensusOutputGuard,
+            RuntimeExternalLifecycleCensus<'_>,
+        ),
+        EffectExecutorError,
+    > {
+        let Self {
+            runtime,
+            output_guard,
+            config,
+            retained_effect_batch,
+            parked_effect_batch,
+            pending_signatures,
+            pending_stores,
+            pending_applications,
+            pending_lifecycle_output_admissions,
+            ..
+        } = self;
+        let source = retained_effect_batch
+            .iter()
+            .chain(parked_effect_batch.iter())
+            .flat_map(|batch| batch.effects.iter().map(|owned| owned.ownership.owner()))
+            .chain(
+                pending_signatures
+                    .values()
+                    .map(|pending| pending.ownership.owner()),
+            )
+            .chain(
+                pending_stores
+                    .values()
+                    .map(|pending| pending.task.ownership().owner()),
+            )
+            .chain(
+                pending_applications
+                    .values()
+                    .map(|pending| pending.ownership.owner()),
+            )
+            .chain(
+                pending_lifecycle_output_admissions
+                    .values()
+                    .map(|pending| pending.lifecycle_owner()),
+            );
+        let external = RuntimeExternalLifecycleCensus::new(source, config.max_pending_work)
+            .map_err(EffectExecutorError::Contract)?;
+        Ok((runtime, &**output_guard, external))
     }
     fn park_retained_effect_batch(&mut self) -> Result<(), EffectExecutorError> {
         if self.parked_effect_batch.is_some() {
@@ -8443,6 +8480,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 || released_validation_will_apply)
                 && self.decision_apply_dispatch_barrier_is_occupied()
             {
+                break;
+            }
+            if (matches!(&owned.effect, AdapterEffect::Apply { .. })
+                || released_validation_will_apply)
+                && !self.decision_persistence_readiness(services)?.is_ready()
+            {
+                // The unchanged owned suffix waits while the exact disk
+                // completion follows its authenticated cancellation/Ready path.
                 break;
             }
             let pending_work_producer = Self::pending_work_producer(&owned.effect);
@@ -8739,12 +8784,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         {
             return Ok(None);
         }
-        self.publish_external_lifecycle_owners()?;
-        self.runtime
+        let (runtime, _, external) = self.runtime_and_external_lifecycle_census()?;
+        runtime
             .set_ingress_physical_cut(physical_cut)
             .map_err(EffectExecutorError::Runtime)?;
-        self.runtime
-            .freeze_pre_timeout_locked_prepare_qc_cut(now)
+        runtime
+            .freeze_pre_timeout_locked_prepare_qc_cut(now, &external)
             .map_err(EffectExecutorError::Runtime)
     }
     /// Deep-preview one fair-ingress payload without consuming its queue row.
@@ -8780,39 +8825,33 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         cut: &PreTimeoutLockedPrepareQcCutV1,
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
-        if let Err(error) = self.publish_external_lifecycle_owners() {
-            return Err(self.close(error, services));
-        }
-        let decision_before_step = self
-            .runtime
-            .decided_body()
-            .map_err(EffectExecutorError::Runtime)
-            .map_err(|error| self.close(error, services))?;
-        let wal_step = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
-        let step = match self
-            .runtime
-            .step_pre_timeout_locked_prepare_qc_effects(now, cut)
-        {
-            Ok(step) => step,
-            Err(reason) => {
+        let runtime_result = (|| {
+            let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
+            let decision_before_step = runtime
+                .decided_body()
+                .map_err(EffectExecutorError::Runtime)?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
+            let step = match runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut, &external)
+            {
+                Ok(step) => step,
+                Err(reason) => {
+                    drop(wal_step);
+                    return Err(EffectExecutorError::Runtime(reason));
+                }
+            };
+            if step.is_some()
+                && let Err(reason) = runtime.take_scheduler_ownership()
+            {
                 drop(wal_step);
-                return Err(self.close(EffectExecutorError::Runtime(reason), services));
+                return Err(EffectExecutorError::Runtime(reason));
             }
-        };
-        if step.is_some()
-            && let Err(reason) = self.runtime.take_scheduler_ownership()
-        {
-            drop(wal_step);
-            return Err(self.close(EffectExecutorError::Runtime(reason), services));
-        }
-        wal_step.complete();
+            wal_step.complete();
+            Ok::<_, EffectExecutorError>((decision_before_step, step))
+        })();
+        let (decision_before_step, step) =
+            runtime_result.map_err(|error| self.close(error, services))?;
         if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
@@ -8827,9 +8866,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         match step {
             None | Some(RuntimeStep::Idle) => {
                 self.pending_runner_decision_cleanup = pending_runner_decision_cleanup;
-                if let Err(error) = self.publish_external_lifecycle_owners() {
-                    return Err(self.close(error, services));
-                }
                 if let Err(error) = self.publish_status(services) {
                     return Err(self.close(error, services));
                 }
@@ -8892,36 +8928,32 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.park_retained_effect_batch()
                 .map_err(|error| self.close(error, services))?;
         }
-        if let Err(error) = self.publish_external_lifecycle_owners() {
-            return Err(self.close(error, services));
-        }
-        let decision_before_step = self
-            .runtime
-            .decided_body()
-            .map_err(EffectExecutorError::Runtime)
-            .map_err(|error| self.close(error, services))?;
-        let wal_step = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
-        let step = match self.runtime.step_pacemaker_effects(now) {
-            Ok(step) => step,
-            Err(reason) => {
+        let runtime_result = (|| {
+            let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
+            let decision_before_step = runtime
+                .decided_body()
+                .map_err(EffectExecutorError::Runtime)?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
+            let step = match runtime.step_pacemaker_effects(now, &external) {
+                Ok(step) => step,
+                Err(reason) => {
+                    drop(wal_step);
+                    return Err(EffectExecutorError::Runtime(reason));
+                }
+            };
+            if step.is_some()
+                && let Err(reason) = runtime.take_scheduler_ownership()
+            {
                 drop(wal_step);
-                return Err(self.close(EffectExecutorError::Runtime(reason), services));
+                return Err(EffectExecutorError::Runtime(reason));
             }
-        };
-        if step.is_some()
-            && let Err(reason) = self.runtime.take_scheduler_ownership()
-        {
-            drop(wal_step);
-            return Err(self.close(EffectExecutorError::Runtime(reason), services));
-        }
-        wal_step.complete();
+            wal_step.complete();
+            Ok::<_, EffectExecutorError>((decision_before_step, step))
+        })();
+        let (decision_before_step, step) =
+            runtime_result.map_err(|error| self.close(error, services))?;
         if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
@@ -8939,9 +8971,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 if self.retained_effect_batch.is_none() && self.parked_effect_batch.is_some() {
                     self.restore_parked_effect_batch()
                         .map_err(|error| self.close(error, services))?;
-                }
-                if let Err(error) = self.publish_external_lifecycle_owners() {
-                    return Err(self.close(error, services));
                 }
                 if let Err(error) = self.publish_status(services) {
                     return Err(self.close(error, services));
@@ -9045,49 +9074,47 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         blocked_ordinal: u128,
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
-        if let Err(error) = self.publish_external_lifecycle_owners() {
-            return Err(self.close(error, services));
-        }
-        let decision_before_step = self
-            .runtime
-            .decided_body()
-            .map_err(EffectExecutorError::Runtime)
-            .map_err(|error| self.close(error, services))?;
-        let wal_step = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
-        let step = match self
-            .runtime
-            .step_completion_capacity_relief_effects(now, blocked_ordinal)
-        {
-            Ok(Some(step)) => step,
-            Ok(None) => {
-                drop(wal_step);
-                return Err(self.close(
-                    EffectExecutorError::Contract(
+        #[cfg(test)]
+        let mut selected = None;
+        let runtime_result = (|| {
+            let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
+            let decision_before_step = runtime
+                .decided_body()
+                .map_err(EffectExecutorError::Runtime)?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
+            let step = match runtime.step_completion_capacity_relief_effects(
+                now,
+                blocked_ordinal,
+                &external,
+            ) {
+                Ok(Some(step)) => step,
+                Ok(None) => {
+                    drop(wal_step);
+                    return Err(EffectExecutorError::Contract(
                         "a full runtime FIFO had no older-or-equal Completion owner to release"
                             .to_owned(),
-                    ),
-                    services,
-                ));
+                    ));
+                }
+                Err(reason) => {
+                    drop(wal_step);
+                    return Err(EffectExecutorError::Runtime(reason));
+                }
+            };
+            #[cfg(test)]
+            {
+                selected = runtime.last_scheduler_selection_for_test();
             }
-            Err(reason) => {
+            if let Err(reason) = runtime.take_scheduler_ownership() {
                 drop(wal_step);
-                return Err(self.close(EffectExecutorError::Runtime(reason), services));
+                return Err(EffectExecutorError::Runtime(reason));
             }
-        };
-        #[cfg(test)]
-        let selected = self.runtime.last_scheduler_selection_for_test();
-        if let Err(reason) = self.runtime.take_scheduler_ownership() {
-            drop(wal_step);
-            return Err(self.close(EffectExecutorError::Runtime(reason), services));
-        }
-        wal_step.complete();
+            wal_step.complete();
+            Ok::<_, EffectExecutorError>((decision_before_step, step))
+        })();
+        let (decision_before_step, step) =
+            runtime_result.map_err(|error| self.close(error, services))?;
         if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
@@ -9114,9 +9141,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         canonical_prepare_qc_digest: None,
                         batch_prepare_qc_digest: None,
                     });
-                }
-                if let Err(error) = self.publish_external_lifecycle_owners() {
-                    return Err(self.close(error, services));
                 }
                 if let Err(error) = self.publish_status(services) {
                     return Err(self.close(error, services));
@@ -9195,39 +9219,39 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
             return Ok(EffectExecutorStep::Idle);
         }
-        if let Err(error) = self.publish_external_lifecycle_owners() {
-            return Err(self.close(error, services));
-        }
-        let decision_before_step = self
-            .runtime
-            .decided_body()
-            .map_err(EffectExecutorError::Runtime)
-            .map_err(|error| self.close(error, services))?;
-        let wal_step = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
-        let step = match self.runtime.step_effects(now) {
-            Ok(step) => step,
-            Err(reason) => {
-                drop(wal_step);
-                return Err(self.close(EffectExecutorError::Runtime(reason), services));
-            }
-        };
         #[cfg(test)]
-        let selected = self.runtime.last_scheduler_selection_for_test();
-        if let Err(reason) = self.runtime.take_scheduler_ownership() {
-            drop(wal_step);
-            return Err(self.close(EffectExecutorError::Runtime(reason), services));
-        }
-        // Runtime stepping includes the safety-WAL append. Release its permit
-        // before invoking any service callback so service operations acquire
-        // their own non-nested guard boundary.
-        wal_step.complete();
+        let mut selected = None;
+        let runtime_result = (|| {
+            let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
+            let decision_before_step = runtime
+                .decided_body()
+                .map_err(EffectExecutorError::Runtime)?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
+            let step = match runtime.step_effects(now, &external) {
+                Ok(step) => step,
+                Err(reason) => {
+                    drop(wal_step);
+                    return Err(EffectExecutorError::Runtime(reason));
+                }
+            };
+            #[cfg(test)]
+            {
+                selected = runtime.last_scheduler_selection_for_test();
+            }
+            if let Err(reason) = runtime.take_scheduler_ownership() {
+                drop(wal_step);
+                return Err(EffectExecutorError::Runtime(reason));
+            }
+            // Runtime stepping includes the safety-WAL append. Release its permit
+            // before invoking any service callback so service operations acquire
+            // their own non-nested guard boundary.
+            wal_step.complete();
+            Ok::<_, EffectExecutorError>((decision_before_step, step))
+        })();
+        let (decision_before_step, step) =
+            runtime_result.map_err(|error| self.close(error, services))?;
         if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
@@ -9323,29 +9347,26 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .map_err(|error| self.close(error, services))?;
             return Ok(step);
         }
-        if let Err(error) = self.publish_external_lifecycle_owners() {
-            return Err(self.close(error, services));
-        }
-        let wal_step = self
-            .output_guard
-            .begin_fail_stop_operation()
-            .ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
-        let step = match self.runtime.step_recovery_effects(now) {
-            Ok(step) => step,
-            Err(reason) => {
+        let runtime_result = (|| {
+            let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
+            let step = match runtime.step_recovery_effects(now, &external) {
+                Ok(step) => step,
+                Err(reason) => {
+                    drop(wal_step);
+                    return Err(EffectExecutorError::Runtime(reason));
+                }
+            };
+            if let Err(reason) = runtime.take_scheduler_ownership() {
                 drop(wal_step);
-                return Err(self.close(EffectExecutorError::Runtime(reason), services));
+                return Err(EffectExecutorError::Runtime(reason));
             }
-        };
-        if let Err(reason) = self.runtime.take_scheduler_ownership() {
-            drop(wal_step);
-            return Err(self.close(EffectExecutorError::Runtime(reason), services));
-        }
-        wal_step.complete();
+            wal_step.complete();
+            Ok::<_, EffectExecutorError>(step)
+        })();
+        let step = runtime_result.map_err(|error| self.close(error, services))?;
         if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
@@ -9860,22 +9881,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
-        if let Some(consumer) = &pending.consumer {
-            let consumer_tag = match consumer {
-                StoreConsumer::Reducer { tag, .. } | StoreConsumer::LocalProposal { tag, .. } => {
-                    *tag
-                }
-            };
-            if !self.exact_body_pipeline_stage_owned(consumer_tag, key, HashOf::new(&manifest)) {
-                return Err(self.close(
-                    EffectExecutorError::Contract(
-                        "body-store completion consumer differs from its immutable pipeline owner"
-                            .to_owned(),
-                    ),
-                    services,
-                ));
-            }
-        }
         let stored_bytes = u64::try_from(pending.task.canonical_wire.len()).map_err(|_| {
             self.close(
                 EffectExecutorError::Contract(
@@ -9992,15 +9997,41 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         };
         let coalesces_published_store_terminal =
             published_store_completion_plan.coalesces_terminal();
+        // Durable lifecycle publication transfers the semantic body stage and
+        // retires its old pipeline token before an overlapping physical Store
+        // necessarily returns. The validated marker above is the successor
+        // authority for that exact receipt. Requiring the retired token first
+        // would fail-stop a legitimate completion after the ownership transfer.
+        // An extant foreign token, or a missing token without that successor,
+        // remains an ownership violation.
+        if let Some(consumer) = &pending.consumer {
+            let consumer_tag = match consumer {
+                StoreConsumer::Reducer { tag, .. } | StoreConsumer::LocalProposal { tag, .. } => {
+                    *tag
+                }
+            };
+            let transferred_to_published_marker =
+                coalesces_published_store_terminal && !self.body_pipeline_owners.contains_key(&key);
+            if !transferred_to_published_marker
+                && !self.exact_body_pipeline_stage_owned(consumer_tag, key, HashOf::new(&manifest))
+            {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "body-store completion consumer differs from its immutable pipeline owner"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+        }
         let coalesced_pipeline_owner = if coalesces_published_store_terminal {
             match (
                 &pending.consumer,
                 self.body_pipeline_owners.get(&key).copied(),
             ) {
                 (Some(_), Some(owner)) => Some(owner),
-                (Some(_), None) => unreachable!(
-                    "an attached Store completion preflighted its exact pipeline owner"
-                ),
+                // The exact published marker already retired this token.
+                (Some(_), None) => None,
                 (None, Some(owner))
                     if owner.manifest_hash == Some(HashOf::new(&manifest))
                         && (owner.tag == pending.task.tag()
@@ -10796,7 +10827,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<CompletionDisposition, EffectTransportError> {
         if self.output_guard.restart_required() {
             return Err(EffectTransportError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
+                self.output_guard.restart_error(),
             ));
         }
         let work_id = task.id();
@@ -11276,6 +11307,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let certified = self
             .plan_certified_fetch_retirement(work_id, candidate.request_hash)
             .map_err(|error| EffectTransportError::FailClosed(error.to_string()))?;
+        let decision_exclusion = self
+            .runtime
+            .decided_body()
+            .map_err(EffectTransportError::FailClosed)?
+            .filter(|decision| (decision.1, decision.2) != key)
+            .map(|decision| CertifiedFetchDecisionExclusionV1 {
+                decision,
+                round: key.0,
+                subject: key.1,
+                manifest_hash: durable_receipt.manifest_hash(),
+            });
         Ok(PreparedLifecycleCertifiedFetchCompletion {
             pending: pending.clone(),
             certified,
@@ -11286,6 +11328,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             durable_receipt: durable_receipt.clone(),
             response_hash: candidate.response_hash,
             claim_preflight,
+            decision_exclusion,
         })
     }
     /// Infallibly retire one preflighted executor owner after exact dequeue.
@@ -11333,6 +11376,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .prepare_authenticated_response_claim(authenticated)
             .expect("exclusive executor retains the preflighted response family");
         let _disposition = claim.commit();
+        if let Some(exclusion) = prepared.decision_exclusion {
+            assert!(exclusion.matches_durable_body(&prepared.durable_receipt));
+            assert_eq!(
+                self.runtime
+                    .decided_body()
+                    .expect("preflighted Decision remains readable"),
+                Some(exclusion.decision)
+            );
+            self.commit_pending_fetch_retirement(PendingFetchRetirementPlan {
+                pending: prepared.pending,
+                certified: Some(prepared.certified),
+            })
+            .expect("preflighted cancelled Fetch retains its exact retirement owner");
+            let removed = self
+                .body_pipeline_owners
+                .remove(&prepared.body_pipeline_key);
+            assert_eq!(removed, Some(prepared.body_pipeline_owner));
+            return;
+        }
         let removed = self
             .pending_fetches
             .remove(&work_id)
@@ -11445,11 +11507,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             height: self.context.height,
             captured_at,
             fail_closed: self.fatal_reason.is_some() || restart_required,
-            fatal_reason: self.fatal_reason.clone().or_else(|| {
-                restart_required.then(|| {
-                    "process restart is required after a fatal consensus failure".to_owned()
-                })
-            }),
+            fatal_reason: self
+                .fatal_reason
+                .clone()
+                .or_else(|| restart_required.then(|| self.output_guard.restart_error())),
             pending_tip_recovery_stage: self
                 .pending_tip_recovery
                 .as_ref()
@@ -11637,15 +11698,27 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && self.pending_work() == 0
     }
 
-    /// Inspect the exact live lifecycle Apply retransmit owner without
+    /// Project the exact live lifecycle Apply owner without
     /// exposing its retained CommitQC or validated receipt.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn live_lifecycle_decision_apply_key_for_test(
+    pub(in crate::sumeragi) fn live_lifecycle_decision_apply_key(
         &self,
     ) -> Option<LifecycleDecisionApplyDispatchKeyV1> {
         self.live_lifecycle_decision_apply
             .as_ref()
             .map(|owner| owner.dispatch_key)
+    }
+
+    /// Whether the exact lifecycle Apply has published its durable finality receipt.
+    ///
+    /// This reads the receipt's actual owner, independently of runner completion
+    /// history. Generic runtime finality retains its separate completion path.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_is_complete(&self) -> bool {
+        self.finality_completion.as_ref().is_some_and(|completion| {
+            matches!(
+                completion.ownership,
+                FinalityCompletionOwner::LifecycleDecisionApply(_)
+            )
+        })
     }
     /// Inspect only whether pending-Kura Apply collided with lifecycle/batch owners.
     #[cfg(test)]
@@ -12570,6 +12643,29 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 None => {}
             }
             let same_lifecycle = existing.task.ownership == ownership;
+            if services
+                .certified_fetch_persistence_work()
+                .contains(&existing_id)
+            {
+                let same_owner = existing.task.ownership.owner() == ownership.owner();
+                let authorized_tag = existing.task.tag == tag
+                    || (tag.strictly_advances(existing.task.tag)
+                        && self.runtime.authoritative_tag() == Some(tag));
+                if !same_owner
+                    || !authorized_tag
+                    || proposal_replay.is_some()
+                    || manifest.as_ref().is_some_and(|incoming| {
+                        !existing.task.matches_reconstructed_manifest(incoming)
+                    })
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "Fetch rediscovery changed admitted certified-persistence authority"
+                            .to_owned(),
+                    ));
+                }
+                self.preflight_certified_fetch_indexes()?;
+                return Ok(());
+            }
             if existing.task.tag != tag {
                 return Err(EffectExecutorError::Contract(
                     "conflicting retransmission for one body-fetch round/subject".to_owned(),
@@ -13275,6 +13371,54 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.remote_proposal_replay.remove(&key);
         }
         Ok(())
+    }
+    /// Keep the exact logical acquisition while its physical persistence owns completion.
+    fn retained_certified_persistence_keys<S: V2EffectServices>(
+        &self,
+        services: &S,
+    ) -> Result<BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>, EffectExecutorError> {
+        services
+            .certified_fetch_persistence_work()
+            .into_iter()
+            .map(|work_id| {
+                let pending = self.pending_fetches.get(&work_id).ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "certified persistence lost its logical Fetch owner".to_owned(),
+                    )
+                })?;
+                let request_hash = pending.request_hash.ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "certified persistence lost its signed request".to_owned(),
+                    )
+                })?;
+                self.plan_certified_fetch_retirement(work_id, request_hash)?;
+                Ok((pending.task.round, pending.task.subject))
+            })
+            .collect()
+    }
+    /// Derive terminal-cleanup readiness from exact admitted physical custody.
+    pub(in crate::sumeragi) fn decision_persistence_readiness<S: V2EffectServices>(
+        &self,
+        services: &S,
+    ) -> Result<DecisionPersistenceReadinessV1, EffectExecutorError> {
+        let work = services.certified_fetch_persistence_work();
+        if work.is_empty() {
+            return Ok(DecisionPersistenceReadinessV1::Ready);
+        }
+        let keys = self.retained_certified_persistence_keys(services)?;
+        if let Some(decision) = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)?
+        {
+            let selected = (decision.1, decision.2);
+            if keys.contains(&selected) && self.validated_bodies.contains_key(&selected) {
+                return Err(EffectExecutorError::Contract(
+                    "validated Decision body still owns an admitted Fetch persistence".to_owned(),
+                ));
+            }
+        }
+        Ok(DecisionPersistenceReadinessV1::Waiting(work))
     }
     fn preflight_certified_fetch_indexes(&self) -> Result<(), EffectExecutorError> {
         for pending in self.pending_fetches.values() {
@@ -14338,6 +14482,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .transpose()
             .map_err(EffectExecutorError::Contract)?
             .flatten();
+        let persisting = self.retained_certified_persistence_keys(services)?;
+        if (drain_decision_body || self.decision_body_drained) && !persisting.is_empty() {
+            return Err(EffectExecutorError::Contract(
+                "terminal Decision cleanup overtook admitted certified-body persistence".to_owned(),
+            ));
+        }
         // A protected Prepare lock constrains voting; it does not outrank the
         // first durable quorum Decision. The retirement plan below removes
         // every non-decision owner, including a different protected lock, and
@@ -14372,7 +14522,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.preflight_remote_proposal_replay_indexes()?;
         let first_install = self.protected_decision.is_none();
         let retire_key = |key: (wire::ConsensusRound, wire::BlockSubject)| {
-            drain_decision_body || key != decision_body
+            !persisting.contains(&key) && (drain_decision_body || key != decision_body)
         };
         self.preflight_exact_body_byte_accounting()?;
         let exact_local_stores = self
@@ -14883,6 +15033,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         ready_body: ReadyBody,
         services: &mut S,
     ) -> Result<CompletionDisposition, EffectTransportError> {
+        if services
+            .certified_fetch_persistence_work()
+            .contains(&work_id)
+        {
+            return Err(EffectTransportError::Backpressure);
+        }
         let task = self
             .pending_fetches
             .get(&work_id)
@@ -14994,11 +15150,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         self.preflight_remote_proposal_replay_indexes()?;
-        for pending in self
-            .pending_fetches
-            .values()
-            .filter(|pending| tag.strictly_advances(pending.task.tag))
-        {
+        let persisting = self.retained_certified_persistence_keys(services)?;
+        for pending in self.pending_fetches.values().filter(|pending| {
+            tag.strictly_advances(pending.task.tag)
+                && !persisting.contains(&(pending.task.round, pending.task.subject))
+        }) {
             let key = (pending.task.round, pending.task.subject);
             if Some(key) != protected_body {
                 continue;
@@ -15022,7 +15178,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let stale_fetches = self
             .pending_fetches
             .values()
-            .filter(|pending| tag.strictly_advances(pending.task.tag))
+            .filter(|pending| {
+                tag.strictly_advances(pending.task.tag)
+                    && !persisting.contains(&(pending.task.round, pending.task.subject))
+            })
             .map(|pending| {
                 let key = (pending.task.round, pending.task.subject);
                 if Some(key) == protected_body {
@@ -15174,8 +15333,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .body_pipeline_owners
             .iter()
             .filter_map(|(key, owner)| {
-                (tag.strictly_advances(owner.tag) && !protected_ready_rebind_keys.contains(key))
-                    .then_some((*key, *owner))
+                (tag.strictly_advances(owner.tag)
+                    && !protected_ready_rebind_keys.contains(key)
+                    && !persisting.contains(key))
+                .then_some((*key, *owner))
             })
             .collect::<Vec<_>>();
         for (key, owner) in &stale_pipeline_owners {
@@ -15256,6 +15417,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             !tag.strictly_advances(owner.tag)
                 || retained_apply_owners.contains(key)
                 || retained_store_owners.contains(key)
+                || persisting.contains(key)
         });
         // Unprotected Proposal families retire with the superseded view.
         // Preserve the protected body's exact Store lineage both before and
@@ -15266,12 +15428,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // incumbent causal root before consuming it. Earlier physical stages
         // still restart from the certified pipeline.
         self.remote_proposal_replay.retain(|key, stage| {
-            (Some(*key) == protected_body || Some(*key) == highest_prepare_body)
-                && matches!(
-                    stage,
-                    RemoteProposalReplayStageV1::Store { .. }
-                        | RemoteProposalReplayStageV1::Stored { .. }
-                )
+            persisting.contains(key)
+                || ((Some(*key) == protected_body || Some(*key) == highest_prepare_body)
+                    && matches!(
+                        stage,
+                        RemoteProposalReplayStageV1::Store { .. }
+                            | RemoteProposalReplayStageV1::Stored { .. }
+                    ))
         });
         self.authenticated_genesis_replay.retain(|key, stage| {
             (Some(*key) == protected_body || Some(*key) == highest_prepare_body)
@@ -15340,10 +15503,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "pending effect work exceeded its configured capacity".to_owned(),
             ));
         }
+        let persisting = services.certified_fetch_persistence_work();
         let selected = self
             .pending_fetches
             .iter()
             .filter_map(|(work_id, pending)| {
+                if persisting.contains(work_id) {
+                    return None;
+                }
                 let key = (pending.task.round, pending.task.subject);
                 if self
                     .protected_decision
@@ -15475,7 +15642,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn ensure_open(&self) -> Result<(), EffectExecutorError> {
         if self.output_guard.restart_required() {
             return Err(EffectExecutorError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
+                self.output_guard.restart_error(),
             ));
         }
         match &self.fatal_reason {
@@ -15491,13 +15658,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // The retained relay may terminate the process as soon as the guard
         // closes, so preserve the precise reason before publishing that edge.
         iroha_logger::error!(%reason, "Sumeragi v2 effect transport failed closed");
-        // A caller may still own the launch or runtime operation's permit.
-        // Close admission now; that outer permit's release completes the drain.
-        self.output_guard.close_admission_for_restart();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| reason.to_string())
             .clone();
+        // Publish the cause before closure becomes visible to another observer.
+        // A caller may still own the launch or runtime operation's permit;
+        // its release completes the drain without blocking this notification.
+        self.output_guard.retain_effect_failure(reason.clone());
+        self.output_guard.close_admission_for_restart();
         services.fail_closed(&reason);
         EffectTransportError::FailClosed(reason)
     }
@@ -15518,13 +15687,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // concurrently and may exit before `services.fail_closed` can report
         // the originating executor error.
         iroha_logger::error!(%error, "Sumeragi v2 effect executor failed closed");
-        // Service failure may unwind through an outer admitted operation.
-        // Waiting for its permit here would prevent that unwind from returning.
-        self.output_guard.close_admission_for_restart();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| error.to_string())
             .clone();
+        // The first observer of closed output must already see this cause.
+        // Service failure may unwind through an outer admitted operation;
+        // waiting for its permit here would prevent that unwind from returning.
+        self.output_guard.retain_effect_failure(reason.clone());
+        self.output_guard.close_admission_for_restart();
         services.fail_closed(&reason);
         error
     }

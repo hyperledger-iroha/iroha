@@ -16,8 +16,8 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 669_904
-EXPECTED_ASSET_SHA256 = "97a6d279fab3244f62ad20945d55046349c17da718cdaf946c72ae995cba30d7"
+EXPECTED_ASSET_LENGTH = 677_727
+EXPECTED_ASSET_SHA256 = "0c379c9cba11d30b5d916f9f3a9671e964e75e0a78904768a02e82475febe03a"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {
@@ -45,25 +45,32 @@ MIGRATED_TESTS = {
 # publication checks together with the current durable CommitIntent consumer.
 # The FIFO case retains the authenticated physical ordering checks from both
 # branches. Pin the combined cases; the 55th case still owns body retirement.
+# The certified Fetch case now limits retries to changed queue cuts, retains
+# permanent rejection custody, and orders exact Decision cancellation. Cleanup
+# excludes admitted persistence; the timer region includes its external census.
+# Storage-only startup now retains the authenticated exact pending Apply comparison
+# and orders ledger/body recovery before opening its production owner.
 NEW_CASE_CONTRACT_COUNTS = {
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 181,
     "registry_remains_inert_and_scheduler_free": 89,
-    "superseded_certified_body_retirement_is_exact_and_durably_sealed": 90,
-    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
+    "superseded_certified_body_retirement_is_exact_and_durably_sealed": 98,
+    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 341,
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 312,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 95,
+    "certified_fetch_completion_source_keeps_the_durable_cut_ordered": 63,
 }
 MIGRATED_CASE_SHA256 = {
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "be7471d4e85fcfbbcadbae26edf7628c422d9ca60b2244a11041f089a79108c5",
-    "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
-    "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
-    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "2355a641c23d184a39570f61bc55961c9a04b46e1d31a5082cef5fd3114e8221",
-    "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "a56c319557fc0fd0eda26924c60de29940a77cb38cbd11ba551a1ec15c131ad5",
+    "registry_remains_inert_and_scheduler_free": "cf3a858cc7345c7663edfef709da6191758b48b881a93cd031c88d0b9878bc93",
+    "superseded_certified_body_retirement_is_exact_and_durably_sealed": "71ea3bb6e8824dc8151382fa4c18cfba4cc75c6093a15d5f6a849fd6a451236d",
+    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "9819e8836f8893f55626f44ba4b6532c21d1a09aec4a6efcb39145f9165fcf14",
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "bda488863750adfa085b4a11b068ec66b7d4281868fbd0501ed6abcaaa7371b1",
+    "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "4119f60449e948da1e2add5f027060e7e17eb6877c8b58a8ebdae123c07ba745",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "5891975b056d42f20e2b6b6721c3c8cf7bafd3f70535cb24062ce1e7cb7db159",
+    "certified_fetch_completion_source_keeps_the_durable_cut_ordered": "161a214b471f09ad2945a05097416c1c0c235345dcddaa1d38eea26b8dbaefab",
 }
 
 
@@ -167,6 +174,19 @@ def macro_inventory_failures(
 # owner reconciliation. Use their exact source providers, without source globbing
 # or depending on a compiled Core test executable.
 BOUNDARY_CASE_REGIONS = {
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": (
+        "cleanup_high_selection",
+        "cleanup_terminal_retirement",
+    ),
+    "registry_remains_inert_and_scheduler_free": (
+        "periodic_runtime_timer",
+    ),
+    "certified_fetch_completion_source_keeps_the_durable_cut_ordered": (
+        "preledger_restart",
+        "preledger_diagnostic",
+        "retry_dependency",
+        "transaction",
+    ),
     "cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks": (
         "catalog_open",
         "pending_kura_terminal",
@@ -206,6 +226,8 @@ BOUNDARY_SOURCE_PATHS = {
     "queue": "crates/iroha_core/src/queue.rs",
     "ledger": "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs",
     "launch": "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+    "runtime": "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+    "selector": "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs",
 }
 # Select the complete lock projection: Prepare and Decision independently use
 # the same round/subject expressions and must not shadow a broken lock guard.
@@ -219,6 +241,50 @@ ACTUAL_LOCKED_CERTIFICATE_PROJECTION = """let protected_lock = durable
             })
             .transpose()?;"""
 BOUNDARY_MUTATIONS = (
+    (
+        "highest Prepare cleanup preserves admitted persistence",
+        "effects",
+        "*highest != replacement && !persisting.contains(highest)",
+        "*highest != replacement",
+    ),
+    (
+        "terminal cleanup preserves admitted persistence",
+        "effects",
+        "&& !protected_ready_rebind_keys.contains(key)\n                    && !persisting.contains(key)",
+        "&& !protected_ready_rebind_keys.contains(key)",
+    ),
+    (
+        "periodic timer retains its serialized root identity",
+        "runtime",
+        "RuntimeCandidateCausalOrigin::mint_fresh_root(\n"
+        "                self.round_tag,\n"
+        "                CommandClass::Progress,\n"
+        "                RuntimeFreshRootKind::Retransmit,\n"
+        "                PERIODIC_RETRANSMIT_ROOT_IDENTITY,",
+        "RuntimeCandidateCausalOrigin::mint_fresh_root(\n"
+        "                self.round_tag,\n"
+        "                CommandClass::Progress,\n"
+        "                RuntimeFreshRootKind::Retransmit,\n"
+        '                b"foreign-periodic-root",',
+    ),
+    (
+        "certified Fetch retries only changed queue cuts",
+        "selector",
+        "Self::Queue(FairIngressQueueCutError::QueueCutChanged)",
+        "Self::CompletionIdentity(_)",
+    ),
+    (
+        "certified Fetch permanent rejection retains restart custody",
+        "selector",
+        "if failure.permits_fresh_queue_retry()",
+        "if true",
+    ),
+    (
+        "certified Fetch cancels its excluded Decision before publication",
+        "selector",
+        "staged.cancel_excluded_decision(exclusion, durable_registry.durable_body_receipt())",
+        "staged.skip_excluded_decision(exclusion, durable_registry.durable_body_receipt())",
+    ),
     (
         "activation recovered Decision authentication",
         "launch",

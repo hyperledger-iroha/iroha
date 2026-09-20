@@ -1,5 +1,8 @@
 //! This module contains [`store::LiveQueryStore`] and helpers.
 #![allow(clippy::disallowed_types)]
+mod archive_capture;
+mod archive_index;
+pub use archive_capture::ArchiveCaptureWait;
 pub mod cursor;
 pub mod index_status;
 mod journal_io;
@@ -118,7 +121,6 @@ pub fn insert_verifying_key_record_for_test(
         NonZeroU64::new(height_u64).expect("height non-zero"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -137,7 +139,7 @@ pub fn insert_verifying_key_record_for_test(
 /// Insert a consensus evidence record directly into WSV for tests.
 pub fn insert_evidence_record_for_test(state: &mut crate::state::State, record: EvidenceRecord) {
     let (height, height_u64) = next_height_for_state(state);
-    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let key = crate::sumeragi::evidence::evidence_key(&record.evidence);
@@ -158,7 +160,6 @@ pub fn insert_contract_instance_for_test(
     let height_u64 = u64::try_from(usize::from(height)).expect("height fits in u64");
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(height_u64).expect("height non-zero"),
-        None,
         None,
         None,
         0,
@@ -183,7 +184,7 @@ pub fn insert_proof_record_for_test(
 ) {
     rec.id = id;
     let (height, height_u64) = next_height_for_state(state);
-    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.insert_proof_record(rec);
@@ -202,7 +203,7 @@ pub fn insert_proof_tags_for_test(
     tags.sort_unstable();
     tags.dedup();
     let (height, height_u64) = next_height_for_state(state);
-    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.proof_tags.insert(id.clone(), tags.clone());
@@ -234,7 +235,7 @@ pub fn insert_gov_proposal_for_test(
 ) {
     use std::collections::HashSet;
     let (next_height, next_height_u64) = next_height_for_state(state);
-    let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world
@@ -252,7 +253,7 @@ pub fn insert_gov_referendum_for_test(
 ) {
     use std::collections::HashSet;
     let (next_height, next_height_u64) = next_height_for_state(state);
-    let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.governance_referenda.insert(id, rec);
@@ -268,7 +269,7 @@ pub fn insert_gov_locks_for_test(
 ) {
     use std::collections::HashSet;
     let (next_height, next_height_u64) = next_height_for_state(state);
-    let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(next_height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.world.put_governance_locks(id, locks);

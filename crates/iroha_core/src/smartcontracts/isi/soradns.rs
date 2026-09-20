@@ -555,7 +555,6 @@ mod tests {
             nonzero!(1_u64),
             None,
             None,
-            None,
             BLOCK_TIMESTAMP_MS,
             0,
         )

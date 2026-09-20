@@ -87,7 +87,7 @@ fn execute_fail_stop_io_command(
 ) -> Result<V2IoCompletion, String> {
     let operation = output_guard
         .begin_fail_stop_operation()
-        .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        .ok_or_else(|| output_guard.restart_error())?;
     match execute() {
         Ok(V2IoCompletion::RecoveryRequired(reason)) | Err(reason) => {
             // Log before closing output. The retained relay exits the process
@@ -95,8 +95,23 @@ fn execute_fail_stop_io_command(
             // drop races with `process::exit` and can erase the only precise
             // failure diagnostic.
             iroha_logger::error!(reason, "Sumeragi v2 I/O command failed closed");
-            drop(operation);
+            operation.fail(reason.clone());
             Err(reason)
+        }
+        Ok(completion) if completion.local_validation_recovery_reason().is_some() => {
+            let reason = completion
+                .local_validation_recovery_reason()
+                .expect("typed local recovery retains its precise cause")
+                .to_owned();
+            iroha_logger::error!(
+                reason,
+                "Sumeragi v2 Validate retains its dispatch for local recovery"
+            );
+            // Close under the original permit before any other consensus output
+            // can cross this failure. The intact completion still owns dispatch
+            // custody and is delivered to its exact index before the worker exits.
+            operation.fail(reason);
+            Ok(completion)
         }
         Ok(completion) => {
             operation.complete();

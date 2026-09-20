@@ -3,9 +3,18 @@
 //! The caller owns the expected raw SHA-256 and byte admission. Neither a proof
 //! artifact nor this request can provide its own trust pin. Decoding invokes the
 //! ordinary schedule/binding admission; it creates no completed-proof authority.
-//! TODO: connect this codec to retained request-file handles and the pinned CLI.
+//! Filesystem admission retains the request descriptor and ancestors through
+//! consuming export/replay, proof publication and final projection.
+//! Preparation calls `prepare_bound`, which returns a `PreparedLaunch` retaining
+//! the original facts and published transport pair. Export and replay each call
+//! `open_launcher` and consume its `RetainedLauncherRequest`. These are separate
+//! per-command owners. Executable identity and complete runtime admission belong
+//! to the original parent, independently of every request and reply.
 
 use super::*;
+
+pub(super) mod journal;
+pub(super) mod prepare;
 
 #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_kagami::scaling_evidence::LauncherRequestV1")]
@@ -22,8 +31,9 @@ struct PlanV1 {
     first_context: HeightContextId,
     first_height: u64,
     last_height: u64,
-    lane_catalog_hash: Hash,
-    active_lanes: Vec<MergeLaneBinding>,
+    nexus_amx_context_hash: Hash,
+    execution_policy_hash: Hash,
+    active_lanes: Vec<NativeWorkloadLane>,
     lane_authorities: MergeLaneAuthorityCatalogV1,
     scheduled: Vec<ScheduledV1>,
 }
@@ -51,6 +61,7 @@ struct LimitsV1 {
 struct BindingV1 {
     height: u64,
     finality_hash: Hash,
+    contexts_hash: Hash,
     query_hashes: Vec<Hash>,
 }
 
@@ -174,7 +185,8 @@ impl RequestV1 {
                 first_context: plan.first_context,
                 first_height: plan.first_height,
                 last_height: plan.last_height,
-                lane_catalog_hash: plan.lane_catalog_hash,
+                nexus_amx_context_hash: plan.nexus_amx_context_hash,
+                execution_policy_hash: plan.execution_policy_hash,
                 active_lanes: plan.active_lanes,
                 lane_authorities: plan.lane_authorities,
                 scheduled: plan
@@ -201,6 +213,7 @@ impl RequestV1 {
                 .map(|b| BindingV1 {
                     height: b.height,
                     finality_hash: b.finality_hash,
+                    contexts_hash: b.contexts_hash,
                     query_hashes: b.query_hashes,
                 })
                 .collect(),
@@ -228,7 +241,8 @@ impl RequestV1 {
             first_context: self.plan.first_context,
             first_height: self.plan.first_height,
             last_height: self.plan.last_height,
-            lane_catalog_hash: self.plan.lane_catalog_hash,
+            nexus_amx_context_hash: self.plan.nexus_amx_context_hash,
+            execution_policy_hash: self.plan.execution_policy_hash,
             active_lanes: self.plan.active_lanes,
             lane_authorities: self.plan.lane_authorities,
             scheduled: self
@@ -249,6 +263,7 @@ impl RequestV1 {
             .map(|b| HeightInputBinding {
                 height: b.height,
                 finality_hash: b.finality_hash,
+                contexts_hash: b.contexts_hash,
                 query_hashes: b.query_hashes,
             })
             .collect();

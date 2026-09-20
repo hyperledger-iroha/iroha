@@ -833,17 +833,23 @@ const TEMPDIR_IN_ENV: &str = "TEST_NETWORK_TMP_DIR";
 const TEMPDIR_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const TEMPDIR_MAX_KEEP: usize = 256;
 const KEEP_TEMPDIR_ENV: &str = "IROHA_TEST_NETWORK_KEEP_DIRS";
+const PROGRAM_IROHAD_TAIRA_ENV: &str = "TEST_NETWORK_BIN_IROHAD_TAIRA";
 const PROGRAM_IROHAD_ENV: &str = "TEST_NETWORK_BIN_IROHAD";
 const PROGRAM_IROHAD_MESSAGE_CONTROL_ENV: &str = "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL";
 const PROGRAM_IROHAD_PARLIAMENT_SIGNERS_ENV: &str = "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS";
 const PROGRAM_IROHAD_FEATURES_ENV: &str = "TEST_NETWORK_IROHAD_FEATURES";
 const PROGRAM_IROHA_ENV: &str = "TEST_NETWORK_BIN_IROHA";
+/// Locate the build checkout without requiring it to exist on this host.
+fn compiled_repo_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("test network crate must be under the workspace crates directory")
+        .to_path_buf()
+}
 /// Utility to get the root of the repository
 pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../")
-        .canonicalize()
-        .unwrap()
+    compiled_repo_path().canonicalize().unwrap()
 }
 const DEFAULT_RANS_TABLES: &[u8] = include_bytes!("../../../codec/rans/tables/rans_seed0.toml");
 fn tempdir_in() -> Option<impl AsRef<Path>> {
@@ -989,6 +995,8 @@ pub enum Program {
     /// Feature-isolated daemon with exact-seat Parliament beacon and TLE share providers.
     #[doc(hidden)]
     IrohadParliamentSigners,
+    /// Shipping Taira launcher, including its offline production beacon bootstrap.
+    IrohadTaira,
     /// Iroha Client CLI
     Iroha,
 }
@@ -1034,6 +1042,7 @@ impl Program {
     const fn release_prebuilt_binary(self) -> ReleasePrebuiltBinary {
         match self {
             Self::Irohad => ReleasePrebuiltBinary::Irohad,
+            Self::IrohadTaira => ReleasePrebuiltBinary::IrohadTaira,
             Self::IrohadMessageControl => ReleasePrebuiltBinary::IrohadMessageControl,
             // The test signer is explicitly rejected whenever a release-prebuilt
             // contract is active. This value is therefore an unreachable sentinel.
@@ -1096,6 +1105,16 @@ impl Program {
                 .collect(),
                 isolated_target_subdir: Some("parliament-signers"),
             },
+            Self::IrohadTaira => ProgramSpec {
+                name: "iroha3d_taira",
+                env: PROGRAM_IROHAD_TAIRA_ENV,
+                pkg: "irohad",
+                build_args: ["--bin", "iroha3d_taira"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+                isolated_target_subdir: None,
+            },
             Self::Iroha => ProgramSpec {
                 name: "iroha",
                 env: PROGRAM_IROHA_ENV,
@@ -1107,6 +1126,7 @@ impl Program {
     }
 }
 // Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
+static IROHAD_TAIRA_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_MESSAGE_CONTROL_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHAD_PARLIAMENT_SIGNERS_BIN: OnceLock<PathBuf> = OnceLock::new();
@@ -1146,13 +1166,15 @@ pub enum ReleasePrebuiltBinary {
     IrohadMessageControl,
     Iroha,
     Kagami,
+    IrohadTaira,
 }
 impl ReleasePrebuiltBinary {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Irohad,
         Self::IrohadMessageControl,
         Self::Iroha,
         Self::Kagami,
+        Self::IrohadTaira,
     ];
     const fn manifest_prefix(self) -> &'static str {
         match self {
@@ -1160,6 +1182,7 @@ impl ReleasePrebuiltBinary {
             Self::IrohadMessageControl => "irohad_message_control",
             Self::Iroha => "iroha",
             Self::Kagami => "kagami",
+            Self::IrohadTaira => "irohad_taira",
         }
     }
     const fn relative_path(self) -> &'static str {
@@ -1168,6 +1191,7 @@ impl ReleasePrebuiltBinary {
             Self::IrohadMessageControl => "message-control/release/iroha3d",
             Self::Iroha => "release/iroha",
             Self::Kagami => "release/kagami",
+            Self::IrohadTaira => "release/iroha3d_taira",
         }
     }
 }
@@ -1181,7 +1205,7 @@ struct ReleaseBinaryAttestation {
 struct ReleaseProgramContract {
     configured_target_dir: PathBuf,
     canonical_target_dir: PathBuf,
-    binaries: [ReleaseBinaryAttestation; 4],
+    binaries: [ReleaseBinaryAttestation; 5],
 }
 impl ReleaseProgramContract {
     fn binary(&self, kind: ReleasePrebuiltBinary) -> &ReleaseBinaryAttestation {
@@ -1477,8 +1501,8 @@ fn parse_release_prebuilt_manifest(
     source_manifest_sha256: &str,
     configured_target: &Path,
     repo: &Path,
-) -> color_eyre::Result<[ReleaseBinaryAttestation; 4]> {
-    const KEYS: [&str; 25] = [
+) -> color_eyre::Result<[ReleaseBinaryAttestation; 5]> {
+    const KEYS: [&str; 29] = [
         "schema_version",
         "source_manifest_sha256",
         "cargo_lock_sha256",
@@ -1504,8 +1528,12 @@ fn parse_release_prebuilt_manifest(
         "kagami_sha256",
         "kagami_size_bytes",
         "kagami_mode_octal",
+        "irohad_taira_relative_path",
+        "irohad_taira_sha256",
+        "irohad_taira_size_bytes",
+        "irohad_taira_mode_octal",
     ];
-    const FIELD_COUNT: usize = 25;
+    const FIELD_COUNT: usize = 29;
     const BASE_FIELD_COUNT: usize = 9;
     let text = std::str::from_utf8(bytes)
         .wrap_err("release prebuilt manifest must contain valid UTF-8")?;
@@ -1639,7 +1667,7 @@ fn parse_release_prebuilt_manifest(
         });
     }
     binaries.try_into().map_err(|_| {
-        eyre!("release prebuilt manifest must contain exactly four executable attestations")
+        eyre!("release prebuilt manifest must contain exactly five executable attestations")
     })
 }
 fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleaseProgramContract>> {
@@ -1882,7 +1910,7 @@ fn validate_release_program_candidate(
 pub fn resolve_release_prebuilt_binary(
     kind: ReleasePrebuiltBinary,
 ) -> color_eyre::Result<Option<PathBuf>> {
-    let Some(contract) = release_program_contract(&repo_root())? else {
+    let Some(contract) = release_program_contract(&compiled_repo_path())? else {
         return Ok(None);
     };
     validate_release_program_candidate(
@@ -1900,7 +1928,7 @@ pub fn revalidate_release_prebuilt_binary(
     kind: ReleasePrebuiltBinary,
     candidate: impl AsRef<Path>,
 ) -> color_eyre::Result<Option<PathBuf>> {
-    let Some(contract) = release_program_contract(&repo_root())? else {
+    let Some(contract) = release_program_contract(&compiled_repo_path())? else {
         return Ok(None);
     };
     validate_release_program_candidate(&contract, kind, candidate).map(Some)
@@ -2672,7 +2700,7 @@ impl Program {
     /// # Errors
     /// If the path is not found (and build did not help).
     fn resolve_internal(&self, skip_build_override: Option<bool>) -> color_eyre::Result<PathBuf> {
-        self.resolve_internal_in_repo(skip_build_override, &repo_root())
+        self.resolve_internal_in_repo(skip_build_override, &compiled_repo_path())
     }
 
     fn resolve_internal_in_repo(
@@ -2727,9 +2755,19 @@ impl Program {
                 None => Ok(candidate),
             };
         }
+        // Explicit absolute prebuilt paths do not need the build checkout. Discovery
+        // and freshness checks still require the real source repository.
+        let canonical_repo = repo.canonicalize().wrap_err_with(|| {
+            eyre!(
+                "Could not access repository {} to discover or build `{name}`; provide an absolute `{env}` for a prebuilt diagnostic binary",
+                repo.display()
+            )
+        })?;
+        let repo = canonical_repo.as_path();
         // Fast path via cache (only when no override is present)
         let cached = match self {
             Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
+            Program::IrohadTaira => cached_binary_if_present(&IROHAD_TAIRA_BIN),
             Program::IrohadMessageControl => cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN),
             Program::IrohadParliamentSigners => {
                 cached_binary_if_present(&IROHAD_PARLIAMENT_SIGNERS_BIN)
@@ -2822,6 +2860,9 @@ impl Program {
                     Program::IrohadMessageControl => {
                         let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
                     }
+                    Program::IrohadTaira => {
+                        let _ = IROHAD_TAIRA_BIN.set(found.clone());
+                    }
                     Program::IrohadParliamentSigners => {
                         let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
                     }
@@ -2866,6 +2907,9 @@ impl Program {
                 }
                 Program::IrohadMessageControl => {
                     let _ = IROHAD_MESSAGE_CONTROL_BIN.set(found.clone());
+                }
+                Program::IrohadTaira => {
+                    let _ = IROHAD_TAIRA_BIN.set(found.clone());
                 }
                 Program::IrohadParliamentSigners => {
                     let _ = IROHAD_PARLIAMENT_SIGNERS_BIN.set(found.clone());
@@ -6904,7 +6948,6 @@ fn normalize_genesis_consensus_handshake(
         .collect();
     let mut header = source.0.header();
     header.merkle_root = external_merkle.root();
-    header.result_merkle_root = None;
     let da_proof_policies = da_proof_policies
         .cloned()
         .or_else(|| source.0.da_proof_policies().cloned());
@@ -10917,22 +10960,21 @@ impl BlockHeight {
     }
 }
 fn detect_block_height_from_storage(storage_dir: &Path, current_total: u64) -> Option<BlockHeight> {
-    let mut hashes_height: Option<u64> = None;
-    if let Ok(entries) = fs::read_dir(storage_dir.join("blocks")) {
-        for entry in entries.flatten() {
-            let hashes_path = entry.path().join("blocks.hashes");
-            if let Ok(meta) = fs::metadata(&hashes_path) {
-                let blocks = meta.len() / 32;
-                hashes_height = Some(hashes_height.map_or(blocks, |prev| prev.max(blocks)));
-            }
-        }
+    let hashes_path = iroha_core::kura::Kura::canonical_storage_paths(storage_dir)
+        .0
+        .join("blocks.hashes");
+    let metadata = fs::metadata(hashes_path).ok()?;
+    let hash_bytes = u64::try_from(CryptoHash::LENGTH).ok()?;
+    if !metadata.is_file() || metadata.len() % hash_bytes != 0 {
+        return None;
     }
+    let hashes_height = metadata.len() / hash_bytes;
     // Pipeline recovery sidecars are written before consensus finality and their compact index
     // contains a fixed header in addition to entry records.  They are useful diagnostics, but
     // neither their presence nor their byte length proves that a block was applied. Only Kura's
     // canonical hash journal proves durable storage height; applied readiness must additionally
     // pass Torii's authoritative `/status` height barrier.
-    let max_height = hashes_height.unwrap_or(0);
+    let max_height = hashes_height;
     if max_height > current_total {
         Some(BlockHeight {
             total: max_height,
@@ -11460,7 +11502,7 @@ mod tests {
     #[tokio::test]
     async fn once_block_falls_back_to_storage_snapshot() {
         let dir = tempdir().expect("tempdir");
-        let lane_dir = dir.path().join("storage/blocks/lane_000_default");
+        let lane_dir = dir.path().join("storage/blocks/canonical");
         fs::create_dir_all(&lane_dir).expect("lane dir");
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 64]).expect("committed block hashes");
         let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
@@ -11518,7 +11560,7 @@ mod tests {
     #[tokio::test]
     async fn wait_for_block_1_with_watchdog_rejects_kura_without_applied_status() {
         let dir = tempdir().expect("tempdir");
-        let lane_dir = dir.path().join("storage/blocks/lane_000_default");
+        let lane_dir = dir.path().join("storage/blocks/canonical");
         fs::create_dir_all(&lane_dir).expect("lane dir");
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32])
             .expect("durable Kura hash journal");
@@ -12208,7 +12250,7 @@ mod tests {
             .dir
             .join("storage")
             .join("blocks")
-            .join("lane_000_default");
+            .join("canonical");
         let pipeline_dir = lane_dir.join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create modern pipeline dir");
         write_sidecar_index(&pipeline_dir, 1);
@@ -12233,7 +12275,7 @@ mod tests {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
         let custom_storage_dir = peer.dir.join("custom-storage");
-        let lane_dir = custom_storage_dir.join("blocks").join("lane_000_default");
+        let lane_dir = custom_storage_dir.join("blocks").join("canonical");
         fs::create_dir_all(&lane_dir).expect("create custom lane dir");
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 32])
             .expect("write custom canonical hash journal");
@@ -12264,7 +12306,7 @@ mod tests {
             .dir
             .join("storage")
             .join("blocks")
-            .join("lane_000_default")
+            .join("canonical")
             .join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create lane pipeline dir");
         write_sidecar_index(&pipeline_dir, 3);
@@ -12277,11 +12319,7 @@ mod tests {
     fn detect_block_height_prefers_block_hashes_over_pipeline() {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
-        let lane_dir = peer
-            .dir
-            .join("storage")
-            .join("blocks")
-            .join("lane_000_default");
+        let lane_dir = peer.dir.join("storage").join("blocks").join("canonical");
         let pipeline_dir = lane_dir.join("pipeline");
         fs::create_dir_all(&pipeline_dir).expect("create lane pipeline dir");
         write_sidecar_index(&pipeline_dir, 3);
@@ -12292,14 +12330,39 @@ mod tests {
         assert_eq!(height.non_empty, 1);
     }
     #[test]
+    fn detect_block_height_never_uses_lane_alias_hash_journals() {
+        let directory = tempdir().expect("storage fixture");
+        let alias = directory.path().join("blocks/lane_000_default");
+        fs::create_dir_all(&alias).unwrap();
+        fs::write(alias.join("blocks.hashes"), vec![0u8; 32 * 20]).unwrap();
+        assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
+        let canonical = iroha_core::kura::Kura::canonical_storage_paths(directory.path()).0;
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("blocks.hashes"), vec![0u8; 32 * 2]).unwrap();
+        assert_eq!(
+            detect_block_height_from_storage(directory.path(), 0)
+                .expect("canonical durable height")
+                .total,
+            2
+        );
+        assert!(detect_block_height_from_storage(directory.path(), 2).is_none());
+    }
+    #[test]
+    fn detect_block_height_rejects_partial_canonical_hash_journal() {
+        let directory = tempdir().expect("storage fixture");
+        let canonical = iroha_core::kura::Kura::canonical_storage_paths(directory.path()).0;
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("blocks.hashes"), vec![0u8; 33]).unwrap();
+        assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
+        fs::remove_file(canonical.join("blocks.hashes")).unwrap();
+        fs::create_dir(canonical.join("blocks.hashes")).unwrap();
+        assert!(detect_block_height_from_storage(directory.path(), 0).is_none());
+    }
+    #[test]
     fn best_effort_block_height_uses_storage_without_status() {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
-        let lane_dir = peer
-            .dir
-            .join("storage")
-            .join("blocks")
-            .join("lane_000_default");
+        let lane_dir = peer.dir.join("storage").join("blocks").join("canonical");
         fs::create_dir_all(&lane_dir).expect("create lane dir");
         fs::write(lane_dir.join("blocks.hashes"), vec![0u8; 64])
             .expect("write canonical hash journal");
@@ -15990,6 +16053,112 @@ mod tests {
         assert_eq!(decoded, instruction_box);
     }
     #[test]
+    fn program_absolute_prebuilt_override_does_not_require_checkout() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let fixture = tempdir().expect("temporary missing repository fixture");
+        let missing_repo = fixture.path().join("missing-checkout");
+        let binary = env::current_exe().expect("current prebuilt test binary");
+        let _binary = EnvVarRestore::set(PROGRAM_IROHA_ENV, &binary);
+        let resolved = Program::Iroha
+            .resolve_internal_in_repo(Some(true), &missing_repo)
+            .expect("absolute diagnostic binary must not need its build checkout");
+        assert_eq!(
+            resolved,
+            binary.canonicalize().expect("canonical test binary")
+        );
+        assert!(release_program_contract(&missing_repo).unwrap().is_none());
+        assert!(
+            resolve_release_prebuilt_binary(ReleasePrebuiltBinary::Iroha)
+                .expect("inactive release lookup must not need a checkout")
+                .is_none()
+        );
+        assert!(
+            revalidate_release_prebuilt_binary(ReleasePrebuiltBinary::Iroha, &binary)
+                .expect("inactive release revalidation must not need a checkout")
+                .is_none()
+        );
+        assert!(!missing_repo.exists());
+    }
+    #[test]
+    fn program_discovery_requires_checkout_with_context() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let _clear_binary = EnvVarGuard::cleared(PROGRAM_IROHA_ENV);
+        let fixture = tempdir().expect("temporary missing repository fixture");
+        let missing_repo = fixture.path().join("missing-checkout");
+        for skip_build in [true, false] {
+            let error = Program::Iroha
+                .resolve_internal_in_repo(Some(skip_build), &missing_repo)
+                .expect_err("discovery and builds must require the real checkout");
+            let message = error.to_string();
+            assert!(message.contains("Could not access repository"), "{message}");
+            assert!(message.contains(PROGRAM_IROHA_ENV), "{message}");
+            assert!(
+                message.contains(&missing_repo.display().to_string()),
+                "{message}"
+            );
+        }
+        let _relative = EnvVarRestore::set(PROGRAM_IROHA_ENV, "target/release/iroha");
+        assert!(
+            Program::Iroha
+                .resolve_internal_in_repo(Some(true), &missing_repo)
+                .is_err(),
+            "a relative override must not become relative to an unrelated working directory"
+        );
+        assert!(!missing_repo.exists());
+    }
+    #[test]
+    fn program_absolute_prebuilt_override_rejects_partial_release_identity() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _clear_source = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+        let fixture = tempdir().expect("temporary missing repository fixture");
+        let missing_repo = fixture.path().join("missing-checkout");
+        let binary = env::current_exe().expect("current prebuilt test binary");
+        let _binary = EnvVarRestore::set(PROGRAM_IROHA_ENV, &binary);
+        for (present, required) in [
+            (
+                IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+                IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV,
+            ),
+            (
+                IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV,
+                IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+            ),
+        ] {
+            let _partial = EnvVarRestore::set(present, "a".repeat(64));
+            let error = Program::Iroha
+                .resolve_internal_in_repo(Some(true), &missing_repo)
+                .expect_err("an absolute override must not bypass a partial release identity");
+            assert!(error.to_string().contains(required), "{error}");
+        }
+        assert!(!missing_repo.exists());
+    }
+    #[test]
+    fn program_absolute_prebuilt_override_requires_active_release_checkout() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let fixture = create_release_prebuilt_fixture();
+        let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+        let binary = fixture
+            .target
+            .join(ReleasePrebuiltBinary::Iroha.relative_path());
+        let _binary = EnvVarRestore::set(PROGRAM_IROHA_ENV, &binary);
+        let missing_repo = fixture.repo.join("missing-checkout");
+        let error = Program::Iroha
+            .resolve_internal_in_repo(Some(true), &missing_repo)
+            .expect_err("an active release contract must authenticate its real repository");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to canonicalize repository root for release artifact isolation"),
+            "{error}"
+        );
+        assert!(!missing_repo.exists());
+    }
+    #[test]
     fn program_resolve_uses_env_override_without_build() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
@@ -16913,7 +17082,7 @@ mod tests {
         );
         let produced = network.genesis();
         assert!(
-            produced.0.results().all(|result| result.as_ref().is_ok()),
+            produced.0.output_results().all(|result| result.as_ref().is_ok()),
             "deferred dataspace-scoped genesis transactions must pre-execute under the final catalog"
         );
         let config_layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();

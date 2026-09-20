@@ -127,3 +127,20 @@ is not a successful measurement, accepted ACK, or evidence closure. Packet
 capture keeps its existing exact tcpdump shutdown operation. Execute this
 canonical campaign entrypoint on the main Python thread so its lifetime scope
 can own signal handling; do not terminate the enclosing app/session to drain it.
+
+## Happy-day payment observation
+
+`private_settlement_happy_day_campaign.py` validates the distinct native entrypoint
+`nexus::atomic_private_settlement_localnet::atomic_private_settlement_n3_happy_day`.
+The request and completion marker explicitly bind `happy_day`. Its 47 retained
+artifacts prove the same three-leg financial state checks, all sixteen signed
+finality observations, replay idempotence, and continuous terminal cleanup. All
+sixteen validator PIDs remain unchanged; no restart artifact is accepted. Every
+terminal observation must match the finalized financial state with zero local
+and replicated staging. Earlier finalization observations may show monotonic
+local cleanup after the atomic financial transition.
+
+This read-only validator does not establish source, build, runtime closure, or
+ten-run release qualification. The invoking experiment controller must retain
+and authenticate those records separately. Run `--help` for the required
+owner-only run directory, bound request, and validator image SHA-256 inputs.

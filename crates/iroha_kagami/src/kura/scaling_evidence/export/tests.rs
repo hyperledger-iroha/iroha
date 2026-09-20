@@ -1,10 +1,9 @@
 //! Signed cross-owner disk export and independent canonical replay controls.
 
 use super::*;
+use crate::kura::scaling_evidence::fixture;
 use iroha_core::kura::BlockStore;
 use norito::codec::Encode as _;
-#[path = "../fixture.rs"]
-mod fixture;
 
 #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
 mod unix {
@@ -28,14 +27,12 @@ mod unix {
             let signed = fixture::Fixture::new(lanes);
             let mut store = BlockStore::new(&root);
             store.create_files_if_they_do_not_exist().unwrap();
-            store.append_block_to_chain(&signed.genesis).unwrap();
-            store.append_block_to_chain(&signed.carrier).unwrap();
+            for height in &signed.heights {
+                store.append_block_to_chain(&height.block).unwrap();
+            }
             drop(store);
             let log = root.join("merge.log");
-            let entry = signed.entry.encode();
-            let mut bytes = (entry.len() as u32).to_le_bytes().to_vec();
-            bytes.extend_from_slice(&entry);
-            fs::write(&log, bytes).unwrap();
+            fs::write(&log, []).unwrap();
             Self {
                 _directory: directory,
                 root,
@@ -44,18 +41,16 @@ mod unix {
             }
         }
         fn supplied(&self) -> Vec<SuppliedHeightEvidence> {
-            vec![
-                SuppliedHeightEvidence {
-                    height: 1,
-                    finality: norito::encode_canonical(&self.signed.first).unwrap(),
-                    queries: vec![],
-                },
-                SuppliedHeightEvidence {
-                    height: 2,
-                    finality: norito::encode_canonical(&self.signed.second).unwrap(),
-                    queries: self.signed.queries(),
-                },
-            ]
+            self.signed
+                .heights
+                .iter()
+                .map(|height| SuppliedHeightEvidence {
+                    height: height.block.header().height().get(),
+                    finality: norito::encode_canonical(&height.proof).unwrap(),
+                    contexts: height.evidence.clone(),
+                    queries: height.queries(),
+                })
+                .collect()
         }
         fn bindings(&self) -> Vec<HeightInputBinding> {
             bindings(&self.supplied())
@@ -63,8 +58,8 @@ mod unix {
         fn reader_limits(&self) -> CanonicalKuraEvidenceLimits {
             CanonicalKuraEvidenceLimits {
                 first_height: 1,
-                last_height: 2,
-                max_committed_blocks: 8,
+                last_height: self.signed.heights.len() as u64,
+                max_committed_blocks: 1025,
                 max_store_data_bytes: 2 * 1024 * 1024,
                 max_carrier_bytes: 1024 * 1024,
                 max_merge_log_bytes: 2 * 1024 * 1024,
@@ -114,6 +109,7 @@ mod unix {
             .map(|s| HeightInputBinding {
                 height: s.height,
                 finality_hash: Hash::new(&s.finality),
+                contexts_hash: Hash::new(&s.contexts),
                 query_hashes: s.queries.iter().map(Hash::new).collect(),
             })
             .collect()
@@ -163,18 +159,18 @@ mod unix {
             );
             assert_eq!(disk.snapshot(), before);
             let envelope: ExportEnvelopeV1 = canonical(export.canonical_bytes()).unwrap();
-            assert_eq!(envelope.heights.len(), 2);
+            assert_eq!(envelope.heights.len(), disk.signed.heights.len());
+            for (retained, actual) in envelope.heights.iter().zip(&disk.signed.heights) {
+                assert_eq!(retained.contexts, actual.evidence);
+                assert_eq!(retained.carrier, actual.block.encode_wire().unwrap());
+            }
             assert_eq!(
                 envelope
                     .heights
                     .iter()
-                    .filter(|h| h.merge_entry.is_some())
-                    .count(),
-                1
-            );
-            assert_eq!(
-                envelope.heights[1].merge_entry.as_ref().unwrap(),
-                &disk.signed.entry.canonical_bytes()
+                    .map(|height| height.queries.len())
+                    .sum::<usize>(),
+                8
             );
         }
     }
@@ -183,7 +179,7 @@ mod unix {
     fn strict_projection_has_exact_types_order_and_signed_hash_identity() {
         let disk = Disk::new(4);
         let export = disk.export().unwrap();
-        let json = export.json_projection().unwrap();
+        let json = export.json_projection(MAX_PROOF_BYTES).unwrap();
         let rows: norito::json::Value = norito::json::from_slice(&json).unwrap();
         let rows = rows.as_array().unwrap();
         let names: BTreeSet<_> = [
@@ -194,8 +190,9 @@ mod unix {
             "entrypoint_hash",
             "carrier_height",
             "carrier_hash",
-            "merge_entry_hash",
-            "merge_epoch",
+            "admission_carrier_hash",
+            "input_descriptor_hash",
+            "instance_id",
             "leaf_index",
             "lane_id",
             "dataspace_id",
@@ -228,7 +225,10 @@ mod unix {
                 row["entrypoint_hash"].as_str(),
                 Some(tx.hash().to_string().as_str())
             );
-            assert_eq!(row["carrier_height"].as_u64(), Some(2));
+            assert_eq!(
+                row["carrier_height"].as_u64(),
+                Some(export.rows()[index].request.carrier_height)
+            );
             assert_eq!(row["lane_id"].as_u64(), Some(route.lane_id.as_u32() as u64));
             assert_eq!(
                 row["dataspace_id"].as_u64(),
@@ -260,7 +260,7 @@ mod unix {
                 }
                 2 => {
                     bindings[1].finality_hash = Hash::new(b"different");
-                    "finality input digest mismatch"
+                    "finality/context input digest mismatch"
                 }
                 3 => {
                     bindings[1].query_hashes[0] = Hash::new(b"different");
@@ -301,7 +301,7 @@ mod unix {
     }
 
     #[test]
-    fn full_scan_rejects_a_late_tail_after_the_requested_real_merge_entry() {
+    fn full_scan_rejects_a_late_tail_even_when_native_carriers_need_no_merge_entries() {
         let disk = Disk::new(4);
         assert!(disk.export().is_ok());
         let mut bytes = fs::read(&disk.log).unwrap();
@@ -317,7 +317,7 @@ mod unix {
         let disk = Disk::new(4);
         assert!(disk.export().is_ok());
         let mut supplied = disk.supplied();
-        let mut second = disk.signed.second.clone();
+        let mut second = disk.signed.heights[1].proof.clone();
         second.finality_artifact.commit_qc.aggregate_signature.pop();
         supplied[1].finality = norito::encode_canonical(&second).unwrap();
         // Independently supplied digest is deliberately updated: this control
@@ -406,7 +406,7 @@ mod unix {
         let disk = Disk::new(4);
         let export = disk.export().unwrap();
         assert!(replay(&disk, &export).is_ok());
-        for mode in 0..14 {
+        for mode in 0..15 {
             let mut e: ExportEnvelopeV1 = canonical(export.canonical_bytes()).unwrap();
             let row = &mut e.rows[0];
             match mode {
@@ -416,12 +416,13 @@ mod unix {
                 3 => row.request.authority = disk.signed.requests[1].1.authority().clone(),
                 4 => row.request.entrypoint_hash = disk.signed.requests[1].1.hash_as_entrypoint(),
                 5 => row.request.carrier_height += 1,
-                6 => row.request.carrier_hash = disk.signed.genesis.hash(),
+                6 => row.request.carrier_hash = disk.signed.heights[0].block.hash(),
                 7 => {
-                    row.request.merge_entry_hash =
+                    row.request.admission_carrier_hash =
                         HashOf::from_untyped_unchecked(Hash::new(b"changed entry"))
                 }
-                8 => row.request.merge_epoch += 1,
+                8 => row.request.input_descriptor_hash = Hash::new(b"different descriptor"),
+                13 => row.request.instance_id = Hash::new(b"different instance"),
                 9 => row.request.leaf_index += 1,
                 10 => row.request.lane_id = LaneId::new(99),
                 11 => row.request.dataspace_id = DataSpaceId::new(99),
@@ -457,9 +458,9 @@ mod unix {
                 1 => {
                     e.heights.pop();
                 }
-                2 => e.heights[1].merge_entry = None,
+                2 => e.heights[1].contexts.clear(),
                 3 => e.heights[1].queries.swap(0, 1),
-                _ => e.heights[1].carrier = disk.signed.genesis.encode_wire().unwrap(),
+                _ => e.heights[1].carrier = disk.signed.heights[0].block.encode_wire().unwrap(),
             }
             let bytes = norito::encode_canonical(&e).unwrap();
             assert!(
@@ -483,7 +484,9 @@ mod unix {
         for mode in 0..4 {
             let mut plan = disk.signed.plan();
             match mode {
-                0 => plan.first_context = disk.signed.second.finality_artifact.context_id(),
+                0 => {
+                    plan.first_context = disk.signed.heights[1].proof.finality_artifact.context_id()
+                }
                 1 => plan.scheduled[0].route.lane_id = LaneId::new(1),
                 2 => {
                     plan.scheduled[0].signed_transaction =
@@ -524,7 +527,7 @@ mod unix {
         )
         .unwrap();
         assert_eq!(exact.canonical_bytes(), initial.canonical_bytes());
-        assert!(exact.json_projection().is_ok());
+        assert!(exact.json_projection(MAX_PROOF_BYTES).is_ok());
         limits.output_bytes -= 1;
         let error = export_from_kura(
             disk.signed.plan(),
@@ -629,6 +632,78 @@ mod unix {
             "export frame exceeds admitted allocation"
         );
     }
+    // Independent projection response budget controls.
+    #[test]
+    fn projection_independent_cap_accepts_exact_complete_array_and_rejects_every_prefix() {
+        for lanes in [1, 4] {
+            let disk = Disk::new(lanes);
+            let export = disk.export().unwrap();
+            let canonical = export.canonical_bytes().to_vec();
+            let complete = export.json_projection(MAX_PROOF_BYTES).unwrap();
+            let exact = u64::try_from(complete.len()).unwrap();
+            assert!(exact < export.rows().len() as u64 * (ROW_RESERVATION + 1) + 2);
+            let bounded = export.json_projection(exact).unwrap();
+            assert_eq!(bounded, complete);
+            assert!(bounded.capacity() as u64 <= exact);
+            let decoded: norito::json::Value = norito::json::from_slice(&bounded).unwrap();
+            assert_eq!(decoded.as_array().unwrap().len(), export.rows().len());
+            let mut prefix = 1_u64;
+            let mut insufficient = vec![1, 2, exact - 1];
+            for (index, row) in export.rows().iter().enumerate() {
+                prefix += u64::from(index > 0) + projection_row(row).unwrap().len() as u64;
+                if index + 1 < export.rows().len() {
+                    insufficient.push(prefix + 1);
+                }
+            }
+            for maximum in insufficient {
+                assert!(maximum < exact);
+                assert_eq!(
+                    export.json_projection(maximum).unwrap_err().to_string(),
+                    "projection exceeds independent maximum",
+                    "a complete prefix must not escape at cap {maximum}",
+                );
+            }
+            assert_eq!(export.canonical_bytes(), canonical);
+            assert_eq!(export.json_projection(exact).unwrap(), complete);
+        }
+    }
+
+    #[test]
+    fn projection_independent_cap_rejects_zero_and_overflow() {
+        let disk = Disk::new(1);
+        let export = disk.export().unwrap();
+        let canonical = export.canonical_bytes().to_vec();
+        for maximum in [0, MAX_PROOF_BYTES + 1, u64::MAX] {
+            assert_eq!(
+                export.json_projection(maximum).unwrap_err().to_string(),
+                "projection maximum must be between 1 byte and 256 MiB",
+            );
+        }
+        assert_eq!(export.canonical_bytes(), canonical);
+        assert!(!export.json_projection(MAX_PROOF_BYTES).unwrap().is_empty());
+    }
+
+    #[test]
+    fn projection_independent_cap_preserves_original_plan_output_reservation() {
+        let disk = Disk::new(1);
+        let mut export = disk.export().unwrap();
+        let complete = export.json_projection(MAX_PROOF_BYTES).unwrap();
+        let reservation = export.rows().len() as u64 * (ROW_RESERVATION + 1) + 2;
+        let required = export.canonical_bytes().len() as u64 + reservation;
+        export.output_limit = required;
+        assert_eq!(
+            export.json_projection(complete.len() as u64).unwrap(),
+            complete
+        );
+        export.output_limit = required - 1;
+        assert_eq!(
+            export
+                .json_projection(complete.len() as u64)
+                .unwrap_err()
+                .to_string(),
+            "projection output reservation exceeded",
+        );
+    }
 }
 
 #[test]
@@ -660,22 +735,17 @@ fn export_envelope_declares_v1_identity_for_complete_nested_proofs() {
     let complete = verifier.finish().unwrap();
     let envelope = ExportEnvelopeV1 {
         version: 1,
-        heights: vec![
-            HeightProofV1 {
-                height: 1,
-                finality: norito::encode_canonical(&fixture.first).unwrap(),
-                carrier: fixture.genesis.encode_wire().unwrap(),
-                merge_entry: None,
-                queries: vec![],
-            },
-            HeightProofV1 {
-                height: 2,
-                finality: norito::encode_canonical(&fixture.second).unwrap(),
-                carrier: fixture.carrier.encode_wire().unwrap(),
-                merge_entry: Some(fixture.entry.canonical_bytes()),
-                queries: fixture.queries(),
-            },
-        ],
+        heights: fixture
+            .heights
+            .iter()
+            .map(|height| HeightProofV1 {
+                height: height.block.header().height().get(),
+                finality: norito::encode_canonical(&height.proof).unwrap(),
+                carrier: height.block.encode_wire().unwrap(),
+                contexts: height.evidence.clone(),
+                queries: height.queries(),
+            })
+            .collect(),
         rows: schedule_rows(complete.rows().to_vec()),
     };
     let decoded = super::super::tests::assert_declared_scaling_frame::<
@@ -689,24 +759,29 @@ fn export_envelope_declares_v1_identity_for_complete_nested_proofs() {
         ],
     );
     assert_eq!(decoded.version, 1);
-    assert_eq!(decoded.heights.len(), 2);
+    assert_eq!(decoded.heights.len(), fixture.heights.len());
     assert!(decoded.heights[0].queries.is_empty());
-    assert_eq!(decoded.heights[1].queries.len(), 8);
+    assert_eq!(
+        decoded
+            .heights
+            .iter()
+            .map(|height| height.queries.len())
+            .sum::<usize>(),
+        8
+    );
     assert!(same_rows(&envelope.rows, &decoded.rows));
 
     // Bind the replay to independent fixture inputs, not the decoded envelope.
-    let bindings = [
-        HeightInputBinding {
-            height: 1,
-            finality_hash: Hash::new(norito::encode_canonical(&fixture.first).unwrap()),
-            query_hashes: vec![],
-        },
-        HeightInputBinding {
-            height: 2,
-            finality_hash: Hash::new(norito::encode_canonical(&fixture.second).unwrap()),
-            query_hashes: fixture.queries().iter().map(Hash::new).collect(),
-        },
-    ];
+    let bindings: Vec<_> = fixture
+        .heights
+        .iter()
+        .map(|height| HeightInputBinding {
+            height: height.block.header().height().get(),
+            finality_hash: Hash::new(norito::encode_canonical(&height.proof).unwrap()),
+            contexts_hash: Hash::new(&height.evidence),
+            query_hashes: height.queries().iter().map(Hash::new).collect(),
+        })
+        .collect();
     let bytes = norito::encode_canonical(&decoded).unwrap();
     let replayed = replay_export(
         fixture.plan(),
@@ -719,10 +794,11 @@ fn export_envelope_declares_v1_identity_for_complete_nested_proofs() {
     assert!(same_rows(&decoded.rows, replayed.rows()));
     assert_eq!(replayed.canonical_bytes(), bytes);
 
-    // A valid outer frame cannot authorize an unframed nested merge entry.
-    let mut bare_merge: ExportEnvelopeV1 = norito::decode_canonical(&bytes).unwrap();
-    bare_merge.heights[1].merge_entry = Some(fixture.entry.encode());
-    let bare_bytes = norito::encode_canonical(&bare_merge).unwrap();
+    // A valid outer frame cannot authorize an unframed nested context proof.
+    let mut bare_contexts: ExportEnvelopeV1 = norito::decode_canonical(&bytes).unwrap();
+    bare_contexts.heights[1].contexts =
+        fixture.heights[1].evidence[norito::core::Header::SIZE..].to_vec();
+    let bare_bytes = norito::encode_canonical(&bare_contexts).unwrap();
     assert_ne!(bare_bytes, bytes);
     assert!(
         replay_export(

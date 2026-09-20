@@ -1,9 +1,179 @@
 # Core first-release regression validation
 
-This repair follows the reported Core run with 13,623 passing tests and 973
-failures. It targets the current first-release contracts. No compatibility
-decoder, obsolete instruction alias, consensus bypass, or new ignored test is
-introduced.
+These records describe focused repairs against the current first-release
+contracts. They do not establish full workspace or release qualification.
+
+## September 20 Anonymous-PGC proof decoding stack overflow
+
+The isolated `verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects`
+test aborts on the default libtest stack in the original executable. The debugger
+places the fault in nested Norito decoding of the sender's positive range proof.
+Each unsigned range embeds 5,152 bytes of fixed arrays; the sender embeds two
+ranges, and the complete payment embeds the sender. By-value decoder results and
+temporaries multiply that storage across the call chain: the unsigned-range
+decoder alone reserves 98,664 bytes, above the test's roughly 393,000-byte frame.
+
+Both payment and bootstrap range arrays now use a private heap owner with exact
+compile-time dimensions. Serialization and decoding delegate to the canonical
+fixed-array codec, and decoding charges the owned array against the allocation
+budget. Provers retain their existing vector allocation when converting to the
+fixed owner. No additional accepted encoding or enlarged thread stack is needed.
+The rebuilt unsigned-range decoder frame is 7,032 bytes. The original test passes
+on the default libtest stack, and the new full-payment decode/verification test
+passes with a 512 KiB stack.
+
+All 52 focused regressions pass on the final executable in 160.45 seconds with
+eight test workers and `RUST_MIN_STACK` unset: all Anonymous-PGC engine and array
+tests plus the nine PGC bootstrap/payment instruction tests. Coverage includes
+both unchanged proof known-answer vectors, maximum 64-account inputs, malformed
+and tampered proofs, allocation limits, atomic updates and replay rejection.
+The allocation test measures the canonical decoder's existing temporary costs
+separately, then checks the exact additional heap charge and one-byte-short
+budget rejection.
+
+The final test build passes without diagnostics:
+
+```sh
+cargo test -p iroha_core --lib \
+  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry --no-run
+```
+
+Changed-file `rustfmt --edition 2024 --check`, `git diff --check`, and
+`scripts/check_no_legacy_codec.sh` pass. `cargo fmt --all -- --check` reports
+pre-existing differences in `state/canonical_runtime_tests.rs`,
+`state/carrier_preparation/physical_publication.rs`, the test network's
+`production_beacon_prepare.rs`, and the daemon's `external_software_signer.rs`.
+Those files are outside this repair. Full workspace tests were not run.
+
+## September 19 CLI output API and carrier warning repair
+
+CLI settlement verification uses canonical network inputs and authenticated typed
+execution outputs. Fixtures construct current block headers, output receipts and
+Merkle proofs; a regression rejects substitution of another input's successful
+output. The public-input genesis fixture installs its manifest baseline and
+authenticated configured Kura geometry before startup catalog projection.
+
+Carrier warning cleanup retains original resources and their drop order, limits
+inspection helpers to unit tests, and preserves nested failure diagnostics.
+The source bindings and mutation checks track the retained field names. Unused
+CLI wrappers and fulfilled lint expectations are removed without compatibility
+shims or blanket warning suppression.
+
+The combined test build is warning-free:
+
+```sh
+cargo test -p iroha_cli --bin iroha -p iroha_core --lib --no-run
+```
+
+Focused execution passes 90 Core tests, 51 CLI tests and the four-peer P2P
+crossed-dial/restart regression. The existing expensive end-to-end settlement
+proof test remains ignored. Three focused carrier source-contract checks,
+edited-file formatting and the retired-codec guard also pass. Full workspace
+tests and the broader source-contract mutation matrix were not completed.
+
+## September 16 committed-carrier and recovery regressions
+
+The reported Core run passed 15,335 tests and failed 82. The original executable
+reproduced all 82 failures in a focused run. Fixtures now count actual applied
+fragments, bind certified merge execution to its exact carrier header, keep
+ordinary payloads out of execution-bearing merge carriers, and configure the
+complete startup dataspace baseline. Geometry fixtures admit the primary anchor
+and journal incarnation replacement through the geometry owner. AXT replay
+checks retain the permanent counter across rejected physical reconfiguration
+and explicit policy revocation/recreation.
+
+Native AMX publication can reopen an authenticated committed carrier for repair.
+Its bounded durable locator records that repair explicitly, validates the exact
+selected executed wire, and cannot classify missing or changed committed bytes
+as an uncommitted append. Late body-store completions may settle through an
+exact authenticated publication marker after pipeline ownership transfers;
+missing or conflicting ownership without that proof still fails. The native
+body-loss fixture preserves indexed recovery length and first verifies that
+ordinary eviction cannot discard pending publication work.
+
+All 449 focused tests pass, with no failures or ignored tests: all 82 reported
+test names and 367 additional block, geometry, publication, query,
+autonomous-execution and lifecycle checks. The final run completed in 636.29
+seconds directly from the rebuilt executable with eight libtest workers.
+The build and supporting checks are:
+
+```sh
+scripts/cargo_fast.sh -- test -p iroha_core --lib \
+  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry --no-run
+cargo fmt -p iroha_core --check
+python3 scripts/tests/sumeragi_source_contract_asset_compaction_test.py
+python3 scripts/tests/sumeragi_v2_lifecycle_launch_source_compaction_test.py
+scripts/check_no_legacy_codec.sh
+```
+
+Both Python suites pass (6 and 11 checks), as do formatting and the codec guard.
+The full Core and workspace test suites are outside this focused validation.
+
+## September 15 certified-fetch registry stack overflow
+
+Both `cold_ready_fetch` regressions aborted independently on the default
+libtest stack. The debugger identified cumulative stack use from large inline
+owners across admission and cold recovery. The B-tree stored 26,000-byte
+`ConcreteLifecycleWork` values inline, amplifying stack use across tree
+operations and nested admission results. The cold-recovery census also held
+every authenticated carrier variant inline, producing a 547,336-byte frame
+above canonical replay-authority decoding in the unoptimized Linux build.
+
+Registry rows, installation failures and publication failures now retain boxed
+work. Keeping error results boxed also removes full-carrier temporaries from
+the nested publication frames while they validate the canonical ledger.
+The shared fixture keeps its production owners on the heap across handoffs.
+Live successor transitions reuse their parent allocation or consume storage
+reserved before durable publication;
+rollback retains the complete move-only incumbent. Cold reconstruction retains
+heap ownership through authenticated Fetch-to-Store-to-Validate conversions and
+the complete census, prepared-work handoff and registry construction, preserving
+all authentication checks and durable schemas.
+The storage regressions check the actual installed B-tree value size,
+error-result size and both recovery entry sizes; a fixture layout guard prevents
+aggregate ownership copies from returning. Source contracts
+require transfer of the existing Validate parent allocation into Sign work.
+The original cold-fetch rejection and replay assertions remain unchanged.
+The terminal ingress drain also passes its configured control-queue capacity
+to the current lane-output interface, fixing a missing-argument build error.
+Its ordinary lane fixture derives the required ingress capacity from the
+frozen roster and explicitly opens the configured ingress before enqueueing.
+
+Comparing stack-frame prologues in the original and repaired unoptimized
+Linux test binaries gives these scoped measurements:
+
+| Frame | Original bytes | Repaired bytes |
+| --- | ---: | ---: |
+| Authenticated body recovery census | 547,336 | 6,744 |
+| Recovered body registry installation | 338,808 | 712 |
+| Exact registry installation | 312,952 | 1,032 |
+| Reported failing test | 362,824 | 28,856 |
+
+Validation passes on the default libtest stack with no stack-size override:
+387 distinct Rust tests covering all 34 certified-body fence cases, registry
+and admission transactions, authenticated replay and ledger recovery, all 55
+source contracts, ingress planning, and lane output ordering/backpressure.
+The existing incident-frame inspection test remains ignored because it needs
+external diagnostic inputs. All six source-contract asset tests and the
+retired-codec dependency guard pass. Full workspace tests were not run.
+
+The focused build used the same test feature graph as the reported binary:
+
+```sh
+scripts/cargo_fast.sh -- test -p iroha_core --lib \
+  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry \
+  cold_ready_fetch -- --nocapture
+scripts/cargo_fast.sh -- test -p iroha_core --lib \
+  --features iroha-core-tests,sumeragi-main-loop-tests,expensive-telemetry \
+  ordinary_lane_consumer_ -- --test-threads=4
+python3 scripts/tests/sumeragi_source_contract_asset_compaction_test.py
+scripts/check_no_legacy_codec.sh
+```
+
+The broader focused suites ran directly from the resulting test executable
+with four test threads. Source-contract guards now explicitly require parent
+allocation reuse, exact obsolete-owner retirement, and authenticated CompleteTip
+repair publication ordering.
 
 ## September 15 block-construction stack overflow
 

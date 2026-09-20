@@ -1,4 +1,5 @@
 use super::*;
+use crate::vega::sponge::Keccak256;
 use crate::vega::zk_ams::mkhe::{
     rns_native_cross_field_rlwe_direct::RnsNativeCrossFieldRlweVerifiedCoreRootV1,
     rns_native_global_lookup_z_commitment_view::rns_native_global_inverse_product_sumcheck::RnsNativeGlobalLookupVerifiedCoreRootV2,
@@ -10,8 +11,18 @@ use crate::vega::zk_ams::mkhe::{
         ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
         ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
     },
-    rns_native_zero_padding_commitment::verified_zero_padding_root_fixture_v1,
 };
+
+fn proof_digest_fixture(label: &[u8], context: u16, ordinal: u16) -> ProofDigestV1 {
+    super::super::rns_native_proof_hash::test_proof_digest_v1(
+        label,
+        (u64::from(context) << 16) | u64::from(ordinal),
+    )
+}
+
+fn proof_tag(tag: u8) -> ProofDigestV1 {
+    proof_digest_fixture(b"numeric-test-tag", u16::from(tag), 0)
+}
 
 fn digest(label: &[u8], context: u16, ordinal: u16) -> [u8; 32] {
     let mut hash = Keccak256::new();
@@ -132,26 +143,26 @@ fn opening_records(context: u16) -> [ZkAmsMkheRnsNativeOpeningCommitmentV1; OPEN
     })
 }
 
-fn opening_bundle(binding: [u8; 32], context: u16) -> ZkAmsMkheRnsNativeOpeningCommitmentsV1 {
+fn opening_bundle(binding: ProofDigestV1, context: u16) -> ZkAmsMkheRnsNativeOpeningCommitmentsV1 {
     ZkAmsMkheRnsNativeOpeningCommitmentsV1::new(binding, opening_records(context))
         .expect("ordered openings")
 }
 
-fn terminal_bridge(binding: [u8; 32], context: u16) -> ZkAmsMkheRnsNativeTerminalBridgeV1 {
+fn terminal_bridge(binding: ProofDigestV1, context: u16) -> ZkAmsMkheRnsNativeTerminalBridgeV1 {
     ZkAmsMkheRnsNativeTerminalBridgeV1::new(
         binding,
-        digest(b"mapping-root", context, 0),
-        digest(b"terminal-hyrax-root", context, 0),
-        digest(b"cross-basis-root", context, 0),
+        proof_digest_fixture(b"mapping-root", context, 0),
+        proof_digest_fixture(b"terminal-hyrax-root", context, 0),
+        proof_digest_fixture(b"cross-basis-root", context, 0),
     )
     .expect("terminal bridge")
 }
 
-fn qpcs_roots(binding: [u8; 32], context: u16) -> ZkAmsMkheRnsNativeQpcsRootsV1 {
+fn qpcs_roots(binding: ProofDigestV1, context: u16) -> ZkAmsMkheRnsNativeQpcsRootsV1 {
     let fri_roots = core::array::from_fn(|layer| {
         ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             u8::try_from(layer).expect("FRI layer fits u8"),
-            digest(
+            proof_digest_fixture(
                 b"qpcs-fri-root",
                 context,
                 u16::try_from(layer).expect("FRI layer fits u16"),
@@ -161,20 +172,19 @@ fn qpcs_roots(binding: [u8; 32], context: u16) -> ZkAmsMkheRnsNativeQpcsRootsV1 
     });
     ZkAmsMkheRnsNativeQpcsRootsV1::new(
         binding,
-        digest(b"qpcs-initial-root", context, 0),
-        digest(b"q-mask-s-root", context, 0),
-        digest(b"qpcs-quotient-root", context, 0),
+        proof_digest_fixture(b"qpcs-initial-root", context, 0),
+        proof_digest_fixture(b"q-mask-s-root", context, 0),
+        proof_digest_fixture(b"qpcs-quotient-root", context, 0),
         fri_roots,
     )
     .expect("qPCS root schedule")
 }
 
-fn terminal_roots(binding: [u8; 32], context: u16) -> ZkAmsMkheRnsNativeTerminalRootsV1 {
+fn terminal_roots(binding: ProofDigestV1, context: u16) -> ZkAmsMkheRnsNativeTerminalRootsV1 {
     ZkAmsMkheRnsNativeTerminalRootsV1::new(
         binding,
-        digest(b"cross-field-root", context, 0),
-        digest(b"global-lookup-root", context, 0),
-        digest(b"zero-padding-root", context, 0),
+        proof_digest_fixture(b"cross-field-root", context, 0),
+        proof_digest_fixture(b"global-lookup-root", context, 0),
     )
     .expect("terminal roots")
 }
@@ -232,34 +242,26 @@ fn finish(
         .expect("complete transcript")
 }
 
-fn zero_equality_parts(
+fn global_equality_pending(
     fixture: &ContextFixture,
     opening_context: u16,
     bridge_context: u16,
     qpcs_context: u16,
     terminal_context: u16,
-    zero_padding_root: [u8; 32],
-) -> (
-    ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1,
-    ZkAmsMkheRnsNativeChallengeSeedsV1,
-) {
+    global_root: ProofDigestV1,
+) -> ZkAmsMkheRnsNativeGlobalLookupRootEqualityPendingV1 {
     let qpcs = qpcs_stage(fixture, opening_context, bridge_context, qpcs_context);
-    let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(
-        qpcs.binding_digest(),
-        digest(b"cross-field-root", terminal_context, 0),
-        digest(b"global-lookup-root", terminal_context, 0),
-        zero_padding_root,
-    )
-    .expect("same-root terminal chronology");
-    let chronology = qpcs
-        .bind_provisional_terminal_chronology_v1(roots)
-        .expect("provisional terminal chronology");
-    let ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1 {
-        zero_padding_root_equality_obligation,
-        final_challenge_seeds,
-        ..
-    } = chronology;
-    (zero_padding_root_equality_obligation, final_challenge_seeds)
+    let cross = proof_digest_fixture(b"cross-field-root", terminal_context, 0);
+    let roots = ZkAmsMkheRnsNativeTerminalRootsV1::new(qpcs.binding_digest(), cross, global_root)
+        .expect("exact two-root context");
+    let chronology = qpcs.bind_provisional_terminal_chronology_v1(roots).unwrap();
+    let (cross_obligation, pending) =
+        chronology.into_cross_field_obligation_and_global_pending_v1();
+    // This test exercises chronology/ownership, not cryptographic proof generation.
+    cross_obligation
+        .discharge_v1(RnsNativeCrossFieldRlweVerifiedCoreRootV1::test_fixture_v1(cross).unwrap())
+        .unwrap();
+    pending
 }
 
 #[test]
@@ -274,14 +276,14 @@ fn canonical_transcript_is_deterministic_and_all_challenges_are_distinct() {
         ordered.len(),
         ZK_AMS_MKHE_RNS_NATIVE_TRANSCRIPT_CHALLENGE_COUNT_V1
     );
-    assert!(ordered.iter().all(|seed| *seed != [0; 32]));
+    assert!(ordered.iter().all(|seed| *seed != ProofDigestV1::ZERO));
     assert!(
         ordered
             .iter()
             .enumerate()
             .all(|(index, seed)| !ordered[index + 1..].contains(seed))
     );
-    assert_ne!(first.transcript_digest(), [0; 32]);
+    assert_ne!(first.transcript_digest(), ProofDigestV1::ZERO);
     assert!(!ordered.contains(&first.transcript_digest()));
 }
 
@@ -326,7 +328,7 @@ fn qpcs_prover_chronology_is_sequential_one_shot_and_matches_convenience() {
         .expect("initial-root stage");
     let state_after_initial = initial.binding_digest();
     let pre_qpcs_rns_seed = initial.rns_aggregation_challenge_seed();
-    assert_ne!(pre_qpcs_rns_seed, [0; 32]);
+    assert_ne!(pre_qpcs_rns_seed, ProofDigestV1::ZERO);
     let mut relation = initial
         .bind_q_mask_s_root(q_mask_s_root)
         .expect("q-mask relation stage");
@@ -341,7 +343,7 @@ fn qpcs_prover_chronology_is_sequential_one_shot_and_matches_convenience() {
     let relation_seed = relation_binding.qpcs_relation_challenge_seed();
     let relation_schedule =
         super::super::rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1::from_relation_binding_v1(
-            digest(b"qpcs-parameter", 33, 0),
+            super::super::rns_native_qpcs_initial::canonical_parameter_digest_v1().unwrap(),
             relation_binding,
         )
         .expect("schedule from one-shot relation binding");
@@ -357,22 +359,22 @@ fn qpcs_prover_chronology_is_sequential_one_shot_and_matches_convenience() {
     let mut fri = relation
         .bind_qpcs_quotient_root(quotient_root)
         .expect("quotient/batching stage");
-    assert_ne!(fri.qpcs_batching_challenge_seed(), [0; 32]);
+    assert_ne!(fri.qpcs_batching_challenge_seed(), ProofDigestV1::ZERO);
     for (layer, root) in fri_roots.into_iter().enumerate() {
         assert_eq!(usize::from(fri.next_fri_layer()), layer);
         fri = fri.bind_qpcs_fri_root(root).expect("ordered FRI root");
         assert_ne!(
             fri.qpcs_fri_fold_challenge_seed(layer as u8)
                 .expect("fold seed"),
-            [0; 32]
+            ProofDigestV1::ZERO
         );
     }
     let split = fri.finish_qpcs_fri_roots().expect("complete split qPCS");
     relation_schedule
         .validate_qpcs_bound_lineage_v1(&split)
         .expect("matching one-shot qPCS lineage");
-    assert_ne!(split.qpcs_query_challenge_seed(), [0; 32]);
-    assert_ne!(split.cross_field_challenge_seed(), [0; 32]);
+    assert_ne!(split.qpcs_query_challenge_seed(), ProofDigestV1::ZERO);
+    assert_ne!(split.cross_field_challenge_seed(), ProofDigestV1::ZERO);
 
     let convenience_terminal = terminal_stage(&fixture, 13, 23);
     let convenience_roots = qpcs_roots(convenience_terminal.binding_digest(), 33);
@@ -389,7 +391,7 @@ fn qpcs_prover_chronology_is_sequential_one_shot_and_matches_convenience() {
         .expect("same initial stage");
     assert_eq!(second_initial.binding_digest(), state_after_initial);
     let mut second_relation = second_initial
-        .bind_q_mask_s_root(digest(b"changed-q-mask-s-root", 33, 0))
+        .bind_q_mask_s_root(proof_digest_fixture(b"changed-q-mask-s-root", 33, 0))
         .expect("changed q-mask relation stage");
     let second_binding = second_relation
         .take_qpcs_relation_binding()
@@ -397,7 +399,7 @@ fn qpcs_prover_chronology_is_sequential_one_shot_and_matches_convenience() {
     assert_ne!(relation_seed, second_binding.qpcs_relation_challenge_seed());
     let second_schedule =
         super::super::rns_native_qpcs_prefix::RnsNativeQpcsRelationScheduleV1::from_relation_binding_v1(
-            digest(b"qpcs-parameter", 33, 0),
+            super::super::rns_native_qpcs_initial::canonical_parameter_digest_v1().unwrap(),
             second_binding,
         )
         .expect("changed relation schedule");
@@ -485,22 +487,22 @@ fn terminal_producer_chronology_is_sequential_and_matches_convenience() {
         .expect("cross-field stage");
     let global_lookup_binding = cross_field.binding_digest();
     let global_lookup_seed = cross_field.global_lookup_challenge_seed();
-    assert_ne!(global_lookup_binding, [0; 32]);
-    assert_ne!(global_lookup_seed, [0; 32]);
+    assert_ne!(global_lookup_binding, ProofDigestV1::ZERO);
+    assert_ne!(global_lookup_seed, ProofDigestV1::ZERO);
 
-    let global_lookup = cross_field
+    let staged = cross_field
         .bind_global_lookup_root(roots.global_lookup_root)
-        .expect("global-lookup stage");
-    let zero_padding_binding = global_lookup.binding_digest();
-    let zero_padding_seed = global_lookup.zero_padding_challenge_seed();
-    assert_ne!(zero_padding_binding, [0; 32]);
-    assert_ne!(zero_padding_seed, [0; 32]);
-    assert_ne!(global_lookup_binding, zero_padding_binding);
-    assert_ne!(global_lookup_seed, zero_padding_seed);
-
-    let staged = global_lookup
-        .bind_zero_padding_root(roots.zero_padding_root)
-        .expect("zero-padding stage");
+        .expect("final global-root stage");
+    assert_ne!(staged.transcript_digest(), ProofDigestV1::ZERO);
+    assert_ne!(
+        staged.composite_binding_challenge_seed(),
+        ProofDigestV1::ZERO
+    );
+    assert_ne!(global_lookup_binding, staged.transcript_digest());
+    assert_ne!(
+        global_lookup_seed,
+        staged.composite_binding_challenge_seed()
+    );
     let convenience_qpcs = qpcs_stage(&fixture, 15, 25, 35);
     assert_eq!(convenience_qpcs.binding_digest(), qpcs_bound_state);
     let convenience_roots = terminal_roots(convenience_qpcs.binding_digest(), 45);
@@ -510,7 +512,6 @@ fn terminal_producer_chronology_is_sequential_and_matches_convenience() {
     assert_eq!(staged, convenience);
     assert_eq!(staged.qpcs_bound_transcript_state_v1(), qpcs_bound_state);
     assert_eq!(staged.global_lookup_challenge_seed(), global_lookup_seed);
-    assert_eq!(staged.zero_padding_challenge_seed(), zero_padding_seed);
 }
 
 #[test]
@@ -520,19 +521,15 @@ fn claimed_cross_field_root_is_provisional_and_equality_is_one_shot() {
     let roots = terminal_roots(qpcs.binding_digest(), 101);
     let claimed_root = roots.cross_field_root();
     let expected_global = roots.global_lookup_root();
-    let expected_zero = roots.zero_padding_root();
     let (claim, remaining) = roots.into_cross_field_claim_v1();
     assert_eq!(remaining.global_lookup_root(), expected_global);
-    assert_eq!(remaining.zero_padding_root(), expected_zero);
     let (provisional, obligation) = qpcs
         .bind_claimed_cross_field_root_v1(claim)
         .expect("typed cross-field claim");
-    assert_ne!(provisional.binding_digest(), [0; 32]);
-    let wrong_root = RnsNativeCrossFieldRlweVerifiedCoreRootV1::test_fixture_v1(digest(
-        b"wrong-cross-field-root",
-        101,
-        0,
-    ))
+    assert_ne!(provisional.binding_digest(), ProofDigestV1::ZERO);
+    let wrong_root = RnsNativeCrossFieldRlweVerifiedCoreRootV1::test_fixture_v1(
+        proof_digest_fixture(b"wrong-cross-field-root", 101, 0),
+    )
     .expect("opaque wrong-root fixture");
     assert!(matches!(
         obligation.discharge_v1(wrong_root),
@@ -569,7 +566,6 @@ fn pre_global_capability_snapshots_exact_stage_and_binds_remaining_roots() {
     let roots = terminal_roots(qpcs_binding, 102);
     let claimed_root = roots.cross_field_root();
     let expected_global_root = roots.global_lookup_root();
-    let expected_zero_root = roots.zero_padding_root();
     let (claim, remaining_roots) = roots.into_cross_field_claim_v1();
     let (cross_field, obligation) = qpcs
         .bind_claimed_cross_field_root_v1(claim)
@@ -591,7 +587,7 @@ fn pre_global_capability_snapshots_exact_stage_and_binds_remaining_roots() {
     let sole_z_binding = capability
         .sole_z_binding_digest_v1()
         .expect("opaque sole-z binding");
-    assert_ne!(sole_z_binding, [0; 32]);
+    assert_ne!(sole_z_binding, ProofDigestV1::ZERO);
     let matching_fixture = ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1::test_fixture_v1(
         expected_pre_global_binding,
         expected_global_seed,
@@ -605,7 +601,7 @@ fn pre_global_capability_snapshots_exact_stage_and_binds_remaining_roots() {
     );
     let changed_fixture = ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1::test_fixture_v1(
         expected_pre_global_binding,
-        digest(b"foreign-global-seed", 62, 0),
+        proof_digest_fixture(b"foreign-global-seed", 62, 0),
     )
     .expect("changed capability fixture");
     assert_ne!(
@@ -616,7 +612,7 @@ fn pre_global_capability_snapshots_exact_stage_and_binds_remaining_roots() {
     );
     assert!(
         ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1::test_fixture_v1(
-            [0; 32],
+            ProofDigestV1::ZERO,
             expected_global_seed,
         )
         .is_err()
@@ -630,7 +626,6 @@ fn pre_global_capability_snapshots_exact_stage_and_binds_remaining_roots() {
     );
     assert_eq!(final_seeds.cross_field_root(), claimed_root);
     assert_eq!(final_seeds.global_lookup_root(), expected_global_root);
-    assert_eq!(final_seeds.zero_padding_root(), expected_zero_root);
     assert_eq!(
         final_seeds.global_lookup_challenge_seed(),
         expected_global_seed
@@ -653,7 +648,7 @@ fn pre_global_capability_snapshots_exact_stage_and_binds_remaining_roots() {
 }
 
 #[test]
-fn provisional_terminal_chronology_is_atomic_exact_and_legacy_equivalent() {
+fn provisional_terminal_chronology_is_atomic_and_matches_sequential_owner() {
     let fixture = context_fixture(63);
 
     let staged_qpcs = qpcs_stage(&fixture, 73, 83, 93);
@@ -667,7 +662,7 @@ fn provisional_terminal_chronology_is_atomic_exact_and_legacy_equivalent() {
     let staged_global = staged_cross
         .bind_global_lookup_root(staged_roots.global_lookup_root())
         .expect("staged global root");
-    let expected_post_global = staged_global.binding_digest();
+    let expected_final_state = staged_global.transcript_digest();
 
     let claimed_qpcs = qpcs_stage(&fixture, 73, 83, 93);
     let claimed_roots = terminal_roots(claimed_qpcs.binding_digest(), 103);
@@ -698,16 +693,8 @@ fn provisional_terminal_chronology_is_atomic_exact_and_legacy_equivalent() {
         expected_post_cross
     );
     assert_eq!(
-        chronology
-            .zero_padding_root_equality_obligation
-            .claimed_root,
-        claimed_roots.zero_padding_root()
-    );
-    assert_eq!(
-        chronology
-            .zero_padding_root_equality_obligation
-            .post_global_lookup_binding_digest,
-        expected_post_global
+        chronology.final_challenge_seeds_v1().transcript_digest(),
+        expected_final_state
     );
     assert_eq!(
         chronology
@@ -722,12 +709,12 @@ fn provisional_terminal_chronology_is_atomic_exact_and_legacy_equivalent() {
         expected_global_seed
     );
 
-    let legacy_qpcs = qpcs_stage(&fixture, 73, 83, 93);
-    let legacy_roots = terminal_roots(legacy_qpcs.binding_digest(), 103);
-    let legacy = legacy_qpcs
-        .bind_terminal_roots(legacy_roots)
-        .expect("legacy terminal chronology");
-    assert_eq!(chronology.final_challenge_seeds_v1(), &legacy);
+    let collected_qpcs = qpcs_stage(&fixture, 73, 83, 93);
+    let collected_roots = terminal_roots(collected_qpcs.binding_digest(), 103);
+    let sequential = collected_qpcs
+        .bind_terminal_roots(collected_roots)
+        .expect("sequential terminal chronology");
+    assert_eq!(chronology.final_challenge_seeds_v1(), &sequential);
 
     let wrong_qpcs = qpcs_stage(&fixture, 74, 84, 94);
     let foreign_qpcs = qpcs_stage(&fixture, 75, 85, 95);
@@ -739,76 +726,86 @@ fn provisional_terminal_chronology_is_atomic_exact_and_legacy_equivalent() {
 }
 
 #[test]
-fn zero_root_equality_replays_the_exact_terminal_suffix_and_consumes_to_all_equal() {
+fn global_root_equality_replays_the_exact_terminal_suffix_and_consumes_to_all_equal() {
     let fixture = context_fixture(64);
-    let zero_padding_root = digest(b"shared-zero-padding-root", 105, 0);
-    let (obligation, final_challenge_seeds) =
-        zero_equality_parts(&fixture, 74, 84, 94, 104, zero_padding_root);
-    let (replayed_final_transcript_tag, replayed_composite_seed) =
-        replay_zero_padding_terminal_suffix_v1(
-            obligation.post_global_lookup_binding_digest,
-            obligation.claimed_root,
-        )
-        .expect("canonical zero-padding terminal suffix");
+    let root = proof_digest_fixture(b"shared-global-root", 105, 0);
+    let pending = global_equality_pending(&fixture, 74, 84, 94, 104, root);
+    let obligation = &pending.global_lookup_root_equality_obligation;
+    let (final_state, composite_seed) = replay_global_lookup_terminal_suffix_v1(
+        obligation.post_cross_field_binding_digest,
+        obligation.claimed_root,
+    )
+    .unwrap();
     assert_eq!(
-        replayed_final_transcript_tag,
-        final_challenge_seeds.transcript_digest()
+        final_state,
+        pending.final_challenge_seeds.transcript_digest()
     );
     assert_eq!(
-        replayed_composite_seed,
-        final_challenge_seeds.composite_binding_challenge_seed()
+        composite_seed,
+        pending
+            .final_challenge_seeds
+            .composite_binding_challenge_seed()
     );
-
-    let verified_root = verified_zero_padding_root_fixture_v1(&final_challenge_seeds)
-        .expect("same-session verified zero root");
-    let pending = ZkAmsMkheRnsNativeZeroPaddingRootEqualityPendingV1 {
-        zero_padding_root_equality_obligation: obligation,
-        final_challenge_seeds,
-    };
-    let all_equal = pending
-        .discharge_zero_padding_root_equality_v1(verified_root)
-        .expect("exact zero-root equality discharge");
-    let final_challenge_seeds = all_equal.into_final_challenge_seeds_v1();
-    assert_eq!(
-        final_challenge_seeds.transcript_digest(),
-        replayed_final_transcript_tag
-    );
+    assert_eq!(root, pending.final_challenge_seeds.global_lookup_root());
+    let tag = pending
+        .pre_global_lookup_capability_v1()
+        .global_lookup_chronology_tag_v2()
+        .unwrap();
+    let verified = RnsNativeGlobalLookupVerifiedCoreRootV2::test_fixture_v2(root, tag);
+    let terminal = pending
+        .discharge_global_lookup_root_equality_v2(verified)
+        .unwrap()
+        .into_final_challenge_seeds_v1();
+    assert_eq!(terminal.transcript_digest(), final_state);
+    assert_eq!(terminal.composite_binding_challenge_seed(), composite_seed);
+    assert_eq!(terminal.ordered_challenge_seeds().len(), 27);
+    assert_eq!(terminal.ordered_challenge_seeds()[26], composite_seed);
 }
 
 #[test]
-fn global_then_zero_root_equality_consumes_the_exact_concrete_chronology() {
+fn global_root_equality_rejects_every_native_lane_of_final_root_seed_and_state() {
     let fixture = context_fixture(164);
-    let qpcs = qpcs_stage(&fixture, 174, 184, 194);
-    let qpcs_binding = qpcs.binding_digest();
-    let terminal_context = 204;
-    let claimed_global_root = digest(b"global-lookup-root", terminal_context, 0);
-    let chronology = qpcs
-        .bind_provisional_terminal_chronology_v1(terminal_roots(qpcs_binding, terminal_context))
-        .expect("provisional terminal chronology");
-    let (_cross_obligation, global_pending) =
-        chronology.into_cross_field_obligation_and_global_pending_v1();
-    let tag = global_pending
-        .pre_global_lookup_capability_v1()
-        .global_lookup_chronology_tag_v2()
-        .expect("same-session global chronology tag");
-    let verified_global_root =
-        RnsNativeGlobalLookupVerifiedCoreRootV2::test_fixture_v2(claimed_global_root, tag);
-    let zero_pending = global_pending
-        .discharge_global_lookup_root_equality_v2(verified_global_root)
-        .expect("concrete global-root equality");
-    let verified_zero_root =
-        verified_zero_padding_root_fixture_v1(zero_pending.final_challenge_seeds_v1())
-            .expect("same-session verified zero root");
-    let _terminal = zero_pending
-        .discharge_zero_padding_root_equality_v1(verified_zero_root)
-        .expect("all terminal roots equal");
+    let root = proof_digest_fixture(b"global-root", 204, 0);
+    for field in 0..4 {
+        for lane in 0..6 {
+            let mut pending = global_equality_pending(&fixture, 174, 184, 194, 204, root);
+            let tag = pending
+                .pre_global_lookup_capability_v1()
+                .global_lookup_chronology_tag_v2()
+                .unwrap();
+            let verified = RnsNativeGlobalLookupVerifiedCoreRootV2::test_fixture_v2(root, tag);
+            let value = match field {
+                0 => &mut pending.final_challenge_seeds.global_lookup_root,
+                1 => &mut pending.final_challenge_seeds.global_lookup_challenge_seed,
+                2 => {
+                    &mut pending
+                        .final_challenge_seeds
+                        .composite_binding_challenge_seed
+                }
+                3 => &mut pending.final_challenge_seeds.transcript_digest,
+                _ => unreachable!(),
+            };
+            let mut bytes = *value.as_bytes();
+            let word = u64::from_le_bytes(bytes[lane * 8..lane * 8 + 8].try_into().unwrap());
+            let word = (word + 1) % fastpq_isi::poseidon::FIELD_MODULUS;
+            bytes[lane * 8..lane * 8 + 8].copy_from_slice(&word.to_le_bytes());
+            *value = ProofDigestV1::from_le_bytes(bytes).unwrap();
+            assert!(
+                matches!(
+                    pending.discharge_global_lookup_root_equality_v2(verified),
+                    Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch)
+                ),
+                "field{field} lane{lane}"
+            );
+        }
+    }
 }
 
 #[test]
 fn global_root_equality_rejects_wrong_roots_and_foreign_post_cross_tags() {
     let fixture = context_fixture(165);
     let terminal_context = 205;
-    let claimed_global_root = digest(b"global-lookup-root", terminal_context, 0);
+    let claimed_global_root = proof_digest_fixture(b"global-lookup-root", terminal_context, 0);
 
     let qpcs = qpcs_stage(&fixture, 175, 185, 195);
     let qpcs_binding = qpcs.binding_digest();
@@ -823,7 +820,7 @@ fn global_root_equality_rejects_wrong_roots_and_foreign_post_cross_tags() {
     assert!(matches!(
         first_pending.discharge_global_lookup_root_equality_v2(
             RnsNativeGlobalLookupVerifiedCoreRootV2::test_fixture_v2(
-                digest(b"wrong-global-root", terminal_context, 0),
+                proof_digest_fixture(b"wrong-global-root", terminal_context, 0),
                 first_tag,
             ),
         ),
@@ -844,7 +841,7 @@ fn global_root_equality_rejects_wrong_roots_and_foreign_post_cross_tags() {
         .post_cross_field_binding_digest;
     let wrong_seed_capability = ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1::test_fixture_v1(
         post_cross,
-        digest(b"foreign-global-seed", terminal_context, 0),
+        proof_digest_fixture(b"foreign-global-seed", terminal_context, 0),
     )
     .expect("same-post foreign-seed capability");
     let wrong_seed_tag = wrong_seed_capability
@@ -894,43 +891,39 @@ fn global_root_equality_rejects_wrong_roots_and_foreign_post_cross_tags() {
 }
 
 #[test]
-fn zero_root_equality_rejects_same_root_foreign_tags_and_terminal_suffix_splices() {
+fn global_root_equality_rejects_same_root_foreign_tags_and_terminal_suffix_splices() {
     let fixture = context_fixture(65);
-    let shared_zero_padding_root = digest(b"shared-zero-padding-root", 106, 0);
-    let (first_obligation, first_final_seeds) =
-        zero_equality_parts(&fixture, 75, 85, 95, 105, shared_zero_padding_root);
-    let (_second_obligation, second_final_seeds) =
-        zero_equality_parts(&fixture, 76, 86, 96, 106, shared_zero_padding_root);
+    let root = proof_digest_fixture(b"shared-global-root", 106, 0);
+    let first = global_equality_pending(&fixture, 75, 85, 95, 105, root);
+    let second = global_equality_pending(&fixture, 76, 86, 96, 106, root);
     assert_eq!(
-        first_final_seeds.zero_padding_root(),
-        second_final_seeds.zero_padding_root()
+        first.final_challenge_seeds.global_lookup_root(),
+        second.final_challenge_seeds.global_lookup_root()
     );
     assert_ne!(
-        first_final_seeds.transcript_digest(),
-        second_final_seeds.transcript_digest()
+        first.final_challenge_seeds.transcript_digest(),
+        second.final_challenge_seeds.transcript_digest()
     );
-
-    let foreign_tagged_root = verified_zero_padding_root_fixture_v1(&second_final_seeds)
-        .expect("foreign-session verified zero root");
-    let pending = ZkAmsMkheRnsNativeZeroPaddingRootEqualityPendingV1 {
-        zero_padding_root_equality_obligation: first_obligation,
-        final_challenge_seeds: first_final_seeds,
-    };
+    let foreign_tag = second
+        .pre_global_lookup_capability_v1()
+        .global_lookup_chronology_tag_v2()
+        .unwrap();
     assert!(matches!(
-        pending.discharge_zero_padding_root_equality_v1(foreign_tagged_root),
+        first.discharge_global_lookup_root_equality_v2(
+            RnsNativeGlobalLookupVerifiedCoreRootV2::test_fixture_v2(root, foreign_tag)
+        ),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch)
     ));
-
-    let (fresh_first_obligation, _fresh_first_final_seeds) =
-        zero_equality_parts(&fixture, 75, 85, 95, 105, shared_zero_padding_root);
-    let foreign_suffix_root = verified_zero_padding_root_fixture_v1(&second_final_seeds)
-        .expect("foreign-suffix verified zero root");
-    let spliced_pending = ZkAmsMkheRnsNativeZeroPaddingRootEqualityPendingV1 {
-        zero_padding_root_equality_obligation: fresh_first_obligation,
-        final_challenge_seeds: second_final_seeds,
-    };
+    let mut fresh = global_equality_pending(&fixture, 75, 85, 95, 105, root);
+    let exact_tag = fresh
+        .pre_global_lookup_capability_v1()
+        .global_lookup_chronology_tag_v2()
+        .unwrap();
+    fresh.final_challenge_seeds = second.final_challenge_seeds;
     assert!(matches!(
-        spliced_pending.discharge_zero_padding_root_equality_v1(foreign_suffix_root),
+        fresh.discharge_global_lookup_root_equality_v2(
+            RnsNativeGlobalLookupVerifiedCoreRootV2::test_fixture_v2(root, exact_tag)
+        ),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ContextMismatch)
     ));
 }
@@ -938,12 +931,10 @@ fn zero_root_equality_rejects_same_root_foreign_tags_and_terminal_suffix_splices
 #[test]
 fn terminal_challenges_are_derived_before_and_sensitive_to_dependent_roots() {
     let fixture = context_fixture(7);
-    let cross_field_root = digest(b"cross-field-root", 46, 0);
-    let changed_cross_field_root = digest(b"changed-cross-field-root", 46, 0);
-    let global_lookup_root = digest(b"global-lookup-root", 46, 0);
-    let changed_global_lookup_root = digest(b"changed-global-lookup-root", 46, 0);
-    let zero_padding_root = digest(b"zero-padding-root", 46, 0);
-    let changed_zero_padding_root = digest(b"changed-zero-padding-root", 46, 0);
+    let cross_field_root = proof_digest_fixture(b"cross-field-root", 46, 0);
+    let changed_cross_field_root = proof_digest_fixture(b"changed-cross-field-root", 46, 0);
+    let global_lookup_root = proof_digest_fixture(b"global-lookup-root", 46, 0);
+    let changed_global_lookup_root = proof_digest_fixture(b"changed-global-lookup-root", 46, 0);
 
     let cross_field = qpcs_stage(&fixture, 16, 26, 36)
         .bind_cross_field_root(cross_field_root)
@@ -979,29 +970,23 @@ fn terminal_challenges_are_derived_before_and_sensitive_to_dependent_roots() {
         .bind_global_lookup_root(changed_global_lookup_root)
         .expect("changed global-lookup stage");
     assert_eq!(
-        global_lookup.zero_padding_challenge_seed(),
-        repeated_global_lookup.zero_padding_challenge_seed()
+        global_lookup.composite_binding_challenge_seed(),
+        repeated_global_lookup.composite_binding_challenge_seed()
     );
     assert_ne!(
-        global_lookup.zero_padding_challenge_seed(),
-        changed_global_lookup.zero_padding_challenge_seed()
+        global_lookup.composite_binding_challenge_seed(),
+        changed_global_lookup.composite_binding_challenge_seed()
     );
     assert_ne!(
-        global_lookup.binding_digest(),
-        changed_global_lookup.binding_digest()
+        global_lookup.transcript_digest(),
+        changed_global_lookup.transcript_digest()
     );
 
-    let baseline = global_lookup
-        .bind_zero_padding_root(zero_padding_root)
-        .expect("baseline final stage");
-    let changed = repeated_global_lookup
-        .bind_zero_padding_root(changed_zero_padding_root)
-        .expect("changed final stage");
+    assert_eq!(global_lookup, repeated_global_lookup);
     assert_ne!(
-        baseline.composite_binding_challenge_seed(),
-        changed.composite_binding_challenge_seed()
+        global_lookup.transcript_digest(),
+        changed_global_lookup.transcript_digest()
     );
-    assert_ne!(baseline.transcript_digest(), changed.transcript_digest());
 }
 
 #[test]
@@ -1014,7 +999,7 @@ fn terminal_stages_reject_digest_reuse_and_expose_no_out_of_order_path() {
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
     ));
 
-    let cross_field_root = digest(b"cross-field-root", 47, 0);
+    let cross_field_root = proof_digest_fixture(b"cross-field-root", 47, 0);
     let cross_field = qpcs_stage(&fixture, 17, 27, 37)
         .bind_cross_field_root(cross_field_root)
         .expect("cross-field stage");
@@ -1023,22 +1008,10 @@ fn terminal_stages_reject_digest_reuse_and_expose_no_out_of_order_path() {
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
     ));
 
-    let global_lookup_root = digest(b"global-lookup-root", 47, 0);
-    let global_lookup = qpcs_stage(&fixture, 17, 27, 37)
-        .bind_cross_field_root(cross_field_root)
-        .expect("second cross-field stage")
-        .bind_global_lookup_root(global_lookup_root)
-        .expect("global-lookup stage");
-    assert!(matches!(
-        global_lookup.bind_zero_padding_root(global_lookup_root),
-        Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
-    ));
-
     let source = include_str!("rns_native_transcript.rs");
     for consuming_signature in [
         "fn bind_cross_field_root(\n        mut self,",
         "fn bind_global_lookup_root(\n        mut self,",
-        "fn bind_zero_padding_root(\n        mut self,",
     ] {
         assert!(
             source.contains(consuming_signature),
@@ -1060,23 +1033,15 @@ fn terminal_stages_reject_digest_reuse_and_expose_no_out_of_order_path() {
         .split_once("impl ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1 {")
         .expect("cross-field implementation")
         .1
-        .split_once("/// Move-only transcript after the global-lookup root")
+        .split_once("/// Final domain-separated challenge seeds")
         .expect("global-lookup stage boundary")
         .0;
     assert!(cross_field_impl.contains("fn bind_global_lookup_root("));
     assert!(!cross_field_impl.contains("fn bind_zero_padding_root("));
 
-    let global_lookup_impl = source
-        .split_once("impl ZkAmsMkheRnsNativeGlobalLookupBoundTranscriptV1 {")
-        .expect("global-lookup implementation")
-        .1
-        .split_once("/// Final domain-separated challenge seeds")
-        .expect("final challenge boundary")
-        .0;
-    assert!(global_lookup_impl.contains("fn bind_zero_padding_root("));
-    assert!(source.contains(
-        ".bind_cross_field_root(roots.cross_field_root)?\n            .bind_global_lookup_root(roots.global_lookup_root)?\n            .bind_zero_padding_root(roots.zero_padding_root)"
-    ));
+    assert!(!source.contains("struct ZkAmsMkheRnsNativeGlobalLookupBoundTranscriptV1"));
+    assert!(!source.contains("fn bind_zero_padding_root("));
+    assert!(source.contains(".bind_cross_field_root(roots.cross_field_root)?\n            .bind_global_lookup_root(roots.global_lookup_root)"));
 }
 
 #[test]
@@ -1102,18 +1067,23 @@ fn zero_and_duplicate_semantic_digests_fail_closed() {
     let mut records = opening_records(50);
     records[1].source_commitment_digest = records[0].source_commitment_digest;
     assert!(matches!(
-        ZkAmsMkheRnsNativeOpeningCommitmentsV1::new([0xa5; 32], records),
+        ZkAmsMkheRnsNativeOpeningCommitmentsV1::new(proof_tag(0xa5), records),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
     ));
     assert!(matches!(
-        ZkAmsMkheRnsNativeTerminalBridgeV1::new([1; 32], [2; 32], [2; 32], [3; 32]),
+        ZkAmsMkheRnsNativeTerminalBridgeV1::new(
+            proof_tag(1),
+            proof_tag(2),
+            proof_tag(2),
+            proof_tag(3)
+        ),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
     ));
 
     let mut fri_roots = core::array::from_fn(|layer| {
         ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             u8::try_from(layer).expect("FRI layer fits u8"),
-            digest(
+            proof_digest_fixture(
                 b"duplicate-test-fri",
                 1,
                 u16::try_from(layer).expect("FRI layer fits u16"),
@@ -1123,11 +1093,17 @@ fn zero_and_duplicate_semantic_digests_fail_closed() {
     });
     fri_roots[1].root = fri_roots[0].root;
     assert!(matches!(
-        ZkAmsMkheRnsNativeQpcsRootsV1::new([1; 32], [2; 32], [3; 32], [4; 32], fri_roots,),
+        ZkAmsMkheRnsNativeQpcsRootsV1::new(
+            proof_tag(1),
+            proof_tag(2),
+            proof_tag(3),
+            proof_tag(4),
+            fri_roots,
+        ),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
     ));
     assert!(matches!(
-        ZkAmsMkheRnsNativeTerminalRootsV1::new([1; 32], [2; 32], [3; 32], [2; 32]),
+        ZkAmsMkheRnsNativeTerminalRootsV1::new(proof_tag(1), proof_tag(2), proof_tag(2)),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
     ));
 }
@@ -1137,7 +1113,7 @@ fn opening_and_fri_reordering_is_rejected() {
     let mut records = opening_records(60);
     records.swap(0, 1);
     assert!(matches!(
-        ZkAmsMkheRnsNativeOpeningCommitmentsV1::new([0xb5; 32], records),
+        ZkAmsMkheRnsNativeOpeningCommitmentsV1::new(proof_tag(0xb5), records),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidOpeningOrder)
     ));
     assert!(matches!(
@@ -1153,7 +1129,7 @@ fn opening_and_fri_reordering_is_rejected() {
     let mut fri_roots = core::array::from_fn(|layer| {
         ZkAmsMkheRnsNativeQpcsFriRootV1::new(
             u8::try_from(layer).expect("FRI layer fits u8"),
-            digest(
+            proof_digest_fixture(
                 b"reorder-test-fri",
                 1,
                 u16::try_from(layer).expect("FRI layer fits u16"),
@@ -1163,11 +1139,17 @@ fn opening_and_fri_reordering_is_rejected() {
     });
     fri_roots.swap(3, 4);
     assert!(matches!(
-        ZkAmsMkheRnsNativeQpcsRootsV1::new([1; 32], [2; 32], [3; 32], [4; 32], fri_roots,),
+        ZkAmsMkheRnsNativeQpcsRootsV1::new(
+            proof_tag(1),
+            proof_tag(2),
+            proof_tag(3),
+            proof_tag(4),
+            fri_roots,
+        ),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidRootOrder)
     ));
     assert!(matches!(
-        ZkAmsMkheRnsNativeQpcsFriRootV1::new(18, [1; 32]),
+        ZkAmsMkheRnsNativeQpcsFriRootV1::new(18, proof_tag(1)),
         Err(ZkAmsMkheRnsNativeTranscriptErrorV1::InvalidRoot)
     ));
 }
@@ -1218,12 +1200,12 @@ fn source_receipt_and_all_prior_stage_splices_are_rejected() {
 fn duplicate_digest_across_stage_boundaries_is_rejected() {
     let fixture = context_fixture(90);
     let transcript = commitment_stage(&fixture, 91);
-    let reused = opening_records(91)[0].source_commitment_digest;
+    let reused = transcript.mapping_challenge_seed;
     let bridge = ZkAmsMkheRnsNativeTerminalBridgeV1::new(
         transcript.binding_digest(),
         reused,
-        digest(b"fresh-terminal-root", 91, 0),
-        digest(b"fresh-cross-basis-root", 91, 0),
+        proof_digest_fixture(b"fresh-terminal-root", 91, 0),
+        proof_digest_fixture(b"fresh-cross-basis-root", 91, 0),
     )
     .expect("locally distinct bridge");
     assert!(matches!(
@@ -1245,7 +1227,6 @@ fn transcript_contract_remains_non_authorizing_and_stages_are_move_only() {
         "pub(super) struct ZkAmsMkheRnsNativeCrossFieldRootClaimV1",
         "pub(super) struct ZkAmsMkheRnsNativeCrossFieldRootEqualityObligationV1",
         "pub(super) struct ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1",
-        "pub(super) struct ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1",
         "pub(super) struct ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1",
         "pub(super) struct ZkAmsMkheRnsNativeRemainingTerminalRootsV1",
         "pub(super) struct ZkAmsMkheRnsNativePreGlobalLookupCapabilityV1",
@@ -1253,7 +1234,6 @@ fn transcript_contract_remains_non_authorizing_and_stages_are_move_only() {
         "pub(super) struct ZkAmsMkheRnsNativeQpcsFriTranscriptV1",
         "pub struct ZkAmsMkheRnsNativeQpcsBoundTranscriptV1",
         "pub(super) struct ZkAmsMkheRnsNativeCrossFieldBoundTranscriptV1",
-        "pub(super) struct ZkAmsMkheRnsNativeGlobalLookupBoundTranscriptV1",
     ] {
         let declaration = source.find(stage).expect("stage declaration");
         let prefix = &source[declaration.saturating_sub(100)..declaration];
@@ -1297,7 +1277,10 @@ fn transcript_contract_remains_non_authorizing_and_stages_are_move_only() {
         equality_discharge.contains("recomputed_root: RnsNativeCrossFieldRlweVerifiedCoreRootV1")
     );
     assert!(!equality_discharge.contains("fn discharge_v1<R>"));
-    assert!(!equality_discharge.contains("recomputed_root: [u8; 32]"));
+    assert!(
+        !equality_discharge.contains("recomputed_root: [u8; 32]")
+            && !equality_discharge.contains("recomputed_root: ProofDigestV1")
+    );
     assert!(!source.contains("trait ZkAmsMkheRnsNativeVerifiedCrossFieldCoreRootCapabilityV1"));
     assert!(!source.contains("into_verified_cross_field_core_root_v1"));
     assert!(!source.contains("struct ZkAmsMkheRnsNativeVerifiedCrossFieldCoreRootV1"));
@@ -1328,7 +1311,6 @@ fn provisional_terminal_chronology_surface_is_move_only_opaque_and_ordered() {
     let source = include_str!("rns_native_transcript.rs");
     for type_name in [
         "ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1",
-        "ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1",
         "ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1",
     ] {
         let declaration = source
@@ -1342,11 +1324,12 @@ fn provisional_terminal_chronology_surface_is_move_only_opaque_and_ordered() {
     }
 
     assert!(source.contains("impl ZkAmsMkheRnsNativeGlobalLookupRootEqualityObligationV1"));
-    assert!(source.contains("impl ZkAmsMkheRnsNativeZeroPaddingRootEqualityObligationV1"));
     assert!(source.contains("verified_root: RnsNativeGlobalLookupVerifiedCoreRootV2"));
-    assert!(source.contains("verified_root: RnsNativeVerifiedZeroPaddingRootV1"));
     assert!(!source.contains("fn discharge_v2<R>"));
-    assert!(!source.contains("verified_root: [u8; 32]"));
+    assert!(
+        !source.contains("verified_root: [u8; 32]")
+            && !source.contains("verified_root: ProofDigestV1")
+    );
     for forbidden_surface in [
         "fn global_lookup_claimed_root_v1(",
         "fn zero_padding_claimed_root_v1(",
@@ -1405,12 +1388,6 @@ fn provisional_terminal_chronology_surface_is_move_only_opaque_and_ordered() {
     let global_bind = transition
         .find("cross_field_transcript.bind_global_lookup_root(global_lookup_root)")
         .expect("global root bind");
-    let zero_obligation = transition
-        .find("let zero_padding_root_equality_obligation")
-        .expect("zero equality obligation");
-    let zero_bind = transition
-        .find("global_lookup_transcript.bind_zero_padding_root(zero_padding_root)")
-        .expect("zero root bind");
     let atomic_return = transition
         .find("Ok(ZkAmsMkheRnsNativeProvisionalTerminalChronologyV1")
         .expect("atomic chronology return");
@@ -1419,9 +1396,7 @@ fn provisional_terminal_chronology_surface_is_move_only_opaque_and_ordered() {
             && cross_bind < pre_global
             && pre_global < global_obligation
             && global_obligation < global_bind
-            && global_bind < zero_obligation
-            && zero_obligation < zero_bind
-            && zero_bind < atomic_return
+            && global_bind < atomic_return
     );
 }
 
@@ -1474,7 +1449,7 @@ fn pre_global_capability_surface_is_opaque_move_only_snapshot_and_source_ordered
         .split_once("pub(super) fn bind_remaining_terminal_roots_v1(")
         .expect("atomic remaining-root transition")
         .1
-        .split_once("/// Consume this stage, bind the global-lookup root")
+        .split_once("/// Bind the global-lookup root and derive the final composite challenge.")
         .expect("atomic transition boundary")
         .0;
     assert!(transition.contains("        self,"));
@@ -1491,9 +1466,6 @@ fn pre_global_capability_surface_is_opaque_move_only_snapshot_and_source_ordered
     let global_root = transition
         .find(".bind_global_lookup_root(roots.global_lookup_root)")
         .expect("global-root bind");
-    let zero_root = transition
-        .find(".bind_zero_padding_root(roots.zero_padding_root)")
-        .expect("zero-root bind");
     let paired_return = transition
         .find("Ok((pre_global_capability, final_challenge_seeds))")
         .expect("paired return");
@@ -1501,8 +1473,7 @@ fn pre_global_capability_surface_is_opaque_move_only_snapshot_and_source_ordered
         snapshot < binding
             && binding < global_seed
             && global_seed < global_root
-            && global_root < zero_root
-            && zero_root < paired_return
+            && global_root < paired_return
     );
 }
 
@@ -1541,4 +1512,77 @@ fn qpcs_staging_is_settled_while_direct_activation_remains_fail_closed() {
         "#[path = \"mkhe/rns_native_cross_field_rlwe_direct.rs\"]\nmod rns_native_cross_field_rlwe_direct;"
     ));
     assert!(!facade.contains("pub mod rns_native_cross_field_rlwe_direct;"));
+}
+
+#[test]
+fn transcript_digest_registry_keeps_public_identity_and_complete_proof_lanes_distinct() {
+    let mut registry = DigestRegistryV1::new();
+    let proof = proof_digest_fixture(b"registry-proof", 1, 0);
+    let public: [u8; 32] = proof.as_bytes()[..32].try_into().unwrap();
+    registry.insert(public).unwrap();
+    registry.insert(proof).unwrap();
+    assert_eq!(
+        registry.insert(proof),
+        Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
+    );
+    assert_eq!(
+        registry.insert(public),
+        Err(ZkAmsMkheRnsNativeTranscriptErrorV1::DuplicateDigest)
+    );
+    assert_eq!(
+        registry.insert(ProofDigestV1::ZERO),
+        Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ZeroDigest)
+    );
+    assert_eq!(
+        registry.insert([0; 32]),
+        Err(ZkAmsMkheRnsNativeTranscriptErrorV1::ZeroDigest)
+    );
+    let fixture = context_fixture(211);
+    let qpcs = qpcs_stage(&fixture, 212, 213, 214);
+    let roots = terminal_roots(qpcs.binding_digest(), 215);
+    let mut words = roots.cross_field_root().words();
+    words[5] = (words[5] + 1) % fastpq_isi::poseidon::FIELD_MODULUS;
+    let changed_root =
+        ProofDigestV1::from_shared(fastpq_isi::GoldilocksDigest384V1::new(words).unwrap());
+    let changed = qpcs_stage(&fixture, 212, 213, 214)
+        .bind_cross_field_root(changed_root)
+        .unwrap();
+    let baseline = qpcs
+        .bind_cross_field_root(roots.cross_field_root())
+        .unwrap();
+    assert_ne!(changed.binding_digest(), baseline.binding_digest());
+    assert_ne!(
+        changed.global_lookup_challenge_seed(),
+        baseline.global_lookup_challenge_seed()
+    );
+}
+
+#[test]
+fn final_global_suffix_uses_exact_current_ordinal_and_rejects_missing_root() {
+    let fixture = context_fixture(301);
+    let cross = qpcs_stage(&fixture, 302, 303, 304)
+        .bind_cross_field_root(proof_digest_fixture(b"cross", 305, 0))
+        .unwrap();
+    let post_cross = cross.binding_digest();
+    let root = proof_digest_fixture(b"global", 305, 0);
+    let final_seeds = cross.bind_global_lookup_root(root).unwrap();
+    let absorbed = absorb_digest_v1(post_cross, AbsorbKindV1::GlobalLookup, 0, root).unwrap();
+    let exact =
+        derive_challenge_digest_v1(absorbed, 26, ChallengePurposeV1::CompositeBinding, 0).unwrap();
+    let retired =
+        derive_challenge_digest_v1(absorbed, 27, ChallengePurposeV1::CompositeBinding, 0).unwrap();
+    assert_eq!(exact, final_seeds.composite_binding_challenge_seed());
+    assert_ne!(exact, retired);
+    assert!(replay_global_lookup_terminal_suffix_v1(post_cross, ProofDigestV1::ZERO).is_err());
+    assert!(replay_global_lookup_terminal_suffix_v1(ProofDigestV1::ZERO, root).is_err());
+    let source = include_str!("rns_native_transcript.rs");
+    for retired in [
+        "ZeroPadding",
+        "zero_padding",
+        "ZeroPaddingRootEqualityPending",
+        "GlobalLookupBoundTranscript",
+    ] {
+        assert!(!source.contains(retired));
+    }
+    assert!(source.contains("final_challenge_seeds.global_lookup_root != self.claimed_root"));
 }

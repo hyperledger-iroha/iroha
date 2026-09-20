@@ -140,6 +140,7 @@ pub mod privacy_state;
 pub(crate) mod privacy_verifier;
 /// Atomic private-settlement runtime helpers.
 pub mod private_settlement;
+pub(crate) mod publication_lock;
 /// Query API types and execution.
 pub mod query;
 /// Transaction queue and mempool logic.
@@ -961,6 +962,16 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                         }
                     }
                 }
+                BlockMessage::NativeLane(envelope) => {
+                    if envelope.version
+                        == iroha_data_model::block::lane_consensus::LANE_MESSAGE_VERSION_V1
+                    {
+                        T::Consensus
+                    } else {
+                        T::Other
+                    }
+                }
+                BlockMessage::NativeLaneDecision(_) => T::Consensus,
                 BlockMessage::LaneExecutablePayload(_)
                 | BlockMessage::LaneHistoricalRecoveryResponse(_) => T::ConsensusPayload,
                 BlockMessage::LaneBlockProposal(_)
@@ -1390,14 +1401,34 @@ mod event_ordering_tests;
 #[path = "../tests/execute_trigger_events.rs"]
 mod execute_trigger_events_tests;
 #[cfg(test)]
+pub(crate) mod execution_output_test_support;
+#[cfg(test)]
 mod frame_identity_tests;
+// Governance height/custody fixtures use explicit synthetic publication,
+// so they share this nonshipping harness rather than exporting that authority.
+#[cfg(test)]
+#[path = "../tests/gov_plain_referendum_open_event.rs"]
+mod gov_plain_referendum_open_event_tests;
+#[cfg(test)]
+#[path = "../tests/gov_referendum_open_close.rs"]
+mod gov_referendum_open_close_tests;
+#[cfg(test)]
+#[path = "../tests/gov_slash_and_restitute.rs"]
+mod gov_slash_and_restitute_tests;
+#[cfg(test)]
+#[path = "../tests/gov_unlock_sweep.rs"]
+mod gov_unlock_sweep_tests;
 #[cfg(test)]
 #[path = "../tests/isi_gas_fees.rs"]
 mod isi_gas_fees_tests;
 #[cfg(test)]
 #[path = "../tests/ivm_corehost_axt.rs"]
 mod ivm_corehost_axt_tests;
-#[cfg(any(test, feature = "kagemusha-real-proof-harness"))]
+#[cfg(any(
+    test,
+    feature = "iroha-core-tests",
+    feature = "kagemusha-real-proof-harness"
+))]
 mod kagemusha_v1_test_fixtures;
 #[cfg(test)]
 mod network_payload_tests;

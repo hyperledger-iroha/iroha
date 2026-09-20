@@ -3,6 +3,9 @@
 compile_error!(
     "the feature-isolated Parliament fixture signers cannot be compiled into an optimized daemon"
 );
+/// Native fresh global-beacon provisioning under centralized deployment custody.
+#[cfg(unix)]
+pub mod beacon_bootstrap;
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -904,6 +907,10 @@ pub struct Args {
         hide = true
     )]
     test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode,
+    /// Use real consumed Taira custody in the explicit Core-only native fixture.
+    #[cfg(all(unix, feature = "test-network-message-control"))]
+    #[arg(long = "test-network-production-beacon-custody", hide = true)]
+    test_network_production_beacon_custody: bool,
     /// Override FASTPQ prover execution mode (`cpu` or `gpu`).
     #[arg(
         long = "fastpq-execution-mode",
@@ -1968,7 +1975,9 @@ impl ConsensusIngressLimiter {
         use iroha_core::sumeragi::message::BlockMessage;
         match msg {
             iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref().as_ref() {
-                BlockMessage::LaneBlockProposal(_)
+                BlockMessage::NativeLane(_)
+                | BlockMessage::NativeLaneDecision(_)
+                | BlockMessage::LaneBlockProposal(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneBlockCertificate(_)
@@ -2376,6 +2385,7 @@ enum RelayReceiverKind {
     Chunk,
     Low,
 }
+#[cfg(test)]
 impl RelayReceiverKind {
     const fn label(self) -> &'static str {
         match self {
@@ -2388,7 +2398,9 @@ impl RelayReceiverKind {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RelayIngressLoopExit {
+    #[cfg(test)]
     ReceiverClosed(RelayReceiverKind),
+    #[cfg(test)]
     WorkerClosed(RelayReceiverKind),
 }
 enum RelayReceiverEvent<T> {
@@ -2553,7 +2565,9 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
             BlockMessage::V2(_) | BlockMessage::KuraReplicaAdvert(_) => {
                 Some(SumeragiRelayClass::V2)
             }
-            BlockMessage::LaneBlockProposal(_)
+            BlockMessage::NativeLane(_)
+            | BlockMessage::NativeLaneDecision(_)
+            | BlockMessage::LaneBlockProposal(_)
             | BlockMessage::LaneExecutablePayload(_)
             | BlockMessage::LaneBlockNewViewVote(_)
             | BlockMessage::LaneBlockNewViewCertificate(_)
@@ -4542,6 +4556,29 @@ impl NetworkRelayShared {
             | LaneBlockCertificate(_)
             | LaneHistoricalRecoveryRequest(_)
             | LaneHistoricalRecoveryResponse(_) => Self::lane_block_message_meta(msg),
+            NativeLane(envelope) => {
+                use iroha_data_model::block::lane_consensus::LaneMessageV1;
+                let (label, round) = match &envelope.message {
+                    LaneMessageV1::Proposal(proposal) => {
+                        ("NativeLaneProposal", proposal.body.round)
+                    }
+                    LaneMessageV1::Vote(vote) => ("NativeLaneVote", vote.statement.round),
+                    LaneMessageV1::QuorumCertificate(qc) => ("NativeLaneQc", qc.statement.round),
+                    LaneMessageV1::TimeoutVote(vote) => ("NativeLaneTimeoutVote", vote.body.round),
+                    LaneMessageV1::TimeoutCertificate(tc) => {
+                        ("NativeLaneTimeoutCertificate", tc.round)
+                    }
+                };
+                (label, Some(round.lane_height), Some(round.voting_view))
+            }
+            NativeLaneDecision(decision) => {
+                let round = decision.commit_qc.statement.round;
+                (
+                    "NativeLaneDecision",
+                    Some(round.lane_height),
+                    Some(round.voting_view),
+                )
+            }
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
             V2(message) => Self::v2_block_message_meta(&message.payload),
         }
@@ -5944,6 +5981,142 @@ mod network_relay_tests {
         );
     }
     #[test]
+    fn native_lane_transport_classification_keeps_distinct_round_metadata() {
+        use iroha_data_model::block::lane_consensus::{
+            LANE_MESSAGE_VERSION_V1, LaneDecisionV1, LaneJustificationV1, LaneManifestV1,
+            LaneMessageEnvelopeV1, LaneMessageV1, LanePhaseV1, LaneProposalBodyV1, LaneProposalV1,
+            LaneQcV1, LaneRoundV1, LaneSignatureShareV1, LaneTcV1, LaneTimeoutBodyV1,
+            LaneTimeoutVoteV1, LaneValueKindV1, LaneValueRefV1, LaneVoteStatementV1, LaneVoteV1,
+        };
+        use iroha_p2p::network::message::{ClassifyTopic, Topic};
+
+        // Untrusted wire-shape fixtures exercise relay accounting only. The
+        // Native consumer must independently authenticate its actual committee.
+        let hash = Hash::new(b"native daemon relay classification");
+        let round = LaneRoundV1 {
+            instance_id: hash,
+            lane_height: 5,
+            voting_view: 7,
+        };
+        let value = LaneValueRefV1 {
+            instance_id: hash,
+            admitted_binding_hash: hash,
+            kind: LaneValueKindV1::Execution,
+            origin_view: 2,
+            origin_producer: 0,
+            descriptor_hash: hash,
+            payload_hash: hash,
+            availability_hash: hash,
+        };
+        let manifest = LaneManifestV1 {
+            value,
+            layout: consensus_v2::DataAvailabilityLayout {
+                encoding: consensus_v2::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 8192,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 2 * 1024 * 1024,
+                max_chunk_count: 512,
+            },
+            chunk_root: hash,
+            byte_len: 1,
+            chunk_count: 2,
+        };
+        let share = LaneSignatureShareV1 {
+            signer: 0,
+            signature: vec![0x71; 96],
+        };
+        let statement = LaneVoteStatementV1 {
+            round,
+            phase: LanePhaseV1::Commit,
+            value,
+        };
+        let qc = LaneQcV1 {
+            statement,
+            shares: (0..3)
+                .map(|signer| LaneSignatureShareV1 {
+                    signer,
+                    ..share.clone()
+                })
+                .collect(),
+        };
+        let timeout = LaneTimeoutVoteV1 {
+            body: LaneTimeoutBodyV1 {
+                round,
+                highest_prepare: None,
+            },
+            share: share.clone(),
+        };
+        let controls = [
+            (
+                "NativeLaneProposal",
+                LaneMessageV1::Proposal(LaneProposalV1 {
+                    body: LaneProposalBodyV1 {
+                        round,
+                        proposer: 0,
+                        manifest: manifest.clone(),
+                        justification: LaneJustificationV1::Opening,
+                    },
+                    signature: share.signature.clone(),
+                }),
+            ),
+            (
+                "NativeLaneVote",
+                LaneMessageV1::Vote(LaneVoteV1 { statement, share }),
+            ),
+            ("NativeLaneQc", LaneMessageV1::QuorumCertificate(qc.clone())),
+            (
+                "NativeLaneTimeoutVote",
+                LaneMessageV1::TimeoutVote(timeout.clone()),
+            ),
+            (
+                "NativeLaneTimeoutCertificate",
+                LaneMessageV1::TimeoutCertificate(LaneTcV1 {
+                    round,
+                    votes: vec![timeout],
+                }),
+            ),
+        ];
+        let mut messages = controls
+            .into_iter()
+            .map(|(label, message)| {
+                (
+                    label,
+                    BlockMessage::NativeLane(LaneMessageEnvelopeV1 {
+                        version: LANE_MESSAGE_VERSION_V1,
+                        message,
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        messages.push((
+            "NativeLaneDecision",
+            BlockMessage::NativeLaneDecision(Box::new(LaneDecisionV1 {
+                manifest,
+                commit_qc: qc,
+            })),
+        ));
+        for (label, message) in messages {
+            assert_eq!(
+                NetworkRelayShared::block_message_meta(&message),
+                (label, Some(5), Some(7))
+            );
+            let network = sumeragi_msg(message);
+            assert_eq!(network.topic(), Topic::Consensus);
+            assert_eq!(
+                sumeragi_relay_class(&network),
+                Some(SumeragiRelayClass::Lane)
+            );
+            let policy = ConsensusIngressLimiter::ingress_policy(&network);
+            assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
+            assert!(!policy.apply_penalty);
+            assert!(!NetworkRelayShared::should_apply_low_priority_ingress(
+                &network
+            ));
+        }
+    }
+
+    #[test]
     fn block_message_meta_reports_v2_round_when_available() {
         assert_eq!(
             NetworkRelayShared::block_message_meta(&v2_vote_block_message()),
@@ -6582,14 +6755,11 @@ fn apply_state_runtime_config_before_snapshot_auth(
 }
 fn apply_state_geometry_config_before_kura_replay(
     state: &mut State,
-    config: &Config,
+    policies: &StartupLanePolicies,
 ) -> ReportResult<(), StartError> {
-    let restored_runtime = state
-        .nexus_runtime_restored_from_snapshot()
-        .then(|| state.nexus_snapshot());
-    if restored_runtime.is_none() {
+    if !state.nexus_runtime_restored_from_snapshot() {
         state
-            .prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)
+            .prepare_configured_primary_geometry_anchor(&policies.nexus.configured_lane_catalog)
             .map_err(|err| Report::new(err).change_context(StartError::InitKura))
             .map_err(|report| {
                 report.attach("failed to anchor authenticated primary lane geometry at startup")
@@ -6603,7 +6773,7 @@ fn apply_state_geometry_config_before_kura_replay(
     } else {
         state
             .prepare_restored_configured_primary_geometry_anchor(
-                &config.nexus.configured_lane_catalog,
+                &policies.nexus.configured_lane_catalog,
             )
             .map_err(|err| Report::new(err).change_context(StartError::InitKura))
             .map_err(|report| {
@@ -6618,9 +6788,8 @@ fn apply_state_geometry_config_before_kura_replay(
                 report.attach("failed to restore snapshot Nexus lane storage at startup")
             })?;
     }
-    let nexus = nexus_config_for_startup_replay(config.nexus.clone(), restored_runtime.as_ref());
     state
-        .set_nexus_from_config(nexus)
+        .set_nexus_from_config(policies.nexus.clone())
         .map_err(|err| Report::new(err).change_context(StartError::InitKura))
         .map_err(|report| {
             report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
@@ -6697,6 +6866,49 @@ fn freeze_lane_compliance_for_startup_replay(
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
     Ok(Some(Arc::new(engine)))
 }
+/// One validated policy snapshot shared by geometry installation, replay and runtime handoff.
+///
+/// Construct this before publishing governed geometry: State views must never observe an active
+/// lane whose manifest or compliance policy has not been installed. Snapshot authentication can
+/// use these process-local policies without authorizing any Kura geometry mutation.
+struct StartupLanePolicies {
+    nexus: iroha_config::parameters::actual::Nexus,
+    manifests: LaneManifestRegistryHandle,
+    compliance: Option<Arc<LaneComplianceEngine>>,
+}
+
+fn install_lane_policies_for_startup_replay(
+    state: &mut State,
+    configured: iroha_config::parameters::actual::Nexus,
+    baseline: &LaneManifestRegistryHandle,
+) -> ReportResult<StartupLanePolicies, StartError> {
+    let restored = state
+        .nexus_runtime_restored_from_snapshot()
+        .then(|| state.nexus_snapshot());
+    let nexus = state
+        .nexus_with_committed_catalog(nexus_config_for_startup_replay(
+            configured,
+            restored.as_ref(),
+        ))
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+        .map_err(|report| {
+            report.attach("restored physical dataspaces differ from protected catalog authority")
+        })?;
+    let manifests = state
+        .lane_manifests_with_committed_catalog(baseline, &nexus)
+        .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+        .map_err(|report| report.attach("committed lane manifests are invalid before snapshot authentication and Kura replay"))?;
+    let compliance = freeze_lane_compliance_for_startup_replay(&nexus)?;
+    // Validate every source before changing State, and never rescan the files during handoff.
+    state.install_lane_manifests(&manifests);
+    state.install_lane_compliance_engine(compliance.clone());
+    Ok(StartupLanePolicies {
+        nexus,
+        manifests,
+        compliance,
+    })
+}
+
 /// Reconstruct the effective sources, including catalog transitions committed during replay.
 fn rebind_frozen_lane_manifests_after_startup_replay(
     state: &State,
@@ -7844,11 +8056,21 @@ impl Iroha {
             StartupTrustRoot::AuthenticatedSnapshotPending => None,
         };
         let effective_genesis_public_key = config.genesis.public_key.clone();
+        // Freeze configured sources before deserialization creates its first State
+        // view, then retain the same baseline through replay and runtime handoff.
+        let configured_lane_manifests = if emergency_fast {
+            Arc::new(LaneManifestRegistry::empty())
+        } else {
+            freeze_lane_manifests_for_startup_replay(&config.nexus)
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
+                .map_err(|report| report.attach("lane manifest registry is not ready before snapshot restoration"))?
+        };
         let mut loaded_state_from_snapshot = false;
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
             try_read_snapshot_with_bootstrap_policy(
                 config.snapshot.store_dir.resolve_relative_path(),
                 &kura,
+                &configured_lane_manifests,
                 || live_query_store.clone(),
                 block_count,
                 config.snapshot.merkle_chunk_size_bytes,
@@ -7916,16 +8138,18 @@ impl Iroha {
                         &config.nexus.dataspace_catalog,
                     );
                 }
-                State::try_new_with_chain_and_network_id(
-                    world,
-                    Arc::clone(&kura),
-                    live_query_store.clone(),
-                    config.common.chain.clone(),
-                    NetworkId::from_genesis_hash(config.genesis.expected_hash),
-                    #[cfg(feature = "telemetry")]
-                    state_telemetry.clone(),
+                Box::new(
+                    State::try_new_with_chain_and_network_id(
+                        world,
+                        Arc::clone(&kura),
+                        live_query_store.clone(),
+                        config.common.chain.clone(),
+                        NetworkId::from_genesis_hash(config.genesis.expected_hash),
+                        #[cfg(feature = "telemetry")]
+                        state_telemetry.clone(),
+                    )
+                    .map_err(|error| Report::new(error).change_context(StartError::InitKura))?,
                 )
-                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?
             }
             Err(error) if emergency_fast => {
                 return Err(Report::new(error)
@@ -7979,8 +8203,20 @@ impl Iroha {
                 },
             )?;
         }
-        if !emergency_fast && !provisional_imported_prefix {
-            apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
+        let startup_lane_policies = if emergency_fast {
+            None
+        } else {
+            Some(install_lane_policies_for_startup_replay(
+                &mut state,
+                config.nexus.clone(),
+                &configured_lane_manifests,
+            )?)
+        };
+        if let Some(policies) = startup_lane_policies
+            .as_ref()
+            .filter(|_| !provisional_imported_prefix)
+        {
+            apply_state_geometry_config_before_kura_replay(&mut state, policies)?;
             // Kura authenticates canonical replay evidence before State exists. Geometry setup
             // above then publishes the configured lane directories, so refresh only that
             // auxiliary metadata before planning. Otherwise the new lane paths invalidate the
@@ -8008,41 +8244,25 @@ impl Iroha {
                 block_count.0
             )));
         }
-        // An imported snapshot has not yet authorized geometry mutation. Compute its candidate
-        // policy from configured static settings and authenticated restored topology without
-        // replacing State's canonical snapshot projection. Freeze filesystem-backed policy once.
-        let startup_policy_nexus = if provisional_imported_prefix {
-            let candidate = nexus_config_for_startup_replay(
-                config.nexus.clone(),
-                Some(&state.nexus_snapshot()),
-            );
-            state
-                .nexus_with_committed_catalog(candidate)
-                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-                .map_err(|report| {
-                    report.attach(
-                        "restored physical dataspaces differ from protected catalog authority",
-                    )
-                })?
-        } else {
-            nexus_for_runtime_surfaces(&state)
-        };
-        let (frozen_startup_lane_manifests, frozen_startup_lane_compliance) = if emergency_fast {
-            iroha_logger::warn!(
-                "emergency Fast startup deferred lane-manifest and compliance directory loading until a Strict restart"
-            );
-            (Arc::new(LaneManifestRegistry::empty()), None)
-        } else {
-            let baseline = freeze_lane_manifests_for_startup_replay(&startup_policy_nexus)
-                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-                .map_err(|report| report.attach("lane manifest registry is not ready before snapshot authentication and Kura replay"))?;
-            let manifests = state
-                .lane_manifests_with_committed_catalog(&baseline, &startup_policy_nexus)
-                .map_err(|error| Report::new(error).change_context(StartError::InitKura))
-                .map_err(|report| report.attach("committed lane manifests are invalid before snapshot authentication and Kura replay"))?;
-            let compliance = freeze_lane_compliance_for_startup_replay(&startup_policy_nexus)?;
-            (manifests, compliance)
-        };
+        // Reuse the policy snapshot installed before geometry. Imported snapshots still have
+        // not authorized geometry mutation; emergency Fast never scans local policy sources.
+        let (startup_policy_nexus, frozen_startup_lane_manifests, frozen_startup_lane_compliance) =
+            if let Some(policies) = &startup_lane_policies {
+                (
+                    policies.nexus.clone(),
+                    Arc::clone(&policies.manifests),
+                    policies.compliance.clone(),
+                )
+            } else {
+                iroha_logger::warn!(
+                    "emergency Fast startup deferred lane-manifest and compliance directory loading until a Strict restart"
+                );
+                (
+                    nexus_for_runtime_surfaces(&state),
+                    Arc::new(LaneManifestRegistry::empty()),
+                    None,
+                )
+            };
         let startup_policy = if emergency_fast {
             iroha_core::sumeragi::V2SnapshotStartupPolicy::from_state(&state)
         } else {
@@ -8054,8 +8274,10 @@ impl Iroha {
             )
         }
         .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
-        state.install_lane_manifests(&frozen_startup_lane_manifests);
-        state.install_lane_compliance_engine(frozen_startup_lane_compliance.clone());
+        if emergency_fast {
+            state.install_lane_manifests(&frozen_startup_lane_manifests);
+            state.install_lane_compliance_engine(None);
+        }
         let mut snapshot_startup_authorization =
             iroha_core::sumeragi::authenticate_v2_snapshot_startup(
                 kura.as_ref(),
@@ -8228,7 +8450,11 @@ impl Iroha {
         let generic_replay_height = v2_replay_plan.complete_prefix_height();
         let generic_replay_start = state_height.saturating_add(1);
         if provisional_imported_prefix {
-            apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
+            let policies = startup_lane_policies.as_ref().ok_or_else(|| {
+                Report::new(StartError::InitKura)
+                    .attach("imported-prefix geometry requires Strict startup policies")
+            })?;
+            apply_state_geometry_config_before_kura_replay(&mut state, policies)?;
         }
         if generic_replay_height > state_height {
             iroha_logger::info!(
@@ -9039,7 +9265,7 @@ impl Iroha {
                 }
             }
         }
-        let state = Arc::new(state);
+        let state: Arc<State> = Arc::from(state);
         #[cfg(feature = "telemetry")]
         if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =
             lane_manifest_task
@@ -13681,6 +13907,10 @@ fn configure_reports(args: &Args) {
 /// runtime-provider bindings.
 pub fn main_entry() {
     soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
+    #[cfg(all(unix, feature = "test-network-message-control"))]
+    if taira_runtime_signer::dispatch_production_beacon_fixture_if_requested() {
+        return;
+    }
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
     if let Err(report) = run_main(None, None) {
         eprintln!("{report:?}");
@@ -14028,6 +14258,11 @@ fn run_main_with_config_guard(
     launcher_runtime_factory: Option<IrohaLauncherRuntimeFactoryV1>,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
+    #[cfg(all(unix, feature = "test-network-message-control"))]
+    if args.test_network_production_beacon_custody && launcher_config_guard.is_none() {
+        return Err(Report::new(MainError::Config)
+            .attach("production beacon fixture requires its explicit launcher registry boundary"));
+    }
     let lang = i18n::detect_language(args.language.as_deref());
     i18n::init(lang);
     configure_reports(&args);
@@ -14468,26 +14703,13 @@ fn validate_genesis_execution_offline(
     install_zk_config_before_kura_replay(&mut state, config).change_context(MainError::Config)?;
     apply_state_runtime_config_before_snapshot_auth(&mut state, config)
         .map_err(|error| Report::new(MainError::Config).attach(error))?;
-    apply_state_geometry_config_before_kura_replay(&mut state, config)
+    let baseline = freeze_lane_manifests_for_startup_replay(&config.nexus)
+        .map_err(|error| Report::new(error).change_context(MainError::Config))?;
+    let startup_policies =
+        install_lane_policies_for_startup_replay(&mut state, config.nexus.clone(), &baseline)
+            .change_context(MainError::Config)?;
+    apply_state_geometry_config_before_kura_replay(&mut state, &startup_policies)
         .change_context(MainError::Config)?;
-    let replay_nexus = nexus_for_runtime_surfaces(&state);
-    let frozen_lane_manifests =
-        freeze_lane_manifests_for_startup_replay(&replay_nexus).map_err(|error| {
-            Report::new(MainError::Config).attach(format!(
-                "lane manifest registry is not ready for genesis validation: {error}"
-            ))
-        })?;
-    let lane_manifests = state
-        .lane_manifests_with_committed_catalog(&frozen_lane_manifests, &replay_nexus)
-        .map_err(|error| {
-            Report::new(error)
-                .change_context(MainError::Config)
-                .attach("committed lane manifests are invalid for genesis validation")
-        })?;
-    state.install_lane_manifests(&lane_manifests);
-    let frozen_compliance = freeze_lane_compliance_for_startup_replay(&replay_nexus)
-        .change_context(MainError::Config)?;
-    state.install_lane_compliance_engine(frozen_compliance);
     let signed_voters =
         iroha_core::sumeragi::signed_genesis_voting_peers(genesis).map_err(|error| {
             Report::new(MainError::Config).attach(format!(
@@ -15875,7 +16097,7 @@ mod tests {
             .split_once("// Recovery: scan recent persisted pipeline sidecars")
             .expect("pipeline recovery diagnostics")
             .1
-            .split_once("let state = Arc::new(state);")
+            .split_once("let state: Arc<State> = Arc::from(state);")
             .expect("end of pipeline recovery diagnostics")
             .0;
         assert_eq!(
@@ -18672,18 +18894,13 @@ mod tests {
                 .expect("fixture ZK policy must be valid");
             apply_state_runtime_config_before_snapshot_auth(&mut state, config)
                 .expect("fixture execution policy must be valid");
-            apply_state_geometry_config_before_kura_replay(&mut state, config)
+            let baseline = freeze_lane_manifests_for_startup_replay(&config.nexus)
+                .expect("fixture configured manifest baseline");
+            let startup_policies =
+                install_lane_policies_for_startup_replay(&mut state, config.nexus.clone(), &baseline)
+                    .expect("fixture lane policies must be ready before publishing geometry");
+            apply_state_geometry_config_before_kura_replay(&mut state, &startup_policies)
                 .expect("fixture Nexus geometry must be valid");
-            let nexus = nexus_for_runtime_surfaces(&state);
-            let lane_manifests = freeze_lane_manifests_for_startup_replay(&nexus)
-                .expect("fixture lane manifests must be ready for genesis replay");
-            let lane_manifests = state
-                .lane_manifests_with_committed_catalog(&lane_manifests, &nexus)
-                .expect("fixture committed manifests must match their protected catalog");
-            state.install_lane_manifests(&lane_manifests);
-            let compliance = freeze_lane_compliance_for_startup_replay(&nexus)
-                .expect("fixture compliance must be ready for genesis replay");
-            state.install_lane_compliance_engine(compliance);
             (validation_root, state, kura)
         }
         fn sign_configured_genesis_for_test(
@@ -18733,10 +18950,11 @@ mod tests {
             )
             .unpack(|_| {})
             .unwrap_or_else(|(block, error)| {
-                let transaction_errors = (0..block.external_transactions().count())
+                let transaction_errors = (0..block.network_entrypoint_count())
                     .filter_map(|index| {
                         block
-                            .error(index)
+                            .network_output_at(u32::try_from(index).ok()?)
+                            .and_then(|(_, output)| output.result.as_ref().err())
                             .map(|reason| format!("transaction[{index}]: {reason:?}"))
                     })
                     .collect::<Vec<_>>();
@@ -18969,7 +19187,7 @@ mod tests {
             .unpack(|_| {});
             if let Err((block, error)) = result {
                 let results = block
-                    .results()
+                    .output_results()
                     .map(|result| format!("{result:?}"))
                     .collect::<Vec<_>>();
                 panic!(
@@ -19657,6 +19875,8 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
+                #[cfg(all(unix, feature = "test-network-message-control"))]
+                test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,
@@ -19722,6 +19942,8 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
+                #[cfg(all(unix, feature = "test-network-message-control"))]
+                test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,

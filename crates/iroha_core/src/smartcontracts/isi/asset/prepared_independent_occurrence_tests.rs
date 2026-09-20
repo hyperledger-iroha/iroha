@@ -30,7 +30,7 @@ fn independent_later_funded_legs_use_prior_applied_balances_and_one_occurrence()
     let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
     let (state, definition, alice_asset) = build_asset_transfer_control_test_state(10);
     let bob_asset = AssetId::new(definition.clone(), BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash;
     {
@@ -103,7 +103,7 @@ fn independent_rejected_preparations_keep_singleton_digest_and_outcome_order() {
     let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition.clone(), BOB_ID.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash;
     {
@@ -165,7 +165,7 @@ fn independent_rejected_preparations_keep_singleton_digest_and_outcome_order() {
 fn independent_zero_accepted_legs_publish_no_occurrence() {
     let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     {
         let mut tx = block.transaction();
@@ -207,7 +207,7 @@ fn independent_zero_accepted_legs_publish_no_occurrence() {
 fn independent_control_usage_counts_only_interleaved_successful_legs() {
     let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0);
     let mut block = state.block(header);
     let hash;
     {
@@ -277,7 +277,7 @@ fn independent_full_quantity_and_self_transfer_keep_exact_repeated_key_values() 
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let initial: Quantity = "18446744073709551618.125".parse().unwrap();
     let transferred: Quantity = "18446744073709551617.125".parse().unwrap();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 7, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash;
     {

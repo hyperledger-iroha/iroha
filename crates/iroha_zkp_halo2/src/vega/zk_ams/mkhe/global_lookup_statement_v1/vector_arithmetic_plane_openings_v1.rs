@@ -1,12 +1,13 @@
-//! Fail-closed retained-opening prerequisite for the three quadratic residuals.
+//! Retained-opening prerequisite for native40 direct comparator/sign products.
 //!
 //! This child freezes the exact plane inventory, axes, authenticated-snapshot
-//! layout, source-context binding, and one-shot replay purposes needed before
-//! the `s = 3, 5, 8` vector-arithmetic proofs can be implemented.  A narrowly
-//! purpose-bound confidential-spool constructor now admits the exact snapshot, but no upstream
-//! owner supplies all values, blindings, and matching commitments. Production construction is
-//! therefore deliberately uninhabited. No proof, transcript frame, wire byte, receipt, authority,
-//! RSS claim, or release gate is added here.
+//! layout, source-context binding, and one-shot replay purposes used by
+//! the actual statement3, statement5 and statement8 direct product owners. The exact logical
+//! snapshot uses the canonical ordered two-spool storage owner below. No upstream
+//! owner supplies all values, blindings, and matching commitments or consumes
+//! that retained pair into a materializer. Production construction remains
+//! uninhabited. No proof, transcript frame, wire size, receipt, authority, RSS
+//! claim, or release gate is added here.
 
 #![allow(
     dead_code,
@@ -23,24 +24,23 @@
 
 use core::convert::Infallible;
 
-use iroha_confidential_spool::{
-    CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1,
-    CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1,
-    CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1, CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1,
-    CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_SLOTS_V1,
-    ConfidentialSpoolLayoutV1,
+use iroha_crypto::confidential_spool::{
+    CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1, CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1,
+    CONFIDENTIAL_SPOOL_MAX_SLOTS_V1,
 };
 
 use crate::vega::{bulletproof_t256::ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1, sponge::Keccak256};
 
-use super::{challenge_v1::challenge_manifest_digest_v1, global_lookup_topology_digest_v1};
+use super::{
+    GlobalLookupCommitmentPurposeV1, comparator_signed_coordinate_v1,
+    global_lookup_topology_digest_v1,
+};
 
 const PLANE_OPENING_VERSION_V1: u8 = 1;
 const COORDINATES_PER_PLANE_V1: usize = 1 << 14;
 const COMPARATOR_GROUPS_V1: usize = 344;
 const SIGNED_SOURCE_UNITS_V1: usize = 1_032;
 const BETA_COLUMNS_V1: usize = 18;
-const QUADRATIC_STATEMENTS_V1: [u8; 3] = [3, 5, 8];
 
 const BD_PLANES_V1: usize = COMPARATOR_GROUPS_V1;
 const BS_PLANES_V1: usize = COMPARATOR_GROUPS_V1;
@@ -48,7 +48,6 @@ const BETA_PLANES_V1: usize = COMPARATOR_GROUPS_V1 * BETA_COLUMNS_V1;
 const M_PLANES_V1: usize = COMPARATOR_GROUPS_V1;
 const X_PLANES_V1: usize = SIGNED_SOURCE_UNITS_V1;
 const N_PLANES_V1: usize = SIGNED_SOURCE_UNITS_V1;
-const Q_PLANES_V1: usize = QUADRATIC_STATEMENTS_V1.len();
 const COMMITMENT_MASKS_V1: usize = PLANE_COUNT_V1;
 
 const BD_START_V1: usize = 0;
@@ -57,10 +56,7 @@ const BETA_START_V1: usize = BS_START_V1 + BS_PLANES_V1;
 const M_START_V1: usize = BETA_START_V1 + BETA_PLANES_V1;
 const X_START_V1: usize = M_START_V1 + M_PLANES_V1;
 const N_START_V1: usize = X_START_V1 + X_PLANES_V1;
-const Q3_ORDINAL_V1: usize = N_START_V1 + N_PLANES_V1;
-const Q5_ORDINAL_V1: usize = Q3_ORDINAL_V1 + 1;
-const Q8_ORDINAL_V1: usize = Q5_ORDINAL_V1 + 1;
-const PLANE_COUNT_V1: usize = Q8_ORDINAL_V1 + 1;
+const PLANE_COUNT_V1: usize = N_START_V1 + N_PLANES_V1;
 
 const SCALAR_BYTES_V1: u64 = 32;
 const POINT_BYTES_V1: u64 = 33;
@@ -102,24 +98,23 @@ const COLUMN_AXIS_LANGUAGE_V1: &[u8] = b"beta-column=0..17;beta-order=group-majo
 const COORDINATE_AXIS_LANGUAGE_V1: &[u8] =
     b"coordinate-v=0..16383;Boolean-coordinate-bits-little-endian;canonical-T256-scalar-big-endian-32";
 const PLANE_ORDER_LANGUAGE_V1: &[u8] =
-    b"plane-order=bD[group],bS[group],beta[group][column],m[group],x[unit],n[unit],q3,q5,q8;commitment-order=blinding-order=plane-order";
+    b"plane-order=bD[group],bS[group],beta[group][column],m[group],x[unit],n[unit];commitment-order=blinding-order=plane-order";
 const SNAPSHOT_LAYOUT_LANGUAGE_V1: &[u8] =
-    b"one-authenticated-confidential-snapshot;plane-major;per-plane-slots=value-chunk[0..31],tail;value-chunk=512-canonical-scalars;tail=blinding32||nonidentity-commitment33||zero-padding16319;slot=plane*33+local;no-independent-snapshot-authorities";
+    b"one-authenticated-confidential-snapshot;ordered-two-spool-storage-v1;whole-plane-ranges=[0,7075),[7075,9288);segment-context=full-plane-context+mapping+ordered-exact-range;aggregate=descriptor+both-actual-leaf-digests-in-order;plane-major;per-plane-slots=value-chunk[0..31],tail;value-chunk=512-canonical-scalars;tail=blinding32||nonidentity-commitment33||zero-padding16319;slot=plane*33+local;no-independent-snapshot-authorities";
 const COMMITMENT_LANGUAGE_V1: &[u8] =
     b"commitment-mask[plane]=blinding[plane];mask-order=plane-order;C_plane=sum_v(value[plane,v]*G[v])+blinding[plane]*H;one-nonzero-canonical-blinding-and-one-canonical-nonidentity-33B-point-per-plane;basis=ZkAmsT256BulletproofSuiteV1:G[0..16384)+H";
 const SOURCE_CONTEXT_LANGUAGE_V1: &[u8] =
-    b"context-order=topology,challenge-manifest,basis,mapping,source-replay-record,source-opening-record,canonical-reopen-record,radix-range-record,coefficient-residual-manifest,committed-MLE-profile";
+    b"context-order=native40-inventory,basis,mapping,source-replay-record,source-opening-record,canonical-reopen-record,radix-range-record";
 const PRODUCTION_BLOCKER_LANGUAGE_V1: &[u8] =
-    b"current-upstream-does-not-own-one-authenticated-snapshot-containing-all-9291-exact-values,blindings,and-matching-commitments;exact-purpose-specific-spool-geometry-is-available;production-seal-remains-Infallible";
+    b"current-upstream-does-not-own-one-authenticated-snapshot-containing-all-9288-exact-values,blindings,and-matching-commitments;ordered-two-spool-storage-does-not-supply-authenticated-source-to-pair-handoff-or-commitment-equations;replay-cursor-does-not-yet-authenticate-plane-slots;production-seal-remains-Infallible";
 
 const CURRENT_UPSTREAM_COMPLETE_V1: bool = false;
-const CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1: bool = true;
+const CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1: bool = false;
 const PLANE_OPENING_MATERIALIZED_V1: bool = false;
 const TRANSCRIPT_FRAMES_ADDED_V1: usize = 0;
 const WIRE_BYTES_ADDED_V1: usize = 0;
-const KAT_ORDINALS_CHANGED_V1: bool = false;
-const VECTOR_ARITHMETIC_PROOFS_WIRED_V1: bool = false;
-const VECTOR_ARITHMETIC_PROOFS_VERIFIED_V1: bool = false;
+const DIRECT_PRODUCT_SOURCE_REPLAYS_WIRED_V1: bool = false;
+const COMPLETE_OPENING_EQUATIONS_VERIFIED_V1: bool = false;
 const ZERO_KNOWLEDGE_ACCEPTED_V1: bool = false;
 const OPERATIONAL_RECEIPT_ACCEPTED_V1: bool = false;
 const AUTHORITY_MINTED_V1: bool = false;
@@ -129,8 +124,8 @@ const RELEASE_READY_V1: bool = false;
 const _: () = {
     assert!(COORDINATES_PER_PLANE_V1 == 16_384);
     assert!(BETA_PLANES_V1 == 6_192);
-    assert!(PLANE_COUNT_V1 == 9_291);
-    assert!(COMMITMENT_MASKS_V1 == 9_291);
+    assert!(PLANE_COUNT_V1 == 9_288);
+    assert!(COMMITMENT_MASKS_V1 == 9_288);
     assert!(
         PLANE_COUNT_V1
             == BD_PLANES_V1
@@ -139,35 +134,27 @@ const _: () = {
                 + M_PLANES_V1
                 + X_PLANES_V1
                 + N_PLANES_V1
-                + Q_PLANES_V1
     );
     assert!(VALUE_BYTES_PER_PLANE_V1 == 524_288);
-    assert!(SNAPSHOT_SLOT_COUNT_V1 == 306_603);
-    assert!(RETAINED_VALUE_BYTES_V1 == 4_871_159_808);
-    assert!(RETAINED_BLINDING_BYTES_V1 == 297_312);
-    assert!(RETAINED_COMMITMENT_WIRE_BYTES_V1 == 306_603);
-    assert!(SNAPSHOT_SEMANTIC_BYTES_V1 == 4_871_763_723);
-    assert!(SNAPSHOT_ZERO_PADDING_BYTES_V1 == 151_619_829);
-    assert!(SNAPSHOT_PADDED_PLAINTEXT_BYTES_V1 == 5_023_383_552);
-    assert!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1 == 4_905_648);
-    assert!(SNAPSHOT_FILE_BYTES_V1 == 5_028_289_200);
-    assert!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1 == 1_198_764_720);
+    assert!(SNAPSHOT_SLOT_COUNT_V1 == 306_504);
+    assert!(RETAINED_VALUE_BYTES_V1 == 4_869_586_944);
+    assert!(RETAINED_BLINDING_BYTES_V1 == 297_216);
+    assert!(RETAINED_COMMITMENT_WIRE_BYTES_V1 == 306_504);
+    assert!(SNAPSHOT_SEMANTIC_BYTES_V1 == 4_870_190_664);
+    assert!(SNAPSHOT_ZERO_PADDING_BYTES_V1 == 151_570_872);
+    assert!(SNAPSHOT_PADDED_PLAINTEXT_BYTES_V1 == 5_021_761_536);
+    assert!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1 == 4_904_064);
+    assert!(SNAPSHOT_FILE_BYTES_V1 == 5_026_665_600);
+    assert!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1 == 1_197_141_120);
     assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
     assert!(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1);
     assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
-    assert!(SNAPSHOT_SLOT_COUNT_V1 == CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1);
-    assert!(
-        SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1
-            == CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1
-    );
-    assert!(SNAPSHOT_FILE_BYTES_V1 == CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1);
     assert!(!CURRENT_UPSTREAM_COMPLETE_V1);
-    assert!(CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    assert!(!CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
     assert!(!PLANE_OPENING_MATERIALIZED_V1);
     assert!(TRANSCRIPT_FRAMES_ADDED_V1 == 0 && WIRE_BYTES_ADDED_V1 == 0);
-    assert!(!KAT_ORDINALS_CHANGED_V1);
-    assert!(!VECTOR_ARITHMETIC_PROOFS_WIRED_V1);
-    assert!(!VECTOR_ARITHMETIC_PROOFS_VERIFIED_V1);
+    assert!(!DIRECT_PRODUCT_SOURCE_REPLAYS_WIRED_V1);
+    assert!(!COMPLETE_OPENING_EQUATIONS_VERIFIED_V1);
     assert!(!ZERO_KNOWLEDGE_ACCEPTED_V1);
     assert!(!OPERATIONAL_RECEIPT_ACCEPTED_V1);
     assert!(!AUTHORITY_MINTED_V1);
@@ -194,9 +181,6 @@ enum GlobalLookupPlaneRoleV1 {
     MixedTop = 4,
     SmallSigned = 5,
     SmallNegativeMagnitude = 6,
-    ResidualQ3 = 7,
-    ResidualQ5 = 8,
-    ResidualQ8 = 9,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,78 +190,42 @@ struct GlobalLookupPlaneCoordinateV1 {
     group: Option<u16>,
     unit: Option<u16>,
     column: Option<u8>,
-    statement: Option<u8>,
 }
 
 fn plane_coordinate_v1(
     ordinal: usize,
 ) -> Result<GlobalLookupPlaneCoordinateV1, PlaneOpeningErrorV1> {
-    let (role, group, unit, column, statement) = match ordinal {
-        BD_START_V1..BS_START_V1 => (
-            GlobalLookupPlaneRoleV1::BooleanD,
-            Some(ordinal - BD_START_V1),
-            None,
-            None,
-            None,
-        ),
-        BS_START_V1..BETA_START_V1 => (
-            GlobalLookupPlaneRoleV1::BooleanS,
-            Some(ordinal - BS_START_V1),
-            None,
-            None,
-            None,
-        ),
-        BETA_START_V1..M_START_V1 => {
-            let local = ordinal - BETA_START_V1;
-            (
-                GlobalLookupPlaneRoleV1::ComparatorBorrow,
-                Some(local / BETA_COLUMNS_V1),
-                None,
-                Some(local % BETA_COLUMNS_V1),
-                None,
-            )
+    let logical = u32::try_from(ordinal).map_err(|_| PlaneOpeningErrorV1::Shape)?;
+    let physical =
+        comparator_signed_coordinate_v1(logical).map_err(|_| PlaneOpeningErrorV1::Shape)?;
+    let local = physical.purpose_ordinal;
+    let (role, group, unit, column) = match physical.purpose {
+        GlobalLookupCommitmentPurposeV1::ComparatorDifferenceTop => {
+            (GlobalLookupPlaneRoleV1::BooleanD, Some(local), None, None)
         }
-        M_START_V1..X_START_V1 => (
-            GlobalLookupPlaneRoleV1::MixedTop,
-            Some(ordinal - M_START_V1),
+        GlobalLookupCommitmentPurposeV1::ComparatorSumTop => {
+            (GlobalLookupPlaneRoleV1::BooleanS, Some(local), None, None)
+        }
+        GlobalLookupCommitmentPurposeV1::ComparatorBorrow => (
+            GlobalLookupPlaneRoleV1::ComparatorBorrow,
+            Some(local / BETA_COLUMNS_V1 as u32),
             None,
-            None,
-            None,
+            Some(local % BETA_COLUMNS_V1 as u32),
         ),
-        X_START_V1..N_START_V1 => (
+        GlobalLookupCommitmentPurposeV1::ComparatorMixedTop => {
+            (GlobalLookupPlaneRoleV1::MixedTop, Some(local), None, None)
+        }
+        GlobalLookupCommitmentPurposeV1::SmallSigned => (
             GlobalLookupPlaneRoleV1::SmallSigned,
             None,
-            Some(ordinal - X_START_V1),
-            None,
+            Some(local),
             None,
         ),
-        N_START_V1..Q3_ORDINAL_V1 => (
+        GlobalLookupCommitmentPurposeV1::SmallNegativeMagnitude => (
             GlobalLookupPlaneRoleV1::SmallNegativeMagnitude,
             None,
-            Some(ordinal - N_START_V1),
+            Some(local),
             None,
-            None,
-        ),
-        Q3_ORDINAL_V1 => (
-            GlobalLookupPlaneRoleV1::ResidualQ3,
-            None,
-            None,
-            None,
-            Some(3),
-        ),
-        Q5_ORDINAL_V1 => (
-            GlobalLookupPlaneRoleV1::ResidualQ5,
-            None,
-            None,
-            None,
-            Some(5),
-        ),
-        Q8_ORDINAL_V1 => (
-            GlobalLookupPlaneRoleV1::ResidualQ8,
-            None,
-            None,
-            None,
-            Some(8),
         ),
         _ => return Err(PlaneOpeningErrorV1::Shape),
     };
@@ -296,22 +244,25 @@ fn plane_coordinate_v1(
             .map(u8::try_from)
             .transpose()
             .map_err(|_| PlaneOpeningErrorV1::Resource)?,
-        statement,
     })
 }
 
 fn role_plane_count_v1(role: GlobalLookupPlaneRoleV1) -> usize {
-    match role {
-        GlobalLookupPlaneRoleV1::BooleanD => BD_PLANES_V1,
-        GlobalLookupPlaneRoleV1::BooleanS => BS_PLANES_V1,
-        GlobalLookupPlaneRoleV1::ComparatorBorrow => BETA_PLANES_V1,
-        GlobalLookupPlaneRoleV1::MixedTop => M_PLANES_V1,
-        GlobalLookupPlaneRoleV1::SmallSigned => X_PLANES_V1,
-        GlobalLookupPlaneRoleV1::SmallNegativeMagnitude => N_PLANES_V1,
-        GlobalLookupPlaneRoleV1::ResidualQ3
-        | GlobalLookupPlaneRoleV1::ResidualQ5
-        | GlobalLookupPlaneRoleV1::ResidualQ8 => 1,
-    }
+    let purpose = match role {
+        GlobalLookupPlaneRoleV1::BooleanD => {
+            GlobalLookupCommitmentPurposeV1::ComparatorDifferenceTop
+        }
+        GlobalLookupPlaneRoleV1::BooleanS => GlobalLookupCommitmentPurposeV1::ComparatorSumTop,
+        GlobalLookupPlaneRoleV1::ComparatorBorrow => {
+            GlobalLookupCommitmentPurposeV1::ComparatorBorrow
+        }
+        GlobalLookupPlaneRoleV1::MixedTop => GlobalLookupCommitmentPurposeV1::ComparatorMixedTop,
+        GlobalLookupPlaneRoleV1::SmallSigned => GlobalLookupCommitmentPurposeV1::SmallSigned,
+        GlobalLookupPlaneRoleV1::SmallNegativeMagnitude => {
+            GlobalLookupCommitmentPurposeV1::SmallNegativeMagnitude
+        }
+    };
+    purpose.count_v1()
 }
 
 fn absorb_len_prefixed_v1(hash: &mut Keccak256, bytes: &[u8]) -> Result<(), PlaneOpeningErrorV1> {
@@ -354,7 +305,6 @@ fn plane_mapping_digest_v1() -> Result<[u8; 32], PlaneOpeningErrorV1> {
         hash.update(&coordinate.group.unwrap_or(u16::MAX).to_be_bytes());
         hash.update(&coordinate.unit.unwrap_or(u16::MAX).to_be_bytes());
         hash.update(&[coordinate.column.unwrap_or(u8::MAX)]);
-        hash.update(&[coordinate.statement.unwrap_or(0)]);
     }
     require_nonzero_v1(hash.finalize())
 }
@@ -365,30 +315,24 @@ struct PlaneOpeningSourceContextV1 {
     source_opening_record_digest: [u8; 32],
     canonical_reopen_record_digest: [u8; 32],
     radix_range_record_digest: [u8; 32],
-    coefficient_residual_manifest_digest: [u8; 32],
-    committed_mle_profile_digest: [u8; 32],
 }
 
 fn plane_context_digest_v1(
     axes: PlaneOpeningSourceContextV1,
 ) -> Result<[u8; 32], PlaneOpeningErrorV1> {
     let topology_digest = require_nonzero_v1(global_lookup_topology_digest_v1())?;
-    let challenge_digest = require_nonzero_v1(challenge_manifest_digest_v1())?;
     let mapping_digest = plane_mapping_digest_v1()?;
     let mut hash = Keccak256::new();
     hash.update(PLANE_CONTEXT_DOMAIN_V1);
     hash.update(&[PLANE_OPENING_VERSION_V1]);
     for digest in [
         topology_digest,
-        challenge_digest,
         ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
         mapping_digest,
         axes.source_replay_record_digest,
         axes.source_opening_record_digest,
         axes.canonical_reopen_record_digest,
         axes.radix_range_record_digest,
-        axes.coefficient_residual_manifest_digest,
-        axes.committed_mle_profile_digest,
     ] {
         hash.update(&require_nonzero_v1(digest)?);
     }
@@ -397,27 +341,26 @@ fn plane_context_digest_v1(
     require_nonzero_v1(hash.finalize())
 }
 
-fn approved_snapshot_layout_v1(
+fn approved_snapshot_plan_v1(
     context_digest: [u8; 32],
-) -> Result<ConfidentialSpoolLayoutV1, PlaneOpeningErrorV1> {
-    let layout = ConfidentialSpoolLayoutV1::global_lookup_plane_openings_v1(context_digest)
-        .map_err(|_| PlaneOpeningErrorV1::Resource)?;
-    if layout.slot_count_v1() != SNAPSHOT_SLOT_COUNT_V1
-        || layout.plaintext_len_v1() != SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1
-        || layout.file_len_v1() != SNAPSHOT_FILE_BYTES_V1
-    {
+) -> Result<ordered_snapshot_v1::OrderedPlaneSpoolPlanV1, PlaneOpeningErrorV1> {
+    let plan = ordered_snapshot_v1::OrderedPlaneSpoolPlanV1::canonical_v1(require_nonzero_v1(
+        context_digest,
+    )?)
+    .map_err(|_| PlaneOpeningErrorV1::Resource)?;
+    if plan.slot_count_v1() != SNAPSHOT_SLOT_COUNT_V1 {
         return Err(PlaneOpeningErrorV1::Resource);
     }
-    Ok(layout)
+    Ok(plan)
 }
 
 struct PlaneOpeningRecordV1 {
     topology_digest: [u8; 32],
-    challenge_manifest_digest: [u8; 32],
     basis_digest: [u8; 32],
     mapping_digest: [u8; 32],
     context_digest: [u8; 32],
     source_context_axes: PlaneOpeningSourceContextV1,
+    ordered_snapshot_plan_digest: [u8; 32],
     authenticated_snapshot_digest: [u8; 32],
     commitment_inventory_digest: [u8; 32],
     record_digest: [u8; 32],
@@ -429,7 +372,6 @@ fn plane_record_digest_v1(record: &PlaneOpeningRecordV1) -> Result<[u8; 32], Pla
     hash.update(&[PLANE_OPENING_VERSION_V1]);
     for digest in [
         record.topology_digest,
-        record.challenge_manifest_digest,
         record.basis_digest,
         record.mapping_digest,
         record.context_digest,
@@ -437,10 +379,7 @@ fn plane_record_digest_v1(record: &PlaneOpeningRecordV1) -> Result<[u8; 32], Pla
         record.source_context_axes.source_opening_record_digest,
         record.source_context_axes.canonical_reopen_record_digest,
         record.source_context_axes.radix_range_record_digest,
-        record
-            .source_context_axes
-            .coefficient_residual_manifest_digest,
-        record.source_context_axes.committed_mle_profile_digest,
+        record.ordered_snapshot_plan_digest,
         record.authenticated_snapshot_digest,
         record.commitment_inventory_digest,
     ] {
@@ -468,9 +407,8 @@ fn plane_record_digest_v1(record: &PlaneOpeningRecordV1) -> Result<[u8; 32], Pla
         CURRENT_UPSTREAM_COMPLETE_V1 as u8,
         CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1 as u8,
         PLANE_OPENING_MATERIALIZED_V1 as u8,
-        KAT_ORDINALS_CHANGED_V1 as u8,
-        VECTOR_ARITHMETIC_PROOFS_WIRED_V1 as u8,
-        VECTOR_ARITHMETIC_PROOFS_VERIFIED_V1 as u8,
+        DIRECT_PRODUCT_SOURCE_REPLAYS_WIRED_V1 as u8,
+        COMPLETE_OPENING_EQUATIONS_VERIFIED_V1 as u8,
         ZERO_KNOWLEDGE_ACCEPTED_V1 as u8,
         OPERATIONAL_RECEIPT_ACCEPTED_V1 as u8,
         AUTHORITY_MINTED_V1 as u8,
@@ -482,10 +420,11 @@ fn plane_record_digest_v1(record: &PlaneOpeningRecordV1) -> Result<[u8; 32], Pla
 
 fn validate_plane_record_v1(record: &PlaneOpeningRecordV1) -> Result<(), PlaneOpeningErrorV1> {
     if record.topology_digest != global_lookup_topology_digest_v1()
-        || record.challenge_manifest_digest != challenge_manifest_digest_v1()
         || record.basis_digest != ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1
         || record.mapping_digest != plane_mapping_digest_v1()?
         || record.context_digest != plane_context_digest_v1(record.source_context_axes)?
+        || record.ordered_snapshot_plan_digest
+            != approved_snapshot_plan_v1(record.context_digest)?.descriptor_digest_v1()
         || record.authenticated_snapshot_digest == [0; 32]
         || record.commitment_inventory_digest == [0; 32]
         || record.record_digest != plane_record_digest_v1(record)?
@@ -495,8 +434,8 @@ fn validate_plane_record_v1(record: &PlaneOpeningRecordV1) -> Result<(), PlaneOp
     Ok(())
 }
 
-/// Production cannot supply this capability until one authenticated snapshot
-/// owns all exact values and blindings and authenticates the matching points.
+/// TODO: Consume the actual ordered pair only after a source owner verifies all
+/// exact values, blindings and matching points. A storage digest is insufficient.
 enum GlobalLookupPlaneOpeningMaterializerSealV1 {
     Production {
         authenticated_confidential_snapshot: Infallible,
@@ -538,12 +477,10 @@ impl Drop for TestAuthenticatedSnapshotHarnessV1 {
     }
 }
 
-#[path = "vector_arithmetic_plane_openings_v1/global_lookup_proof_session_v3.rs"]
-mod global_lookup_proof_session_v3;
+#[path = "vector_arithmetic_plane_openings_v1/ordered_snapshot_v1.rs"]
+mod ordered_snapshot_v1;
 #[path = "vector_arithmetic_plane_openings_v1/replay_caps_v1.rs"]
 mod replay_caps_v1;
-#[path = "vector_arithmetic_plane_openings_v1/vector_arithmetic_proof_codec_v2.rs"]
-mod vector_arithmetic_proof_codec_v2;
 
 use replay_caps_v1::PlaneOpeningReplayPermitsV1;
 
@@ -576,6 +513,7 @@ impl GlobalLookupPlaneOpeningMaterializerSealV1 {
     ) -> Result<GlobalLookupPlaneOpeningOwnerV1, PlaneOpeningErrorV1> {
         let context_digest = plane_context_digest_v1(axes)?;
         let mapping_digest = plane_mapping_digest_v1()?;
+        let plan = approved_snapshot_plan_v1(context_digest)?;
         let (snapshot, snapshot_digest, commitment_inventory_digest) = match self {
             Self::Production {
                 authenticated_confidential_snapshot,
@@ -599,11 +537,11 @@ impl GlobalLookupPlaneOpeningMaterializerSealV1 {
         };
         let mut record = PlaneOpeningRecordV1 {
             topology_digest: global_lookup_topology_digest_v1(),
-            challenge_manifest_digest: challenge_manifest_digest_v1(),
             basis_digest: ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
             mapping_digest,
             context_digest,
             source_context_axes: axes,
+            ordered_snapshot_plan_digest: plan.descriptor_digest_v1(),
             authenticated_snapshot_digest: snapshot_digest,
             commitment_inventory_digest,
             record_digest: [0; 32],
@@ -677,6 +615,8 @@ impl GlobalLookupPlaneOpeningReplayV1 {
         &mut self,
         ordinal: usize,
     ) -> Result<(), PlaneOpeningErrorV1> {
+        // TODO: Authenticate every required slot and commitment equation before
+        // advancing this cursor; only the synthetic test harness is inhabited.
         self.cursor
             .as_mut()
             .ok_or(PlaneOpeningErrorV1::Replay)?

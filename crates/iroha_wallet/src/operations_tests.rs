@@ -84,7 +84,36 @@ impl HttpTransport for Transport {
                 }
                 .send_blocking(request);
             }
-            "/v1/pipeline/transactions/status" => (404, Vec::new()),
+            "/v1/pipeline/transactions/status" => {
+                assert_eq!(request.method, iroha::http::Method::GET);
+                assert!(request.body.is_empty());
+                let hash = request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "hash")
+                    .expect("status lookup includes its exact transaction hash")
+                    .1
+                    .parse::<iroha_crypto::HashOf<SignedTransaction>>()?;
+                assert!(
+                    request
+                        .url
+                        .query_pairs()
+                        .any(|(key, value)| key == "scope" && value == "global")
+                );
+                let absence = iroha_torii_shared::ErrorEnvelope::new(
+                    iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+                    "Missing status.",
+                )
+                .with_details(iroha_torii_shared::ErrorDetails {
+                    pipeline_transaction_status_not_found: Some(
+                        iroha_torii_shared::PipelineTransactionStatusNotFoundV1::new(
+                            &hash, "global",
+                        ),
+                    ),
+                    ..iroha_torii_shared::ErrorDetails::default()
+                });
+                (404, json::to_vec(&absence)?)
+            }
             _ => {
                 self.dispatch_count.fetch_add(1, Ordering::SeqCst);
                 let path = self

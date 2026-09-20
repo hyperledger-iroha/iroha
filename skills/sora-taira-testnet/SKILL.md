@@ -324,6 +324,12 @@ canonical Taira chain, exact genesis network identity, and address profile 369.
 For these explicit native CLI commands, obtain the onboarding issuer, onboarding
 token, and faucet issuer/asset/amount policy independently from the operator;
 never trust a prepared response to supply its own issuer or funding policy.
+For public discovery, the read-only
+`iroha.accounts.faucet.policy` tool maps to `GET /v1/accounts/faucet/policy`
+and reports the enabled faucet's exact network, address profile, public authority,
+canonical asset, and amount. In these operator-admitted CLI workflows, compare
+this unsigned response with the operator's independent policy; it does not
+establish the trusted preparation inputs.
 
 Prepare a new operation in a previously absent journal directory whose parent
 already exists. For example:

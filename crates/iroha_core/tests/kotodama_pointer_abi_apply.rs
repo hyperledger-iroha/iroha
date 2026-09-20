@@ -156,7 +156,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         core::num::NonZeroU64::new(1).unwrap(),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -270,7 +269,6 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let state = State::new_for_testing(world, kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,

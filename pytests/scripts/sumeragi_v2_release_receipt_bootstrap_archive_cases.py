@@ -77,9 +77,9 @@ def _fixture_validator_invocation(
     acknowledgment: Path,
     source_manifest_sha256: str,
     candidate_root: Path,
-    scaling_evidence_manifest: Path,
+    scaling_execution_record: Path,
     expected_signer_fingerprint: str,
-    scaling_digests: dict[str, str],
+    expected_scaling_execution_sha256: str,
 ) -> dict[str, object]:
     known = _fixture_validator_values(
         helper,
@@ -90,9 +90,9 @@ def _fixture_validator_invocation(
         acknowledgment=acknowledgment,
         source_manifest_sha256=source_manifest_sha256,
         candidate_root=candidate_root,
-        scaling_evidence_manifest=scaling_evidence_manifest,
+        scaling_execution_record=scaling_execution_record,
         expected_signer_fingerprint=expected_signer_fingerprint,
-        scaling_digests=scaling_digests,
+        expected_scaling_execution_sha256=expected_scaling_execution_sha256,
     )
     bindings = []
     for name in helper.VALIDATOR_OPTION_ORDER:
@@ -114,7 +114,7 @@ def _fixture_validator_invocation(
     record = {
         "profile": "release",
         "operation": "verify-existing-and-ack",
-        "python_flags": ["-I", "-S"],
+        "python_flags": ["-I", "-B", "-S"],
         "validator": "protected:validate-receipt.py",
         "ordered_options": bindings,
     }
@@ -141,9 +141,9 @@ def _fixture_validator_values(
     acknowledgment: Path,
     source_manifest_sha256: str,
     candidate_root: Path,
-    scaling_evidence_manifest: Path,
+    scaling_execution_record: Path,
     expected_signer_fingerprint: str,
-    scaling_digests: dict[str, str],
+    expected_scaling_execution_sha256: str,
 ) -> dict[str, tuple[str, str | bool]]:
     values: dict[str, tuple[str, str | bool]] = {
         name: ("flag", True)
@@ -190,7 +190,10 @@ def _fixture_validator_values(
         ),
         "--expected-formal-replay-signature-sha256": ("text", "9" * 64),
         "--formal-replay-principal": ("text", "fixture-formal-replay"),
-        "--scaling-evidence-manifest": ("path", str(scaling_evidence_manifest)),
+        "--scaling-execution-record": ("path", str(scaling_execution_record)),
+        "--expected-scaling-execution-sha256": (
+            "text", expected_scaling_execution_sha256
+        ),
         "--sdk-dependency-archive": (
             "path", str(source.parent / "sdk-dependency-bundle.tar")
         ),
@@ -205,16 +208,6 @@ def _fixture_validator_values(
         ),
         "--runtime-tool-probe-result": (
             "path", str(source.parent / "runtime-tool-probe-result.json")
-        ),
-        "--expected-scaling-trial-harness-sha256": (
-            "text", scaling_digests["trial_harness"]
-        ),
-        "--expected-scaling-configuration-sha256": (
-            "text", scaling_digests["configuration"]
-        ),
-        "--expected-scaling-irohad-sha256": ("text", scaling_digests["irohad"]),
-        "--expected-scaling-iroha-cli-sha256": (
-            "text", scaling_digests["iroha_cli"]
         ),
         "--repository-root": ("path", str(source)),
         "--output": ("path", str(receipt)),
@@ -291,17 +284,13 @@ def _fixture_receipt_for_validator(
                 "seed_completion": path("--g12-seed-completion"),
                 "fault_soak_completion": path("--g12-fault-soak-completion"),
             },
-            "multilane_scaling_bundle": {
-                "files": [{
-                    "relative_path": "scaling_evidence.json",
-                    **path("--scaling-evidence-manifest"),
-                }]
-            },
-            "multilane_scaling_trust_anchors": {
-                "trial_harness_sha256": values["--expected-scaling-trial-harness-sha256"][1],
-                "configuration_sha256": values["--expected-scaling-configuration-sha256"][1],
-                "irohad_sha256": values["--expected-scaling-irohad-sha256"][1],
-                "iroha_cli_sha256": values["--expected-scaling-iroha-cli-sha256"][1],
+            "multilane_scaling": {
+                "parent_execution": {
+                    "archive_id": "release-scaling.parent-execution.v1",
+                    "sha256": values["--expected-scaling-execution-sha256"][1],
+                    "size_bytes": Path(values["--scaling-execution-record"][1]).stat().st_size,
+                    "mode": "0400",
+                },
             },
         },
     }
@@ -509,16 +498,16 @@ def exercise_release_helper_fail_atomicity(
     stdout = f"Sumeragi v2 aggregate release receipt verified: {receipt}\n".encode()
     ack = invocation / "receipt-validation-ack.json"
     candidate_root = private_directory(tmp_path / "fault-seal-candidate")
-    scaling_root = private_directory(tmp_path / "fault-seal-scaling")
-    scaling_manifest = scaling_root / "scaling_evidence.json"
-    scaling_manifest.write_bytes(b"{}\n")
+    # This atomicity fixture models the completed validator's data only. The
+    # sealer pins opaque original record bytes; canonical archive/native checks
+    # belong to the actual receipt validator and its separate fixture suite.
+    scaling_execution_record = bootstrap / "scaling-execution.json"
+    scaling_execution_record.write_bytes(b'{"fixture":"sealer-record-binding-only"}\n')
+    scaling_execution_record.chmod(0o400)
+    expected_scaling_execution_sha256 = hashlib.sha256(
+        scaling_execution_record.read_bytes()
+    ).hexdigest()
     expected_signer_fingerprint = "SHA256:" + "A" * 43
-    scaling_digests = {
-        "trial_harness": "5" * 64,
-        "configuration": "6" * 64,
-        "irohad": "7" * 64,
-        "iroha_cli": "8" * 64,
-    }
     expected_invocation_values = _fixture_validator_values(
         helper,
         invocation=invocation,
@@ -528,9 +517,9 @@ def exercise_release_helper_fail_atomicity(
         acknowledgment=ack,
         source_manifest_sha256=manifest_digest,
         candidate_root=candidate_root,
-        scaling_evidence_manifest=scaling_manifest,
+        scaling_execution_record=scaling_execution_record,
         expected_signer_fingerprint=expected_signer_fingerprint,
-        scaling_digests=scaling_digests,
+        expected_scaling_execution_sha256=expected_scaling_execution_sha256,
     )
     receipt.chmod(0o600)
     receipt.write_bytes(
@@ -564,9 +553,9 @@ def exercise_release_helper_fail_atomicity(
             acknowledgment=ack,
             source_manifest_sha256=manifest_digest,
             candidate_root=candidate_root,
-            scaling_evidence_manifest=scaling_manifest,
+            scaling_execution_record=scaling_execution_record,
             expected_signer_fingerprint=expected_signer_fingerprint,
-            scaling_digests=scaling_digests,
+            expected_scaling_execution_sha256=expected_scaling_execution_sha256,
         ),
         "exit_status": 0,
         "stdout": {"sha256": hashlib.sha256(stdout).hexdigest(), "size_bytes": len(stdout)},
@@ -604,9 +593,32 @@ def exercise_release_helper_fail_atomicity(
         helper._validate_validator_invocation(
             changed_invocation, expected_values=expected_invocation_values
         )
+    # Each current scaling selector remains independently bound in the exact
+    # validator invocation, even when the substituted record is otherwise canonical.
+    for selected_record, selected_digest in (
+        (bootstrap / "foreign-scaling-execution.json", expected_scaling_execution_sha256),
+        (scaling_execution_record, "b" * 64),
+    ):
+        changed_scaling_invocation = _fixture_validator_invocation(
+            helper,
+            invocation=invocation,
+            bootstrap=bootstrap,
+            source=source,
+            receipt=receipt,
+            acknowledgment=ack,
+            source_manifest_sha256=manifest_digest,
+            candidate_root=candidate_root,
+            scaling_execution_record=selected_record,
+            expected_signer_fingerprint=expected_signer_fingerprint,
+            expected_scaling_execution_sha256=selected_digest,
+        )
+        with pytest.raises(helper.CacheCopyError, match="normalized option value"):
+            helper._validate_validator_invocation(
+                changed_scaling_invocation, expected_values=expected_invocation_values
+            )
     ack.write_bytes(canonical_json(ack_value)); ack.chmod(0o400)
     for secret_path in (
-        invocation, bootstrap, source, candidate_root, scaling_root, validator,
+        invocation, bootstrap, source, candidate_root, scaling_execution_record, validator,
     ):
         assert str(secret_path).encode() not in ack.read_bytes()
     original_publish = helper._publish_inventory
@@ -624,9 +636,8 @@ def exercise_release_helper_fail_atomicity(
         with pytest.raises(helper.CacheCopyError, match="protected publication"):
             helper.seal_release_result(
                 invocation, bootstrap, manifest_digest, candidate_root,
-                scaling_manifest, expected_signer_fingerprint,
-                scaling_digests["trial_harness"], scaling_digests["configuration"],
-                scaling_digests["irohad"], scaling_digests["iroha_cli"],
+                scaling_execution_record, expected_signer_fingerprint,
+                expected_scaling_execution_sha256,
             )
     finally:
         helper._publish_inventory = original_publish
@@ -635,9 +646,8 @@ def exercise_release_helper_fail_atomicity(
     with pytest.raises(helper.CacheCopyError, match="prior cleanup quarantine"):
         helper.seal_release_result(
             invocation, bootstrap, manifest_digest, candidate_root,
-            scaling_manifest, expected_signer_fingerprint,
-            scaling_digests["trial_harness"], scaling_digests["configuration"],
-            scaling_digests["irohad"], scaling_digests["iroha_cli"],
+            scaling_execution_record, expected_signer_fingerprint,
+            expected_scaling_execution_sha256,
         )
     helper.cleanup_invocation(tmp_path, invocation, "fault-seal-")
     assert not invocation.exists()

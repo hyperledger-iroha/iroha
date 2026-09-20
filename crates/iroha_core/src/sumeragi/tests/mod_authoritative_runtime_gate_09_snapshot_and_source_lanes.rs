@@ -38,9 +38,27 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
             service_idle_age: Some(Duration::from_secs(5)),
         }
     );
-    let _ = ingress
-        .try_recv_if_at(captured_at, |_| true)
+    ingress.close();
+    assert!(ingress.ensure_closed_drained_cut().is_err());
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            v2_message_with_index(2),
+            validators[1].clone(),
+        )),
+        Err(super::FairV2IngressPushError::Closed(_))
+    ));
+    let mut first = ingress
+        .try_recv_if_at_checked(captured_at, |_| true)
+        .expect("checked closed-prefix dequeue")
         .expect("drain first fair source head");
+    assert_eq!(first.sender(), &validators[0]);
+    let first_owner = first
+        .take_ingress_ownership()
+        .expect("first occurrence owner");
+    assert!(first_owner.validate_exact());
+    assert_eq!(first_owner.physical_admission_ordinal(), Some(1));
+    assert_eq!(first_owner.runtime_physical_cut(), Some(4));
+    assert!(ingress.ensure_closed_drained_cut().is_err());
     assert_eq!(
         ingress.snapshot_at(captured_at),
         super::FairV2IngressSnapshot {
@@ -50,9 +68,18 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
             service_idle_age: Some(Duration::ZERO),
         }
     );
-    let _ = ingress
-        .try_recv_if_at(captured_at, |_| true)
+    let mut second = ingress
+        .try_recv_if_at_checked(captured_at, |_| true)
+        .expect("checked closed-prefix dequeue")
         .expect("drain second fair source head");
+    assert_eq!(second.sender(), &validators[1]);
+    let second_owner = second
+        .take_ingress_ownership()
+        .expect("second occurrence owner");
+    assert!(second_owner.validate_exact());
+    assert_eq!(second_owner.physical_admission_ordinal(), Some(2));
+    assert_eq!(second_owner.runtime_physical_cut(), Some(4));
+    assert!(ingress.ensure_closed_drained_cut().is_err());
     assert_eq!(
         ingress.snapshot_at(captured_at),
         super::FairV2IngressSnapshot {
@@ -62,9 +89,17 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
             service_idle_age: Some(Duration::ZERO),
         }
     );
-    let _ = ingress
-        .try_recv_if_at(captured_at, |_| true)
+    let mut third = ingress
+        .try_recv_if_at_checked(captured_at, |_| true)
+        .expect("checked closed-prefix dequeue")
         .expect("drain remaining fair source");
+    assert_eq!(third.sender(), &validators[0]);
+    let third_owner = third
+        .take_ingress_ownership()
+        .expect("third occurrence owner");
+    assert!(third_owner.validate_exact());
+    assert_eq!(third_owner.physical_admission_ordinal(), Some(3));
+    assert_eq!(third_owner.runtime_physical_cut(), Some(4));
     assert_eq!(
         ingress.snapshot_at(captured_at),
         super::FairV2IngressSnapshot {
@@ -74,6 +109,15 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
             service_idle_age: None,
         }
     );
+    assert!(
+        ingress
+            .try_recv_if_at_checked(captured_at, |_| true)
+            .unwrap()
+            .is_none()
+    );
+    ingress
+        .ensure_closed_drained_cut()
+        .expect("all three exact closed-prefix occurrences retired");
 }
 #[test]
 fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {

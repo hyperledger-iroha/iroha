@@ -34,8 +34,7 @@ impl ResidentOwner for TransactionEntrypointIndex {
     fn resident_associations(&self) -> std::result::Result<u64, resource_inventory::Unavailable> {
         let markers = resident_inventory::lengths([
             self.indexed_heights.len(),
-            self.incomplete_merge_heights.len(),
-            self.incomplete_kaigi_signal_heights.len(),
+            self.incomplete_heights.len(),
             self.inventories_by_height.len(),
         ])?;
         self.nested_associations
@@ -45,9 +44,7 @@ impl ResidentOwner for TransactionEntrypointIndex {
     }
 
     fn resident_complete(&self) -> bool {
-        self.complete
-            && self.incomplete_merge_heights.is_empty()
-            && self.incomplete_kaigi_signal_heights.is_empty()
+        self.complete && self.incomplete_heights.is_empty()
     }
 }
 

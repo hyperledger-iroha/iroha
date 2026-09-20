@@ -83,6 +83,9 @@ TRUSTED_NAMES = {
     "approval_final_bootstrap_publication": (
         "final-bootstrap-publication.approval.v1.json"
     ),
+    "scaling_plan": "scaling-plan.json",
+    "scaling_budget": "scaling-budget.json",
+    "scaling_handoff_helper": "scaling-handoff.py",
     "sdk_dependency_bundle_manifest": "sdk-dependency-bundle-manifest.json",
     "revocation": "bootstrap-revocation",
     "runner_tool_manifest": "runner-tool-manifest.json",
@@ -268,7 +271,7 @@ def _fixture_validator_invocation(
     record = {
         "profile": "release",
         "operation": "verify-existing-and-ack",
-        "python_flags": ["-I", "-S"],
+        "python_flags": ["-I", "-B", "-S"],
         "validator": "protected:validate-receipt.py",
         "ordered_options": bindings,
     }
@@ -340,6 +343,12 @@ def _fixture_validator_values(
         ),
         "--runtime-tool-probe-result": (
             "path", str(invocation / "runtime-tool-probe-result.json"),
+        ),
+        "--scaling-execution-record": (
+            "path", str(evidence / "scaling-execution.json"),
+        ),
+        "--expected-scaling-execution-sha256": (
+            "text", _digest((evidence / "scaling-execution.json").read_bytes()),
         ),
         "--output": ("path", str(receipt)),
         "--verify-existing": ("flag", True),
@@ -413,19 +422,13 @@ def _fixture_receipt_for_validator(
                 "seed_completion": path("--g12-seed-completion"),
                 "fault_soak_completion": path("--g12-fault-soak-completion"),
             },
-            "multilane_scaling_bundle": {
-                "files": [
-                    {
-                        "relative_path": "scaling_evidence.json",
-                        **path("--scaling-evidence-manifest"),
-                    }
-                ]
-            },
-            "multilane_scaling_trust_anchors": {
-                "trial_harness_sha256": values["--expected-scaling-trial-harness-sha256"][1],
-                "configuration_sha256": values["--expected-scaling-configuration-sha256"][1],
-                "irohad_sha256": values["--expected-scaling-irohad-sha256"][1],
-                "iroha_cli_sha256": values["--expected-scaling-iroha-cli-sha256"][1],
+            "multilane_scaling": {
+                "parent_execution": {
+                    "archive_id": "release-scaling.parent-execution.v1",
+                    "sha256": values["--expected-scaling-execution-sha256"][1],
+                    "size_bytes": Path(values["--scaling-execution-record"][1]).stat().st_size,
+                    "mode": "0400",
+                },
             },
         },
     }
@@ -485,7 +488,7 @@ def test_manifest_helper_finishes_naturally_before_reporting_latched_violation(
     with pytest.raises(module.ValidationError, match=message):
         module._run_bounded(
             PYTHON,
-            ("-I", "-S", "-c", child),
+            ("-I", "-B", "-S", "-c", child),
             cwd=tmp_path,
             environment={"PATH": os.defpath},
         )
@@ -576,7 +579,7 @@ def test_manifest_helper_drains_after_generic_supervisor_exception(
     with pytest.raises(RuntimeError, match="injected supervisor failure"):
         module._run_bounded(
             PYTHON,
-            ("-I", "-S", "-c", child),
+            ("-I", "-B", "-S", "-c", child),
             cwd=tmp_path,
             environment={"PATH": os.defpath},
         )
@@ -919,26 +922,24 @@ class Fixture:
         environment: dict[str, str] | None = None,
         arguments: list[str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        result_path = self.evidence / "release-runner-result.json"
-        if checkpoint == "sealed" and result_path.exists():
-            invocation_root = (environment or self.environment).get(
-                "IROHA_RELEASE_INVOCATION_ROOT"
-            )
-            assert invocation_root is not None
-            sealed_validator = (
-                Path(invocation_root)
-                / "source"
-                / "scripts"
-                / "validate_sumeragi_v2_release_bootstrap.py"
-            )
-        else:
-            sealed_validator = (
-                self.evidence
-                / "release-runner"
-                / "source"
-                / "scripts"
-                / "validate_sumeragi_v2_release_bootstrap.py"
-            )
+        # This is the original parent's authenticated selection. Archived descriptor
+        # values remain metadata here; sealed replay never adopts a live endpoint.
+        invocation_root = Path(
+            self.marker()["runner"]["scaling_handoff"]["IROHA_RELEASE_INVOCATION_ROOT"]
+        )
+        sealed_validator = (
+            invocation_root / "source" / "scripts"
+            / "validate_sumeragi_v2_release_bootstrap.py"
+        )
+        child_environment = dict(self.environment if environment is None else environment)
+        if checkpoint == "sealed":
+            for name in (
+                "IROHA_RELEASE_SCALING_GATE_FD",
+                "IROHA_RELEASE_SCALING_INVOCATION_SHA256",
+                "IROHA_RELEASE_SCALING_CHALLENGE",
+                "IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256",
+            ):
+                child_environment.pop(name, None)
         program = (
             sealed_validator
             if checkpoint == "sealed" and sealed_validator.exists()
@@ -947,6 +948,7 @@ class Fixture:
         argv = arguments or [
             str(self.evidence / TRUSTED_NAMES["python"]),
             "-I",
+            "-B",
             "-S",
             str(program),
             "--candidate-root",
@@ -961,7 +963,7 @@ class Fixture:
         return subprocess.run(
             argv,
             cwd=self.candidate,
-            env=environment or self.environment,
+            env=child_environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -971,7 +973,9 @@ class Fixture:
         )
 
     def prepare_sealed(self, *, mode: int = 0o700) -> Path:
-        release_runner = self.evidence / "release-runner"
+        release_runner = Path(
+            self.marker()["runner"]["scaling_handoff"]["IROHA_RELEASE_INVOCATION_ROOT"]
+        )
         release_runner.mkdir(mode=mode)
         source_scripts = release_runner / "source" / "scripts"
         source_scripts.mkdir(parents=True, mode=0o700)
@@ -988,30 +992,21 @@ class Fixture:
         return release_runner
 
     def prepare_retained_sealed(self) -> Path:
-        invocation = self.root / "release-invocation"
+        invocation = Path(
+            self.marker()["runner"]["scaling_handoff"]["IROHA_RELEASE_INVOCATION_ROOT"]
+        )
         invocation.mkdir(mode=0o700)
-        self.environment["IROHA_RELEASE_INVOCATION_ROOT"] = str(invocation)
-        self.environment["IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"] = str(
-            invocation / "fixture" / "scaling-evidence-manifest"
-        )
-        marker = self.marker()
-        marker_environment = {
-            key: value
-            for key, value in self.environment.items()
-            if key
-            not in {
-                "IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
-                "SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256",
-                "PWD",
-                "SHLVL",
-                "_",
-                "__CF_USER_TEXT_ENCODING",
-            }
-        }
-        marker["runner"]["environment_sha256"] = _digest(
-            _canonical(marker_environment)
-        )
-        self.seal_marker(marker)
+        # These are metadata fixtures for the standalone validator and invocation
+        # projection. They do not assert a successful scaling experiment.
+        for name, data in (
+            ("scaling-source-paths.txt", b"scripts/nexus/run_multilane_scaling_gate.py\n"),
+            ("scaling-rustc-version.txt", b"fixture rustc selection\n"),
+            ("scaling-python-runtime.json", _canonical({"fixture": "framework-binding"})),
+            ("scaling-execution.json", _canonical({"fixture": "parent-record-path-binding"})),
+        ):
+            _write(self.evidence / name, data, 0o400)
+        (self.evidence / "scaling-verifier-python").mkdir(mode=0o700)
+        (self.evidence / "scaling-preflight").mkdir(mode=0o700)
         source_scripts = invocation / "source" / "scripts"
         source_scripts.mkdir(parents=True, mode=0o700)
         _copy(
@@ -1165,6 +1160,7 @@ class Fixture:
             _canonical(result),
             0o400,
         )
+        self.publish_private_retained_provenance(invocation)
         return invocation
 
     def publish_private_retained_provenance(self, invocation: Path) -> None:
@@ -1273,6 +1269,11 @@ def release_fixture(tmp_path: Path) -> Fixture:
         "runtime_helper_cli": b"synthetic runtime helper CLI component",
         "tool_probe_helper": fixture_tool_probe_helper(),
         "approval_contract": APPROVAL_CONTRACT.read_bytes(),
+        "scaling_plan": _canonical({"fixture": "protected-scaling-plan"}),
+        "scaling_budget": _canonical({"fixture": "protected-scaling-budget"}),
+        "scaling_handoff_helper": (
+            REPO_ROOT / "scripts" / "sumeragi_v2_release_scaling_handoff.py"
+        ).read_bytes(),
         "sdk_dependency_bundle_manifest": _canonical({
             "format": "iroha-sumeragi-v2-sdk-dependency-sources",
             "schema_version": 1,
@@ -1296,6 +1297,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
             [
                 str(PYTHON),
                 "-I",
+                "-B",
                 "-S",
                 str(RUNTIME_HELPER),
                 "--copy-framework-python",
@@ -1343,6 +1345,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         [
             str(archives["python"]),
             "-I",
+            "-B",
             "-S",
             str(archives["tool_probe_helper"]),
             "--tool-manifest",
@@ -1578,6 +1581,16 @@ def release_fixture(tmp_path: Path) -> Fixture:
             archives["sdk_dependency_bundle_manifest"].read_bytes()
         ),
     })
+    scaling_handoff = {
+        "IROHA_RELEASE_INVOCATION_ROOT": str(root / "release-invocation"),
+        "IROHA_RELEASE_TEMP_BASE": str(root),
+        "IROHA_RELEASE_SCALING_GATE_FD": "27",
+        "IROHA_RELEASE_SCALING_INVOCATION_SHA256": "b" * 64,
+        "IROHA_RELEASE_SCALING_CHALLENGE": "c" * 64,
+        "IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256": _digest(
+            archives["scaling_handoff_helper"].read_bytes()
+        ),
+    }
     closed_environment = {
         "HOME": str(evidence / "home"),
         "LANG": "C",
@@ -1603,6 +1616,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         "GIT_TERMINAL_PROMPT": "0",
         **policy_environment,
         **aliases,
+        **scaling_handoff,
     }
     marker = {
         "schema_version": 2,
@@ -1630,6 +1644,8 @@ def release_fixture(tmp_path: Path) -> Fixture:
                 "python3": "release-bootstrap.python.v1",
             },
             "environment_sha256": _digest(_canonical(closed_environment)),
+            "scaling_handoff": scaling_handoff,
+            "scaling_preflight_timeout_seconds": 28800,
             "mode": f"{stat.S_IMODE(runner.stat().st_mode):04o}",
             "output": {
                 "stderr_archive_id": "release-bootstrap.runner-stderr.v1",
@@ -1664,6 +1680,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
                 "argv": [
                     str(archives["python"]),
                     "-I",
+                    "-B",
                     "-S",
                     "-c",
                     "import sys;sys.stdout.write(sys.executable+'\\n')",
@@ -1763,6 +1780,10 @@ def test_sealed_checkpoint_accepts_private_runner_subtree_and_ambient_changes(
     bootstrap = importlib.util.module_from_spec(bootstrap_spec)
     sys.modules[bootstrap_spec.name] = bootstrap
     bootstrap_spec.loader.exec_module(bootstrap)
+    scaling_execution = bootstrap._read_file(
+        release_fixture.evidence / "scaling-execution.json",
+        "fixture original parent execution record", maximum_bytes=4096,
+    )
     evidence_fd = os.open(
         release_fixture.evidence,
         os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
@@ -1773,6 +1794,7 @@ def test_sealed_checkpoint_accepts_private_runner_subtree_and_ambient_changes(
             evidence_fd,
             candidate=release_fixture.candidate,
             authenticated_environment=release_fixture.environment,
+            scaling_execution=scaling_execution,
         )
     finally:
         os.close(evidence_fd)
@@ -1868,6 +1890,7 @@ def test_sealed_checkpoint_accepts_private_runner_subtree_and_ambient_changes(
                 evidence_fd,
                 candidate=release_fixture.candidate,
                 authenticated_environment=release_fixture.environment,
+                scaling_execution=scaling_execution,
             )
     finally:
         os.close(evidence_fd)
@@ -1882,13 +1905,17 @@ def test_sealed_checkpoint_accepts_private_runner_subtree_and_ambient_changes(
 
 
 def test_entry_rejects_runner_subtree_before_phase_transition(release_fixture: Fixture) -> None:
-    release_fixture.prepare_sealed()
+    # An unregistered top-level evidence subtree remains forbidden; the original
+    # external invocation root itself may legitimately exist before handoff.
+    (release_fixture.evidence / "release-runner").mkdir(mode=0o700)
     _assert_rejected(release_fixture.run())
 
 
 def test_sealed_requires_exact_private_runner_subtree(release_fixture: Fixture) -> None:
     _assert_rejected(release_fixture.run(checkpoint="sealed"))
-    (release_fixture.evidence / "release-runner").mkdir(mode=0o755)
+    Path(release_fixture.marker()["runner"]["scaling_handoff"][
+        "IROHA_RELEASE_INVOCATION_ROOT"
+    ]).mkdir(mode=0o755)
     _assert_rejected(release_fixture.run(checkpoint="sealed"))
 
 
@@ -1903,8 +1930,9 @@ def test_sealed_rejects_drifted_runner_owned_validator_copy(
 ) -> None:
     release_fixture.prepare_sealed()
     sealed_validator = (
-        release_fixture.evidence
-        / "release-runner"
+        Path(release_fixture.marker()["runner"]["scaling_handoff"][
+            "IROHA_RELEASE_INVOCATION_ROOT"
+        ])
         / "source"
         / "scripts"
         / "validate_sumeragi_v2_release_bootstrap.py"
@@ -2154,6 +2182,7 @@ def test_missing_literal_profile_contract_is_rejected(release_fixture: Fixture) 
     arguments = [
         str(release_fixture.evidence / TRUSTED_NAMES["python"]),
         "-I",
+        "-B",
         "-S",
         str(release_fixture.validator),
         "--candidate-root",

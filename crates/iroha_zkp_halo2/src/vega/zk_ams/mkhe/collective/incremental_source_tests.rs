@@ -766,13 +766,26 @@ fn two_limb_incremental_kernel_rejects_foreign_key_and_zeroizes_preallocated_dro
 #[test]
 fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_reference() {
     let source = include_str!("incremental_source.rs");
-    let disabled_phase23 = concat!(
-        "#[cfg(any())]\n",
+    let private_phase23 = concat!(
         "#[path = \"incremental_source_phase23.rs\"]\n",
         "mod incremental_source_phase23;"
     );
-    assert!(source.contains(disabled_phase23));
-    assert_eq!(source.matches("mod incremental_source_phase23;").count(), 1);
+    assert_eq!(source.matches(private_phase23).count(), 1);
+    // Exactly the private path and declaration: no public module or re-export.
+    assert_eq!(source.matches("incremental_source_phase23").count(), 2);
+    let preceding_item = source
+        .split(private_phase23)
+        .next()
+        .expect("private Phase23 registration")
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("//"))
+        .expect("item preceding private Phase23 registration");
+    // Comments may document the private owner, but no cfg/cfg_attr or other
+    // attribute may hide its normal compilation before the path attribute.
+    assert!(preceding_item.ends_with(';') || preceding_item.ends_with('}'));
+    assert!(!preceding_item.starts_with('#'));
     assert!(source.contains("Source-authenticated, limb-streamed collective encryption"));
     assert!(source.contains("38 independently addressed `c0` limbs"));
     assert!(source.contains("38 independently addressed `c1` limbs"));
@@ -991,3 +1004,6 @@ fn incremental_source_has_sealed_limb_streaming_surface_and_private_native_refer
         9_445_392
     );
 }
+
+#[path = "incremental_source_tests/owned_manifest_authority_v1.rs"]
+mod owned_manifest_authority_v1;

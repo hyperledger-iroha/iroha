@@ -99,9 +99,9 @@ fn live_idle_decision_cleanup_reconciles_runner_frontier() {
                 assert!(executor.protected_decision.is_none());
                 assert!(executor.pending_runner_decision_cleanup.is_none());
                 let step = if pacemaker_only {
-                    executor.step_pacemaker_once(now, &mut fixture.services)
+                    executor.step_pacemaker_once(now, fixture.services.as_mut())
                 } else {
-                    executor.step(now, &mut fixture.services)
+                    executor.step(now, fixture.services.as_mut())
                 }
                 .expect("observe the live Decision in an otherwise idle runtime turn");
                 assert_eq!(step, EffectExecutorStep::Idle);
@@ -550,10 +550,10 @@ fn cold_decision_fetch_publishes_first_network_body_through_completion_and_apply
                 // physical Validate, Apply publication and another cold reopen.
                 recover_stale_prepare_decision_crash_fixture(
                     ReadyBodyFixture {
-                        transport,
-                        owner,
-                        planner_io,
-                        services,
+                        transport: Box::new(transport),
+                        owner: Box::new(owner),
+                        planner_io: Box::new(planner_io),
+                        services: Box::new(services),
                         _owner_directory: directory,
                         certificate,
                         ordinal: 0,
@@ -964,7 +964,6 @@ fn recover_stale_prepare_decision_crash_fixture(
         launched.with_proposal_restart_fixture_for_test(|_, executor, _| {
             assert_eq!(executor.runtime.queued_commands(), 0);
             executor
-                .runtime
                 .enqueue_network(wire::ConsensusMessageV2::new(
                     wire::ConsensusMessageV2Payload::QuorumCertificate(duplicate_commit),
                 ))
@@ -1075,9 +1074,9 @@ fn recover_stale_prepare_decision_crash_fixture(
     transport.executor = executor;
     let fixture = ReadyBodyFixture {
         transport,
-        owner,
-        planner_io: *planner_io,
-        services,
+        owner: Box::new(owner),
+        planner_io,
+        services: Box::new(services),
         _owner_directory: directory,
         certificate,
         ordinal: fetch,

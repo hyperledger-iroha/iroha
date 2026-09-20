@@ -5,7 +5,7 @@ enum AutonomousRuntimeEffectFixture {
 }
 
 const AUTONOMOUS_RUNTIME_DATASPACE: &str = "catalogmerge";
-const AUTONOMOUS_RUNTIME_LANE: LaneId = LaneId::new(1);
+const AUTONOMOUS_RUNTIME_LANE: LaneId = LaneId::new(2);
 
 fn configured_runtime_effect_queue_plan_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock)
 {
@@ -77,7 +77,7 @@ fn configured_runtime_effect_queue_plan_state() -> (State, Vec<KeyPair>, Vec<Key
 }
 
 fn autonomous_runtime_effect_entrypoint(
-    state: &mut State,
+    state: &State,
     validator_keypairs: &[KeyPair],
     tag: u8,
     effect: AutonomousRuntimeEffectFixture,
@@ -187,33 +187,71 @@ fn autonomous_runtime_effect_entrypoint(
     )
 }
 
-fn autonomous_runtime_effect_fixture(
+fn install_native_runtime_startup_registry(state: &State, keys: &[KeyPair]) {
+    let nexus = state.nexus_snapshot();
+    let validators = keys
+        .iter()
+        .map(|key| {
+            let validator = AccountId::new(key.public_key().clone()).to_string();
+            let peer_id = PeerId::new(key.public_key().clone()).to_string();
+            norito::json!({ "validator": validator, "peer_id": peer_id })
+        })
+        .collect::<Vec<_>>();
+    let directory = tempfile::tempdir().unwrap();
+    for lane in nexus.lane_catalog.lanes() {
+        let alias = lane.alias.clone();
+        let lane_validators = validators.clone();
+        let manifest = norito::json!({
+            "lane": alias, "version": 1,
+            "validators": lane_validators, "quorum": 3,
+        });
+        std::fs::write(
+            directory
+                .path()
+                .join(format!("{}.manifest.json", lane.alias)),
+            norito::json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+    let registry = Arc::new(LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &iroha_config::parameters::actual::LaneRegistry {
+            manifest_directory: Some(directory.path().to_path_buf()),
+            ..Default::default()
+        },
+    ));
+    assert!(registry.is_bound_to_catalog(&nexus.lane_catalog));
+    state.install_lane_manifests(&registry);
+}
+
+fn autonomous_native_runtime_effect_fixture(
     effect: AutonomousRuntimeEffectFixture,
-) -> (State, MergeLedgerEntry, SignedBlock) {
-    let (state, entry, carrier, _) =
-        autonomous_merge_commit_authorization_fixture_with_runtime_effect(
-            false,
-            false,
-            None,
-            false,
-            Some(effect),
-        );
-    assert!(
-        entry
-            .execution_batch
-            .as_ref()
-            .expect("runtime execution batch")
-            .lanes
-            .iter()
-            .all(|lane| lane.results.iter().all(|result| result.0.is_ok())),
-        "runtime-effect fixture must commit successful native parameter execution: {:?}",
-        entry
-            .execution_batch
-            .as_ref()
-            .expect("runtime execution batch")
-            .lanes
+) -> (Box<NativeEconomicFixture>, SignedBlock, HeightContext) {
+    native_publication_fixture_for_test(&[NativeEconomicCase::RuntimeEffect(effect)])
+}
+
+fn assert_native_application_recorded_for_test(state: &State, carrier: &SignedBlock) {
+    let batch = carrier
+        .execution_context()
+        .unwrap()
+        .native_lane_decisions
+        .as_deref()
+        .unwrap();
+    let identity = super::lane_decision_batch::native_application_identity(
+        &carrier.header(),
+        batch.canonical_hash().unwrap(),
     );
-    (state, entry, carrier)
+    let key = StatePath::from_str(&format!(
+        "native_lane_application_{}",
+        hex::encode(identity.as_ref())
+    ))
+    .unwrap();
+    assert_eq!(
+        state.world.smart_contract_state.view().get(&key),
+        Some(&norito::encode_canonical(&identity).unwrap()),
+        "exact once-only native application marker"
+    );
 }
 
 #[expect(
@@ -461,24 +499,12 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     })
 }
 fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        &state.network_id,
-        certificate,
-    )
-    .expect("fixture QueuePlan admission certificate");
-    let mut world = state.world.block();
-    world.smart_contract_state.insert(
-        State::queue_plan_admission_registry_marker_key(&admission.registry_key)
-            .expect("fixture registry key"),
-        State::queue_plan_admission_registry_marker_payload(&admission.registry_value)
-            .expect("fixture registry value"),
-    );
-    State::stage_queue_plan_pending_obligation_in_storage(
-        &mut world.smart_contract_state,
-        &admission,
-    )
-    .expect("fixture pending QueuePlan obligation");
-    world.commit();
+    let admission =
+        validated_queue_plan_input_certificate_for_state_test(&state.network_id, certificate)
+            .expect("fixture QueuePlan admission certificate");
+    state
+        .install_queue_plan_pending_binding_for_test(&admission.certificate.binding)
+        .expect("fixture exact ranked QueuePlan admission and pending obligation");
 }
 fn seed_pending_queue_plan_binding_state_for_test(
     state: &State,
@@ -517,11 +543,9 @@ fn queue_plan_pending_obligation_for_test(
     state: &State,
     certificate: &[u8],
 ) -> QueuePlanPendingObligationV1 {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-        &state.network_id,
-        certificate,
-    )
-    .expect("fixture QueuePlan admission certificate");
+    let admission =
+        validated_queue_plan_input_certificate_for_state_test(&state.network_id, certificate)
+            .expect("fixture QueuePlan admission certificate");
     State::queue_plan_pending_obligation_from_admission(&admission)
         .expect("fixture pending QueuePlan obligation")
 }
@@ -740,12 +764,6 @@ fn autonomous_merge_batch_transfer_commit_authorization_fixture(
         autonomous_merge_commit_authorization_fixture_inner(false, false, Some(mode), false);
     (state, entry, carrier)
 }
-fn autonomous_sealed_reveal_merge_commit_authorization_fixture()
--> (State, MergeLedgerEntry, SignedBlock) {
-    let (state, entry, carrier, _) =
-        autonomous_merge_commit_authorization_fixture_inner(false, false, None, true);
-    (state, entry, carrier)
-}
 #[derive(Clone, Copy)]
 enum QueuePlanTransferFixture {
     Single,
@@ -899,6 +917,267 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     )
 }
 
+fn install_exact_merge_beacon_fixture(
+    state: &State,
+    world: &mut WorldBlock<'_>,
+    validators: &[KeyPair],
+    parent: &SignedBlock,
+) -> iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1 {
+    use crate::governance::parliament::{
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1,
+        parliament_attempt_policy_v1,
+    };
+    use iroha_data_model::{
+        consensus::GlobalThresholdBeaconChainAnchorV1,
+        governance::types::{
+            BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
+            GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1,
+            GovernanceExpectedHeadV1, GovernanceStageV1, ProposalContentId, SortitionRequestV1,
+            parliament_candidate_root_v1,
+        },
+        isi::governance::ParliamentSortitionRequestRegistrationV1,
+    };
+    let mut roster = validators
+        .iter()
+        .map(|key| PeerId::new(key.public_key().clone()))
+        .collect::<Vec<_>>();
+    roster.sort();
+    let height = parent.header().height().get() + 1;
+    let (key, pulses) = crate::beacon::signed_pulses_fixture_for_roster_and_anchors(
+        *state.network_id_ref(),
+        &roster,
+        &[
+            GlobalThresholdBeaconChainAnchorV1 {
+                height: parent.header().height().get() - 1,
+                block_hash: parent
+                    .header()
+                    .prev_block_hash()
+                    .expect("fixture parent has predecessor"),
+            },
+            GlobalThresholdBeaconChainAnchorV1 {
+                height: height - 1,
+                block_hash: parent.hash(),
+            },
+        ],
+    );
+    let prior = pulses[0];
+    let next = pulses[1];
+    let link = crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(&prior)
+        .expect("real roster-bound prior pulse");
+    let proposal = indexed_deploy_contract_proposal(1);
+    let proposal_content_id = ProposalContentId::new(proposal.kind.fingerprint());
+    let attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
+    let (risk_tier, requirements) = parliament_attempt_policy_v1(&proposal.kind);
+    let mut attempt = ParliamentAttemptStateV1::try_new(
+        GovernanceAttemptV1 {
+            id: attempt_id,
+            proposal_content_id,
+            sequence: 0,
+            risk_tier,
+            stage: GovernanceStageV1::Qualification,
+            status: GovernanceAttemptStatusV1::Active,
+        },
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+        height - 1,
+        proposal.kind.effect_preimage_hash_v1(),
+        GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: proposal
+                .kind
+                .governed_subject_id_v1()
+                .expect("exact proposal subject"),
+        }),
+        requirements.clone(),
+    )
+    .expect("native pending Parliament attempt");
+    attempt
+        .complete_qualification(attempt_id)
+        .expect("qualified Parliament attempt");
+    let mut candidates = roster
+        .iter()
+        .map(|peer| AccountId::new(peer.public_key().clone()))
+        .collect::<Vec<_>>();
+    candidates.sort();
+    let registrations = requirements
+        .iter()
+        .map(|requirement| {
+            let body = requirement.body;
+            let request = SortitionRequestV1::try_new_canonical(
+                attempt_id,
+                BodyElectionAttemptId::derive_v1(attempt_id, body, 0),
+                body,
+                parliament_candidate_root_v1(attempt_id, body, &candidates),
+                u32::try_from(candidates.len()).expect("four native validator candidates"),
+                u32::try_from(crate::governance::draw::body_committee_size(
+                    &state.gov, body,
+                ))
+                .expect("configured Parliament body target fits u32"),
+                proposal.created_height,
+                height,
+                BeaconSessionId::for_network_v1(state.network_id_ref()),
+                None,
+            )
+            .expect("exact committed request for carrier-height pulse");
+            ParliamentSortitionRequestRegistrationV1 {
+                sequence: 0,
+                request,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut request_ids = registrations
+        .iter()
+        .map(|registration| registration.request.id)
+        .collect::<Vec<_>>();
+    request_ids.sort();
+    // The typed proposal determines the complete initial body pipeline. Persist
+    // every request together so snapshot restore verifies that same policy.
+    attempt
+        .register_sortition_request_batch(attempt_id, registrations, candidates)
+        .expect("complete native pending request batch");
+    attempt
+        .validate()
+        .expect("canonical pending Parliament state");
+    attempt
+        .validate_proposal_bindings_v1(&proposal.kind)
+        .expect("pending attempt retains the exact typed proposal policy");
+    // Prove the exact candidates and configured target admit a native assignment
+    // using the genuine next pulse, without consuming the persisted pending slot.
+    let mut drawn = attempt.clone();
+    drawn
+        .consume_sortition_pulse_batch(
+            attempt_id,
+            request_ids,
+            BeaconSessionId::for_network_v1(state.network_id_ref()),
+            height,
+            BeaconPulseId::new(next.pulse_id),
+            crate::beacon::global_threshold_beacon_governance_seed_v1(&next, height),
+            state.network_id_ref(),
+            &state.gov,
+        )
+        .expect("real pulse admits the configured native assignment");
+    drawn
+        .validate()
+        .expect("drawn assignment satisfies native invariants");
+    drawn
+        .validate_proposal_bindings_v1(&proposal.kind)
+        .expect("drawn assignment retains the exact typed proposal policy");
+    world
+        .governance_proposals
+        .insert(*proposal_content_id.as_bytes(), proposal);
+    let old_session = *world
+        .global_beacon_active_session
+        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
+        .expect("existing queue-plan fixture session");
+    world.global_beacon_key_sessions.remove(old_session);
+    let old_pulses = world
+        .global_beacon_pulses
+        .iter()
+        .map(|(id, _)| *id)
+        .collect::<Vec<_>>();
+    for id in old_pulses {
+        world.global_beacon_pulses.remove(id);
+    }
+    let old_slots = world
+        .global_beacon_pulse_slots
+        .iter()
+        .map(|(slot, _)| *slot)
+        .collect::<Vec<_>>();
+    for slot in old_slots {
+        world.global_beacon_pulse_slots.remove(slot);
+    }
+    world
+        .global_beacon_key_sessions
+        .insert(key.session.session_id, key);
+    world
+        .global_beacon_active_session
+        .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, prior.session_id);
+    world.global_beacon_pulses.insert(prior.pulse_id, prior);
+    world.global_beacon_pulse_slots.insert(
+        (
+            BeaconSessionId::for_network_v1(&prior.network_id),
+            prior.height,
+        ),
+        prior.pulse_id,
+    );
+    world
+        .global_beacon_latest_pulse
+        .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, link);
+    {
+        let mut transaction = world.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        transaction
+            .put_parliament_attempt(attempt)
+            .expect("persist native required-slot indexes");
+        transaction.apply();
+    }
+    next
+}
+
+// The native input Decision is the only economic source authority. The pulse
+// session and pending request are installed before admission finality; the
+// complete applying source base therefore commits them before reconstruction.
+fn autonomous_native_beacon_composition_fixture() -> (
+    Box<NativeEconomicFixture>,
+    SignedBlock,
+    iroha_data_model::block::consensus_v2::HeightContext,
+) {
+    let mut pulse = None;
+    let fixture = native_economic_fixture_with_initializers(
+        &[NativeEconomicCase::Transfer(25)],
+        false,
+        Some(DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 8192,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 2 * 1024 * 1024,
+            max_chunk_count: 512,
+        }),
+        None,
+        |_| {},
+        |state, parent| {
+            let keys = (0xD3_u8..=0xD6)
+                .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+                .collect::<Vec<_>>();
+            let mut world = state.world.block();
+            pulse = Some(install_exact_merge_beacon_fixture(
+                state, &mut world, &keys, parent,
+            ));
+            world.commit();
+        },
+    );
+    let mut carrier = native_consumer_stage_carrier(&fixture);
+    carrier.set_npos_consensus_effects(Some(iroha_data_model::consensus::NposConsensusEffects {
+        finalized_global_beacon_pulse: pulse,
+        ..Default::default()
+    }));
+    let key = merge_carrier_finality_fixture_keypair();
+    carrier
+        .replace_signatures(BTreeSet::from([
+            iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::from_hash(key.private_key(), carrier.hash()),
+            ),
+        ]))
+        .unwrap();
+    let parent = fixture
+        .native
+        .state
+        .kura
+        .v2_finality_artifact(fixture.native.block.header().height().get())
+        .unwrap()
+        .unwrap();
+    let context = crate::sumeragi::v2_context::build_successor_height_context(
+        &parent,
+        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(&fixture.native.state)
+            .expect("derive Native applying policy from its exact committed predecessor"),
+        None,
+    )
+    .unwrap();
+    (fixture, carrier, context)
+}
+
 fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
     seed_expired_axt_replay: bool,
     seed_due_start_effect: bool,
@@ -911,11 +1190,52 @@ fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
     SignedBlock,
     Option<AxtHandleReplayKey>,
 ) {
+    autonomous_merge_commit_authorization_fixture_with_beacon(
+        seed_expired_axt_replay,
+        seed_due_start_effect,
+        transfer_fixture,
+        wrap_in_sealed_reveal,
+        runtime_effect,
+        false,
+    )
+}
+
+/// Exact certified source and carrier before output validation or durability.
+/// This grants no global finality, output seal or publication authorization.
+struct UnpersistedAutonomousMergeFixture {
+    state: State,
+    entry: MergeLedgerEntry,
+    carrier: SignedBlock,
+    parent: SignedBlock,
+    validator_keypairs: Vec<KeyPair>,
+    expired_axt_replay_key: Option<AxtHandleReplayKey>,
+    requested_beacon: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+}
+
+/// Produce the same actual RS16 source and certified merge candidate used by
+/// the full fixture, stopping before its separately owned carrier output phase.
+fn unpersisted_autonomous_merge_commit_fixture(
+    seed_expired_axt_replay: bool,
+    seed_due_start_effect: bool,
+    transfer_fixture: Option<QueuePlanTransferFixture>,
+    wrap_in_sealed_reveal: bool,
+    runtime_effect: Option<AutonomousRuntimeEffectFixture>,
+    with_beacon: bool,
+) -> UnpersistedAutonomousMergeFixture {
     let (mut state, validator_keypairs, commit_keypairs, parent) = if runtime_effect.is_some() {
         configured_runtime_effect_queue_plan_state()
     } else {
         configured_single_lane_queue_plan_state()
     };
+    // Install the exact public session/history/request before any admission,
+    // pre-execution or QC commits the parent state. Never mutate the certified base.
+    let requested_beacon = with_beacon.then(|| {
+        let mut world = state.world.block();
+        let pulse =
+            install_exact_merge_beacon_fixture(&state, &mut world, &validator_keypairs, &parent);
+        world.commit();
+        pulse
+    });
     let authority_height = parent.header().height().get();
     let carrier_height = authority_height
         .checked_add(1)
@@ -1020,7 +1340,6 @@ fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
         NonZeroU64::new(carrier_height).expect("fixture carrier height is non-zero"),
         Some(parent.hash()),
         None,
-        None,
         u64::try_from(parent.header().creation_time().as_millis())
             .expect("fixture parent time fits u64")
             .saturating_add(1),
@@ -1091,34 +1410,82 @@ fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
         .expect("fixture autonomous execution candidate is valid");
     let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
     let entry = merge_entry_from_candidate(candidate, qc);
-    let mut carrier = certified_merge_carrier_after(&parent, &entry);
-    if let Some(fixture) = transfer_fixture {
-        let committed_fragments = match fixture {
-            QueuePlanTransferFixture::Single => 1,
-            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => 2,
-        };
-        carrier.set_committed_fragment_count(committed_fragments);
-    } else if runtime_effect.is_some() {
-        // Count the successful source and any actual native block-start work;
-        // do not assume an instruction count or invent an empty fragment.
-        let staged = state
-            .block_with_certified_merge_entry(
-                carrier.header().clone(),
-                &entry,
-                ConsensusMode::Permissioned,
-            )
-            .expect("derive fragments from the exact native runtime-effect carrier and source");
-        let committed_fragments = u64::try_from(staged.committed_fragment_count())
-            .expect("native runtime-effect fragment count fits u64");
-        assert!(
-            committed_fragments > 0,
-            "successful source must commit a fragment"
+    let carrier = certified_merge_carrier_after(&parent, &entry);
+    UnpersistedAutonomousMergeFixture {
+        state,
+        entry,
+        carrier,
+        parent,
+        validator_keypairs,
+        expired_axt_replay_key,
+        requested_beacon,
+    }
+}
+
+fn autonomous_merge_commit_authorization_fixture_with_beacon(
+    seed_expired_axt_replay: bool,
+    seed_due_start_effect: bool,
+    transfer_fixture: Option<QueuePlanTransferFixture>,
+    wrap_in_sealed_reveal: bool,
+    runtime_effect: Option<AutonomousRuntimeEffectFixture>,
+    with_beacon: bool,
+) -> (
+    State,
+    MergeLedgerEntry,
+    SignedBlock,
+    Option<AxtHandleReplayKey>,
+) {
+    let UnpersistedAutonomousMergeFixture {
+        state,
+        entry,
+        mut carrier,
+        parent,
+        validator_keypairs,
+        expired_axt_replay_key,
+        requested_beacon,
+    } = unpersisted_autonomous_merge_commit_fixture(
+        seed_expired_axt_replay,
+        seed_due_start_effect,
+        transfer_fixture,
+        wrap_in_sealed_reveal,
+        runtime_effect,
+        with_beacon,
+    );
+    if transfer_fixture.is_some() || runtime_effect.is_some() || wrap_in_sealed_reveal {
+        // Setting the certified execution context leaves a resultless proposal.
+        // Only the actual execution owner may attach its rows, fragment count,
+        // transcripts and policy; a fixture cannot copy nonexistent results.
+        let mut staged = state
+            .block_with_certified_merge_entry(carrier.header(), &entry, ConsensusMode::Permissioned)
+            .expect("stage the exact native runtime-effect carrier and source");
+        let validated = ValidBlock::validate_unchecked(carrier, &mut staged).unpack(|_| {});
+        carrier = validated.into();
+        let committed_fragments = carrier
+            .committed_fragment_count()
+            .expect("actual validation attaches the fragment count");
+        if transfer_fixture.is_some() || runtime_effect.is_some() {
+            assert!(
+                committed_fragments > 0,
+                "successful source must commit a fragment"
+            );
+        }
+        assert_eq!(
+            committed_fragments,
+            u64::try_from(staged.committed_fragment_count())
+                .expect("native runtime-effect fragment count fits u64"),
+            "the carrier retains exactly its actual executed fragments"
         );
         drop(staged);
-        carrier.set_committed_fragment_count(committed_fragments);
-    } else if wrap_in_sealed_reveal {
-        // One applied sealed reveal commits one instruction fragment.
-        carrier.set_committed_fragment_count(1);
+    }
+    if let Some(pulse) = requested_beacon {
+        carrier.set_npos_consensus_effects(Some(
+            iroha_data_model::consensus::NposConsensusEffects {
+                finalized_global_beacon_pulse: Some(pulse),
+                ..Default::default()
+            },
+        ));
+        // The complete authenticated execution owner must attach outputs after
+        // this proposal mutation; old result vectors cannot be retained.
     }
     state
         .kura
@@ -1132,106 +1499,13 @@ fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
     );
     (state, entry, carrier, expired_axt_replay_key)
 }
-fn staged_autonomous_merge_commit_block<'state>(
-    state: &'state State,
-    entry: &MergeLedgerEntry,
-    carrier: &SignedBlock,
-) -> StateBlock<'state> {
-    let mut state_block = state
-        .block_with_certified_merge_entry(
-            carrier.header().clone(),
-            entry,
-            ConsensusMode::Permissioned,
-        )
-        .expect("certified autonomous execution must stage on its exact carrier");
-    assert!(
-        state_block
-            .canonical_wsv_merge_commit_authorization
-            .is_some(),
-        "successful re-execution must mint canonical WSV commit authorization"
-    );
-    stage_exact_autonomous_carrier_membership_for_pre_vote(&mut state_block, carrier);
-    let (time_entrypoints, time_hashes, time_results, time_execution_hashes) =
-        state_block.execute_time_triggers(&carrier.header());
-    assert!(time_entrypoints.is_empty());
-    assert!(time_hashes.is_empty());
-    assert!(time_results.is_empty());
-    assert!(time_execution_hashes.is_empty());
-    state_block
-        .validate_staged_merge_execution_authorization()
-        .expect("pre-vote authorization must bind deterministic carrier events");
-    let committed = ValidBlock::new_unverified_for_tests(carrier.clone())
-        .commit_unchecked()
-        .unpack(|_| {});
-    let topology = state.commit_topology_snapshot();
-    let (_events, authorization) = state_block.apply_without_execution_inner(
-        &committed,
-        topology,
-        ApplyTopologyAuthority::Fixture,
-    );
-    authorization.expect("fixture application must authorize the exact canonical carrier");
-    assert!(
-        state_block
-            .canonical_carrier_commit_metadata_authorization
-            .is_some(),
-        "exact finalized carrier application must mint metadata authorization"
-    );
-    state_block
-}
-fn production_validated_autonomous_merge_commit_block<'state>(
-    state: &'state State,
-    entry: &MergeLedgerEntry,
-    carrier: &SignedBlock,
-) -> StateBlock<'state> {
-    let mut state_block = state
-        .block_with_certified_merge_entry(
-            carrier.header().clone(),
-            entry,
-            ConsensusMode::Permissioned,
-        )
-        .expect("certified autonomous execution must stage on its exact carrier");
-    let valid = ValidBlock::validate_unchecked(carrier.clone(), &mut state_block).unpack(|_| {});
-    let _witness = state_block
-        .take_exec_witness()
-        .expect("production validation must hand its execution witness to consensus");
-    assert!(
-        state_block.batch_transfer_outcomes.is_empty(),
-        "production carrier finalization must not inherit autonomous receipt rows"
-    );
-    let committed = valid.commit_unchecked().unpack(|_| {});
-    assert_eq!(
-        committed.as_ref().hash(),
-        carrier.hash(),
-        "production validation must retain the certified carrier identity"
-    );
-    let topology = state.commit_topology_snapshot();
-    let (_events, authorization) = state_block.apply_without_execution_inner(
-        &committed,
-        topology,
-        ApplyTopologyAuthority::Fixture,
-    );
-    authorization.expect("production-validated carrier application must remain authorized");
-    assert!(
-        state_block
-            .canonical_carrier_commit_metadata_authorization
-            .is_some(),
-        "production carrier application must mint metadata authorization"
-    );
-    state_block
-        .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::FinalizedCarrier {
-            carrier_height: carrier.header().height().get(),
-            carrier_hash: &carrier.hash(),
-        })
-        .expect("production consumer handoff must leave the exact finalized carrier surface");
-    state_block
-}
 fn stage_exact_autonomous_carrier_membership_for_pre_vote(
     state_block: &mut StateBlock<'_>,
     carrier: &SignedBlock,
 ) {
     let height = autonomous_carrier_transaction_height(state_block);
     state_block
-        .stage_canonical_carrier_membership(carrier.entrypoint_hashes(), height)
+        .stage_canonical_carrier_membership(carrier.network_input_hashes(), height)
         .expect("certified carrier membership must match its merge execution batch");
 }
 fn autonomous_carrier_transaction_height(state_block: &StateBlock<'_>) -> NonZeroUsize {
@@ -1250,59 +1524,4 @@ fn autonomous_carrier_parent_height(carrier: &SignedBlock) -> usize {
             .expect("autonomous carrier has a parent"),
     )
     .expect("autonomous carrier parent height fits usize")
-}
-struct ExactTestStateBlockCommitAuthorization {
-    carrier_block_hash: HashOf<BlockHeader>,
-    execution_reference: iroha_data_model::block::CertifiedMergeLedgerReference,
-    lane_count: usize,
-}
-impl StateBlockCommitAuthorization for ExactTestStateBlockCommitAuthorization {
-    fn consume_for_state_commit(
-        self: Box<Self>,
-        carrier_block_hash: HashOf<BlockHeader>,
-        staged_merge_entry: Option<&MergeLedgerEntry>,
-    ) -> Result<(), String> {
-        let entry = staged_merge_entry
-            .filter(|entry| entry.execution_batch.is_some())
-            .ok_or_else(|| "test authorization requires one autonomous merge entry".to_owned())?;
-        let lane_count = entry
-            .execution_batch
-            .as_ref()
-            .expect("filtered autonomous execution entry")
-            .lanes
-            .len();
-        if carrier_block_hash != self.carrier_block_hash
-            || iroha_data_model::block::CertifiedMergeLedgerReference::new(entry)
-                != self.execution_reference
-            || lane_count != self.lane_count
-        {
-            return Err("test authorization identity changed before State commit".to_owned());
-        }
-        Ok(())
-    }
-}
-fn exact_test_state_commit_authorization(
-    state_block: &StateBlock<'_>,
-) -> Box<dyn StateBlockCommitAuthorization> {
-    let entry = state_block
-        .staged_merge_entry
-        .as_ref()
-        .filter(|entry| entry.execution_batch.is_some())
-        .expect("fixture State block carries autonomous execution");
-    Box::new(ExactTestStateBlockCommitAuthorization {
-        carrier_block_hash: state_block._curr_block.hash(),
-        execution_reference: iroha_data_model::block::CertifiedMergeLedgerReference::new(entry),
-        lane_count: entry
-            .execution_batch
-            .as_ref()
-            .expect("filtered autonomous execution entry")
-            .lanes
-            .len(),
-    })
-}
-fn commit_staged_autonomous_for_test(
-    state_block: StateBlock<'_>,
-) -> Result<(), TransactionsBlockError> {
-    let authorization = exact_test_state_commit_authorization(&state_block);
-    state_block.commit_with_state_commit_authorization(authorization)
 }

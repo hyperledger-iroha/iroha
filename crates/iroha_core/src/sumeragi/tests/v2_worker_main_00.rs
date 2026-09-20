@@ -9,7 +9,6 @@ use crate::sumeragi::{
     v2_block_sync::tests::durable_history_fixture,
     v2_body_store::DurableBodyReceipt,
     v2_chunks::encode_payload,
-    v2_core::MAX_EFFECTS_PER_STEP,
     v2_effects::EffectQueueConfig,
     v2_lane_work::tests::{
         durable_lane_history_fixture, historical_autonomous_lane_certificate_fixture,
@@ -17,7 +16,7 @@ use crate::sumeragi::{
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
         LocalProposalEffectOwnership, RetiredBodyPipelineCompletions, RuntimeEffectOwnership,
-        RuntimeLifecycleOwner, RuntimeStep, bind_adapter_effect_batch_ownership,
+        RuntimeStep, bind_adapter_effect_batch_ownership,
     },
     v2_transport::{authenticate_certified_body_request, authenticate_payload_chunk},
 };
@@ -328,8 +327,6 @@ struct SaturatedCompletionRuntime {
     next_lifecycle_ordinal: u128,
     effect_owners: BTreeMap<Hash, crate::sumeragi::v2_runtime::RuntimeEffectOwnerAssignment>,
     exact_effect_ownership: Option<(AdapterEffect, RuntimeEffectOwnership)>,
-    external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
-    external_lifecycle_owner_capacity: Option<usize>,
 }
 impl SaturatedCompletionRuntime {
     fn new(queued: usize, capacity: usize) -> Self {
@@ -340,8 +337,6 @@ impl SaturatedCompletionRuntime {
             next_lifecycle_ordinal: 1,
             effect_owners: BTreeMap::new(),
             exact_effect_ownership: None,
-            external_lifecycle_owners: Vec::new(),
-            external_lifecycle_owner_capacity: None,
         }
     }
     fn admitting_network_ingress(queued: usize, capacity: usize) -> Self {
@@ -446,12 +441,17 @@ impl EffectRuntime for SaturatedCompletionRuntime {
             && ingress_ownership.matches_message(&BlockMessage::V2(message.clone()))
     }
 
-    fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
+    fn step_effects(
+        &mut self,
+        _now: Instant,
+        _external: &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<RuntimeStep<AdapterEffect>, String> {
         Ok(RuntimeStep::Idle)
     }
     fn step_recovery_effects(
         &mut self,
         _now: Instant,
+        _external: &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeStep<AdapterEffect>, String> {
         Err("synthetic runtime cannot drive pending-tip recovery".to_owned())
     }
@@ -480,50 +480,7 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     ) -> Result<Vec<LeaderWireRuntimeTerminal>, String> {
         Ok(Vec::new())
     }
-    fn set_external_lifecycle_owners(
-        &mut self,
-        owners: Vec<RuntimeLifecycleOwner>,
-    ) -> Result<(), String> {
-        let capacity = self.external_lifecycle_owner_capacity.ok_or_else(|| {
-            "saturated test runtime external-owner capacity is not configured".to_owned()
-        })?;
-        if owners.len() > capacity || owners.iter().any(|owner| owner.lifecycle_ordinal() == 0) {
-            return Err(
-                "saturated test runtime external lifecycle ownership is invalid".to_owned(),
-            );
-        }
-        let mut exact_by_ordinal = BTreeMap::new();
-        for owner in &owners {
-            if exact_by_ordinal
-                .insert(owner.lifecycle_ordinal(), owner)
-                .is_some()
-            {
-                return Err(
-                    "saturated test runtime external lifecycle ownership is not unique".to_owned(),
-                );
-            }
-        }
-        self.external_lifecycle_owners = owners;
-        Ok(())
-    }
-    fn configure_external_lifecycle_owner_capacity(
-        &mut self,
-        max_pending_work: usize,
-    ) -> Result<(), String> {
-        let retained_capacity = MAX_EFFECTS_PER_STEP.checked_mul(2).ok_or_else(|| {
-            "saturated test runtime external-owner capacity overflowed".to_owned()
-        })?;
-        let capacity = max_pending_work
-            .checked_add(retained_capacity)
-            .ok_or_else(|| {
-                "saturated test runtime external-owner capacity overflowed".to_owned()
-            })?;
-        if max_pending_work == 0 || self.external_lifecycle_owners.len() > capacity {
-            return Err("saturated test runtime external-owner capacity is invalid".to_owned());
-        }
-        self.external_lifecycle_owner_capacity = Some(capacity);
-        Ok(())
-    }
+
     fn mint_local_proposal_effect_ownership(
         &mut self,
         tag: EventTag,
@@ -733,9 +690,6 @@ fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
         Generation::new(service.context.height),
     );
     let mut runtime = SaturatedCompletionRuntime::new(0, 1);
-    runtime
-        .configure_external_lifecycle_owner_capacity(1)
-        .expect("configure bounded external owners");
     let proposal_ownership = runtime
         .mint_local_proposal_effect_ownership(tag, &manifest)
         .expect("mint local proposal owner");
@@ -761,23 +715,16 @@ fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
         .pop()
         .expect("one effect has one owner");
     assert_eq!(fetch_owner, proposal_owner);
-    runtime
-        .set_external_lifecycle_owners(vec![proposal_owner.owner().clone()])
-        .expect("one external owner fits");
-    assert_eq!(runtime.external_lifecycle_owners.len(), 1);
-    assert!(
-        runtime
-            .set_external_lifecycle_owners(vec![
-                proposal_owner.owner().clone();
-                MAX_EFFECTS_PER_STEP + 2
-            ])
-            .is_err()
-    );
-    assert_eq!(
-        runtime.external_lifecycle_owners.len(),
+    let external = crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::new(
+        [proposal_owner.owner(), fetch_owner.owner()],
         1,
-        "rejected publication must preserve the prior bounded owner set"
-    );
+    )
+    .expect("equal Store/Fetch aliases share one borrowed owner");
+    assert_eq!(external.len(), 1);
+    assert!(std::ptr::eq(
+        external.iter().next().expect("one owner"),
+        proposal_owner.owner()
+    ));
 }
 fn fixture_kagemusha_mint_finality_roster(
     network_id: iroha_data_model::NetworkId,

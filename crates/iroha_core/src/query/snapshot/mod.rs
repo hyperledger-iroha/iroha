@@ -1537,7 +1537,6 @@ mod tests {
             nonzero_ext::nonzero!(1_u64),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -1564,7 +1563,6 @@ mod tests {
         let role_id: RoleId = "cursor_account_reader".parse().expect("role id");
         let mut block = state.block(BlockHeader::new(
             nonzero_ext::nonzero!(2_u64),
-            None,
             None,
             None,
             0,
@@ -1604,7 +1602,6 @@ mod tests {
         let second_cursor = second_cursor.expect("one archived page must remain");
         let mut block = state.block(BlockHeader::new(
             nonzero_ext::nonzero!(3_u64),
-            None,
             None,
             None,
             0,

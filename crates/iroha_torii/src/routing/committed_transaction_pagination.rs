@@ -9,6 +9,11 @@ fn committed_transactions_indexed_snapshot(
     iroha_core::smartcontracts::isi::tx::committed_transactions_bounded_snapshot(
         &view,
         filter,
+        iroha_core::smartcontracts::isi::tx::TransactionHistoryWorkLimits {
+            max_carrier_work: app_query_limits().max_fetch_size,
+            max_total_work: app_query_limits().max_fetch_size,
+            max_bytes: iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(app_query_limits().max_fetch_size),
+        },
         app_query_limits().max_fetch_size,
         defaults::torii::MAX_CONTENT_LEN.get(),
     )
@@ -42,6 +47,9 @@ fn collect_committed_transaction_page<T>(
         &view,
         filter,
         app_query_limits().max_fetch_size,
+        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(
+            app_query_limits().max_fetch_size,
+        ),
         |transaction, typed_match| {
             if !typed_match {
                 return Ok(std::ops::ControlFlow::Continue(()));
@@ -105,6 +113,9 @@ fn collect_sorted_committed_transaction_page<K: Ord, T>(
         &view,
         filter,
         app_query_limits().max_fetch_size,
+        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(
+            app_query_limits().max_fetch_size,
+        ),
         |transaction, typed_match| {
             if !typed_match {
                 return Ok(std::ops::ControlFlow::Continue(()));

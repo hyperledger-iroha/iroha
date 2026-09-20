@@ -43,8 +43,13 @@ struct ThresholdSessionsV1 {
     tle_public_state: TleKeySessionPublicStateV1,
 }
 
-fn assert_runtime_upgrade_registry_empty(client: &Client) -> Result<()> {
-    let norito::json::Value::Object(response) = client.get_runtime_upgrades_json()? else {
+async fn assert_runtime_upgrade_registry_empty(client: &Client) -> Result<()> {
+    let norito::json::Value::Object(response) = read_on_dedicated_thread({
+        let client = client.client().clone();
+        move || client.get_runtime_upgrades_json()
+    })
+    .await?
+    else {
         return Err(eyre!("runtime-upgrade list response is not an object"));
     };
     let Some(norito::json::Value::Array(items)) = response.get("items") else {
@@ -61,7 +66,7 @@ async fn install_threshold_sessions(
     network: &sandbox::SerializedNetwork,
     client: &Client,
 ) -> Result<ThresholdSessionsV1> {
-    let ordered_roster = ordered_validator_roster(network, client)?;
+    let ordered_roster = ordered_validator_roster(network, client).await?;
     let beacon_record =
         deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
             .wrap_err("derive failure-corridor beacon fixture")?;
@@ -72,8 +77,10 @@ async fn install_threshold_sessions(
         client,
         beacon_record.session.adaptive_dkg.finalized_at_height,
         "failure-corridor threshold-key installation",
-    )?;
-    client.submit_all(
+    )
+    .await?;
+    submit_parliament_instructions(
+        &client,
         [
             InstructionBox::from(lifecycle_certificate(
                 network,
@@ -94,21 +101,22 @@ async fn install_threshold_sessions(
                 install_height,
             )?),
         ],
-        fee(),
-    )?;
-    assert_eq!(current_height(client)?, install_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, install_height);
     let activation_height = install_height
         .checked_add(1)
         .ok_or_else(|| eyre!("failure-corridor key activation height overflow"))?;
-    client.submit(
-        Log::new(
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
             Level::INFO,
             "carry Parliament failure-corridor threshold-key activation".to_owned(),
-        ),
-        fee(),
-    )?;
+        )],
+    )
+    .await?;
     network.ensure_blocks(activation_height).await?;
-    assert_eq!(current_height(client)?, activation_height);
+    assert_eq!(current_height(client).await?, activation_height);
     Ok(ThresholdSessionsV1 {
         logical_beacon: BeaconSessionId::for_network_v1(&network.network_id()),
         tle_public_state,
@@ -504,13 +512,15 @@ async fn draw_and_seal_failure_path_bodies(
     logical_beacon: BeaconSessionId,
     policy_seats: u32,
 ) -> Result<BTreeMap<ParliamentBody, BodyInstanceId>> {
-    let required_bodies = read_attempt(client, attempt_id)?
+    let required_bodies = read_attempt(client, attempt_id)
+        .await?
         .required_bodies()
         .iter()
         .map(|required| required.body)
         .collect::<Vec<_>>();
     let request_height =
-        next_queue_plan_execution_height(client, 0, "confirmation-capacity initial sortition")?;
+        next_queue_plan_execution_height(client, 0, "confirmation-capacity initial sortition")
+            .await?;
     let pulse_height = request_height
         .checked_add(CAPACITY_SORTITION_DELAY_BLOCKS)
         .ok_or_else(|| eyre!("confirmation-capacity sortition height overflow"))?;
@@ -553,8 +563,9 @@ async fn draw_and_seal_failure_path_bodies(
                 requests: registrations,
             },
         ),
-    )?;
-    assert_eq!(current_height(client)?, request_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, request_height);
     advance_to_autonomous_predecessor(
         network,
         client,
@@ -563,11 +574,10 @@ async fn draw_and_seal_failure_path_bodies(
     )
     .await?;
     network.ensure_blocks(pulse_height).await?;
-    let pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), pulse_height))
-        .collect::<Result<Vec<_>>>()?;
+    let mut pulses = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        pulses.push(pulse_at(&peer.client(), pulse_height).await?);
+    }
     assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
     submit_transition(
         client,
@@ -580,7 +590,8 @@ async fn draw_and_seal_failure_path_bodies(
                 pulse_id: BeaconPulseId::new(pulses[0].pulse_id),
             },
         ),
-    )?;
+    )
+    .await?;
     submit_transitions(
         client,
         attempt_id,
@@ -591,9 +602,10 @@ async fn draw_and_seal_failure_path_bodies(
                 },
             )
         }),
-    )?;
+    )
+    .await?;
 
-    let invitations = read_attempt(client, attempt_id)?;
+    let invitations = read_attempt(client, attempt_id).await?;
     let invitation_close_height = required_bodies
         .iter()
         .map(|body| {
@@ -635,9 +647,10 @@ async fn draw_and_seal_failure_path_bodies(
                         },
                     )
                 }),
-        )?;
+        )
+        .await?;
     }
-    assert!(current_height(client)? <= invitation_close_height);
+    assert!(current_height(client).await? <= invitation_close_height);
     let roster_seal_height = invitation_close_height
         .checked_add(1)
         .ok_or_else(|| eyre!("confirmation-capacity roster seal height overflow"))?;
@@ -656,10 +669,11 @@ async fn draw_and_seal_failure_path_bodies(
                 election_attempt_id: election_ids[body],
             })
         }),
-    )?;
-    assert_eq!(current_height(client)?, roster_seal_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, roster_seal_height);
 
-    let sealed = read_attempt(client, attempt_id)?;
+    let sealed = read_attempt(client, attempt_id).await?;
     let mut body_ids = BTreeMap::new();
     for body in required_bodies {
         let body_state = sealed
@@ -677,7 +691,7 @@ async fn draw_and_seal_failure_path_bodies(
     Ok(body_ids)
 }
 
-fn complete_failure_path_public_findings(
+async fn complete_failure_path_public_findings(
     client: &Client,
     citizen_keys: &[KeyPair],
     attempt_id: GovernanceAttemptId,
@@ -704,8 +718,9 @@ fn complete_failure_path_public_findings(
                     target,
                 })
             }),
-        )?;
-        let reflecting = read_attempt(client, attempt_id)?;
+        )
+        .await?;
+        let reflecting = read_attempt(client, attempt_id).await?;
         let member = reflecting
             .body(body_id)
             .and_then(|state| state.assignments().first())
@@ -720,9 +735,11 @@ fn complete_failure_path_public_findings(
                     result_root: public_finding_root(attempt_id, *body),
                 },
             ),
-        )?;
+        )
+        .await?;
         assert_eq!(
-            read_attempt(client, attempt_id)?
+            read_attempt(client, attempt_id)
+                .await?
                 .body(body_id)
                 .expect("completed public body")
                 .instance()
@@ -766,11 +783,13 @@ async fn finalize_failure_path_policy_ballot(
                 target,
             })
         }),
-    )?;
+    )
+    .await?;
 
     let ballot_attempt_id = BallotAttemptId::derive_v1(policy_body_id, 0);
     let registered_at_height =
-        next_queue_plan_execution_height(client, 0, "confirmation-capacity ballot registration")?;
+        next_queue_plan_execution_height(client, 0, "confirmation-capacity ballot registration")
+            .await?;
     let registration_close_height = registered_at_height
         .checked_add(registration_phase_blocks)
         .ok_or_else(|| eyre!("confirmation-capacity registration height overflow"))?;
@@ -801,15 +820,22 @@ async fn finalize_failure_path_policy_ballot(
             release_beacon_session_id: sessions.logical_beacon,
             release_height,
         }),
-    )?;
-    assert_eq!(current_height(client)?, registered_at_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, registered_at_height);
 
-    let casting_response = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    let casting_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let ballot_attempt_id = (ballot_attempt_id).clone();
+        move || client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)
+    })
+    .await?;
     let casting = casting_archive(&casting_response, ballot_attempt_id)?;
     let validated_casting = casting
         .validate_v1()
         .wrap_err("validate confirmation-capacity casting context")?;
-    let policy_members = read_attempt(client, attempt_id)?
+    let policy_members = read_attempt(client, attempt_id)
+        .await?
         .body(&policy_body_id)
         .expect("Policy Jury body exists")
         .assignments()
@@ -845,14 +871,15 @@ async fn finalize_failure_path_policy_ballot(
                     registration_record: registration.to_bytes(),
                 },
             ),
-        )?;
+        )
+        .await?;
         assert!(
             registration_secrets
                 .insert(participant_hash, secret)
                 .is_none()
         );
     }
-    assert!(current_height(client)? < registration_close_height);
+    assert!(current_height(client).await? < registration_close_height);
     advance_to_queue_plan_authority_height(
         network,
         client,
@@ -866,8 +893,9 @@ async fn finalize_failure_path_policy_ballot(
         ParliamentLifecycleTransitionV1::CloseBallotRegistration(
             ParliamentCloseBallotRegistrationV1 { ballot_attempt_id },
         ),
-    )?;
-    assert_eq!(current_height(client)?, registration_close_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, registration_close_height);
 
     advance_to_queue_plan_authority_height(
         network,
@@ -882,10 +910,16 @@ async fn finalize_failure_path_policy_ballot(
         ParliamentLifecycleTransitionV1::FreezeBallotSurvivors(ParliamentFreezeBallotSurvivorsV1 {
             ballot_attempt_id,
         }),
-    )?;
-    assert_eq!(current_height(client)?, survivor_freeze_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, survivor_freeze_height);
 
-    let survivors_response = client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)?;
+    let survivors_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let ballot_attempt_id = (ballot_attempt_id).clone();
+        move || client.get_parliament_timed_ovn_casting_context(ballot_attempt_id)
+    })
+    .await?;
     let survivors_archive = casting_archive(&survivors_response, ballot_attempt_id)?;
     let survivor_ids = survivors_archive
         .survivor_participant_hashes()
@@ -935,8 +969,9 @@ async fn finalize_failure_path_policy_ballot(
             ballot_attempt_id,
             ballot_records,
         }),
-    )?;
-    assert_eq!(current_height(client)?, commitment_close_height);
+    )
+    .await?;
+    assert_eq!(current_height(client).await?, commitment_close_height);
 
     advance_to_autonomous_predecessor(
         network,
@@ -946,11 +981,10 @@ async fn finalize_failure_path_policy_ballot(
     )
     .await?;
     network.ensure_blocks(release_height).await?;
-    let pulses = network
-        .peers()
-        .iter()
-        .map(|peer| pulse_at(&peer.client(), release_height))
-        .collect::<Result<Vec<_>>>()?;
+    let mut pulses = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        pulses.push(pulse_at(&peer.client(), release_height).await?);
+    }
     assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
     submit_transition(
         client,
@@ -963,19 +997,36 @@ async fn finalize_failure_path_policy_ballot(
                 pulse_id: BeaconPulseId::new(pulses[0].pulse_id),
             },
         ),
-    )?;
+    )
+    .await?;
 
-    let release_context = client.get_parliament_tle_release_context(ballot_attempt_id)?;
+    let release_context = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let ballot_attempt_id = (ballot_attempt_id).clone();
+        move || client.get_parliament_tle_release_context(ballot_attempt_id)
+    })
+    .await?;
     let validated_release = release_projection(&release_context)?
         .validate()
         .wrap_err("validate confirmation-capacity release context")?;
     let mut partials = BTreeMap::new();
     for peer in network.peers() {
         let peer_client = peer.client();
-        let peer_context = peer_client.get_parliament_tle_release_context(ballot_attempt_id)?;
+        let peer_context = read_on_dedicated_thread({
+            let client = peer_client.client().clone();
+            let ballot_attempt_id = (ballot_attempt_id).clone();
+            move || client.get_parliament_tle_release_context(ballot_attempt_id)
+        })
+        .await?;
         assert_eq!(peer_context, release_context);
-        let partial =
-            release_partial(peer_client.post_parliament_tle_partial_release(&peer_context)?);
+        let partial = release_partial(
+            read_on_dedicated_thread({
+                let client = peer_client.client().clone();
+                let release_context = (peer_context).clone();
+                move || client.post_parliament_tle_partial_release(&release_context)
+            })
+            .await?,
+        );
         validated_release
             .session()
             .verify_partial_release(
@@ -1010,7 +1061,8 @@ async fn finalize_failure_path_policy_ballot(
                 signature: final_release.signature,
             },
         }),
-    )?;
+    )
+    .await?;
     Ok(ballot_attempt_id)
 }
 
@@ -1026,7 +1078,8 @@ async fn certify_failure_path_attempt(
         client,
         attempt_id,
         ParliamentLifecycleTransitionV1::CompleteQualification,
-    )?;
+    )
+    .await?;
     let body_ids = draw_and_seal_failure_path_bodies(
         network,
         client,
@@ -1037,7 +1090,7 @@ async fn certify_failure_path_attempt(
         TERMINAL_POLICY_SEATS,
     )
     .await?;
-    complete_failure_path_public_findings(client, citizen_keys, attempt_id, &body_ids)?;
+    complete_failure_path_public_findings(client, citizen_keys, attempt_id, &body_ids).await?;
     finalize_failure_path_policy_ballot(
         network,
         client,
@@ -1052,7 +1105,7 @@ async fn certify_failure_path_attempt(
         2,
     )
     .await?;
-    let certified = read_attempt(client, attempt_id)?;
+    let certified = read_attempt(client, attempt_id).await?;
     assert_eq!(
         certified.attempt().status,
         GovernanceAttemptStatusV1::Certified,
@@ -1116,14 +1169,16 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     let client = network.client();
     let sessions = install_threshold_sessions(&network, &client).await?;
 
-    let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
+    let (code_hash, abi_hash) =
+        stage_contract_artifact(&client, &minimal_contract_artifact()).await?;
     let (competing_contract_code_hash, competing_abi_hash) = stage_contract_artifact(
         &client,
         &minimal_contract_artifact_with_identity(
             "ParliamentSupersessionCompetitor",
             "integration-tests-supersession-competitor",
         ),
-    )?;
+    )
+    .await?;
     assert_ne!(
         competing_contract_code_hash, code_hash,
         "the supersession fixture must install a genuinely distinct artifact head",
@@ -1145,7 +1200,8 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         attempt_sequence: 0,
     };
     let competing_deploy_attempt_id = competing_deploy_create.governance_attempt_id();
-    client.submit_all(
+    submit_parliament_instructions(
+        &client,
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1156,8 +1212,8 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
             }),
             InstructionBox::from(competing_deploy_create),
         ],
-        fee(),
-    )?;
+    )
+    .await?;
     let competing_deploy_certificate = certify_failure_path_attempt(
         &network,
         &client,
@@ -1186,7 +1242,8 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         attempt_sequence: 0,
     };
     let deploy_attempt_id = deploy_create.governance_attempt_id();
-    client.submit_all(
+    submit_parliament_instructions(
+        &client,
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1197,9 +1254,9 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
             }),
             InstructionBox::from(deploy_create),
         ],
-        fee(),
-    )?;
-    assert!(current_height(&client)? < competing_deploy_certificate.enact_at_height);
+    )
+    .await?;
+    assert!(current_height(&client).await? < competing_deploy_certificate.enact_at_height);
     let deploy_certificate = certify_failure_path_attempt(
         &network,
         &client,
@@ -1213,8 +1270,8 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         deploy_certificate.expected_head, competing_deploy_certificate.expected_head,
         "both certified deployments must compare against the same pre-enactment head",
     );
-    assert!(current_height(&client)? >= competing_deploy_certificate.enact_at_height);
-    let competing_enacted = read_attempt(&client, competing_deploy_attempt_id)?;
+    assert!(current_height(&client).await? >= competing_deploy_certificate.enact_at_height);
+    let competing_enacted = read_attempt(&client, competing_deploy_attempt_id).await?;
     assert_eq!(
         competing_enacted.attempt().status,
         GovernanceAttemptStatusV1::Enacted,
@@ -1223,14 +1280,15 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         competing_enacted.certificate(),
         Some(&competing_deploy_certificate),
     );
-    assert!(current_height(&client)? < deploy_certificate.enact_at_height);
+    assert!(current_height(&client).await? < deploy_certificate.enact_at_height);
     assert_governed_contract_binding(
         &client,
         &contract_address,
         competing_contract_code_hash,
         competing_abi_hash,
         "the certified competing binding must be authoritative before enactment",
-    )?;
+    )
+    .await?;
     advance_to_autonomous_predecessor(
         &network,
         &client,
@@ -1241,7 +1299,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     network
         .ensure_blocks(deploy_certificate.enact_at_height)
         .await?;
-    let superseded = read_attempt(&client, deploy_attempt_id)?;
+    let superseded = read_attempt(&client, deploy_attempt_id).await?;
     assert_eq!(
         superseded.attempt().status,
         GovernanceAttemptStatusV1::Superseded,
@@ -1263,13 +1321,22 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     );
     assert!(superseded.execution_failure_root().is_none());
     assert_eq!(superseded.certificate(), Some(&deploy_certificate));
-    let superseded_response = client.get_parliament_attempt(deploy_attempt_id)?;
+    let superseded_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (deploy_attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     for peer in network.peers() {
         let peer_client = peer.client();
         assert_eq!(
-            peer_client
-                .get_parliament_attempt(deploy_attempt_id)?
-                .state_payload_hex,
+            read_on_dedicated_thread({
+                let client = peer_client.client().clone();
+                let attempt_id = (deploy_attempt_id).clone();
+                move || client.get_parliament_attempt(attempt_id)
+            })
+            .await?
+            .state_payload_hex,
             superseded_response.state_payload_hex,
         );
         assert_governed_contract_binding(
@@ -1278,11 +1345,13 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
             competing_contract_code_hash,
             competing_abi_hash,
             "all validators must retain the competing contract binding",
-        )?;
+        )
+        .await?;
     }
 
-    assert_runtime_upgrade_registry_empty(&client)?;
-    let manifest_start_height = current_height(&client)?
+    assert_runtime_upgrade_registry_empty(&client).await?;
+    let manifest_start_height = current_height(&client)
+        .await?
         .checked_add(10)
         .ok_or_else(|| eyre!("runtime-upgrade start height overflow"))?;
     let runtime_manifest = RuntimeUpgradeManifest {
@@ -1309,15 +1378,16 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         attempt_sequence: 0,
     };
     let runtime_attempt_id = runtime_create.governance_attempt_id();
-    client.submit_all(
+    submit_parliament_instructions(
+        &client,
         [
             InstructionBox::from(ProposeRuntimeUpgradeProposal {
                 manifest: runtime_manifest,
             }),
             InstructionBox::from(runtime_create),
         ],
-        fee(),
-    )?;
+    )
+    .await?;
     let runtime_certificate = certify_failure_path_attempt(
         &network,
         &client,
@@ -1346,7 +1416,7 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     network
         .ensure_blocks(runtime_certificate.enact_at_height)
         .await?;
-    let execution_failed = read_attempt(&client, runtime_attempt_id)?;
+    let execution_failed = read_attempt(&client, runtime_attempt_id).await?;
     let expected_failure_root = parliament_execution_failure_root_v1(
         &runtime_certificate,
         runtime_certificate.enact_at_height,
@@ -1365,29 +1435,42 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     );
     assert!(execution_failed.superseding_head().is_none());
     assert_eq!(execution_failed.certificate(), Some(&runtime_certificate));
-    assert_runtime_upgrade_registry_empty(&client)?;
+    assert_runtime_upgrade_registry_empty(&client).await?;
 
-    let execution_failed_response = client.get_parliament_attempt(runtime_attempt_id)?;
+    let execution_failed_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (runtime_attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     for peer in network.peers() {
         let peer_client = peer.client();
         assert_eq!(
-            peer_client
-                .get_parliament_attempt(runtime_attempt_id)?
-                .state_payload_hex,
+            read_on_dedicated_thread({
+                let client = peer_client.client().clone();
+                let attempt_id = (runtime_attempt_id).clone();
+                move || client.get_parliament_attempt(attempt_id)
+            })
+            .await?
+            .state_payload_hex,
             execution_failed_response.state_payload_hex,
             "all validators must commit the same deterministic failure root",
         );
         assert_eq!(
-            peer_client
-                .get_parliament_attempt(deploy_attempt_id)?
-                .state_payload_hex,
+            read_on_dedicated_thread({
+                let client = peer_client.client().clone();
+                let attempt_id = (deploy_attempt_id).clone();
+                move || client.get_parliament_attempt(attempt_id)
+            })
+            .await?
+            .state_payload_hex,
             superseded_response.state_payload_hex,
             "later attempts must not mutate the prior supersession transcript",
         );
-        assert_runtime_upgrade_registry_empty(&peer_client)?;
+        assert_runtime_upgrade_registry_empty(&peer_client).await?;
     }
 
-    let restore_height = current_height(&client)?;
+    let restore_height = current_height(&client).await?;
     let restart_peer = network
         .peers()
         .last()
@@ -1409,15 +1492,23 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
     .map_err(|_| eyre!("certified-terminal restore did not recover finalized state"))?;
     let restored_client = restart_peer.client();
     assert_eq!(
-        restored_client
-            .get_parliament_attempt(deploy_attempt_id)?
-            .state_payload_hex,
+        read_on_dedicated_thread({
+            let client = restored_client.client().clone();
+            let attempt_id = (deploy_attempt_id).clone();
+            move || client.get_parliament_attempt(attempt_id)
+        })
+        .await?
+        .state_payload_hex,
         superseded_response.state_payload_hex,
     );
     assert_eq!(
-        restored_client
-            .get_parliament_attempt(runtime_attempt_id)?
-            .state_payload_hex,
+        read_on_dedicated_thread({
+            let client = restored_client.client().clone();
+            let attempt_id = (runtime_attempt_id).clone();
+            move || client.get_parliament_attempt(attempt_id)
+        })
+        .await?
+        .state_payload_hex,
         execution_failed_response.state_payload_hex,
     );
     assert_governed_contract_binding(
@@ -1426,8 +1517,9 @@ async fn four_validator_certified_effects_record_supersession_and_execution_fail
         competing_contract_code_hash,
         competing_abi_hash,
         "restart must retain the competing contract binding",
-    )?;
-    assert_runtime_upgrade_registry_empty(&restored_client)?;
+    )
+    .await?;
+    assert_runtime_upgrade_registry_empty(&restored_client).await?;
     Ok(())
 }
 
@@ -1475,7 +1567,8 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
     let client = network.client();
     let sessions = install_threshold_sessions(&network, &client).await?;
 
-    let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
+    let (code_hash, abi_hash) =
+        stage_contract_artifact(&client, &minimal_contract_artifact()).await?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
         proposal_operator: client.client().account().clone(),
         contract_address: contract_address.clone(),
@@ -1489,7 +1582,8 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
         attempt_sequence: 0,
     };
     let attempt_id = create.governance_attempt_id();
-    client.submit_all(
+    submit_parliament_instructions(
+        &client,
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1500,13 +1594,14 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
             }),
             InstructionBox::from(create),
         ],
-        fee(),
-    )?;
+    )
+    .await?;
     submit_transition(
         &client,
         attempt_id,
         ParliamentLifecycleTransitionV1::CompleteQualification,
-    )?;
+    )
+    .await?;
 
     let body_ids = draw_and_seal_failure_path_bodies(
         &network,
@@ -1518,8 +1613,9 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
         CONFIRMATION_POLICY_SEATS,
     )
     .await?;
-    complete_failure_path_public_findings(&client, &citizen_keys, attempt_id, &body_ids)?;
-    let policy_members = read_attempt(&client, attempt_id)?
+    complete_failure_path_public_findings(&client, &citizen_keys, attempt_id, &body_ids).await?;
+    let policy_members = read_attempt(&client, attempt_id)
+        .await?
         .body(&body_ids[&ParliamentBody::PolicyJury])
         .expect("Policy Jury body exists")
         .assignments()
@@ -1549,7 +1645,7 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
     )
     .await?;
 
-    let rejected = read_attempt(&client, attempt_id)?;
+    let rejected = read_attempt(&client, attempt_id).await?;
     assert_eq!(
         rejected.attempt().status,
         GovernanceAttemptStatusV1::Rejected,
@@ -1593,14 +1689,25 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
         &client,
         &contract_address,
         "Confirmation-capacity rejection effect isolation",
-    )?;
+    )
+    .await?;
 
-    let rejected_height = current_height(&client)?;
+    let rejected_height = current_height(&client).await?;
     network.ensure_blocks(rejected_height).await?;
-    let rejected_response = client.get_parliament_attempt(attempt_id)?;
+    let rejected_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     for peer in network.peers() {
         let peer_client = peer.client();
-        let peer_response = peer_client.get_parliament_attempt(attempt_id)?;
+        let peer_response = read_on_dedicated_thread({
+            let client = peer_client.client().clone();
+            let attempt_id = (attempt_id).clone();
+            move || client.get_parliament_attempt(attempt_id)
+        })
+        .await?;
         assert_eq!(peer_response.current_height, rejected_height);
         assert_eq!(
             peer_response.state_payload_hex, rejected_response.state_payload_hex,
@@ -1610,7 +1717,8 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
             &peer_client,
             &contract_address,
             "Confirmation-capacity peer effect isolation",
-        )?;
+        )
+        .await?;
     }
 
     let restart_peer = network
@@ -1632,7 +1740,12 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
     )
     .await
     .map_err(|_| eyre!("Confirmation-capacity restore did not recover finalized state"))?;
-    let restored = restart_peer.client().get_parliament_attempt(attempt_id)?;
+    let restored = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     assert_eq!(
         restored.state_payload_hex, rejected_response.state_payload_hex,
         "restart must retain the complete Confirmation-capacity transcript",
@@ -1641,7 +1754,8 @@ async fn four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one_i
         &restart_peer.client(),
         &contract_address,
         "Confirmation-capacity restart effect isolation",
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -1704,9 +1818,11 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
         &client,
         &citizen_asset_id,
         "genesis citizenship escrow custody",
-    )?;
+    )
+    .await?;
 
-    let (code_hash, abi_hash) = stage_contract_artifact(&client, &minimal_contract_artifact())?;
+    let (code_hash, abi_hash) =
+        stage_contract_artifact(&client, &minimal_contract_artifact()).await?;
     let proposal = ProposalKind::DeployContract(DeployContractProposal {
         proposal_operator: client.client().account().clone(),
         contract_address: contract_address.clone(),
@@ -1720,7 +1836,8 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
         attempt_sequence: 0,
     };
     let attempt_id = create.governance_attempt_id();
-    client.submit_all(
+    submit_parliament_instructions(
+        &client,
         [
             InstructionBox::from(ProposeDeployContract {
                 contract_address: contract_address.clone(),
@@ -1731,15 +1848,16 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
             }),
             InstructionBox::from(create),
         ],
-        fee(),
-    )?;
+    )
+    .await?;
     submit_transition(
         &client,
         attempt_id,
         ParliamentLifecycleTransitionV1::CompleteQualification,
-    )?;
+    )
+    .await?;
 
-    let initial = read_attempt(&client, attempt_id)?;
+    let initial = read_attempt(&client, attempt_id).await?;
     let required_bodies = initial
         .required_bodies()
         .iter()
@@ -1752,7 +1870,8 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
 
     for sequence in 0..=MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
         let request_height =
-            next_queue_plan_execution_height(&client, 0, "hidden-capacity sortition intent")?;
+            next_queue_plan_execution_height(&client, 0, "hidden-capacity sortition intent")
+                .await?;
         let pulse_height = request_height
             .checked_add(CAPACITY_SORTITION_DELAY_BLOCKS)
             .ok_or_else(|| eyre!("hidden-capacity pulse height overflow"))?;
@@ -1789,10 +1908,11 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
                     requests: registrations,
                 },
             ),
-        )?;
-        assert_eq!(current_height(&client)?, request_height);
+        )
+        .await?;
+        assert_eq!(current_height(&client).await?, request_height);
 
-        let observed = read_attempt(&client, attempt_id)?;
+        let observed = read_attempt(&client, attempt_id).await?;
         for failure_id in final_failure_ids.values() {
             let failure = observed
                 .sortition_capacity_failure(failure_id)
@@ -1807,14 +1927,14 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
         if sequence < MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
             assert_eq!(observed.attempt().status, GovernanceAttemptStatusV1::Active,);
             if sequence == 0 || sequence + 1 == MAX_PARLIAMENT_SORTITION_RETRIES_V1 {
-                let error = citizen_client
-                    .submit(
-                        UnregisterCitizen {
-                            owner: citizen.clone(),
-                        },
-                        fee(),
-                    )
-                    .expect_err("retryable hidden-capacity evidence must retain the bond");
+                let error = submit_parliament_instructions(
+                    &citizen_client,
+                    [UnregisterCitizen {
+                        owner: citizen.clone(),
+                    }],
+                )
+                .await
+                .expect_err("retryable hidden-capacity evidence must retain the bond");
                 assert!(
                     format!("{error:?}").contains("active Parliament attempt"),
                     "unexpected retained-bond rejection: {error:?}",
@@ -1837,30 +1957,46 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
         &client,
         first_failed_pulse_height.expect("at least one capacity failure"),
         "pre-request capacity evidence must not consume or demand a beacon pulse",
-    )?;
-    let rejected_response = client.get_parliament_attempt(attempt_id)?;
+    )
+    .await?;
+    let rejected_response = read_on_dedicated_thread({
+        let client = client.client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     for peer in network.peers() {
-        let peer_response = peer.client().get_parliament_attempt(attempt_id)?;
+        let peer_response = read_on_dedicated_thread({
+            let client = peer.client().client().clone();
+            let attempt_id = (attempt_id).clone();
+            move || client.get_parliament_attempt(attempt_id)
+        })
+        .await?;
         assert_eq!(
             peer_response.state_payload_hex, rejected_response.state_payload_hex,
             "all validators must agree on terminal capacity evidence",
         );
     }
 
-    citizen_client.submit(
-        UnregisterCitizen {
+    submit_parliament_instructions(
+        &citizen_client,
+        [UnregisterCitizen {
             owner: citizen.clone(),
-        },
-        fee(),
-    )?;
-    let returned_bond = client.query_single(FindAssetById::new(citizen_asset_id))?;
+        }],
+    )
+    .await?;
+    let returned_bond = read_on_dedicated_thread({
+        let client = client.client().clone();
+        move || Ok(client.query_single(FindAssetById::new(citizen_asset_id))?)
+    })
+    .await?;
     assert_eq!(
         returned_bond.value(),
         &Quantity::from(CAPACITY_BOND_AMOUNT),
         "terminal rejection must release the exact citizenship collateral",
     );
 
-    let restored_height = current_height(&client)?;
+    let restored_height = current_height(&client).await?;
     network.ensure_blocks(restored_height).await?;
     let restart_peer = network
         .peers()
@@ -1881,17 +2017,26 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
     )
     .await
     .map_err(|_| eyre!("capacity failure restore did not recover finalized state"))?;
-    let restored_response = restart_peer.client().get_parliament_attempt(attempt_id)?;
+    let restored_response = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        let attempt_id = (attempt_id).clone();
+        move || client.get_parliament_attempt(attempt_id)
+    })
+    .await?;
     assert_eq!(
         restored_response.state_payload_hex, rejected_response.state_payload_hex,
         "restart must retain the complete typed capacity transcript",
     );
-    let restored_bond = restart_peer
-        .client()
-        .query_single(FindAssetById::new(AssetId::new(
-            citizenship_asset_definition,
-            citizen,
-        )))?;
+    let restored_bond = read_on_dedicated_thread({
+        let client = restart_peer.client().client().clone();
+        move || {
+            Ok(client.query_single(FindAssetById::new(AssetId::new(
+                citizenship_asset_definition,
+                citizen,
+            )))?)
+        }
+    })
+    .await?;
     assert_eq!(
         restored_bond.value(),
         &Quantity::from(CAPACITY_BOND_AMOUNT),
@@ -1899,3 +2044,6 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
     );
     Ok(())
 }
+
+#[path = "sora_parliament_private_ballot_retry.rs"]
+mod private_ballot_retry;

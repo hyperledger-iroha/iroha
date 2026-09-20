@@ -273,6 +273,10 @@ fn flagged_worker_fail_stop_error_still_latches_restart_required() {
     );
     drop(worker_failure_guard);
     assert_output_guard_closed(&output_guard);
+    assert_eq!(
+        output_guard.restart_error(),
+        "Sumeragi v2 consensus requires process restart: injected fail-stop I/O error",
+    );
 }
 #[test]
 fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
@@ -311,34 +315,45 @@ fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
                 payload_hash: Hash::new(b"blocked payload"),
             },
         });
-    service.output_guard.activate_restart_required();
+    service
+        .output_guard
+        .begin_fail_stop_operation()
+        .expect("admit failing recovery worker")
+        .fail("exact durable checkpoint could not publish State".to_owned());
     assert!(service.take_prepared_candidate().is_none());
     let blocked_subject = wire::BlockSubject {
         parent_block_hash: None,
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked load block")),
         payload_hash: Hash::new(b"blocked load payload"),
     };
-    assert!(
+    assert_eq!(
         service
             .request_locked_candidate(
                 EventTag::new(1, 0, Generation::new(1)),
                 locked_candidate_round(&service, 0),
                 blocked_subject,
             )
-            .is_err()
+            .unwrap_err(),
+        "Sumeragi v2 consensus requires process restart: exact durable checkpoint could not publish State",
     );
     assert!(service.locked_candidate_acquisition.is_none());
     assert!(
         command_rx.try_recv().is_err(),
         "post-latch service work must not mutate the ordered I/O queue"
     );
-    assert!(
+    assert_eq!(
         service
             .register_outbound_payload(service.active_tag, encoded)
-            .is_err(),
+            .unwrap_err(),
+        "Sumeragi v2 consensus requires process restart: exact durable checkpoint could not publish State",
         "recovery must reject new proposal material before publication"
     );
-    assert!(service.output_permit().is_err());
+    assert_eq!(
+        service.output_permit().err().as_deref(),
+        Some(
+            "Sumeragi v2 consensus requires process restart: exact durable checkpoint could not publish State"
+        ),
+    );
     drop(completion_tx);
 }
 
@@ -527,6 +542,14 @@ fn seal_empty_exact_output_for_cleanup_test(service: &ProductionV2Services) {
         .seal()
         .expect("seal the cleanup fixture's empty exact-output corridor");
 }
+/// Install the network whose actor receiver is retained by the caller's fixture.
+pub(in crate::sumeragi) fn install_network_for_test(
+    service: &mut ProductionV2Services,
+    network: crate::IrohaNetwork,
+) {
+    service.network = network;
+}
+
 /// Rebind closed-network production services to an exact durable context.
 pub(in crate::sumeragi) fn service_for_history_context(
     kura: Arc<Kura>,
@@ -631,4 +654,28 @@ fn successor_service_for_history_as(
     context.height = parent.height.saturating_add(1);
     context.parent_commit_qc = Some(parent.commit_qc.clone());
     service_for_history_context_with_local_validator(kura, context, validators, local_validator)
+}
+
+/// Test-only services for an existing exact State/Kura/guard owner.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sumeragi) fn ordinary_dispatch_services_for_test(
+    kura: Arc<Kura>,
+    context: wire::HeightContext,
+    validators: &[KeyPair],
+    local_validator: wire::ValidatorIndex,
+    state: Arc<State>,
+    output_guard: Arc<ConsensusOutputGuard>,
+    active_tag: EventTag,
+) -> ProductionV2Services {
+    let mut service = service_for_history_context_with_local_validator(
+        kura,
+        context,
+        validators,
+        local_validator,
+    );
+    assert_eq!(state.network_id, service.context.network_id);
+    service.state = state;
+    service.output_guard = output_guard;
+    service.active_tag = active_tag;
+    service
 }

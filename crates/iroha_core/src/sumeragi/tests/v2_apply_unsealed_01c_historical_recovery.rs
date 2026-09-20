@@ -1,4 +1,5 @@
-include!("v2_apply_unsealed_01c_second_autonomous_cycle.rs");
+include!("v2_apply_completed_secondary_archival.rs");
+include!("v2_apply_certified_source_rejection.rs");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MergeFrontierFixtureCase {
     HistoricalRecovery,
@@ -13,19 +14,19 @@ enum MergeFrontierFixtureCase {
     DamagedKura,
 }
 v2_apply_test!(
-    historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application,
+    historical_certified_source_recovery_cannot_authorize_retired_merge_execution,
     {
         run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::HistoricalRecovery);
     }
 );
 v2_apply_test!(
-    cold_state_merge_hydration_preserves_registry_replay_boundary,
+    cold_state_source_recovery_preserves_registry_replay_and_rejects_merge_execution,
     {
         run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::StartupRegistryBoundaries);
     }
 );
 v2_apply_test!(
-    merge_frontier_successful_apply_defers_scheduler_and_both_providers,
+    merge_frontier_ordinary_apply_defers_scheduler_and_preserves_certified_source_custody,
     {
         run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::SuccessfulApply);
     }
@@ -72,10 +73,6 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
         use crate::{
             queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan},
             state::WorldReadOnly as _,
-            sumeragi::v2_lane_work::{
-                LaneApplicationEvidenceRepairPlanning, LaneApplicationEvidenceRepairSummary,
-                apply_lane_application_evidence_repair, plan_lane_application_evidence_repair,
-            },
         };
         use iroha_data_model::{
             block::consensus::{NativeAmxPhase, SumeragiAutonomousLaneExecutionStage},
@@ -187,7 +184,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             == MergeFrontierFixtureCase::StartupRegistryBoundaries
         {
             let before_prepare =
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot");
             let prepared = prepare_canonical_autonomous_batch_with_instructions(
                 &fixture,
                 &queue,
@@ -210,12 +208,16 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 },
             );
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot"),
                 before_prepare,
                 "preparing exact queued claims must not modify canonical State",
             );
-            let admissions =
-                cold_fixture_queue_plan_certificates(&fixture, &prepared.admission_bindings);
+            let admissions = cold_fixture_queue_plan_certificates(
+                &fixture,
+                &prepared.admission_bindings,
+                &prepared.entrypoints,
+            );
             let mut admission_carrier = build_apply_fixture_at_context_with_queue_plan_admissions(
                 &fixture,
                 context.clone(),
@@ -231,6 +233,37 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 )
                 .expect("commit real signed QueuePlan admissions before lane reservation");
             assert_eq!(fixture.state.committed_height(), 2);
+            let retained_admission_carrier = fixture
+                .state
+                .kura()
+                .get_block(std::num::NonZeroUsize::new(2).unwrap())
+                .expect("the applied admission carrier retains its complete canonical wire");
+            assert_eq!(retained_admission_carrier.external_entrypoint_count(), 0);
+            let retained_controls = retained_admission_carrier
+                .execution_context()
+                .expect("admission-only carrier retains its execution context")
+                .queue_plan_admissions();
+            assert_eq!(retained_controls.len(), prepared.entrypoints.len());
+            let mut retained_inputs = std::collections::BTreeMap::new();
+            for bytes in retained_controls {
+                let input = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                    fixture.state.network_id_ref(),
+                    bytes,
+                )
+                .expect("complete input survives the production apply/Kura carrier path");
+                assert!(
+                    retained_inputs
+                        .insert(input.entrypoint().hash(), input.into_input())
+                        .is_none()
+                );
+            }
+            for entrypoint in &prepared.entrypoints {
+                assert_eq!(
+                    &retained_inputs[&entrypoint.hash()].entrypoint,
+                    entrypoint,
+                    "the carrier retains exact executable input without ordinary execution entries"
+                );
+            }
             for binding in &prepared.admission_bindings {
                 assert_eq!(
                     fixture
@@ -257,7 +290,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 .clone();
             assert_eq!(context.height, 3);
             let before_reservation =
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot");
             let reserved = reserve_prepared_canonical_autonomous_batch(
                 &fixture,
                 &queue,
@@ -266,7 +300,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 Some(native_amx_receipts_for_apply_fixture),
             );
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot"),
                 before_reservation,
                 "reserving already-admitted inputs must not modify canonical State",
             );
@@ -713,7 +748,7 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             prepare_qc,
             commit_qc,
         };
-        let retained_terminal_adapters = crate::sumeragi::v2_lane_work::tests::retain_public_lane_evidence_before_application_for_test(
+        let _retained_terminal_adapters = crate::sumeragi::v2_lane_work::tests::retain_public_lane_evidence_before_application_for_test(
             Arc::clone(&fixture.state),
             Arc::clone(&fixture.kura),
             active_context.context().clone(),
@@ -1066,9 +1101,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 }
                 MergeFrontierFixtureCase::DamagedKura => {
                     use std::io::Write as _;
-                    let path = iroha_config::parameters::actual::LaneConfig::default()
-                        .primary()
-                        .blocks_dir(fixture.kura.store_root())
+                    let path = Kura::canonical_storage_paths(&fixture.kura.store_root())
+                        .0
                         .join("blocks.index");
                     std::fs::OpenOptions::new()
                         .append(true)
@@ -1234,46 +1268,89 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             .kura
             .get_block(NonZeroUsize::new(source_height).expect("non-zero carrier parent height"))
             .expect("read exact autonomous control carrier");
-        let (_, carrier_time_source) = TimeSource::new_mock(application_header.creation_time());
-        let confidential_features = {
-            let state_view = fixture.state.view();
-            let digest = crate::state::compute_confidential_feature_digest(
-                state_view.world(),
-                &state_view.zk,
-                state_view.sccp_registry.as_ref(),
-                active_context.context().height,
+        let carrier = if frontier_case == MergeFrontierFixtureCase::SuccessfulApply {
+            // An occupied lane cannot admit an ordinary execution. Publish one
+            // actual additional admission while the existing certified source
+            // retains its independent reservation and signing custody.
+            let prepared = prepare_canonical_autonomous_batch_with_instructions(
+                &fixture,
+                &queue,
+                active_context.context(),
+                1,
+                |_| {
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        "concurrent admitted source".to_owned(),
+                    ))]
+                },
+                false,
+                |_| {},
             );
-            (!digest.is_empty()).then_some(digest)
-        };
-        let execution_context = BlockExecutionContextBundle::new(Vec::new())
-            .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
-        let leader_index = active_context.context().leader(0);
-        let leader = usize::try_from(leader_index).expect("merge carrier leader index");
-        let carrier = BlockBuilder::new_with_time_source(Vec::new(), carrier_time_source)
-            .chain(0, Some(parent.as_ref()))
-            .bind_certified_merge_application_context(&application_header)
-            .expect("bind the exact certified autonomous application context")
-            .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
-                &fixture.state.nexus_snapshot(),
-                active_context.context().height,
-            )))
-            .with_confidential_features(confidential_features)
-            .with_execution_context(Some(execution_context))
-            .try_sign_with_index(
-                validator_keys[leader].private_key(),
-                u64::from(leader_index),
+            let admissions = cold_fixture_queue_plan_certificates(
+                &fixture,
+                &prepared.admission_bindings,
+                &prepared.entrypoints,
+            );
+            build_apply_fixture_at_context_with_queue_plan_admissions(
+                &fixture,
+                active_context.context().clone(),
+                admissions,
             )
-            .expect("sign the exact autonomous merge carrier")
-            .unpack(|_| {});
-        let carrier = SignedBlock::from(carrier);
+            .body
+        } else {
+            let (_, carrier_time_source) = TimeSource::new_mock(application_header.creation_time());
+            let confidential_features = {
+                let state_view = fixture.state.view();
+                let digest = crate::state::compute_confidential_feature_digest(
+                    state_view.world(),
+                    &state_view.zk,
+                    state_view.sccp_registry.as_ref(),
+                    active_context.context().height,
+                );
+                (!digest.is_empty()).then_some(digest)
+            };
+            let execution_context = BlockExecutionContextBundle::new(Vec::new())
+                .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
+            let leader_index = active_context.context().leader(0);
+            let leader = usize::try_from(leader_index).expect("merge carrier leader index");
+            let carrier = BlockBuilder::new_with_time_source(Vec::new(), carrier_time_source)
+                .chain(0, Some(parent.as_ref()))
+                .bind_certified_merge_application_context(&application_header)
+                .expect("bind the exact certified autonomous application context")
+                .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
+                    &fixture.state.nexus_snapshot(),
+                    active_context.context().height,
+                )))
+                .with_confidential_features(confidential_features)
+                .with_execution_context(Some(execution_context))
+                .try_sign_with_index(
+                    validator_keys[leader].private_key(),
+                    u64::from(leader_index),
+                )
+                .expect("sign the exact autonomous merge carrier")
+                .unpack(|_| {});
+            SignedBlock::from(carrier)
+        };
         assert_eq!(carrier.header().height().get(), merge_carrier_height);
         assert_eq!(
             carrier.header().prev_block_hash(),
             Some(successor.body.hash())
         );
+        if frontier_case != MergeFrontierFixtureCase::SuccessfulApply {
+            assert_eq!(
+                carrier.header().creation_time(),
+                application_header.creation_time()
+            );
+        }
+        assert_eq!(carrier.external_entrypoint_count(), 0);
         assert_eq!(
-            carrier.header().creation_time(),
-            application_header.creation_time()
+            carrier
+                .execution_context()
+                .unwrap()
+                .queue_plan_admissions()
+                .len(),
+            usize::from(frontier_case == MergeFrontierFixtureCase::SuccessfulApply),
+            "the publication race uses one genuine admission control",
         );
         assert_eq!(carrier.header().view_change_index(), 0);
         let canonical_wire = carrier.encode_wire().expect("encode exact merge carrier");
@@ -1296,9 +1373,57 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
         .expect("derive exact autonomous merge carrier manifest")
         .into_parts()
         .0;
+        if frontier_case != MergeFrontierFixtureCase::SuccessfulApply {
+            let reservations = queue.live_lane_reservations();
+            assert_retired_merge_candidate_rejected(
+                &fixture,
+                &service,
+                active_context.context(),
+                &carrier,
+                &entry,
+            );
+            assert_eq!(queue.live_lane_reservations(), reservations);
+            assert!(queue.lane_reservation_commit_barriers().is_empty());
+            assert!(queue.lane_reservation_release_barriers().is_empty());
+            assert_eq!(autonomous_balance(), None);
+            assert!(!participant_metadata_is_committed());
+            assert!(
+                expected_fifo
+                    .iter()
+                    .all(|hash| !fixture.state.has_committed_entrypoint(*hash))
+            );
+            assert_eq!(
+                fixture
+                    .kura
+                    .durable_autonomous_lane_merge_source(
+                        origin_descriptor.lane_id,
+                        origin_descriptor.lane_block_height,
+                        install.payload.network_id,
+                        install.payload.epoch,
+                    )
+                    .unwrap()
+                    .source_bundle,
+                source.source_bundle
+            );
+            for key in &expected_reservation_keys {
+                assert!(queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
+            }
+            if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries {
+                assert_cold_merge_registry_replay_boundary(
+                    &fixture,
+                    &entry,
+                    startup_snapshot_before_admission.expect("captured pre-admission snapshot"),
+                    startup_snapshot_after_admission.expect("captured admission snapshot"),
+                    startup_snapshot_before_merge.expect("captured source snapshot"),
+                    &expected_reservation_keys,
+                    active_context.context().mode,
+                );
+            }
+            return;
+        }
         let execution_commitment = service
             .validate_candidate(active_context.context(), &carrier)
-            .expect("deterministically re-execute the certified autonomous batch");
+            .expect("validate the genuine ordinary carrier before publication");
         let mut certificate = wire::QuorumCertificate {
             round,
             proposal_round: round,
@@ -1367,10 +1492,8 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
         );
         assert!(queue.lane_reservation_commit_barriers().is_empty());
         assert!(queue.lane_reservation_release_barriers().is_empty());
-        let pre_live_state_hash =
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
-        let pre_live_merge_ledger = fixture.state.merge_ledger.snapshot();
         if frontier_case == MergeFrontierFixtureCase::SuccessfulApply {
+            let source_reservations = queue.live_lane_reservations();
             let pause = service.pause_successful_apply_frontier_for_test();
             let prior_authority = lane_work.authorized_merge_candidate_for_test(&candidate);
             let prior_signatures = lane_work.merge_local_signature_count_for_test();
@@ -1487,17 +1610,17 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             );
             assert_eq!(fixture.state.latest_block_hash_fast(), Some(carrier.hash()));
             assert!(fixture.state.state_view_generation() > generation);
-            assert_eq!(
-                autonomous_balance(),
-                Some(iroha_primitives::numeric::Quantity::from(2_u32))
-            );
-            assert!(participant_metadata_is_committed());
+            assert_eq!(autonomous_balance(), None);
+            assert!(!participant_metadata_is_committed());
             assert!(
                 expected_fifo
                     .iter()
-                    .all(|hash| fixture.state.has_committed_entrypoint(*hash))
+                    .all(|hash| !fixture.state.has_committed_entrypoint(*hash))
             );
-            assert!(queue.live_lane_reservations().is_empty());
+            assert_eq!(queue.live_lane_reservations(), source_reservations);
+            assert!(queue.lane_reservation_commit_barriers().is_empty());
+            assert!(queue.lane_reservation_release_barriers().is_empty());
+            assert!(fixture.state.merge_ledger.snapshot().is_empty());
             assert_eq!(
                 lane_work
                     .refresh_merge_candidates(0)
@@ -1511,533 +1634,6 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             );
             return;
         }
-        fixture.kura.fail_next_native_amx_prepublication_for_tests();
-        let error = service
-            .execute(active_context.context(), &mut body_store, &task)
-            .expect_err("inject the exact live Native prepublication crash boundary");
-        assert!(
-            matches!(
-                &error,
-                V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                    if *stage == "pre-WSV Native AMX participant evidence publication"
-            ),
-            "unexpected Native prepublication failure: {error:?}"
-        );
-        assert!(error.requires_restart_recovery());
-        assert_eq!(fixture.state.committed_height(), source_height);
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
-            pre_live_state_hash,
-            "failed live Native prepublication must not stage WSV"
-        );
-        assert_eq!(fixture.state.merge_ledger.snapshot(), pre_live_merge_ledger);
-        assert_eq!(autonomous_balance(), None);
-        assert!(!participant_metadata_is_committed());
-        assert!(
-            expected_fifo
-                .iter()
-                .all(|hash| !fixture.state.has_committed_entrypoint(*hash))
-        );
-        assert_eq!(
-            fixture
-                .kura
-                .exact_durable_blocks_count()
-                .expect("read exact durable height after Native crash"),
-            merge_height
-        );
-        let durable_carrier = fixture
-            .kura
-            .get_block(NonZeroUsize::new(merge_height).expect("non-zero Native carrier height"))
-            .expect("read result-bearing Native merge carrier after live crash");
-        assert!(durable_carrier.has_results());
-        assert_eq!(
-            durable_carrier.results().len(),
-            0,
-            "compact merge carrier must not duplicate certified autonomous results"
-        );
-        assert_eq!(batch.entrypoint_count, 2);
-        assert_eq!(durable_carrier.hash(), carrier.hash());
-        let merge_carrier_finality = fixture
-            .kura
-            .v2_finality_artifact(merge_carrier_height)
-            .expect("read Native carrier finality")
-            .expect("Native carrier finality precedes prepublication");
-        assert_eq!(merge_carrier_finality.block_hash, durable_carrier.hash());
-        assert!(
-            fixture
-                .kura
-                .wsv_checkpoint(merge_carrier_height)
-                .expect("read absent Native crash checkpoint")
-                .is_none()
-        );
-        assert!(
-            fixture
-                .kura
-                .commit_manifest(merge_carrier_height)
-                .expect("read absent Native crash commit manifest")
-                .is_none()
-        );
-        let durable_merge_carrier = fixture
-            .kura
-            .merge_carrier_for_entry(entry_hash)
-            .expect("read staged Native merge-carrier record")
-            .expect("Kura block commit stages the exact merge association");
-        assert_eq!(durable_merge_carrier.entry_hash, entry_hash);
-        assert_eq!(durable_merge_carrier.block_height, merge_carrier_height);
-        assert_eq!(durable_merge_carrier.block_hash, durable_carrier.hash());
-        assert_eq!(
-            fixture
-                .kura
-                .merge_entry_by_hash(entry_hash)
-                .expect("read full staged Native merge entry"),
-            Some(entry.clone())
-        );
-        let native_amx_manifest =
-            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
-                durable_carrier.as_ref(),
-                Some(&entry),
-            )
-            .expect("derive exact staged Native application manifest");
-        assert_eq!(native_amx_manifest.count(), 1);
-        let native_entry = &native_amx_manifest.entries()[0];
-        assert_eq!(
-            native_entry.participant_proposal.descriptor.proposal_height,
-            source_carrier_height
-        );
-        assert_eq!(
-            native_entry.leaf.application_block_height,
-            merge_carrier_height
-        );
-        assert_eq!(
-            native_entry
-                .participant_settlement
-                .authority_context_height(),
-            source_carrier_height
-        );
-        assert_eq!(native_entry.leaf.members.len(), 2);
-        let native_amx_frontiers = State::native_amx_participant_frontier_markers_and_merge_entry(
-            durable_carrier.as_ref(),
-            Some(&entry),
-        )
-        .expect("derive exact staged Native State frontier");
-        assert_eq!(native_amx_frontiers.len(), 1);
-        assert_eq!(native_amx_frontiers[0].source_count, 2);
-        let missing_live_witness = fixture
-            .kura
-            .prepublish_native_amx_participant_application_evidence(durable_carrier.as_ref(), None)
-            .expect_err("live merge prepublication requires its exact staged witness");
-        assert!(
-            missing_live_witness
-                .to_string()
-                .contains("live Native AMX merge publication lacks its staged association witness"),
-            "unexpected missing live witness error: {missing_live_witness}"
-        );
-        let live_prepublication = fixture
-            .kura
-            .prepublish_native_amx_participant_application_evidence(
-                durable_carrier.as_ref(),
-                Some(&entry),
-            )
-            .expect("publish exact staged Native evidence before WSV retry");
-        assert!(live_prepublication.authenticates_state_frontiers(
-            durable_carrier.as_ref(),
-            &native_amx_manifest,
-            &merge_carrier_finality,
-            &native_amx_frontiers,
-        ));
-        service
-            .execute(active_context.context(), &mut body_store, &task)
-            .expect("atomically apply the exact canonical autonomous merge carrier");
-        assert_fixture_context("after exact Native carrier application");
-        assert_eq!(fixture.state.committed_height(), merge_height);
-        assert_eq!(
-            fixture.state.merge_ledger.snapshot(),
-            vec![Arc::new(entry.clone())]
-        );
-        for transaction_hash in &expected_fifo {
-            assert!(fixture.state.has_committed_entrypoint(*transaction_hash));
-        }
-        assert_eq!(
-            autonomous_balance(),
-            Some(iroha_primitives::numeric::Quantity::from(2_u32)),
-            "two additive autonomous effects must enter canonical WSV exactly once"
-        );
-        assert!(participant_metadata_is_committed());
-        assert!(queue.live_lane_reservations().is_empty());
-        assert!(queue.lane_reservation_commit_barriers().is_empty());
-        assert!(queue.lane_reservation_release_barriers().is_empty());
-        for key in &expected_reservation_keys {
-            assert!(!queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
-        }
-        assert!(
-            queue.lane_reservation_group_is_finalized_for_diagnostics(&expected_reservation_keys)
-        );
-        let receipt = fixture
-            .kura
-            .read_lane_block_application_receipt(
-                origin_descriptor.lane_id,
-                origin_descriptor.lane_block_height,
-            )
-            .expect("read one durable autonomous merge application receipt");
-        assert_eq!(
-            receipt.format,
-            crate::kura::LaneBlockApplicationReceiptArtifactFormat::MergeExecution
-        );
-        assert_eq!(receipt.proposal, anchored_proposal);
-        assert_eq!(receipt.application_block_height, merge_carrier_height);
-        assert_eq!(receipt.application_block_hash, carrier.hash());
-        assert_eq!(receipt.merge_epoch_id, Some(entry.epoch_id));
-        assert_eq!(receipt.merge_entry_hash, Some(entry_hash));
-        assert_eq!(
-            receipt.merge_carrier_block_height,
-            Some(merge_carrier_height)
-        );
-        assert_eq!(receipt.merge_carrier_block_hash, Some(carrier.hash()));
-        assert_eq!(receipt.merge_source_bundle_hash, Some(source.bundle_hash));
-        assert_eq!(
-            receipt.merge_batch_identity_hash,
-            Some(crate::merge::merge_execution_batch_identity_hash(batch))
-        );
-        assert_eq!(receipt.merge_batch_hash, Some(batch.batch_hash));
-        assert_eq!(receipt.merge_base_state_hash, Some(batch.base_state_hash));
-        assert_eq!(receipt.merge_write_set_root, Some(batch.write_set_root));
-        assert_eq!(
-            receipt.merge_expected_post_state_hash,
-            Some(batch.expected_post_state_hash)
-        );
-        assert_eq!(
-            receipt.merge_settlement_hash,
-            Some(execution.settlement_hash)
-        );
-        let receipt_hash = HashOf::new(&receipt);
-        let finalized_row =
-            diagnostic_at(&queue, SumeragiAutonomousLaneExecutionStage::QueueFinalized);
-        assert_eq!(
-            finalized_row.proposal_hash,
-            Some(anchored_proposal.proposal_hash)
-        );
-        assert_eq!(
-            finalized_row.executable_payload_hash,
-            Some(install.payload.payload_hash)
-        );
-        assert_eq!(finalized_row.source_bundle_hash, Some(source.bundle_hash));
-        assert_eq!(finalized_row.merge_entry_hash, Some(entry_hash));
-        assert_eq!(
-            finalized_row.application_block_height,
-            Some(merge_carrier_height)
-        );
-        assert_eq!(finalized_row.application_block_hash, Some(carrier.hash()));
-        assert_eq!(finalized_row.stuck_reason, None);
-        service
-            .execute(active_context.context(), &mut body_store, &task)
-            .expect("retry the exact canonical autonomous merge application");
-        assert_eq!(fixture.state.committed_height(), merge_height);
-        assert_eq!(
-            fixture.state.merge_ledger.snapshot(),
-            vec![Arc::new(entry.clone())]
-        );
-        assert_eq!(
-            autonomous_balance(),
-            Some(iroha_primitives::numeric::Quantity::from(2_u32)),
-            "an exact Apply retry must not execute autonomous effects twice"
-        );
-        assert_eq!(
-            fixture
-                .kura
-                .read_lane_block_application_receipt(
-                    origin_descriptor.lane_id,
-                    origin_descriptor.lane_block_height,
-                )
-                .as_ref()
-                .map(HashOf::new),
-            Some(receipt_hash),
-            "exact Apply retry must retain one byte-identical durable receipt"
-        );
-        assert!(queue.live_lane_reservations().is_empty());
-        assert!(queue.lane_reservation_commit_barriers().is_empty());
-        assert!(queue.lane_reservation_release_barriers().is_empty());
-        assert!(
-            queue.lane_reservation_group_is_finalized_for_diagnostics(&expected_reservation_keys)
-        );
-        if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries {
-            assert_cold_merge_registry_replay_boundary(
-                &fixture,
-                &entry,
-                startup_snapshot_before_admission.expect("captured pre-admission snapshot"),
-                startup_snapshot_after_admission.expect("captured actual admission snapshot"),
-                startup_snapshot_before_merge.expect("captured pre-merge source snapshot"),
-                &expected_reservation_keys,
-                active_context.context().mode,
-            );
-            return;
-        }
-        let native_marker = native_amx_frontiers[0];
-        let native_receipt = fixture
-            .kura
-            .read_native_amx_participant_application_receipt(
-                native_marker.lane_id,
-                native_marker.dataspace_id,
-                native_marker.lane_incarnation,
-                native_marker.lane_block_height,
-            )
-            .expect("read exact committed Native participant receipt");
-        let structural_native_receipt = fixture
-            .kura
-            .read_structural_native_amx_participant_application_receipt(
-                native_marker.lane_id,
-                native_marker.dataspace_id,
-                native_marker.lane_block_height,
-            )
-            .expect("read structural Native participant receipt");
-        assert_eq!(structural_native_receipt, native_receipt);
-        let structural_native_receipt_bytes = norito::encode_canonical(&structural_native_receipt)
-            .expect("encode exact structural Native receipt");
-        let pre_startup_state_hash =
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
-        let pre_startup_merge_ledger = fixture.state.merge_ledger.snapshot();
-        let pre_startup_balance = autonomous_balance();
-        assert!(participant_metadata_is_committed());
-        drop(service);
-        drop(queue);
-        drop(body_store);
-        drop(lane_work);
-        fixture
-            .kura
-            .remove_latest_native_amx_participant_manifest_for_testing(
-                native_marker.lane_id,
-                native_marker.dataspace_id,
-                native_marker.lane_incarnation,
-                native_marker.lane_block_height,
-                durable_carrier.hash(),
-            )
-            .expect("remove only the exact latest Native manifest");
-        fixture
-            .kura
-            .remove_merge_carrier_record_for_testing(durable_carrier.as_ref(), &entry)
-            .expect("remove only the exact merge-carrier reverse record");
-        assert!(
-            fixture
-                .kura
-                .merge_carrier_for_entry(entry_hash)
-                .expect("read absent merge-carrier reverse record")
-                .is_none()
-        );
-        assert_eq!(
-            fixture
-                .kura
-                .merge_entry_by_hash(entry_hash)
-                .expect("read retained full merge entry after association loss"),
-            Some(entry.clone())
-        );
-        assert_eq!(
-            fixture
-                .kura
-                .read_structural_native_amx_participant_application_receipt(
-                    native_marker.lane_id,
-                    native_marker.dataspace_id,
-                    native_marker.lane_block_height,
-                ),
-            Some(structural_native_receipt.clone()),
-            "manifest loss must retain the exact structural Native receipt"
-        );
-        assert!(
-            fixture
-                .kura
-                .read_native_amx_participant_application_receipt(
-                    native_marker.lane_id,
-                    native_marker.dataspace_id,
-                    native_marker.lane_incarnation,
-                    native_marker.lane_block_height,
-                )
-                .is_none(),
-            "the authoritative reader must reject a receipt without its manifest"
-        );
-        let missing_startup_association = fixture
-            .kura
-            .preflight_native_amx_participant_application_evidence_repair(
-                durable_carrier.as_ref(),
-                std::slice::from_ref(&native_marker),
-                None,
-            )
-            .expect_err("startup Native repair requires a committed or planned association");
-        assert!(
-            missing_startup_association
-                .to_string()
-                .contains("Native AMX application block lacks its committed merge association"),
-            "unexpected missing startup association error: {missing_startup_association}"
-        );
-        fixture
-            .kura
-            .preflight_native_amx_participant_application_evidence_repair(
-                durable_carrier.as_ref(),
-                std::slice::from_ref(&native_marker),
-                Some(&entry),
-            )
-            .expect("planned merge association authorizes exact Native startup repair");
-        let startup_context = {
-            let state_view = fixture.state.view();
-            crate::sumeragi::v2_context::build_successor_height_context_from_state(
-                &merge_carrier_finality,
-                &state_view,
-                crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
-                    fixture.state.as_ref(),
-                )
-                .expect("valid committed catalog"),
-            )
-            .expect("derive exact height-four startup context")
-        };
-        assert_eq!(startup_context.height, 4);
-        let planning = plan_lane_application_evidence_repair(
-            &startup_context,
-            fixture.state.as_ref(),
-            fixture.kura.as_ref(),
-            limits,
-        )
-        .expect("plan exact Native and merge association startup repairs");
-        let LaneApplicationEvidenceRepairPlanning::Ready(plan) = planning else {
-            panic!("durable Native carrier body must make startup repair ready");
-        };
-        assert_eq!(plan.item_count(), 2);
-        let repair_summary = apply_lane_application_evidence_repair(
-            fixture.state.as_ref(),
-            fixture.kura.as_ref(),
-            plan,
-        )
-        .expect("apply exact planned Native and merge association repairs");
-        assert_eq!(
-            repair_summary,
-            LaneApplicationEvidenceRepairSummary {
-                ordinary_pairs: 0,
-                ordinary_receipts: 0,
-                native_carriers: 1,
-                native_routes: 1,
-                merge_carriers: 1,
-            }
-        );
-        assert_eq!(
-            fixture
-                .kura
-                .merge_carrier_for_entry(entry_hash)
-                .expect("read repaired merge-carrier record"),
-            Some(durable_merge_carrier)
-        );
-        let repaired_native_receipt = fixture
-            .kura
-            .read_native_amx_participant_application_receipt(
-                native_marker.lane_id,
-                native_marker.dataspace_id,
-                native_marker.lane_incarnation,
-                native_marker.lane_block_height,
-            )
-            .expect("read repaired Native participant receipt");
-        assert_eq!(repaired_native_receipt, native_receipt);
-        assert_eq!(
-            norito::encode_canonical(&repaired_native_receipt)
-                .expect("re-encode repaired Native participant receipt"),
-            structural_native_receipt_bytes,
-            "startup repair must reproduce the exact retained receipt bytes"
-        );
-        assert!(
-            fixture
-                .state
-                .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
-                .expect("read repaired Native State frontiers")
-                .is_empty()
-        );
-        assert_eq!(fixture.state.committed_height(), 3);
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
-            pre_startup_state_hash,
-            "startup evidence repair must not mutate canonical WSV"
-        );
-        assert_eq!(
-            fixture.state.merge_ledger.snapshot(),
-            pre_startup_merge_ledger
-        );
-        assert_eq!(autonomous_balance(), pre_startup_balance);
-        assert!(participant_metadata_is_committed());
-        assert!(
-            expected_fifo
-                .iter()
-                .all(|hash| fixture.state.has_committed_entrypoint(*hash))
-        );
-        let replanning = plan_lane_application_evidence_repair(
-            &startup_context,
-            fixture.state.as_ref(),
-            fixture.kura.as_ref(),
-            limits,
-        )
-        .expect("replan exact completed startup evidence repair");
-        let LaneApplicationEvidenceRepairPlanning::Ready(empty_plan) = replanning else {
-            panic!("completed startup evidence repair must remain locally ready");
-        };
-        assert!(empty_plan.is_empty());
-        assert_eq!(empty_plan.item_count(), 0);
-        let terminal_queue = fixture_queue(fixture.state.as_ref(), events_sender);
-        let terminal_replay = terminal_queue
-            .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
-            .expect("replay terminal autonomous reservation journal");
-        assert_eq!(terminal_replay.restored, 0);
-        assert_eq!(terminal_replay.awaiting_transaction_replay, 0);
-        assert_eq!(terminal_replay.commit_barriers, 0);
-        assert_eq!(terminal_replay.release_barriers, 0);
-        terminal_queue
-            .install_plan_journal(&plan_path, 1024 * 1024, true)
-            .expect("install terminal autonomous QueuePlan journal");
-        terminal_queue
-            .replay_plan_journal(fixture.state.as_ref())
-            .expect("replay terminal autonomous QueuePlan tombstones");
-        assert!(terminal_queue.live_lane_reservations().is_empty());
-        assert!(terminal_queue.lane_reservation_commit_barriers().is_empty());
-        assert!(
-            terminal_queue
-                .lane_reservation_release_barriers()
-                .is_empty()
-        );
-        for key in &expected_reservation_keys {
-            assert!(!terminal_queue.has_durable_plan_claim_for_test(key.entrypoint_hash));
-        }
-        assert!(
-            terminal_queue
-                .lane_reservation_group_is_finalized_for_diagnostics(&expected_reservation_keys)
-        );
-        assert_eq!(
-            autonomous_balance(),
-            Some(iroha_primitives::numeric::Quantity::from(2_u32)),
-            "terminal journal replay must not execute autonomous effects twice"
-        );
-        let terminal_row = diagnostic_at(
-            &terminal_queue,
-            SumeragiAutonomousLaneExecutionStage::QueueFinalized,
-        );
-        assert_eq!(terminal_row, finalized_row);
-        crate::sumeragi::v2_lane_work::tests::inspect_applied_public_lane_qc_replay_for_test(
-            Arc::clone(&fixture.state),
-            Arc::clone(&fixture.kura),
-            startup_context,
-            limits,
-            iroha_data_model::block::consensus::LaneBlockCertificateV1 {
-                proposal: execution.proposal.clone(),
-                prepare_qc: execution.prepare_qc.clone(),
-                commit_qc: execution.commit_qc.clone(),
-            },
-            [prepare_votes.as_slice(), commit_votes.as_slice()],
-            &validator_keys,
-            &local_key,
-            retained_terminal_adapters,
-        );
-        second_autonomous_cycle_preserves_terminal_replay(
-            &fixture,
-            iroha_data_model::block::consensus::LaneBlockCertificateV1 {
-                proposal: execution.proposal.clone(),
-                prepare_qc: execution.prepare_qc.clone(),
-                commit_qc: execution.commit_qc.clone(),
-            },
-            [prepare_votes.as_slice(), commit_votes.as_slice()],
-            &validator_keys,
-            &local_key,
-            limits,
-        );
     }
 }
 
@@ -2045,6 +1641,7 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
 fn cold_fixture_queue_plan_certificates(
     fixture: &ApplyFixture,
     bindings: &[crate::torii_proxy::QueuePlanAdmissionBindingV1],
+    entrypoints: &[TransactionEntrypoint],
 ) -> Vec<Vec<u8>> {
     let mut ordered = bindings.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|binding| binding.registry_key());
@@ -2081,21 +1678,31 @@ fn cold_fixture_queue_plan_certificates(
                     }
                 })
                 .collect();
-            let bytes =
-                norito::encode_canonical(&crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
-                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-                    binding: binding.clone(),
-                    attestations,
-                })
-                .expect("encode the canonical signed QueuePlan certificate");
-            let validated =
-                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                    fixture.state.network_id_ref(),
-                    &bytes,
-                )
-                .expect("the production decoder authenticates the exact admission quorum");
-            assert_eq!(&validated.certificate.binding, binding);
-            assert_eq!(validated.binding_hash, binding.canonical_hash());
+            let bytes = norito::encode_canonical(
+                &iroha_data_model::block::lane_admission::LaneAdmittedInputV1 {
+                    entrypoint: entrypoints
+                        .iter()
+                        .find(|input| input.hash() == binding.entrypoint_hash)
+                        .expect("retain every exact queued input")
+                        .clone(),
+                    certificate: crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
+                        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+                        binding: binding.clone(),
+                        attestations,
+                    },
+                },
+            )
+            .expect("encode the canonical signed QueuePlan certificate");
+            let validated = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
+                fixture.state.network_id_ref(),
+                &bytes,
+            )
+            .expect("the production decoder authenticates the exact admission quorum");
+            assert_eq!(&validated.certificate().certificate.binding, binding);
+            assert_eq!(
+                validated.certificate().binding_hash,
+                binding.canonical_hash()
+            );
             bytes
         })
         .collect()
@@ -2112,14 +1719,14 @@ fn assert_cold_merge_registry_replay_boundary(
 ) {
     use crate::state::QueuePlanAdmissionRegistryMatch;
 
-    // KuraSeed restores canonical State. Normal startup separately refreshes
-    // static Nexus configuration while retaining snapshot topology and cooldown,
-    // then installs the frozen manifests before replay. Reuse the actual fixture
-    // configuration and the four-validator registry that authenticated its carriers.
+    // KuraSeed binds the frozen four-validator registry while restoring canonical
+    // State. Normal startup then refreshes static Nexus configuration while
+    // retaining snapshot topology and cooldown before replay.
     let startup_nexus = fixture.state.nexus_snapshot();
     let startup_lane_manifests = fixture.state.lane_manifests.read().clone();
     let restore = |snapshot| {
         crate::state::deserialize::KuraSeed {
+            lane_manifests: Arc::clone(&startup_lane_manifests),
             kura: Arc::clone(&fixture.kura),
             query_handle: LiveQueryStore::start_test(),
             #[cfg(feature = "telemetry")]
@@ -2128,7 +1735,8 @@ fn assert_cold_merge_registry_replay_boundary(
         .into_state_from_json(snapshot)
         .and_then(|mut state| {
             let restored_nexus = state.nexus_snapshot();
-            let restored_hash = crate::snapshot::canonical_state_snapshot_hash(&state);
+            let restored_hash = crate::snapshot::canonical_state_snapshot_hash(&state)
+                .expect("stable valid fixture snapshot");
             // Authenticate Kura's primary and restore the exact snapshot storage
             // cursor before applying static policy, as the daemon does at startup.
             state
@@ -2157,7 +1765,6 @@ fn assert_cold_merge_registry_replay_boundary(
                     "restore fixture Nexus startup configuration: {error}"
                 ))
             })?;
-            state.install_lane_manifests(&startup_lane_manifests);
             let installed_nexus = state.nexus_snapshot();
             assert_eq!(installed_nexus.lane_catalog, restored_nexus.lane_catalog);
             assert_eq!(installed_nexus.lane_config, restored_nexus.lane_config);
@@ -2174,7 +1781,8 @@ fn assert_cold_merge_registry_replay_boundary(
                 startup_nexus.dataspace_catalog,
             );
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(&state),
+                crate::snapshot::canonical_state_snapshot_hash(&state)
+                    .expect("stable valid fixture snapshot"),
                 restored_hash,
                 "startup runtime attachment must preserve the restored canonical State",
             );
@@ -2218,15 +1826,15 @@ fn assert_cold_merge_registry_replay_boundary(
     }
     drop(cold);
 
-    let expected_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
-    let complete_snapshot = norito::json::to_value(fixture.state.as_ref())
-        .expect("snapshot the exactly applied merge carrier");
+    let expected_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+        .expect("stable source-only fixture snapshot");
+    assert_eq!(fixture.state.committed_height(), 3);
     for (height, snapshot) in [
         (1, before_admission),
         (2, after_admission),
         (3, before_merge.clone()),
     ] {
-        let mut partial = restore(snapshot).expect("hydrate future execution over an exact prefix");
+        let mut partial = restore(snapshot).expect("hydrate the exact admitted source prefix");
         assert_eq!(partial.committed_height(), height);
         assert!(partial.merge_ledger.snapshot().is_empty());
         for key in reservations {
@@ -2236,144 +1844,101 @@ fn assert_cold_merge_registry_replay_boundary(
                         key.entrypoint_hash,
                         key.queue_plan_admission_binding_hash,
                     )
-                    .expect("prefix registry is either absent or exactly pending"),
+                    .unwrap(),
                 if height == 1 {
                     QueuePlanAdmissionRegistryMatch::Absent
                 } else {
                     QueuePlanAdmissionRegistryMatch::Exact
-                },
+                }
             );
             assert!(!partial.has_committed_entrypoint(key.entrypoint_hash));
         }
-        crate::state::replay_blocks_from_kura_range(
-            &fixture.kura,
-            &mut partial,
-            usize::try_from(height + 1).expect("fixture height fits usize"),
-            4,
-        )
-        .expect("ordered replay admits before executing the exact future merge carrier");
-        assert_eq!(partial.committed_height(), 4);
+        if height < 3 {
+            crate::state::replay_blocks_from_kura_range(&fixture.kura, &mut partial, height + 1, 3)
+                .expect("canonical source replay restores admission before any native execution");
+        }
+        assert_eq!(partial.committed_height(), 3);
+        assert!(partial.merge_ledger.snapshot().is_empty());
         assert_eq!(
-            partial.merge_ledger.snapshot(),
-            vec![Arc::new(entry.clone())]
-        );
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(&partial),
+            crate::snapshot::canonical_state_snapshot_hash(&partial).unwrap(),
             expected_hash
         );
         for key in reservations {
-            assert!(partial.has_committed_entrypoint(key.entrypoint_hash));
+            assert!(!partial.has_committed_entrypoint(key.entrypoint_hash));
             assert_eq!(
                 partial
                     .queue_plan_admission_registry_match(
                         key.entrypoint_hash,
                         key.queue_plan_admission_binding_hash,
                     )
-                    .expect("applied execution retains its immutable registry binding"),
-                QueuePlanAdmissionRegistryMatch::Exact,
+                    .unwrap(),
+                QueuePlanAdmissionRegistryMatch::Exact
             );
         }
     }
-
-    let restored = restore(complete_snapshot.clone()).expect("hydrate the exact completed prefix");
-    assert_eq!(restored.committed_height(), 4);
-    assert_eq!(
-        restored.merge_ledger.snapshot(),
-        vec![Arc::new(entry.clone())]
-    );
-    assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(&restored),
-        expected_hash
-    );
-    drop(restored);
-
     for corrupt in ["missing", "conflicting", "malformed"] {
-        for (height, snapshot) in [(3, before_merge.clone()), (4, complete_snapshot.clone())] {
-            let mut restored = restore(snapshot).expect("restore the unmodified control prefix");
-            if height == 3 {
-                restored
-                    .validate_certified_merge_entry_for_global_order(entry, mode)
-                    .expect("the unmodified pending admission authorizes this exact execution");
-            }
-            let registry_keys = restored
-                .world
-                .smart_contract_state
-                .view()
-                .iter()
-                .filter(|(key, _)| key.to_string().starts_with("queue_plan_admission_v2_"))
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            assert_eq!(registry_keys.len(), reservations.len());
-            let mut world = restored.world.block();
-            for key in registry_keys {
-                match corrupt {
-                    "missing" => {
-                        world.smart_contract_state.remove(key);
-                    }
-                    "conflicting" => {
-                        let value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 {
-                            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
-                            binding_hash: Hash::new(b"different immutable admission owner"),
-                        };
-                        world.smart_contract_state.insert(
-                            key,
-                            norito::to_bytes(&value)
-                                .expect("encode a well-formed conflicting owner"),
-                        );
-                    }
-                    "malformed" => {
-                        world.smart_contract_state.insert(key, vec![0xff]);
-                    }
-                    _ => unreachable!(),
+        let restored = restore(before_merge.clone()).expect("restore unmodified pending source");
+        restored
+            .validate_certified_merge_entry_for_global_order(entry, mode)
+            .expect("the original admission binds the certified source");
+        let registry_keys = restored
+            .world
+            .smart_contract_state
+            .view()
+            .iter()
+            .filter(|(key, _)| key.to_string().starts_with("queue_plan_admission_v2_"))
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(registry_keys.len(), reservations.len());
+        let mut world = restored.world.block();
+        for key in registry_keys {
+            match corrupt {
+                "missing" => {
+                    world.smart_contract_state.remove(key);
                 }
-            }
-            world.commit();
-            let before = crate::snapshot::canonical_state_snapshot_hash(&restored);
-            if height == 3 {
-                let error = restored
-                    .validate_certified_merge_entry_for_global_order(entry, mode)
-                    .expect_err(
-                        "future hydration never authorizes missing or conflicting live bindings",
-                    );
-                assert!(
-                    error
-                        .to_string()
-                        .contains("exact QueuePlan admission registry binding"),
-                    "{corrupt} pending registry failed at an unrelated stage: {error}",
-                );
-                assert!(
-                    crate::state::replay_blocks_from_kura_range(
-                        &fixture.kura,
-                        &mut restored,
-                        4,
-                        4,
+                "conflicting" => {
+                    let value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 {
+                        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
+                        binding_hash: Hash::new(b"different immutable admission owner"),
+                    };
+                    let priority = State::decode_exact_queue_plan_admission_registry_record(
+                        &key,
+                        world.smart_contract_state.get(&key).unwrap(),
                     )
-                    .is_err(),
-                    "actual replay must reject a {corrupt} pending admission",
-                );
-                assert_eq!(restored.committed_height(), 3);
-                assert!(restored.merge_ledger.snapshot().is_empty());
-                assert_eq!(
-                    crate::snapshot::canonical_state_snapshot_hash(&restored),
-                    before
-                );
-            }
-            if height == 4 {
-                let malformed_snapshot = norito::json::to_value(&restored)
-                    .expect("serialize the isolated completed-prefix registry corruption");
-                let error = restore(malformed_snapshot).err().expect(
-                    "restored history must retain the exact registry binding of its applied execution",
-                );
-                assert!(
-                    error.to_string().to_lowercase().contains("queue"),
-                    "{corrupt} restored registry failed for an unrelated reason: {error}",
-                );
+                    .unwrap()
+                    .priority;
+                    world.smart_contract_state.insert(
+                        key,
+                        State::queue_plan_admission_registry_marker_payload(&value, priority)
+                            .unwrap(),
+                    );
+                }
+                "malformed" => {
+                    world.smart_contract_state.insert(key, vec![0xff]);
+                }
+                _ => unreachable!(),
             }
         }
+        world.commit();
+        let before = crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap();
+        let error = restored
+            .validate_certified_merge_entry_for_global_order(entry, mode)
+            .expect_err("hydration cannot authorize a corrupt live admission binding");
+        assert!(
+            error
+                .to_string()
+                .contains("exact QueuePlan admission registry binding"),
+            "{corrupt} registry failed at an unrelated stage: {error}"
+        );
+        assert_eq!(restored.committed_height(), 3);
+        assert!(restored.merge_ledger.snapshot().is_empty());
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(),
+            before
+        );
     }
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
-        expected_hash,
-        "all startup and rejection checks leave the original canonical state intact",
+        crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),
+        expected_hash
     );
 }

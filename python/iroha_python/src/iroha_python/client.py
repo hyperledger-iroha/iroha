@@ -8539,13 +8539,12 @@ class AccountTransaction:
 
 @dataclass(frozen=True)
 class VerifiedCommittedTransaction:
-    """A committed transaction whose native Merkle proofs match its exact carrier block."""
+    """A network transaction with native input and full-output proofs against its carrier."""
 
     transaction_hash: str
     block_hash: str
     block_height: int
-    result_hash: str
-    proof_kind: str
+    output_hash: str
     entrypoint_kind: str
     authority: Optional[str]
     signer_public_key_hex: Optional[str]
@@ -8569,8 +8568,7 @@ class VerifiedCommittedTransaction:
             "transaction_hash",
             "block_hash",
             "block_height",
-            "result_hash",
-            "proof_kind",
+            "output_hash",
             "entrypoint_kind",
             "authority",
             "signer_public_key_hex",
@@ -8596,27 +8594,20 @@ class VerifiedCommittedTransaction:
             payload.get("block_hash"),
             "verified carrier block hash",
         )
-        result_hash = _normalize_hash_hex(
-            payload.get("result_hash"),
-            "verified transaction result hash",
+        output_hash = _normalize_hash_hex(
+            payload.get("output_hash"),
+            "verified transaction output hash",
         )
         block_height = _normalize_positive_int(
             payload.get("block_height"),
             "verified carrier block height",
             allow_zero=False,
         )
-        proof_kind = payload.get("proof_kind")
-        if proof_kind not in {"ordinary", "certified_merge"}:
-            raise ValueError(
-                "verified committed transaction proof_kind must be "
-                "'ordinary' or 'certified_merge'"
-            )
         entrypoint_kind = payload.get("entrypoint_kind")
         if entrypoint_kind not in {
             "External",
             "SealedCommitment",
             "SealedReveal",
-            "Time",
         }:
             raise ValueError("verified transaction entrypoint_kind is not recognized")
         authority_value = payload.get("authority")
@@ -8808,8 +8799,7 @@ class VerifiedCommittedTransaction:
             transaction_hash=transaction_hash,
             block_hash=block_hash,
             block_height=block_height,
-            result_hash=result_hash,
-            proof_kind=proof_kind,
+            output_hash=output_hash,
             entrypoint_kind=entrypoint_kind,
             authority=authority,
             signer_public_key_hex=signer_public_key_hex,

@@ -62,7 +62,6 @@
             core::num::NonZeroU64::new(9).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         );

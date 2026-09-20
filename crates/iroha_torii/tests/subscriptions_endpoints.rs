@@ -213,7 +213,6 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
             NonZeroU64::new(expected_height).expect("height > 0"),
             None,
             None,
-            None,
             0,
             0,
         );

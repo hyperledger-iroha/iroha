@@ -16,7 +16,7 @@ fn commit_with_signers_accepts_quorum_without_proxy_tail_signature() {
     ]);
     // Sign with leader + validator but omit proxy-tail signature to mirror a QC with trimmed
     // block signatures.
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let hash = header.hash();
     let mut signatures = BTreeSet::new();
     signatures.insert(BlockSignature::new(
@@ -61,7 +61,7 @@ fn commit_with_signers_allows_block_signer_not_in_qc() {
     ]);
     // QC captured votes from leader + validator + proxy; block also carries a signature
     // from a validator that is not part of the QC signer set.
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let hash = header.hash();
     let mut signatures = BTreeSet::new();
     signatures.insert(BlockSignature::new(

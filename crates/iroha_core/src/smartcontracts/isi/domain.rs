@@ -3711,7 +3711,7 @@ mod tests {
                 Json::new(7_u64),
             ),
         ];
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         for (key, value) in reserved_values {
@@ -3744,7 +3744,7 @@ mod tests {
             "rose".parse().expect("asset name"),
         );
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::asset_definition(AssetDefinition::numeric(
@@ -3880,7 +3880,7 @@ mod tests {
         let mut state = test_state();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         let call_name: Name = "protected".parse().expect("call name");
@@ -3990,7 +3990,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
         seed_account(&mut state, &host, &domain_id);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         crate::smartcontracts::isi::kaigi::store_kaigi_record_for_testing(
@@ -4061,7 +4061,7 @@ mod tests {
         }
         seed_account(&mut state, &authority, &call_domain);
         seed_account(&mut state, &terminal, &alias_domain);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         transaction
@@ -4142,7 +4142,7 @@ mod tests {
             domain_id,
             "coin".parse().expect("asset name"),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::account(NewAccount::new(reserve_account.clone()))
@@ -4190,7 +4190,7 @@ mod tests {
             domain_id,
             "coin".parse().expect("asset name"),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::account(NewAccount::new(reserve_account.clone()))
@@ -4243,7 +4243,7 @@ mod tests {
             domain_id.clone(),
             "coin".parse().expect("asset name"),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::account(NewAccount::new(reserve_account.clone()))
@@ -4411,7 +4411,7 @@ mod tests {
             metadata: Metadata::default(),
             owned_by: owner.clone(),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world.insert_domain_entry(domain_id.clone(), domain);
@@ -4956,7 +4956,7 @@ mod tests {
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(account_label.clone()));
         // Execute register with label.
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -5005,7 +5005,7 @@ mod tests {
             "primary".parse::<Name>().expect("label"),
             DataSpaceId::UNIVERSAL,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_account_alias_manage_permissions(&mut tx, &authority, &account_label);
@@ -5025,7 +5025,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(Account::new(account_id.clone()))
@@ -5054,7 +5054,7 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(Account::new(account_id.clone()))
@@ -5080,7 +5080,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -5115,7 +5115,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -5137,7 +5137,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -5157,7 +5157,7 @@ mod tests {
     fn register_account_with_retail_aliases_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let (paynet, cbuae) = install_retail_dataspace_catalog(&mut tx);
@@ -5186,7 +5186,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(old_label.clone()));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_account_alias_manage_permissions(&mut tx, &authority, &old_label);
@@ -5238,7 +5238,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(Account::new(account_id.clone()))
@@ -5272,7 +5272,7 @@ mod tests {
         let stale_owner = AccountId::new(checked_keypair().public_key().clone());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world
@@ -5319,7 +5319,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -5348,7 +5348,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -5399,7 +5399,7 @@ mod tests {
             alias_in_domain(&domain_id, "register_expired".parse::<Name>().unwrap());
         let binding_alias = alias_in_domain(&domain_id, "binding_expired".parse::<Name>().unwrap());
         let primary_alias = alias_in_domain(&domain_id, "primary_expired".parse::<Name>().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -5467,7 +5467,7 @@ mod tests {
         seed_account(&mut state, &authority, &domain_id);
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let alias = alias_in_domain(&domain_id, "renewal".parse::<Name>().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -5531,7 +5531,7 @@ mod tests {
     fn bind_account_alias_in_retail_namespace_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let (paynet, _) = install_retail_dataspace_catalog(&mut tx);
@@ -5557,7 +5557,7 @@ mod tests {
     #[test]
     fn retail_account_alias_rejects_asset_alias_permission() {
         let state = test_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let (paynet, _) = install_retail_dataspace_catalog(&mut tx);
@@ -5636,7 +5636,7 @@ mod tests {
     fn cbdc_fi_account_alias_management_isolated_by_exact_domain() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let retail = DataSpaceId::new(10);
@@ -5776,7 +5776,7 @@ mod tests {
     fn cbdc_retail_account_rejects_cross_fi_secondary_alias_and_repoint() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let retail = DataSpaceId::new(10);
@@ -5908,7 +5908,7 @@ mod tests {
     #[test]
     fn clearing_primary_status_keeps_retail_home_binding_and_blocks_cross_fi_setup() {
         let state = test_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let retail = DataSpaceId::new(10);
@@ -5982,7 +5982,7 @@ mod tests {
     fn cbdc_retail_same_fi_primary_rotation_remains_supported() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let retail = DataSpaceId::new(10);
@@ -6045,7 +6045,7 @@ mod tests {
     fn cleared_primary_status_does_not_enable_cross_fi_replacement() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let retail = DataSpaceId::new(10);
@@ -6144,7 +6144,7 @@ mod tests {
     fn primary_alias_cas_in_retail_namespace_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let (_, cbuae) = install_retail_dataspace_catalog(&mut tx);
@@ -6182,7 +6182,7 @@ mod tests {
         let policy = MultisigPolicy::new(2, vec![member_a, member_b]).expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
         let account_label = alias_in_domain(&domain_id, "cbdc".parse::<Name>().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -6227,7 +6227,7 @@ mod tests {
     #[test]
     fn account_rekey_upsert_records_alias_reassignment_provenance() {
         let state = test_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let alias = AccountAlias::domainless(
@@ -6280,7 +6280,7 @@ mod tests {
             domain: domain_id.clone(),
         }
         .into();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Grant::account_permission(permission, registrar.clone())
@@ -6369,7 +6369,7 @@ mod tests {
             "CanRegisterAccount".parse().expect("permission name"),
             iroha_primitives::json::Json::new(()),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Grant::account_permission(permission, registrar.clone())
@@ -6437,7 +6437,7 @@ mod tests {
         let account_id = AccountId::new_multisig(policy);
         let banking_label = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let issuance_label = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -6562,7 +6562,7 @@ mod tests {
                 },
             ),
         ];
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         for account in [target.clone(), holder.clone()] {
@@ -6620,7 +6620,7 @@ mod tests {
             AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::UNIVERSAL);
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -6664,7 +6664,7 @@ mod tests {
         let domain_alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
@@ -6735,7 +6735,7 @@ mod tests {
         let stale_owner = AccountId::new(checked_keypair().public_key().clone());
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world
@@ -6788,7 +6788,7 @@ mod tests {
             domain: domain_id.clone(),
         }
         .into();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Grant::account_permission(permission, registrar.clone())
@@ -6827,7 +6827,7 @@ mod tests {
             "CanRegisterAccount".parse().expect("permission name"),
             iroha_primitives::json::Json::new(()),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Grant::account_permission(permission, registrar.clone())
@@ -6864,7 +6864,7 @@ mod tests {
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_account_alias_manage_permissions(&mut tx, &domain_owner, &alias);
@@ -6916,7 +6916,7 @@ mod tests {
             domain: domain_id.clone(),
         }
         .into();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Grant::account_permission(permission, registrar.clone())
@@ -6978,7 +6978,7 @@ mod tests {
             "CanRegisterAccount".parse().expect("permission name"),
             iroha_primitives::json::Json::new(()),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Grant::account_permission(permission, registrar.clone())
@@ -7033,7 +7033,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone()).with_label(Some(account_label));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = Register::account(new_account)
@@ -7062,7 +7062,7 @@ mod tests {
         seed_domain(&mut state, &transferred_domain_id, &user1);
         seed_account(&mut state, &user1, &users_domain_id);
         seed_account(&mut state, &user2, &users_domain_id);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = Transfer::domain(user1.clone(), transferred_domain_id.clone(), user2)
@@ -7091,7 +7091,7 @@ mod tests {
             seed_domain(&mut state, &domain_id, &source);
             seed_account(&mut state, &source, &domain_id);
             seed_account(&mut state, &destination, &domain_id);
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
             transaction
@@ -7139,7 +7139,7 @@ mod tests {
             uaid: None,
             opaque_ids: vec![opaque],
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = Register::account(new_account)
@@ -7167,7 +7167,7 @@ mod tests {
             uaid: Some(uaid),
             opaque_ids: vec![opaque, opaque],
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = Register::account(new_account)
@@ -7203,7 +7203,7 @@ mod tests {
             uaid: Some(second_uaid),
             opaque_ids: vec![opaque],
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(first_account)
@@ -7245,7 +7245,7 @@ mod tests {
         let secp_pair = checked_keypair_with_algorithm(Algorithm::Secp256k1);
         let account_id = AccountId::new(secp_pair.public_key().clone());
         let new_account = Account::new(account_id.clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = Register::account(new_account)
@@ -7277,7 +7277,7 @@ mod tests {
         let bls_pair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let account_id = AccountId::new(bls_pair.public_key().clone());
         let new_account = Account::new(account_id.clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
@@ -7299,7 +7299,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = Account::new(account_id.clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = Register::account(new_account)
@@ -7325,7 +7325,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
@@ -7361,7 +7361,7 @@ mod tests {
         let second_keypair = checked_keypair();
         let second_id = AccountId::new(second_keypair.public_key().clone());
         let second_account = NewAccount::new(second_id.clone()).with_uaid(Some(uaid));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(first_account)
@@ -7405,7 +7405,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
@@ -7436,7 +7436,7 @@ mod tests {
         seed_domain(&mut state, &other_domain_id, &authority);
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -7509,7 +7509,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -7586,7 +7586,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         seed_domain(&mut state, &external_domain, &account_id);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -7611,7 +7611,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let custody_account = AccountId::new(checked_keypair().public_key().clone());
         let owner = (*BOB_ID).clone();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(custody_account.clone()))
@@ -7663,7 +7663,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -7737,7 +7737,7 @@ mod tests {
         let keypair = checked_keypair();
         let target_id = AccountId::new(keypair.public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(target_id.clone()))
@@ -7789,7 +7789,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -7806,7 +7806,7 @@ mod tests {
         seed_domain(&mut state, &asset_domain, &authority);
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         Register::asset_definition({
@@ -7926,7 +7926,7 @@ mod tests {
         for (nonce, active) in [(31_u64, false), (32_u64, true)] {
             let state = test_state();
             let authority = (*ALICE_ID).clone();
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
             let mut tx = block.transaction();
             let contract =
@@ -8049,7 +8049,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -8101,7 +8101,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -8180,7 +8180,7 @@ mod tests {
         seed_domain(&mut state, &sink_domain, &authority);
         seed_domain(&mut state, &remove_domain, &authority);
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -8223,7 +8223,7 @@ mod tests {
         seed_domain(&mut state, &sink_domain, &authority);
         let remove_account_id = AccountId::new(checked_keypair().public_key().clone());
         let sink_account_id = AccountId::new(checked_keypair().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(sink_account_id.clone()))
@@ -8325,7 +8325,7 @@ mod tests {
             domain_id,
             "usd".parse().expect("asset definition name"),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let reserve_account_id;
         let reserve_asset_id;
@@ -8432,7 +8432,7 @@ mod tests {
         let state = State::new_with_chain_and_network_id_for_testing(
             world, kura, query, chain_id, network_id,
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         assert!(
@@ -9041,7 +9041,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let network_id = *state.network_id_ref();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
@@ -9127,7 +9127,7 @@ mod tests {
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
         let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(new_account)
@@ -9225,7 +9225,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(new_definition)
@@ -9261,7 +9261,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(new_definition)
@@ -9299,7 +9299,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: Some(domain_id),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let dataspace_catalog = DataSpaceCatalog::new(vec![
@@ -9366,7 +9366,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: Some(domain_id),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
@@ -9404,7 +9404,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: Some(domain_id),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
@@ -9442,7 +9442,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: Some(domain_id),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Public);
@@ -9480,7 +9480,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: Some(domain_id),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
@@ -9520,7 +9520,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             owning_domain: Some(domain_id),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
@@ -9552,7 +9552,7 @@ mod tests {
             domain_id,
             "usd".parse().expect("asset definition name"),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = Register::asset_definition(AssetDefinition::numeric(
@@ -9607,7 +9607,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(first)
@@ -9642,7 +9642,7 @@ mod tests {
             "usd_shadow".parse().expect("asset name"),
         );
         let alias: AssetDefinitionAlias = "usd#victim.universal".parse().expect("alias");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world.add_account_permission(
@@ -9762,7 +9762,7 @@ mod tests {
             "cash".parse().expect("asset name"),
         );
         let alias: AssetDefinitionAlias = "cash#paynet".parse().expect("dataspace-root alias");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let paynet = DataSpaceId::new(7);
@@ -9838,7 +9838,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
@@ -9890,7 +9890,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
@@ -9945,7 +9945,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let paynet = DataSpaceId::new(7);
@@ -9989,7 +9989,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let paynet = DataSpaceId::new(7);
@@ -10016,7 +10016,7 @@ mod tests {
             domain_id.clone(),
             "unit".parse().expect("name"),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let paynet = DataSpaceId::new(7);
@@ -10061,7 +10061,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
@@ -10099,7 +10099,7 @@ mod tests {
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             Some(domain_id.clone()),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
@@ -10156,7 +10156,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             owning_domain: Some(domain_id),
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let paynet = DataSpaceId::new(7);
@@ -10186,7 +10186,7 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("address");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world
@@ -10229,7 +10229,7 @@ mod tests {
         )
         .expect("address");
         let alias: ContractAlias = "benefit::benefit".parse().expect("benefit alias");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         install_dataspace_catalog_with_lane(
@@ -10267,7 +10267,7 @@ mod tests {
             dynamic_dataspace,
         )
         .expect("address");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_dataspace_alias_lease(&mut tx, &authority, "is");
@@ -10306,7 +10306,7 @@ mod tests {
             dynamic_dataspace,
         )
         .expect("address");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world.contract_instances.insert(
@@ -10339,7 +10339,7 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("address");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world
@@ -10390,7 +10390,7 @@ mod tests {
         )
         .expect("address");
         let alias: ContractAlias = "router::is".parse().expect("alias");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world
@@ -10433,7 +10433,7 @@ mod tests {
             DataSpaceId::new(4_242),
         )
         .expect("address");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         SetContractAlias::clear(contract_address.clone())
@@ -10460,7 +10460,7 @@ mod tests {
             DataSpaceId::new(4_242),
         )
         .expect("address");
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let err = SetContractAlias {
@@ -10491,7 +10491,7 @@ mod tests {
         .expect("address");
         let label =
             AccountAlias::domainless("router".parse().expect("label"), DataSpaceId::UNIVERSAL);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world
@@ -10540,7 +10540,7 @@ mod tests {
         };
         let (account_id, account_value) = account.into_key_value();
         state.world.accounts.insert(account_id, account_value);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         tx.world.add_account_permission(
@@ -10595,7 +10595,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
@@ -10658,7 +10658,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
@@ -10695,7 +10695,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(new_definition)
@@ -10747,7 +10747,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
@@ -10796,7 +10796,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
@@ -10846,7 +10846,7 @@ mod tests {
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
         };
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition(definition)
@@ -10883,7 +10883,7 @@ mod tests {
         let counterparty = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain.clone(), "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition({
@@ -10978,7 +10978,7 @@ mod tests {
             asset_domain.clone(),
             "locked".parse().unwrap(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition({
@@ -11184,7 +11184,7 @@ mod tests {
         let asset_account = AccountId::new(checked_keypair().public_key().clone());
         let holder_id = AccountId::new(checked_keypair().public_key().clone());
         let asset_id = AssetId::new(asset_definition_id.clone(), asset_account.clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(NewAccount::new(asset_account.clone()))
@@ -11514,7 +11514,7 @@ mod tests {
         let to = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition({
@@ -11620,7 +11620,7 @@ mod tests {
         let account_id = AccountId::new(checked_keypair().public_key().clone());
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "fee".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition({
@@ -11675,7 +11675,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         let asset_definition_id =
             AssetDefinitionId::derive_from_components(domain_id, "shield".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::asset_definition({

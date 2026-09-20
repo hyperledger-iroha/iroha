@@ -894,7 +894,6 @@ mod tests {
             NonZeroU64::new(artifact.height).expect("non-zero artifact height"),
             artifact.subject.parent_block_hash,
             None,
-            None,
             0,
             header_view,
         );

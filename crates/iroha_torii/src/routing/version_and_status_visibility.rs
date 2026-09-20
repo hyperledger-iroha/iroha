@@ -69,6 +69,7 @@ fn status_snapshot_failure(error: iroha_core::telemetry::StatusSnapshotError) ->
         StatusSnapshotError::MailboxUnavailable => StatusFailureReason::MailboxUnavailable,
         StatusSnapshotError::ActorClosed => StatusFailureReason::ActorClosed,
         StatusSnapshotError::DeadlineElapsed => StatusFailureReason::DeadlineElapsed,
+        StatusSnapshotError::StateBusy => StatusFailureReason::StateBusy,
         StatusSnapshotError::StateUnavailable => StatusFailureReason::StateUnavailable,
         StatusSnapshotError::CheckpointChanged => StatusFailureReason::CheckpointChanged,
         StatusSnapshotError::MissingBlock => StatusFailureReason::MissingBlock,
@@ -188,6 +189,10 @@ mod status_failure_reason_tests {
             (
                 StatusSnapshotError::DeadlineElapsed,
                 StatusFailureReason::DeadlineElapsed,
+            ),
+            (
+                StatusSnapshotError::StateBusy,
+                StatusFailureReason::StateBusy,
             ),
             (
                 StatusSnapshotError::StateUnavailable,

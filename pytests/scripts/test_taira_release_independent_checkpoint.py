@@ -12,9 +12,10 @@ import unittest
 from unittest.mock import patch
 
 import test_taira_release as existing
+from taira_fake_libtest import executable
 
 release = existing.release
-gate = release.gate
+gate = existing.development_gate
 
 
 class IndependentCheckpointTests(unittest.TestCase):
@@ -31,23 +32,15 @@ class IndependentCheckpointTests(unittest.TestCase):
         self.failures = self.root / "failed-tests"
         self.failures.write_text("")
         self.originals = self.fixture.target / "debug/deps"
-        self.originals.mkdir(parents=True)
+        self.originals.parent.mkdir(mode=0o700)
+        self.originals.mkdir(mode=0o700)
         self.artifacts = {}
         self.observations = []
         self.released = []
         for selection in ("core", "cli", "network"):
             path = self.originals / selection
             tests = [selection + "_first", selection + "_extra"]
-            path.write_text(
-                f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
-                f"if '--list' in sys.argv: print({chr(10).join(name + ': test' for name in tests)!r}); sys.exit(0)\n"
-                "name = sys.argv[1]\n"
-                f"with Path({str(self.executed)!r}).open('a') as f: f.write(name + '\\n')\n"
-                f"failed = name in Path({str(self.failures)!r}).read_text().splitlines()\n"
-                "print('test ' + name + (' ... FAILED' if failed else ' ... ok'))\n"
-                "print('fixture failure' if failed else 'test result: ok. 1 passed; 0 failed; 0 ignored;')\n"
-                "sys.exit(101 if failed else 0)\n"
-            )
+            path.write_text(executable(tests, self.executed, failure_file=self.failures))
             path.chmod(0o700)
             self.artifacts[selection] = {
                 "name": gate.HARNESS_TARGETS[selection][0], "executable": str(path),
@@ -63,13 +56,13 @@ class IndependentCheckpointTests(unittest.TestCase):
         stack.enter_context(patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "CARGO_HOME": str(self.root / "cargo-home")}, clear=True))
         self.source_lock = stack.enter_context((self.root / "source-lock").open("w"))
         self.events = []
-        for group in ("CONFIG_STAGES", "CONFIG_UNIT_STAGES", "DATA_MODEL_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES",
-                      "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
+        for group in tuple(name for name in vars(gate)
+                           if name == "STAGES" or name.endswith("_STAGES")):
             stack.enter_context(patch.object(gate, group, ()))
         for group, selection in (("CORE_STAGES", "core"), ("STAGES", "cli"), ("NETWORK_STAGES", "network")):
             stack.enter_context(patch.object(gate, group, ((selection, (selection + "_first",)),)))
         for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks",
-                         "require_network_fixture_capacity"):
+                         "require_network_fixture_capacity", "check_test_harnesses"):
             stack.enter_context(patch.object(gate, function))
         # Compilation alone is mocked; the exact-copy, custody/release, census,
         # subprocess result checks, preparation records and retry path are real.
@@ -269,9 +262,18 @@ class IndependentCheckpointTests(unittest.TestCase):
         self.assertFalse((self.fixture.out / "checks.json").exists())
 
     def test_source_drift_before_checkpoint_publication_prevents_network_and_linux(self):
-        snapshots = iter([[], [{"path": "changed"}]])
-        with self.assertRaisesRegex(release.PrepareError, "captured source changed"):
-            self.prepare(snapshot=lambda _: next(snapshots))
+        run_stages = gate.run_stages
+        changed = False
+
+        def change_source_after_tests(harness, *args, **kwargs):
+            nonlocal changed
+            run_stages(harness, *args, **kwargs)
+            if Path(harness).name == "core":
+                changed = True
+
+        with patch.object(gate, "run_stages", side_effect=change_source_after_tests):
+            with self.assertRaisesRegex(release.PrepareError, "captured source changed"):
+                self.prepare(snapshot=lambda _: [{"path": "changed"}] if changed else [])
         self.assertEqual(self.ran(), ["cli_first", "core_first"])
         self.assertFalse(self.checkpoint.exists())
         self.network.assert_not_called()
@@ -280,8 +282,8 @@ class IndependentCheckpointTests(unittest.TestCase):
     def test_toolchain_drift_before_checkpoint_publication_prevents_network_and_linux(self):
         run_stages = gate.run_stages
 
-        def change_tool_after_tests(harness, *args):
-            run_stages(harness, *args)
+        def change_tool_after_tests(harness, *args, **kwargs):
+            run_stages(harness, *args, **kwargs)
             if Path(harness).name == "cli":
                 self.fixture.zig.write_bytes(b"changed tool during checks")
 

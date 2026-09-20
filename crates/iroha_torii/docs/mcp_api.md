@@ -562,6 +562,18 @@ then call the ticket helper with the selected role token and trusted URL.
 Role tokens must be the canonical unpadded base64url encoding of exactly 32
 bytes; invalid or header-unsafe token text is rejected.
 
+The read-only `iroha.accounts.faucet.policy` tool maps to
+`GET /v1/accounts/faucet/policy`. Its bounded `AccountFaucetAdvertisement`
+response contains `schema_version: 1`, `network_id`, `network_prefix`, public
+`authority`, resolved canonical `asset_definition_id`, and exact `amount`. Responses use
+`Cache-Control: no-store`. This endpoint neither signs nor submits transactions
+and requires no new block. The tool is available to reader profiles when the
+faucet is enabled; disabled nodes omit it and reject direct HTTP reads with 503
+and the canonical `account_faucet_disabled` error code.
+Discovery is unsigned and must be compared with an independently trusted
+operator policy. Never use it to replace a caller's trusted funding authority,
+asset, or amount.
+
 The curated `iroha.accounts.faucet.prepare` and
 `iroha.accounts.faucet.submit` tools expose the exact two-step faucet protocol.
 They are omitted from initialization metadata and `tools/list` when this node

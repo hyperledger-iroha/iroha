@@ -86,6 +86,7 @@ pub use figure9::{
 pub use masked_relaxed::{MaskedRelaxedRandomErrorV1, MaskedRelaxedRandomSourceV1};
 pub(super) use transcript::{VegaTranscriptError, VegaTranscriptV1};
 pub(super) use wire::{VegaPointWireV1, VegaScalarWireV1};
+pub use zk_ams::RnsNativeProofDigestV1;
 pub use zk_ams::{
     MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, ZK_AMS_ACTION_INDEX_V1,
     ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1, ZK_AMS_MKHE_CPK_ERROR_MEMBERSHIP_WIRE_BYTES_V1,
@@ -272,8 +273,7 @@ pub use zk_ams::{
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_ENVELOPE_VERSION_V1,
     ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_PROOF_SECTION_ORDER_V1,
     ZK_AMS_MKHE_RNS_NATIVE_RNS_RELATION_QPCS_SECTION_MAX_BYTES_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1,
-    ZK_AMS_MKHE_RNS_NATIVE_ZERO_PADDING_SECTION_MAX_BYTES_V1, ZkAmsMkheRnsNativeProofEnvelopeV1,
+    ZK_AMS_MKHE_RNS_NATIVE_TERMINAL_BRIDGE_SECTION_MAX_BYTES_V1, ZkAmsMkheRnsNativeProofEnvelopeV1,
     ZkAmsMkheRnsNativeProofSectionDescriptorV1, ZkAmsMkheRnsNativeProofSectionKindV1,
 };
 pub use zk_ams::{
@@ -291,7 +291,6 @@ pub use zk_ams::{
     ZK_AMS_MKHE_RNS_NATIVE_SECTION_CODEC_VERSION_V1,
     ZkAmsMkheRnsNativeCrossFieldGlobalLookupSectionV1, ZkAmsMkheRnsNativeRnsRelationQpcsSectionV1,
     ZkAmsMkheRnsNativeSectionCodecErrorV1, ZkAmsMkheRnsNativeTerminalBridgeSectionV1,
-    ZkAmsMkheRnsNativeZeroPaddingSectionV1,
 };
 #[cfg(test)]
 pub use zk_ams::{

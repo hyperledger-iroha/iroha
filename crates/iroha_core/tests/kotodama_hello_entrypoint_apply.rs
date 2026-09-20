@@ -46,7 +46,7 @@ fn selected_kotodama_hello_main_entrypoint_writes_expected_detail() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query_handle);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();

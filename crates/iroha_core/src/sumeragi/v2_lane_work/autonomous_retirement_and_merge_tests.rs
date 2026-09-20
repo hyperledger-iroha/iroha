@@ -1118,7 +1118,6 @@ fn installed_execution_candidate_with_wrong_carrier_context_never_reaches_local_
             NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
             Some(candidate.carrier_parent_hash),
             None,
-            None,
             1,
             candidate.view,
         ),
@@ -1229,7 +1228,10 @@ fn synthetic_merge_execution_batch_for_test(
     iroha_data_model::merge::MergeExecutionBatch {
         version: 1,
         base_state_height: adapter.context.height.saturating_sub(1),
-        base_state_hash: adapter.state.lane_execution_state_hash(),
+        base_state_hash: adapter
+            .state
+            .lane_execution_state_hash()
+            .expect("stable valid fixture snapshot"),
         application_block_header,
         lanes: Vec::new(),
         entrypoint_count: 0,
@@ -1533,7 +1535,6 @@ fn authenticated_execution_candidate_rejects_noncanonical_carrier_context_header
     let wrong_header = BlockHeader::new(
         expected_header.height(),
         expected_header.prev_block_hash(),
-        None,
         None,
         wrong_creation_time,
         expected_header.view_change_index(),

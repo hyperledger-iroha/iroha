@@ -119,7 +119,6 @@ mod sorafs_permission_tests {
                 NonZeroU64::new(height).expect("nonzero height"),
                 None,
                 None,
-                None,
                 0,
                 0,
             );

@@ -482,7 +482,6 @@ fn kaigi_private_create_join_leave_rejoin_and_end_use_real_ledger_bound_proofs()
         NonZeroU64::new(1).unwrap(),
         None,
         None,
-        None,
         0,
         0,
     ));
@@ -634,7 +633,6 @@ fn kaigi_authorization_rejects_metadata_root_cap_and_admission_tampering() {
     let state = new_state();
     let mut block = state.block(BlockHeader::new(
         NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,
@@ -801,7 +799,6 @@ fn usage_summary_emitted_only_for_exact_host_context_and_fresh_segment() {
     state.zk.kaigi_usage_vk = Some(usage_key().reference());
     let mut block = state.block(BlockHeader::new(
         NonZeroU64::new(1).unwrap(),
-        None,
         None,
         None,
         0,

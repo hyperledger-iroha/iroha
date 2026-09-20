@@ -257,7 +257,7 @@ def test_merge_sidecar_holder_semantics_survive_item_digest_refresh(
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "try_push_at",
+            "try_push_owned_at",
             "merged.merge_with_receipt(candidate)",
             "merged.merge_with_receipt(retained)",
             "coalesced ingress shadow-merges route capacity and attempt cursors without mutating the retained owner",
@@ -1035,8 +1035,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     core_path = geometry_root / "crates/iroha_core/src/sumeragi/mod.rs"
     core_source = core_path.read_text(encoding="utf-8")
     core_source = core_source.replace(
-        "    Authenticated(PeerId),\n}",
-        "    Authenticated,\n}",
+        "    Authenticated(PeerId),\n    Native(PeerId),\n}",
+        "    Authenticated,\n    Native(PeerId),\n}",
         1,
     )
     core_path.write_text(core_source, encoding="utf-8")
@@ -1059,18 +1059,18 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     mutate_rust_item_source(
         module,
         core_path,
-        "try_push_at",
+        "try_push_owned_at",
         "let source_lane_is_new = !state.lanes.contains_key(&source);",
         "let source_lane_is_new = false;",
     )
     mutate_rust_item_source(
         module,
         core_path,
-        "try_push_at",
+        "try_push_owned_at",
         "let retained_authenticated_non_validator_sources = state\n"
         "                .lanes\n"
         "                .keys()\n"
-        "                .filter(|source| matches!(source, FairV2IngressSource::Authenticated(_)))\n"
+        "                .filter(|source| source.uses_authenticated_capacity())\n"
         "                .count();",
         "let retained_authenticated_non_validator_sources = state\n"
         "                .lanes\n"
@@ -1081,8 +1081,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         module,
         core_path,
         "dequeue_selected_locked",
-        "} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {",
-        "} else if false && matches!(&source, FairV2IngressSource::Authenticated(_)) {",
+        "} else if source.uses_authenticated_capacity() {",
+        "} else if false && source.uses_authenticated_capacity() {",
     )
     mutate_rust_item_source(
         module,
@@ -1154,7 +1154,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         geometry_root
     )
     for expected_error in (
-        "two-way authenticated fair-ingress source ownership inventory",
+        "global and process-lived authenticated fair-ingress source ownership inventory",
         "semantic duplicate coalescing must precede new-lane admission",
         "authenticated non-validator lane cap excludes validator lanes",
         "empty authenticated non-validator lanes release their bounded churn slot",
@@ -1426,16 +1426,16 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
             "exact v2 and lane-local progress/completion/recovery ceilings",
         ),
         (
-            "try_push_at",
+            "try_push_owned_at",
             "queued.ownership_snapshot = ownership_snapshot;",
             "let _ = ownership_snapshot;",
             "validated ingress route shadow commits atomically beside its exact ownership evidence",
         ),
         (
-            "try_push_at",
-            "&& !authenticated_historical_recovery_response",
+            "try_push_owned_at",
+            "&& !authenticated_request_bound_response",
             "&& false",
-            "current-roster or proof-carrying historical authority premise",
+            "current-roster or exact request-bound historical/certified authority premise",
         ),
         (
             "dequeue_selected_locked",
@@ -1445,8 +1445,10 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
         ),
         (
             "try_recv_if_at_checked",
-            "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
-            "self.try_recv_if_at_checked_classified(service_attempt_at, true, predicate)",
+            "service_attempt_at,\n            false,\n"
+            "            FairV2IngressCheckedSelectionScope::Ordinary,",
+            "service_attempt_at,\n            true,\n"
+            "            FairV2IngressCheckedSelectionScope::Ordinary,",
             "ordinary timestamped ingress must delegate to the single classifier",
         ),
     ),
@@ -1521,7 +1523,7 @@ def test_transport_geometry_reviewed_ingress_items_survive_digest_refresh(
         ), leader_errors
         assert any(
             "ordinary timestamped ingress must use the same classifier "
-            "without a bypass policy" in error
+            "with the closed ordinary scope" in error
             and "exact reviewed token digest" not in error
             for error in timeout_errors
         ), timeout_errors
@@ -1610,7 +1612,7 @@ def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
                 "state.configured_network_id = None;",
             ),
             (
-                "try_push_at",
+                "try_push_owned_at",
                 "request.matches_configured_network("
                 "state.configured_network_id.as_ref())",
                 "true",
@@ -1628,7 +1630,7 @@ def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
             "new_with_source_geometry_and_transport_frame_caps",
             "configure_roster_for_context",
             "configure_roster_with_byte_requirements",
-            "try_push_at",
+            "try_push_owned_at",
         ):
             history_item_source = next(
                 candidate
@@ -1702,7 +1704,7 @@ def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
             "authoritative fair-v2 ingress geometry classify",
         ),
         (
-            "try_push_at",
+            "try_push_owned_at",
             (("impl", "FairV2Ingress"),),
             "&& !authenticated_historical_recovery_response",
             "&& false",

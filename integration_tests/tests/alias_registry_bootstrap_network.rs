@@ -2,8 +2,8 @@
 //!
 //! This isolated network uses the native SNS policy, signed planner and paid
 //! leases. Ordinary transaction fees are zero from genesis to isolate lease
-//! accounting; this is not production-fee qualification. The historical alias
-//! is a universal-domain control, NOT private-to-universal transition evidence.
+//! accounting; this is not production-fee qualification. Paid alias routing
+//! uses the universal registry from genesis, before any private catalog entry.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
 use iroha_model_base::domain::DomainId;
@@ -23,6 +23,9 @@ use std::{
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::future::try_join_all;
+#[path = "kura_storage_support.rs"]
+mod kura_storage_support;
+
 use integration_tests::sandbox;
 use iroha::{blocking::Client, sns::SnsNamespacePath};
 use iroha_config::{
@@ -45,8 +48,7 @@ use iroha_data_model::{
     alias_setup::{
         ALIAS_LEASE_YEAR_MS, AliasDataSpaceIntentV1, AliasDataspaceBootstrapGrantV1,
         AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasPlanDispositionV1,
-        AliasQuoteGuardV1, AliasRegistryRoutingActivationV1, AliasSetupPlanRequestV1,
-        ResolvedDomainV1,
+        AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedDomainV1,
     },
     block::{
         SignedBlock,
@@ -1014,19 +1016,10 @@ struct LedgerSnapshot {
 fn ledger_snapshot(
     client: &Client,
     expectations: &[LeaseExpectation],
-    activation: AliasRegistryRoutingActivationV1,
     grant: &AliasDataspaceBootstrapGrantV1,
     transactions: &[SignedTransaction],
 ) -> Result<LedgerSnapshot> {
     let parameters: Parameters = client.client().query_single(FindParameters::new())?;
-    let custom = parameters
-        .custom()
-        .get(&AliasRegistryRoutingActivationV1::parameter_id())
-        .ok_or_else(|| eyre!("routing activation parameter missing"))?;
-    ensure!(
-        AliasRegistryRoutingActivationV1::from_custom_parameter(custom)? == Some(activation),
-        "routing activation changed"
-    );
     let custom = parameters
         .custom()
         .get(&grant.parameter_id()?)
@@ -1124,7 +1117,6 @@ fn ledger_snapshot(
 async fn wait_for_snapshot(
     client: &Client,
     expectations: &[LeaseExpectation],
-    activation: AliasRegistryRoutingActivationV1,
     grant: &AliasDataspaceBootstrapGrantV1,
     transactions: &[SignedTransaction],
     expected: Option<&LedgerSnapshot>,
@@ -1135,10 +1127,8 @@ async fn wait_for_snapshot(
         let expectations = expectations.to_vec();
         let grant = grant.clone();
         let transactions = transactions.to_vec();
-        let observed = read(move || {
-            ledger_snapshot(&client, &expectations, activation, &grant, &transactions)
-        })
-        .await;
+        let observed =
+            read(move || ledger_snapshot(&client, &expectations, &grant, &transactions)).await;
         match observed {
             Ok(snapshot) if expected.is_none_or(|expected| expected == &snapshot) => {
                 return Ok(snapshot);
@@ -1196,8 +1186,8 @@ async fn wait_for_bpng_frontier(
         let mut observations = Vec::new();
         for client in clients {
             let client = client.clone();
-            let observed = read(move || {
-                let diagnostics = client.client().get_sumeragi_diagnostics()?;
+            let observed = timeout(READ_TIMEOUT, async {
+                let diagnostics = client.client().get_sumeragi_diagnostics().await?;
                 let ownerships = diagnostics
                     .lane_payload_ownerships
                     .iter()
@@ -1237,9 +1227,11 @@ async fn wait_for_bpng_frontier(
                     }),
                     "BPNG ownership has no matching applied certified-lane status"
                 );
-                Ok(ownership)
+                Ok::<_, eyre::Report>(ownership)
             })
-            .await;
+            .await
+            .wrap_err("bounded fixture read timed out")
+            .and_then(|result| result.wrap_err("fixture read task failed"));
             match observed {
                 Ok(ownership) => {
                     assert_bpng_ownership(
@@ -1386,20 +1378,27 @@ fn bitmap_signer_count(bitmap: &[u8]) -> u32 {
     bitmap.iter().map(|byte| byte.count_ones()).sum()
 }
 
-fn bpng_certified_sidecar_paths(store_root: &Path) -> Result<(PathBuf, PathBuf)> {
-    let catalog = LaneCatalog::default().apply_lifecycle(&LaneLifecyclePlan {
-        additions: vec![bpng_fixture_lane()],
-        retire: Vec::new(),
-    })?;
-    let lanes = ActualLaneConfig::from_catalog(&catalog);
-    let entry = lanes
-        .entry(BPNG_FIXTURE_LANE)
-        .ok_or_else(|| eyre!("fixture-only BPNG lane has no derived Kura segment"))?;
-    let directory = entry.blocks_dir(store_root).join("lane_artifacts");
-    Ok((
+fn bpng_certified_sidecar_paths(
+    store_root: &Path,
+    network_id: NetworkId,
+    expected_incarnation: Option<Hash>,
+) -> Result<Option<(PathBuf, PathBuf)>> {
+    let Some(blocks) = kura_storage_support::lane_instance_blocks_dir(
+        store_root,
+        network_id,
+        BPNG_FIXTURE_LANE,
+        DataSpaceId::new(BPNG_ID),
+        expected_incarnation,
+        None,
+    )?
+    else {
+        return Ok(None);
+    };
+    let directory = blocks.join("lane_artifacts");
+    Ok(Some((
         directory.join("certified_blocks.norito"),
         directory.join("certified_blocks.index"),
-    ))
+    )))
 }
 
 fn read_optional_evidence_file(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -1499,12 +1498,21 @@ fn validate_certified_bpng_artifact(artifact: &CertifiedLaneBlockArtifact) -> Re
 // Kura reader.
 fn inspect_certified_bpng_lane_evidence(
     store_root: &Path,
+    network_id: NetworkId,
     retained: &RetainedHistory,
     expected_incarnation: Option<Hash>,
     expected_validators: &[PeerId],
     original_voters: &BTreeMap<PeerId, Vec<u8>>,
 ) -> Result<CertifiedBpngLaneEvidence> {
-    let (data_path, index_path) = bpng_certified_sidecar_paths(store_root)?;
+    let Some((data_path, index_path)) =
+        bpng_certified_sidecar_paths(store_root, network_id, expected_incarnation)?
+    else {
+        ensure!(
+            expected_incarnation.is_none(),
+            "expected BPNG lane instance is absent"
+        );
+        return Ok(CertifiedBpngLaneEvidence::absent());
+    };
     let before = (
         read_optional_evidence_file(&data_path)?,
         read_optional_evidence_file(&index_path)?,
@@ -1836,7 +1844,7 @@ fn inspect_stopped_peer(
 ) -> Result<StoppedEvidence> {
     let catalog = LaneCatalog::default();
     let lanes = ActualLaneConfig::from_catalog(&catalog);
-    let blocks_dir = lanes.primary().blocks_dir(peer.kura_store_dir());
+    let (blocks_dir, _) = Kura::canonical_storage_paths(&peer.kura_store_dir());
     let indexed_count = BlockStore::open_read_only(&blocks_dir)?.read_index_count()?;
     ensure!(
         (1..=MAX_RETAINED_HEIGHT).contains(&indexed_count),
@@ -1905,6 +1913,7 @@ fn inspect_stopped_peer(
     }
     let certified_bpng_lane = inspect_certified_bpng_lane_evidence(
         &peer.kura_store_dir(),
+        NetworkId::from_genesis_hash(genesis.0.hash()),
         &retained,
         expected_bpng_incarnation,
         expected_bpng_validators,
@@ -1927,10 +1936,13 @@ fn execution_height(history: &RetainedHistory, transaction: &SignedTransaction) 
     let mut found = None;
     for wire in &history.blocks {
         let block = decode_framed_signed_block(wire)?;
-        for (_, entrypoint, result) in block.entrypoint_results() {
-            if entrypoint == expected {
+        for (input_index, entrypoint) in block.network_entrypoints().enumerate() {
+            if entrypoint == &expected {
+                let (_, output) = block
+                    .network_output_at(u32::try_from(input_index)?)
+                    .ok_or_else(|| eyre!("retained transaction omitted its Network output"))?;
                 ensure!(
-                    found.is_none() && result.0.is_ok(),
+                    found.is_none() && output.result.0.is_ok(),
                     "signed transaction must have one successful retained execution"
                 );
                 let context = block
@@ -1975,14 +1987,19 @@ fn bpng_transaction_ownership(
     for wire in &history.blocks {
         let block = decode_framed_signed_block(wire)?;
         let matches = block
-            .entrypoint_results()
-            .filter(|(_, entrypoint, _)| entrypoint == &expected_entrypoint)
+            .network_entrypoints()
+            .enumerate()
+            .filter(|(_, entrypoint)| *entrypoint == &expected_entrypoint)
             .collect::<Vec<_>>();
         if matches.is_empty() {
             continue;
         }
         ensure!(
-            matches.len() == 1 && matches[0].2.0.is_ok() && found.is_none(),
+            matches.len() == 1
+                && block
+                    .network_output_at(u32::try_from(matches[0].0)?)
+                    .is_some_and(|(_, output)| output.result.0.is_ok())
+                && found.is_none(),
             "BPNG transaction must have one successful retained execution"
         );
         let context = block
@@ -2181,13 +2198,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     );
     let read_client = authority.clone();
     let baseline_leases = read(move || {
-        let params: Parameters = read_client.client().query_single(FindParameters::new())?;
-        ensure!(
-            !params
-                .custom()
-                .contains_key(&AliasRegistryRoutingActivationV1::parameter_id()),
-            "history must begin before routing activation is installed"
-        );
         [SnsNamespacePath::Domain, SnsNamespacePath::Dataspace]
             .into_iter()
             .map(|namespace| {
@@ -2220,20 +2230,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         "history.universal",
     )
     .await?;
-    let activation = AliasRegistryRoutingActivationV1::new(
-        height(authority)
-            .await?
-            .checked_add(24)
-            .ok_or_else(|| eyre!("activation height overflow"))?,
-    );
-    let installed = submit(
-        authority,
-        transaction(
-            authority,
-            SetParameter::new(Parameter::Custom(activation.into_custom_parameter())),
-        ),
-    )
-    .await?;
     let granted = submit(
         authority,
         transaction(
@@ -2242,30 +2238,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         ),
     )
     .await?;
-    let deadline = Instant::now() + ADVANCE_TIMEOUT;
-    for index in 0..32 {
-        if height(authority).await? >= activation.activation_height {
-            break;
-        }
-        ensure!(
-            Instant::now() < deadline && index < 31,
-            "future activation did not become effective within bounded real consensus progress"
-        );
-        // Real signed transactions, never empty height carriers. QueuePlan can
-        // consume multiple carriers; do not assume one transaction = one block.
-        submit(
-            authority,
-            transaction(
-                authority,
-                Log::new(Level::INFO, format!("alias-bootstrap-activation-{index}")),
-            ),
-        )
-        .await?;
-    }
-    ensure!(
-        height(authority).await? >= activation.activation_height,
-        "routing activation not reached"
-    );
     let (dataspace, dataspace_lease) = acquire(
         &payer,
         AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
@@ -2284,21 +2256,12 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     )
     .await?;
     let leases = vec![historical_lease, dataspace_lease, domain_lease];
-    let mut transactions = vec![historical, installed, granted, dataspace, domain];
-    let expected =
-        wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;
+    let mut transactions = vec![historical, granted, dataspace, domain];
+    let expected = wait_for_snapshot(authority, &leases, &grant, &transactions, None).await?;
     assert_paid_once(&baseline_balances, &expected.balances, &leases)?;
     let mut original_lanes = Vec::new();
     for client in &clients {
-        wait_for_snapshot(
-            client,
-            &leases,
-            activation,
-            &grant,
-            &transactions,
-            Some(&expected),
-        )
-        .await?;
+        wait_for_snapshot(client, &leases, &grant, &transactions, Some(&expected)).await?;
         original_lanes.push(observe_catalog_expansion(client, false).await?);
     }
     let initial_prefix = common_retained_prefix(&clients).await?;
@@ -2326,21 +2289,17 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         ensure!(
             execution_height(history, &transactions[0])?
                 < execution_height(history, &transactions[1])?,
-            "historical alias did not precede activation installation"
+            "the first paid universal alias must precede the owner bootstrap grant"
         );
         ensure!(
-            execution_height(history, &transactions[1])? < activation.activation_height,
-            "activation was not installed at a genuinely future height"
+            execution_height(history, &transactions[1])?
+                < execution_height(history, &transactions[2])?,
+            "owner grant must precede first paid dataspace lease"
         );
         ensure!(
             execution_height(history, &transactions[2])?
                 < execution_height(history, &transactions[3])?,
-            "owner grant must precede first paid dataspace lease"
-        );
-        ensure!(
-            execution_height(history, &transactions[3])? >= activation.activation_height
-                && execution_height(history, &transactions[4])? >= activation.activation_height,
-            "BPNG aliases did not execute under active registry routing"
+            "paid dataspace lease must precede its domain lease"
         );
         ensure!(
             evidence.certified_bpng_lane == CertifiedBpngLaneEvidence::absent(),
@@ -2362,15 +2321,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     for ((client, retained), original_lanes) in
         clients.iter().zip(&initial_evidence).zip(&original_lanes)
     {
-        wait_for_snapshot(
-            client,
-            &leases,
-            activation,
-            &grant,
-            &transactions,
-            Some(&expected),
-        )
-        .await?;
+        wait_for_snapshot(client, &leases, &grant, &transactions, Some(&expected)).await?;
         ensure!(
             &observe_catalog_expansion(client, true).await? == original_lanes,
             "dataspace-only restart changed a lane or its incarnation commitment"
@@ -2563,7 +2514,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         assert_bpng_metadata(client, &predecessor_key, &predecessor_value, None).await?;
     }
     let before_second_restart =
-        wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;
+        wait_for_snapshot(authority, &leases, &grant, &transactions, None).await?;
     assert_paid_once(&baseline_balances, &before_second_restart.balances, &leases)?;
     let pre_restart_prefix = common_retained_prefix(&clients).await?;
     ensure!(
@@ -2630,7 +2581,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         wait_for_snapshot(
             client,
             &leases,
-            activation,
             &grant,
             &transactions,
             Some(&before_second_restart),
@@ -2703,7 +2653,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .await?;
     }
     let after_successor =
-        wait_for_snapshot(authority, &leases, activation, &grant, &transactions, None).await?;
+        wait_for_snapshot(authority, &leases, &grant, &transactions, None).await?;
     assert_paid_once(&baseline_balances, &after_successor.balances, &leases)?;
     let after_restart_prefix = common_retained_prefix(&clients).await?;
     ensure!(

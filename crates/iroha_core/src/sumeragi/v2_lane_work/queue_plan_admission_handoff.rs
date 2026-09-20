@@ -195,9 +195,9 @@ impl V2LaneWorkAdapter {
                 })?;
             match disposition {
                 PendingQueuePlanAdmissionDisposition::ExactPending => {
-                    // Retain the quorum certificate while the marker is canonical but the body
-                    // is not. It remains the authenticated handoff for peers lagging behind the
-                    // marker and is retired only with canonical transaction membership.
+                    // The finalized first-admission carrier now retains the exact input.
+                    // Keep this bounded pending copy until terminal application so existing
+                    // queue/reservation cleanup keeps its exact durable handoff owner.
                 }
                 PendingQueuePlanAdmissionDisposition::Applied => {
                     self.state

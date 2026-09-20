@@ -267,3 +267,35 @@ fn hash_correct_manifest_with_duplicate_identity_field_is_rejected() {
             .is_err()
     );
 }
+
+#[test]
+fn worker_command_uses_fixed_python_flags_and_original_path_arguments() {
+    let args = Args {
+        resource_program: "/retained runtime/python".into(),
+        resource_worker: "/retained source/resource_probe_worker.py".into(),
+        resource_budget_sha256: "a".repeat(64),
+        resource_config: "/retained private/probe.json".into(),
+        resource_capture_dir: "/retained evidence/new captures".into(),
+        resource_interval_ms: 1000,
+        resource_timeout_ms: 400,
+        resource_max_start_lag_ms: 100,
+    };
+    let command = worker_command(&args);
+    assert_eq!(command.get_program(), args.resource_program.as_os_str());
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        [
+            "-B",
+            "-S",
+            "/retained source/resource_probe_worker.py",
+            "--config",
+            "/retained private/probe.json",
+            "--capture-dir",
+            "/retained evidence/new captures",
+        ]
+        .map(std::ffi::OsStr::new)
+        .to_vec()
+    );
+    assert_eq!(command.get_current_dir(), Some(Path::new("/")));
+    assert_eq!(command.get_envs().count(), 0);
+}

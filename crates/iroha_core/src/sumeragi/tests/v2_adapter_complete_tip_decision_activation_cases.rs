@@ -14,7 +14,7 @@ fn production_complete_tip_activates_recovered_unapplied_decision_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let (kura, state, verified, storage_authority, local_signer, retirement) =
-        super::super::v2_recovery::production_empty_genesis_complete_tip_fixture_for_test();
+        super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let context = verified.context().clone();
     let local_peer = PeerId::new(local_signer.public_key().clone());
     let local_validator = context

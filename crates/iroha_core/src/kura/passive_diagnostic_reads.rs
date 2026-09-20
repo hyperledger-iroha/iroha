@@ -349,7 +349,7 @@ impl Kura {
     }
     fn read_active_lane_block_artifact_from_bound_without_repair_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         lane_block_height: u64,
         bound: &mut BoundProgressSidecar,
     ) -> Option<LaneBlockArtifact> {
@@ -572,7 +572,7 @@ impl Kura {
     }
     fn read_autonomous_lane_block_record_read_only_latest_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         lane_id: LaneId,
         lane_block_height: u64,
         expected_network_id: iroha_data_model::NetworkId,

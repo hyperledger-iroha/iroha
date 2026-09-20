@@ -35,7 +35,7 @@ fn canonical_executor_runs_without_hidden_host_semantics() {
     vm.set_host(LoggingHost);
     let context = ExecutorContext {
         authority: ALICE_ID.clone(),
-        curr_block: BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0),
+        curr_block: BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0),
     };
     let payload = norito::to_bytes(&context).unwrap();
     const LENGTH_PREFIX_BYTES: usize = 8;
@@ -59,7 +59,6 @@ fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
     );
     let block_header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero block height"),
-        None,
         None,
         None,
         0,

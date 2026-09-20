@@ -212,7 +212,6 @@ fn higher_different_lock_releases_retained_cache_before_replacement_staging() {
         NonZeroU64::new(1).expect("height"),
         None,
         None,
-        None,
         2_000,
         0,
     );

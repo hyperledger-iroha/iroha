@@ -45,6 +45,10 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
     let artifact = LaneBlockExecutionInputArtifact::new(recovered.clone());
     let payload_bytes = artifact.encode_framed().expect("encode execution input");
     let descriptor = &payload.origin_proposal.descriptor;
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let (data_path, index_path) =
         Kura::lane_block_execution_input_paths_for_entry(lane, &kura.store_root());
     let additional_peak = {
@@ -159,6 +163,10 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist view recovery payload");
     let descriptor = &payload.origin_proposal.descriptor;
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane,
         &kura.store_root(),
@@ -274,6 +282,10 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist view writer payload");
     let descriptor = &payload.origin_proposal.descriptor;
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane,
         &kura.store_root(),
@@ -323,6 +335,7 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
         let _sidecar_guard = kura.sidecar_lock.lock();
         kura.write_autonomous_lane_block_view_state_record_locked(
             pending_canonical_bytes,
+            lane,
             &payload,
             &state,
             &view_path,
@@ -356,6 +369,7 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
         let _sidecar_guard = kura.sidecar_lock.lock();
         kura.write_autonomous_lane_block_view_state_record_locked(
             pending_canonical_bytes,
+            lane,
             &payload,
             &state,
             &view_path,

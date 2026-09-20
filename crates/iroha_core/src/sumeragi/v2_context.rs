@@ -132,6 +132,92 @@ impl GenesisV2Bootstrap {
         )
     }
 }
+/// Authenticated height-one context and its exact staged merge authority.
+///
+/// This move-only, non-encoded capability retains the signed bootstrap. Only
+/// [`freeze_genesis_merge_authority`] can construct it; received proof fields,
+/// public catalog fields and a later committed view cannot replace its inputs.
+#[must_use = "retain the genesis authority through launch and original-facts admission"]
+pub struct GenesisMergeAuthority {
+    bootstrap: GenesisV2Bootstrap,
+    catalog_hash: Hash,
+    active_lanes: Vec<iroha_data_model::merge::MergeLaneBinding>,
+    lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1,
+}
+impl GenesisMergeAuthority {
+    /// Borrow the context authenticated by the final signed and staged genesis.
+    #[must_use]
+    pub fn context(&self) -> &wire::HeightContext {
+        self.bootstrap.context()
+    }
+    /// Borrow the exact signed voting proofs retained by the bootstrap.
+    #[must_use]
+    pub fn proofs_of_possession(&self) -> &[Vec<u8>] {
+        self.bootstrap.proofs_of_possession()
+    }
+    /// Return the same sanitized catalog commitment used by merge planning.
+    #[must_use]
+    pub const fn catalog_hash(&self) -> Hash {
+        self.catalog_hash
+    }
+    /// Borrow the production-ordered lane, incarnation and activation bindings.
+    #[must_use]
+    pub fn active_lanes(&self) -> &[iroha_data_model::merge::MergeLaneBinding] {
+        &self.active_lanes
+    }
+    /// Borrow the exact route committees resolved from that staged state.
+    #[must_use]
+    pub fn lane_authority_catalog(&self) -> &iroha_data_model::merge::MergeLaneAuthorityCatalogV1 {
+        &self.lane_authority_catalog
+    }
+}
+
+/// Typed provenance for rejection of an authenticated genesis merge projection.
+#[derive(Debug, Error)]
+pub enum GenesisMergeAuthorityError {
+    /// The existing signed-and-staged bootstrap rejected its authority inputs.
+    #[error(transparent)]
+    Bootstrap(#[from] V2GenesisBootstrapError),
+    /// The supplied staged overlay does not belong to the exact genesis header.
+    #[error("merge authority requires the exact staged height-one genesis header")]
+    StagedHeaderMismatch,
+    /// The production merge projection or signed retained lineage is invalid.
+    #[error(transparent)]
+    Merge(#[from] crate::state::MergeLedgerCommitError),
+}
+
+/// Freeze merge authority while the final authenticated genesis overlay is alive.
+///
+/// This opt-in projection uses the ordinary bootstrap unchanged and then the
+/// same Core merge projection as StateView. It introduces no benchmark lane or
+/// committee policy into ordinary genesis freezing.
+///
+/// # Errors
+///
+/// Preserves the existing bootstrap error or returns the typed staged-header,
+/// merge-committee, incarnation or activation-coherence failure.
+pub fn freeze_genesis_merge_authority(
+    genesis: &GenesisBlock,
+    staged: &StateBlock<'_>,
+    mode: wire::ConsensusMode,
+) -> Result<GenesisMergeAuthority, GenesisMergeAuthorityError> {
+    let bootstrap = freeze_staged_genesis_v2(genesis, staged, mode)?;
+    if genesis.0.header().height().get() != 1
+        || staged._curr_block.height().get() != 1
+        || staged._curr_block.hash() != genesis.0.hash()
+    {
+        return Err(GenesisMergeAuthorityError::StagedHeaderMismatch);
+    }
+    let (catalog_hash, active_lanes, lane_authority_catalog) =
+        staged.staged_genesis_merge_authority_snapshot()?;
+    Ok(GenesisMergeAuthority {
+        bootstrap,
+        catalog_hash,
+        active_lanes,
+        lane_authority_catalog,
+    })
+}
+
 /// Extract the only voting roster source accepted at fresh genesis: signed
 /// `RegisterPeerWithPop` instructions in the genesis body.
 ///
@@ -1480,7 +1566,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero test height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -1540,7 +1625,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero test height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -1550,7 +1634,6 @@ mod tests {
         let state = lane_hash_world(&[]);
         let mut block = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
-            None,
             None,
             None,
             0,
@@ -1590,7 +1673,6 @@ mod tests {
         assert_ne!(hash, staged_context_hash(&changed));
         let staged = state_ab.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
-            None,
             None,
             None,
             0,
@@ -1655,7 +1737,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero test height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -1673,7 +1754,6 @@ mod tests {
         drifted.set_pipeline(pipeline);
         let staged = drifted.block(BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero test height"),
-            None,
             None,
             None,
             0,

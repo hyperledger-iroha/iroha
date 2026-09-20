@@ -23,6 +23,8 @@ import struct
 import subprocess
 import uuid
 
+from release_artifact_contract import ensure_private_directory
+
 
 def dependency_paths(raw: bytes) -> list[tuple[int, Path]]:
     """Read the pinned Cargo 1.93 version-one dependency record, including EOF."""
@@ -77,7 +79,7 @@ def local_package_names(source: Path, environment: dict[str, str]) -> set[str]:
          "metadata", "--manifest-path", str(source / "Cargo.toml"),
          "--locked", "--offline", "--format-version=1"],
         cwd="/", env=environment, stdin=subprocess.DEVNULL, capture_output=True,
-        check=True, timeout=60,
+        check=True, timeout=60, umask=0o077,
     )
     return {package["name"] for package in json.loads(result.stdout)["packages"]
             if package["source"] is None}
@@ -178,7 +180,7 @@ def source_fingerprints(source: Path, target: Path, triple: str,
                 if (family, name) not in stale:
                     continue
                 destination = archive / directory.relative_to(target)
-                destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+                ensure_private_directory(destination.parent, anchor=archive)
                 os.rename(directory, destination)
             print("[taira-release] retained foreign source fingerprints for "
                   + str(len(stale)) + " local package/profile families; compiled artifacts and dependency caches retained", flush=True)

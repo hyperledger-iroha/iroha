@@ -158,7 +158,6 @@ mod sorafs_market_admission {
             nonzero!(2_u64),
             None,
             None,
-            None,
             NOW * 1_000,
             0,
         ));
@@ -312,7 +311,7 @@ mod sorafs_market_admission {
     fn initial_executor_reserve_preserves_governed_operations_decisions_and_provider_requests() {
         let (mut state, policy) = fixture();
         let digest = policy.digest().expect("reserve policy digest");
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, NOW * 1_000, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, NOW * 1_000, 0);
         let block_hash = HashOf::new(&header);
         let mut block = state.block(header);
         let mut transaction = block.transaction();

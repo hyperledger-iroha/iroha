@@ -30,131 +30,6 @@ pub const ALIAS_LIFECYCLE_TRANSACTION_PLAN_HASH_DOMAIN_V1: &[u8] =
     b"iroha:alias-lifecycle-transaction-plan-body:v1\0";
 /// Deterministic duration of one SNS lease year in milliseconds (365 days).
 pub const ALIAS_LEASE_YEAR_MS: u64 = 31_536_000_000;
-/// One-way, consensus-replayed activation of universal SNS registry routing.
-///
-/// Before this parameter is installed and its height is reached, native alias lease instructions
-/// retain their historical target-dataspace routing. At and after the activation height,
-/// `EnsureAlias` and `RenewAliasLease` use the universal registry. The immutable height also lets
-/// delayed execution and cold replay select the semantics committed by historical routing plans.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1")]
-pub struct AliasRegistryRoutingActivationV1 {
-    /// Payload layout version, which must be [`Self::VERSION`].
-    pub version: u16,
-    /// First global carrier height using universal alias-registry routing.
-    pub activation_height: u64,
-}
-impl AliasRegistryRoutingActivationV1 {
-    /// Supported payload layout version.
-    pub const VERSION: u16 = 1;
-    /// Reserved custom parameter identifier for this one-way routing transition.
-    pub const PARAMETER_ID_STR: &'static str = "alias_registry_routing_activation_v1";
-
-    /// Construct an activation request; consensus validates its installation height.
-    #[must_use]
-    pub const fn new(activation_height: u64) -> Self {
-        Self {
-            version: Self::VERSION,
-            activation_height,
-        }
-    }
-
-    /// Return the on-chain custom parameter identifier.
-    #[must_use]
-    pub fn parameter_id() -> crate::parameter::CustomParameterId {
-        Self::PARAMETER_ID_STR
-            .parse()
-            .expect("valid alias registry routing activation parameter identifier")
-    }
-
-    /// Validate the versioned activation payload.
-    ///
-    /// # Errors
-    /// Returns an error for an unsupported version or height zero.
-    pub const fn validate(&self) -> Result<(), &'static str> {
-        if self.version != Self::VERSION {
-            return Err("unsupported alias registry routing activation version");
-        }
-        if self.activation_height == 0 {
-            return Err("alias registry routing activation height must be positive");
-        }
-        Ok(())
-    }
-
-    /// Validate an immutable installation against the exact executing carrier height.
-    ///
-    /// An identical retry is allowed. A first installation must activate no earlier than the next
-    /// height, so it cannot change routing semantics partway through its own carrier.
-    ///
-    /// # Errors
-    /// Returns an error for malformed state, any changed installed activation, a non-future first
-    /// activation, or a carrier height without a representable successor.
-    pub fn validate_installation(
-        &self,
-        previous: Option<&Self>,
-        current_height: u64,
-    ) -> Result<(), &'static str> {
-        self.validate()?;
-        if let Some(previous) = previous {
-            previous.validate()?;
-            return if previous == self {
-                Ok(())
-            } else {
-                Err("alias registry routing activation is immutable once installed")
-            };
-        }
-        let minimum_height = current_height
-            .checked_add(1)
-            .ok_or("alias registry routing activation requires a successor carrier height")?;
-        if self.activation_height < minimum_height {
-            return Err(
-                "alias registry routing activation must start after its installation height",
-            );
-        }
-        Ok(())
-    }
-
-    /// Convert this request into the custom parameter accepted by `SetParameter`.
-    #[must_use]
-    pub fn into_custom_parameter(self) -> crate::parameter::CustomParameter {
-        crate::parameter::CustomParameter::new(
-            Self::parameter_id(),
-            iroha_primitives::json::Json::new(self),
-        )
-    }
-
-    /// Decode and validate a matching activation parameter without accepting unknown fields.
-    ///
-    /// Unrelated custom parameter identifiers return `Ok(None)`.
-    ///
-    /// # Errors
-    /// Returns an error for a malformed matching payload, unsupported version, or height zero.
-    pub fn from_custom_parameter(
-        custom: &crate::parameter::CustomParameter,
-    ) -> Result<Option<Self>, norito::json::Error> {
-        if custom.id() != &Self::parameter_id() {
-            return Ok(None);
-        }
-        let activation = norito::json::from_str::<Self>(custom.payload().get())?;
-        activation
-            .validate()
-            .map_err(|error| norito::json::Error::Message(error.to_owned()))?;
-        Ok(Some(activation))
-    }
-}
 /// Immutable, exact-owner authorization to bootstrap one deterministic dataspace name.
 ///
 /// Parameter governance installs this grant before the first SNS record. It lets the same paid
@@ -1442,6 +1317,7 @@ pub struct AliasAssetTotalV1 {
 #[repr(u8)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupStatusV1")]
+#[norito(deny_unknown_fields)]
 pub enum AliasSetupStatusV1 {
     /// Validation succeeded and the operation is ready.
     #[codec(index = 0)]
@@ -1473,6 +1349,7 @@ pub enum AliasSetupStatusV1 {
 #[repr(u8)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupValidationPhaseV1")]
+#[norito(deny_unknown_fields)]
 pub enum AliasSetupValidationPhaseV1 {
     /// Static configuration validation.
     #[codec(index = 0)]
@@ -1510,6 +1387,7 @@ pub enum AliasSetupValidationPhaseV1 {
 #[repr(u8)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupSeverityV1")]
+#[norito(deny_unknown_fields)]
 pub enum AliasSetupSeverityV1 {
     /// Informational observation.
     #[codec(index = 0)]
@@ -1537,6 +1415,7 @@ pub enum AliasSetupSeverityV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupDiagnosticV1")]
+#[norito(deny_unknown_fields)]
 pub struct AliasSetupDiagnosticV1 {
     /// Validation phase.
     pub phase: AliasSetupValidationPhaseV1,
@@ -1573,6 +1452,7 @@ pub struct AliasSetupDiagnosticV1 {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_data_model::alias_setup::AliasSetupReportV1")]
+#[norito(deny_unknown_fields)]
 pub struct AliasSetupReportV1 {
     /// Report layout version. The only supported value is [`Self::VERSION`].
     pub version: u8,
@@ -1809,83 +1689,6 @@ mod tests {
     use crate::nexus::DataSpaceMetadata;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_primitives::numeric::Numeric;
-
-    #[test]
-    fn alias_registry_routing_activation_roundtrips_and_rejects_invalid_payloads() {
-        let activation = AliasRegistryRoutingActivationV1::new(8_648_377_547_929_788_715);
-        let encoded = norito::to_bytes(&activation).expect("encode activation Norito frame");
-        let decoded: AliasRegistryRoutingActivationV1 =
-            norito::decode_from_bytes(&encoded).expect("activation Norito roundtrip");
-        assert_eq!(decoded, activation);
-        let custom = activation.into_custom_parameter();
-        assert_eq!(
-            AliasRegistryRoutingActivationV1::from_custom_parameter(&custom)
-                .expect("valid activation custom parameter"),
-            Some(activation)
-        );
-        for payload in [
-            norito::json!({"version": 2, "activation_height": 8}),
-            norito::json!({"version": 1, "activation_height": 0}),
-            norito::json!({"version": 1, "activation_height": 8, "enabled": true}),
-            norito::json!({"version": 1}),
-            norito::json!({"version": 1, "activation_height": (-1)}),
-        ] {
-            let invalid = crate::parameter::CustomParameter::new(
-                AliasRegistryRoutingActivationV1::parameter_id(),
-                iroha_primitives::json::Json::from(payload),
-            );
-            assert!(AliasRegistryRoutingActivationV1::from_custom_parameter(&invalid).is_err());
-        }
-        let unrelated = crate::parameter::CustomParameter::new(
-            "unrelated_parameter".parse().expect("custom parameter id"),
-            iroha_primitives::json::Json::from(norito::json!(null)),
-        );
-        assert_eq!(
-            AliasRegistryRoutingActivationV1::from_custom_parameter(&unrelated)
-                .expect("unrelated parameter is ignored"),
-            None
-        );
-    }
-
-    #[test]
-    fn alias_registry_routing_activation_installation_is_future_and_immutable() {
-        let activation = AliasRegistryRoutingActivationV1::new(8);
-        assert!(activation.validate_installation(None, 7).is_ok());
-        assert!(activation.validate_installation(None, 8).is_err());
-        assert!(activation.validate_installation(None, 9).is_err());
-        assert!(
-            AliasRegistryRoutingActivationV1::new(0)
-                .validate_installation(None, 0)
-                .is_err()
-        );
-        assert!(
-            AliasRegistryRoutingActivationV1::new(u64::MAX)
-                .validate_installation(None, u64::MAX - 1)
-                .is_ok()
-        );
-        assert!(
-            AliasRegistryRoutingActivationV1::new(u64::MAX)
-                .validate_installation(None, u64::MAX)
-                .is_err()
-        );
-        assert!(
-            activation
-                .validate_installation(Some(&activation), 20)
-                .is_ok()
-        );
-        for changed in [7, 9] {
-            assert!(
-                AliasRegistryRoutingActivationV1::new(changed)
-                    .validate_installation(Some(&activation), 7)
-                    .is_err()
-            );
-        }
-        assert!(
-            activation
-                .validate_installation(Some(&AliasRegistryRoutingActivationV1::new(0)), 7)
-                .is_err()
-        );
-    }
 
     #[test]
     fn alias_dataspace_bootstrap_grant_roundtrip_binds_exact_bpng_identity() {

@@ -87,6 +87,19 @@ pub trait GlobalBeaconPartialSignerBrokerBackendV1: Send + Sync {
     fn qualification(
         &self,
     ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>;
+    /// Attest live custody for one exact validated public session and seat.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the validated request.
+    fn attest_partial_signing_capability(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<
+        iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    >;
     /// Sign one exact broker-validated canonical pulse payload.
     ///
     /// # Errors

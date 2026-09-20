@@ -22,7 +22,7 @@
 //! exactly one sender, exactly `k` recipients, and exactly `n-k-1` decoys.
 use super::{
     AnonymousPgcError, AnonymousPgcParametersV1, AnonymousPgcPoolInvariantV1,
-    TwistedElGamalCiphertextV1, TwistedElGamalPublicKeyV1,
+    TwistedElGamalCiphertextV1, TwistedElGamalPublicKeyV1, fixed_array::FixedProofArray,
 };
 use crate::privacy_engines::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
@@ -285,9 +285,9 @@ pub struct PgcBalanceConservationProofV1 {
 )]
 #[norito(decode_from_slice)]
 pub struct PgcUnsignedRangeProofV1 {
-    bit_commitments: [CompressedPointV1; RANGE_BITS],
-    branch_challenges: [CanonicalScalarV1; RANGE_BITS * 2],
-    branch_responses: [CanonicalScalarV1; RANGE_BITS * 2],
+    bit_commitments: FixedProofArray<CompressedPointV1, RANGE_BITS>,
+    branch_challenges: FixedProofArray<CanonicalScalarV1, { RANGE_BITS * 2 }>,
+    branch_responses: FixedProofArray<CanonicalScalarV1, { RANGE_BITS * 2 }>,
 }
 /// Proof that the hidden value in a Pedersen commitment is nonzero.
 #[derive(norito::NoritoSchema)]
@@ -508,10 +508,14 @@ impl PgcBalanceConservationProofV1 {
 }
 impl PgcUnsignedRangeProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
-        for point in &self.bit_commitments {
+        for point in self.bit_commitments.iter() {
             let _ = point.to_projective()?;
         }
-        for scalar in self.branch_challenges.iter().chain(&self.branch_responses) {
+        for scalar in self
+            .branch_challenges
+            .iter()
+            .chain(self.branch_responses.iter())
+        {
             let _ = scalar.to_scalar()?;
         }
         Ok(())
@@ -2719,6 +2723,24 @@ mod tests {
             .expect("recipient balance"),
             120
         );
+    }
+    #[test]
+    fn complete_payment_decodes_on_a_bounded_stack() {
+        let fixture = Box::new(Fixture::new());
+        let encoded = fixture.prove().encode();
+        std::thread::Builder::new()
+            .name("pgc-payment-bounded-decode".to_owned())
+            .stack_size(512 * 1024)
+            .spawn(move || {
+                let proof =
+                    AnonymousPgcPaymentProofV1::decode_exact(&encoded, &fixture.statement())
+                        .expect("complete nested payment proof fits the bounded decoder stack");
+                assert_eq!(proof.encode(), encoded);
+                verify_payment(&fixture.statement(), &proof).expect("decoded payment verifies");
+            })
+            .expect("spawn bounded-stack payment decoder")
+            .join()
+            .expect("bounded-stack payment decoder completes");
     }
     #[test]
     fn payment_known_answer_vector_is_stable() {

@@ -25,6 +25,8 @@ SPEC = importlib.util.spec_from_file_location("taira_release", SCRIPT)
 assert SPEC and SPEC.loader
 release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
+# Tests that exercise development diagnostics import their mutable gate explicitly.
+import taira_release_check as development_gate
 
 
 def elf(machine=183):
@@ -39,7 +41,7 @@ class TairaPrepareTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name).resolve()
         self.target = self.root / "target"
-        self.target.mkdir()
+        self.target.mkdir(mode=0o700)
         self.target_mode = stat.S_IMODE(self.target.stat().st_mode)
         self.out = self.root / "prepared"
         self.source = self.target / "frozen-source"
@@ -49,12 +51,19 @@ class TairaPrepareTests(unittest.TestCase):
             tool.chmod(0o755)
         self.args = argparse.Namespace(
             repo_root=SCRIPT.parent.parent, target_dir=self.target,
-            native_check_scope="basic",
+            native_check_scope="basic", native_linker="system",
             output_dir=self.out, expected_commit="a" * 40, expected_signer="A" * 40, zig=self.zig,
             zig_sha256=hashlib.sha256(self.zig.read_bytes()).hexdigest(),
             cargo_zigbuild=self.zigbuild,
             cargo_zigbuild_sha256=hashlib.sha256(self.zigbuild.read_bytes()).hexdigest(),
         )
+
+        self.native_tools = []
+        for role in ("compiler", "linker"):
+            path = self.root / ("native-" + role)
+            path.write_bytes(("disposable native " + role).encode())
+            path.chmod(0o755)
+            self.native_tools.append((role, path, path))
 
     def tearDown(self):
         for path in [self.root, *self.root.rglob("*")]:
@@ -64,14 +73,15 @@ class TairaPrepareTests(unittest.TestCase):
 
     def binaries(self, machine=183):
         output = self.target / release.TARGET / "release"
-        output.mkdir(parents=True, exist_ok=True)
+        output.parent.mkdir(mode=0o700, exist_ok=True)
+        output.mkdir(mode=0o700, exist_ok=True)
         for name, _ in release.BINARIES:
             path = output / name
             path.write_bytes(elf(machine))
             path.chmod(0o755)
 
     def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None, source_lane_fd=88,
-                isolate=None):
+                isolate=None, native_paths=None):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
@@ -86,13 +96,14 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "frozen_snapshot", side_effect=(lambda *_: snapshot(self.source)) if snapshot else (lambda *_: [])), \
              patch.object(release, "isolated_cargo_environment", side_effect=isolate or (lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), []))), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
-             patch.object(release, "captured_gate", return_value=release.gate), \
+             patch.object(release, "captured_gate", return_value=development_gate), \
              patch.object(release, "local_package_names", return_value=set()), \
              patch.object(release, "admit_source_fingerprints", side_effect=cache_admission or (lambda *_a, **_k: [])), \
              patch.object(release, "source_fingerprints", side_effect=lambda *_a, **_k: contextlib.nullcontext([])), \
-             patch.object(release.gate, "run_checks", side_effect=check) as gate, \
+             patch.object(development_gate, "run_checks", side_effect=check) as gate, \
              patch.object(release, "run_build", side_effect=wrapped_build) as compile, \
              patch.object(release, "capacity_preflight", return_value=[]), \
+             patch.object(release, "system_native_linker_paths", side_effect=native_paths or (lambda: tuple(self.native_tools))), \
              contextlib.redirect_stdout(io.StringIO()):
             result = release.prepare(self.args)
         return result, gate, compile
@@ -138,7 +149,7 @@ class TairaPrepareTests(unittest.TestCase):
     def test_failed_gate_never_starts_linux_build_or_capture(self):
         with patch.object(release, "run_build") as build:
             with self.assertRaisesRegex(release.PrepareError, "fixture gate failed"):
-                self.prepare(check=release.gate.CheckError("fixture gate failed"))
+                self.prepare(check=development_gate.CheckError("fixture gate failed"))
             build.assert_not_called()
         self.assertFalse(list(self.out.glob("attempts/*/bin")))
         self.assertFalse((self.out / "result.json").exists())
@@ -176,23 +187,41 @@ class TairaPrepareTests(unittest.TestCase):
             release.capture_artifacts(self.target, self.out)
         self.assertFalse((self.out / "result.json").exists())
 
+    def test_capture_accepts_only_closed_cargo_pair_and_keeps_output_single_link(self):
+        self.binaries()
+        self.out.mkdir()
+        profile = self.target / release.TARGET / 'release'
+        deps = profile / 'deps'; deps.mkdir()
+        for name, _ in release.BINARIES:
+            os.link(profile / name, deps / (name.replace('-', '_') + '-0123456789abcdef'))
+        rows = release.capture_artifacts(self.target, self.out)
+        self.assertEqual(len(rows), len(release.BINARIES))
+        for row in rows:
+            captured = Path(row['path'])
+            self.assertEqual(captured.read_bytes(), elf())
+            self.assertEqual(captured.stat().st_nlink, 1)
+            self.assertEqual(stat.S_IMODE(captured.stat().st_mode), 0o500)
+            self.assertEqual((profile / row['name']).stat().st_nlink, 2)
+        self.assertIn('scripts/taira_cargo_artifact.py', release.BUILD_SOURCES)
+        self.assertIn('scripts/taira_cargo_artifact.py', release.BOOTSTRAP_SOURCES)
+
     def test_artifact_replacement_after_hash_is_rejected(self):
         self.binaries()
         self.out.mkdir()
         original = self.target / release.TARGET / "release" / release.BINARIES[0][0]
-        real_open = release.stable_open_relative
+        real_open = release.cargo_open_relative
         def replace_before_open(root, relative, *, expected):
             original.rename(original.with_suffix(".retained"))
             original.write_bytes(elf())
             original.chmod(0o755)
             return real_open(root, relative, expected=expected)
-        with patch.object(release, "stable_open_relative", side_effect=replace_before_open):
+        with patch.object(release, "cargo_open_relative", side_effect=replace_before_open):
             with self.assertRaises(release.ReleaseArtifactError):
                 release.capture_artifacts(self.target, self.out)
 
     def test_existing_output_and_symlink_target_fail_before_gate(self):
         self.out.mkdir()
-        with patch.object(release.gate, "run_checks") as gate:
+        with patch.object(development_gate, "run_checks") as gate:
             with self.assertRaisesRegex(release.PrepareError, "fresh"):
                 release.prepare(self.args)
             gate.assert_not_called()
@@ -366,7 +395,7 @@ class TairaPrepareTests(unittest.TestCase):
             return ["ivm"]
 
         with self.assertRaisesRegex(release.PrepareError, "fixture native failure"):
-            self.prepare(cache_admission=retire, check=release.gate.CheckError("fixture native failure"))
+            self.prepare(cache_admission=retire, check=development_gate.CheckError("fixture native failure"))
         self.assertFalse((self.out / "checks.json").exists())
         self.assertEqual((self.out / "attempts/000002/retired-checks.json").read_bytes(), old_checks)
         result, gate, _build = self.prepare()
@@ -431,7 +460,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
              patch.object(release, "capacity_preflight", side_effect=release.PrepareError("insufficient free space")), \
-             patch.object(release.gate, "run_checks") as gate:
+             patch.object(development_gate, "run_checks") as gate:
             with self.assertRaisesRegex(release.PrepareError, "insufficient free space"):
                 release.prepare(self.args)
             gate.assert_not_called()
@@ -456,6 +485,19 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertIn("Linux build running", output.getvalue())
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+
+    def test_release_build_child_uses_private_umask_without_changing_parent(self):
+        directory, output = self.root / "cargo-profile", self.root / "cargo-profile/.cargo-lock"
+        source = (f"import os; os.mkdir({str(directory)!r}, 0o777); "
+                  f"os.close(os.open({str(output)!r}, os.O_CREAT|os.O_WRONLY, 0o666))")
+        original_umask = os.umask(0o002)
+        try:
+            release.run_build(self.root, [sys.executable, "-c", source], {}, self.root / "private-build.log")
+            self.assertEqual(os.umask(0o002), 0o002)
+        finally:
+            os.umask(original_umask)
+        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
 
     def test_environment_excludes_secrets_hooks_and_compiler_overrides(self):
         env = release.child_environment({"PATH": "/bin", "HOME": "/fixture",
@@ -709,7 +751,7 @@ class TairaPrepareTests(unittest.TestCase):
         with patch.object(release, "git", side_effect=verified_git):
             yield
 
-    def prepare_controller_fixture(self, commit, *, check=None):
+    def prepare_controller_fixture(self, commit, *, check=None, native_gate_from_capture=False, through_cli=False):
         def build(_root, _command, _env, log, **_kwargs):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
@@ -718,15 +760,17 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "verify_controller_module_origins"), \
              patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
-             patch.object(release, "captured_gate", return_value=release.gate), \
+             (contextlib.nullcontext() if native_gate_from_capture else \
+              patch.object(release, "captured_gate", return_value=development_gate)), \
              patch.object(release, "local_package_names", return_value=set()), \
              patch.object(release, "admit_source_fingerprints", return_value=[]), \
              patch.object(release, "source_fingerprints", side_effect=lambda *_a, **_k: contextlib.nullcontext([])), \
-             patch.object(release.gate, "run_checks", side_effect=check), \
+             patch.object(development_gate, "run_checks", side_effect=check), \
              patch.object(release, "run_build", side_effect=build), \
              patch.object(release, "capacity_preflight", return_value=[]), \
+             patch.object(release, "system_native_linker_paths", return_value=tuple(self.native_tools)), \
              contextlib.redirect_stdout(io.StringIO()):
-            return release.prepare(self.args)
+            return release.main() if through_cli else release.prepare(self.args)
 
     def test_fresh_prepare_selects_signed_objects_before_unrelated_head_and_worktree_changes(self):
         commit, files = self.controller_fixture()
@@ -762,6 +806,87 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual({path: (path.read_bytes(), release.file_identity(path.lstat()))
                           for path in before}, before)
         self.assertEqual(self.fixture_git("status", "--porcelain=v1", "--untracked-files=all"), before_status)
+
+    def test_prepare_cli_does_not_import_a_mutable_gate_with_side_effects(self):
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        for name in ("taira_release.py", "taira_cargo_cache.py", "taira_cargo_artifact.py", "release_artifact_contract.py"):
+            (scripts / name).write_bytes((SCRIPT.parent / name).read_bytes())
+        marker = self.root / "mutable-gate-executed"
+        (scripts / "taira_release_check.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+            "raise RuntimeError('mutable gate executed before preparation')\n")
+        arguments = [sys.executable, "-B", str(scripts / "taira_release.py"), "prepare",
+                     "--repo-root", str(self.root), "--target-dir", str(self.target),
+                     "--expected-commit", "not-a-commit", "--expected-signer", "A" * 40,
+                     "--output-dir", str(self.target / "not-created"), "--zig", str(self.zig),
+                     "--zig-sha256", self.args.zig_sha256,
+                     "--cargo-zigbuild", str(self.zigbuild),
+                     "--cargo-zigbuild-sha256", self.args.cargo_zigbuild_sha256]
+        result = subprocess.run(arguments, cwd="/", capture_output=True, text=True, timeout=10,
+                                env=release.child_environment(dict(os.environ), self.target))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected commit must be a full lowercase Git object ID", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.out.exists())
+
+    def test_prepare_uses_the_signed_gate_despite_divergent_live_gate_and_keeps_failure_fixed(self):
+        self.controller_fixture()
+        relative = "scripts/taira_release_check.py"
+        selected_code = (
+            "import json\nfrom pathlib import Path\n"
+            "class CheckError(RuntimeError): pass\n"
+            "def run_checks(root, **kwargs):\n"
+            "    target = Path(kwargs['environment']['CARGO_TARGET_DIR'])\n"
+            "    (target / 'selected-gate.json').write_text(json.dumps({\n"
+            "        'source': str(root), 'commit': kwargs['source_commit'],\n"
+            "        'scope': kwargs['qualification_scope']}))\n"
+            "    if (target / 'fail-selected-gate').exists():\n"
+            "        raise CheckError('captured native gate refused fixture')\n"
+        ).encode()
+        (self.root / relative).write_bytes(selected_code)
+        self.fixture_git("add", "--", relative)
+        commit = self.commit_controller_fixture("selected native gate fixture")
+        self.args.expected_commit = commit
+        marker = self.root / "live-gate-executed"
+        live_code = (f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+                     "raise AssertionError('live gate executed')\n").encode()
+        (self.root / relative).write_bytes(live_code)
+        index_before = (self.root / ".git/index").read_bytes()
+        result = self.prepare_controller_fixture(commit, native_gate_from_capture=True)
+        source = Path(result["source_root"])
+        self.assertEqual((source / relative).read_bytes(), selected_code)
+        observed = json.loads((self.target / "selected-gate.json").read_text())
+        self.assertEqual(observed, {"source": str(source), "commit": commit, "scope": "basic"})
+        self.assertFalse(marker.exists())
+        self.assertEqual((self.root / relative).read_bytes(), live_code)
+        self.assertEqual((self.root / ".git/index").read_bytes(), index_before)
+        self.out = self.target / "prepared-failure"
+        self.args.output_dir = self.out
+        (self.target / "fail-selected-gate").touch()
+        self.args.command = "prepare"
+        output = io.StringIO()
+        with patch.object(release, "parser", return_value=types.SimpleNamespace(parse_args=lambda: self.args)), \
+             contextlib.redirect_stderr(output):
+            self.assertEqual(self.prepare_controller_fixture(
+                commit, native_gate_from_capture=True, through_cli=True), 1)
+        self.assertEqual(output.getvalue(), "[taira-release] FAIL: captured native gate refused fixture\n")
+        self.assertFalse((self.out / "checks.json").exists())
+        self.assertFalse((self.out / "result.json").exists())
+        self.assertFalse(list(self.out.glob("attempts/*/bin")))
+        self.assertFalse(marker.exists())
+        self.assertEqual((self.root / relative).read_bytes(), live_code)
+
+    def test_missing_signed_native_gate_is_rejected_before_capture(self):
+        self.controller_fixture()
+        self.fixture_git("update-index", "--force-remove", "scripts/taira_release_check.py")
+        commit = self.commit_controller_fixture("missing selected gate fixture")
+        self.args.expected_commit = commit
+        with self.fixture_signature(commit), \
+             patch.object(release, "verify_controller_module_origins"), \
+             self.assertRaisesRegex(release.PrepareError, "missing a required build controller source"):
+            release.verify_signed_source(self.root, commit, self.args.expected_signer)
 
     def test_controller_drift_is_rejected_before_capture_even_when_staged_or_hidden(self):
         commit, files = self.controller_fixture()
@@ -819,7 +944,7 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_controller_module_origins_reject_shadow_package(self):
         modules = {}
-        for name in ("release_artifact_contract", "taira_release_check", "taira_cargo_cache"):
+        for name in ("release_artifact_contract", "taira_cargo_cache", "taira_cargo_artifact"):
             module = types.ModuleType(name)
             module.__file__ = str(self.root / "scripts" / (name + ".py"))
             module.__spec__ = importlib.util.spec_from_file_location(name, module.__file__)
@@ -905,6 +1030,60 @@ class TairaPrepareTests(unittest.TestCase):
             rows.append(f"{mode} {oid} 0\t{name}".encode())
         return b"\0".join(rows) + b"\0"
 
+    def test_prepare_cli_creates_private_source_lane_under_permissive_umask(self):
+        arguments = [sys.executable, "-B", str(SCRIPT), "prepare",
+                     "--target-dir", str(self.target), "--expected-commit", "not-a-commit",
+                     "--expected-signer", "A" * 40, "--output-dir", str(self.out),
+                     "--zig", str(self.zig), "--zig-sha256", self.args.zig_sha256,
+                     "--cargo-zigbuild", str(self.zigbuild),
+                     "--cargo-zigbuild-sha256", self.args.cargo_zigbuild_sha256]
+        result = subprocess.run(arguments, cwd=SCRIPT.parent.parent, capture_output=True,
+                                text=True, timeout=10, umask=0o002)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected commit must be a full lowercase Git object ID", result.stderr)
+        self.assertNotIn("world-writable", result.stderr)
+        key = hashlib.sha256(os.fsencode(self.target)).hexdigest()[:24]
+        for path in (self.target / ".taira-build-lane", self.target / "taira-release-sources",
+                     self.target / "taira-release-sources" / key):
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), self.target_mode)
+        self.assertFalse(self.out.exists())
+
+    def test_source_lane_and_nested_capture_are_private_before_freeze_under_permissive_umask(self):
+        entries = self.source_entries({"crates/deep/module/source.rs": ("100644", b"signed source"),
+                                       "nested/modules/iroha-docs": ("160000", b"")})
+        freeze = release.freeze
+        observed = []
+        def checked_freeze(path, *, directory=False):
+            if directory:
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700)
+                observed.append(path)
+            return freeze(path, directory=directory)
+        original_umask = os.umask(0o002)
+        try:
+            with release.source_lane(self.root, self.target) as (source, _fd), \
+                 patch.object(release, "freeze", side_effect=checked_freeze):
+                self.assertEqual(stat.S_IMODE(source.parent.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE(source.parent.parent.stat().st_mode), 0o700)
+                release.capture_source(self.root, source, self.target, "a" * 40, entries)
+                self.assertEqual((source / "crates/deep/module/source.rs").read_bytes(), b"signed source")
+                release.frozen_snapshot(source, entries, self.target)
+            self.assertEqual(os.umask(0o002), 0o002)
+        finally:
+            os.umask(original_umask)
+        self.assertGreaterEqual(len(observed), 7)
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), self.target_mode)
+
+    def test_source_lane_refuses_existing_shared_parent_without_changing_it(self):
+        parent = self.target / "taira-release-sources"
+        parent.mkdir(mode=0o775)
+        parent.chmod(0o775)
+        with self.assertRaises(release.ReleaseArtifactError):
+            with release.source_lane(self.root, self.target):
+                self.fail("unsafe existing parent was admitted")
+        self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o775)
+        self.assertEqual(list(parent.iterdir()), [])
+
     def test_fixed_capture_reads_git_objects_and_survives_working_source_changes(self):
         entries = self.source_entries({"source.rs": ("100644", b"signed source"),
                                        "run.sh": ("100755", b"#!/bin/sh\nexit 0\n"),
@@ -920,6 +1099,133 @@ class TairaPrepareTests(unittest.TestCase):
             (self.root / "source.rs").write_bytes(b"another unrelated merge")
             self.assertEqual(release.capture_source(self.root, source, self.target, "a" * 40, entries), source)
             release.frozen_snapshot(source, entries, self.target)
+
+    def test_capture_refreshes_real_commit_tree_add_remove_rename_and_path_kinds(self):
+        commit, files = self.controller_fixture()
+        unchanged = next(iter(release.BUILD_SOURCES))
+        stamp = 1_600_000_000_123_456_789
+        warm = self.target / "warm-artifact"
+        warm.write_bytes(b"preserve compiler cache")
+        with release.source_lane(self.root, self.target) as (source, _):
+            def capture(revision):
+                # Real Git objects/tree selection; the independent signature
+                # decision uses the existing explicit fixture boundary.
+                with self.fixture_signature(revision), \
+                     patch.object(release, "verify_controller_module_origins"):
+                    release.verify_signed_source(self.root, revision, self.args.expected_signer)
+                entries = release.commit_entries(self.root, revision)
+                self.assertEqual(release.capture_source(
+                    self.root, source, self.target, revision, entries), source)
+                release.frozen_snapshot(source, entries, self.target)
+                self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                                 {"commit": revision})
+                self.assertEqual(list(source.parent.glob("source.retained-*")), [])
+                self.assertEqual(list(source.parent.glob("source.pending-*")), [])
+                self.assertEqual(warm.read_bytes(), b"preserve compiler cache")
+            capture(commit)
+            os.utime(source / unchanged, ns=(stamp, stamp))
+            for operation in ("add", "remove", "rename", "file-to-directory", "directory-to-file"):
+                with self.subTest(operation=operation):
+                    if operation == "add":
+                        added = self.root / "new-directory/added.rs"
+                        added.parent.mkdir(mode=0o700)
+                        added.write_bytes(b"new signed tree input")
+                        self.fixture_git("add", "--", "new-directory/added.rs")
+                    elif operation == "remove":
+                        self.fixture_git("rm", "--", "new-directory/added.rs")
+                    elif operation == "rename":
+                        self.fixture_git("mv", "--", "source.rs", "renamed.rs")
+                    elif operation == "file-to-directory":
+                        self.fixture_git("rm", "--", "renamed.rs")
+                        (self.root / "renamed.rs").mkdir(mode=0o700)
+                        (self.root / "renamed.rs/child.rs").write_bytes(b"nested replacement")
+                        self.fixture_git("add", "--", "renamed.rs/child.rs")
+                    else:
+                        self.fixture_git("rm", "--", "renamed.rs/child.rs")
+                        if (self.root / "renamed.rs").exists():
+                            (self.root / "renamed.rs").rmdir()
+                        (self.root / "renamed.rs").write_bytes(b"file replacement")
+                        self.fixture_git("add", "--", "renamed.rs")
+                    capture(self.commit_controller_fixture(operation))
+                    self.assertEqual((source / unchanged).stat().st_mtime_ns, stamp)
+                    self.assertEqual((source / unchanged).read_bytes(), files[unchanged])
+            self.assertEqual((source / "renamed.rs").read_bytes(), b"file replacement")
+            self.assertFalse((source / "source.rs").exists())
+            self.assertFalse((source / "new-directory").exists())
+
+    def test_new_tree_refresh_refuses_corrupted_previous_capture_before_mutation(self):
+        commit, files = self.controller_fixture()
+        before = release.commit_entries(self.root, commit)
+        (self.root / "added.rs").write_bytes(b"new committed input")
+        self.fixture_git("add", "--", "added.rs")
+        successor = self.commit_controller_fixture("added source")
+        after = release.commit_entries(self.root, successor)
+        with release.source_lane(self.root, self.target) as (source, _):
+            release.capture_source(self.root, source, self.target, commit, before)
+            original_inode = source.stat().st_ino
+            captured = source / "source.rs"
+            for corruption in ("missing", "bytes", "extra", "output-binding"):
+                with self.subTest(corruption=corruption):
+                    source.chmod(0o700)
+                    if corruption == "missing":
+                        captured.unlink()
+                    elif corruption == "bytes":
+                        captured.chmod(0o600)
+                        captured.write_bytes(b"untrusted replacement")
+                        captured.chmod(0o400)
+                    elif corruption == "extra":
+                        (source / "unknown-input").write_bytes(b"must not retire")
+                    else:
+                        (source / "target").unlink()
+                        (source / "target").symlink_to(self.root, target_is_directory=True)
+                    source.chmod(0o500)
+                    with patch.object(release, "create_fresh_directory") as create, \
+                         patch.object(release.os, "rename") as rename:
+                        with self.assertRaises((release.PrepareError, FileNotFoundError)):
+                            release.capture_source(self.root, source, self.target, successor, after)
+                        create.assert_not_called()
+                        rename.assert_not_called()
+                    self.assertEqual(source.stat().st_ino, original_inode)
+                    self.assertEqual(release.read_record(source.parent / "source-state.json"),
+                                     {"commit": commit})
+                    source.chmod(0o700)
+                    if corruption in ("missing", "bytes"):
+                        if captured.exists():
+                            captured.chmod(0o600)
+                        captured.write_bytes(files["source.rs"])
+                        captured.chmod(0o400)
+                    elif corruption == "extra":
+                        self.assertEqual((source / "unknown-input").read_bytes(), b"must not retire")
+                        (source / "unknown-input").unlink()
+                    else:
+                        (source / "target").unlink()
+                        (source / "target").symlink_to(self.target, target_is_directory=True)
+                    source.chmod(0o500)
+                    release.frozen_snapshot(source, before, self.target)
+
+    def test_capture_probe_preserves_nonstructural_io_errors_and_same_commit_missing_input(self):
+        entries = self.source_entries({"source.rs": ("100644", b"source")})
+        with release.source_lane(self.root, self.target) as (source, _):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            for error in (PermissionError("read denied"), OSError(5, "input/output error")):
+                with self.subTest(error=type(error).__name__), \
+                     patch.object(release, "frozen_snapshot", side_effect=error), \
+                     patch.object(release, "commit_entries") as previous, \
+                     patch.object(release, "create_fresh_directory") as create:
+                    with self.assertRaises(type(error)) as failure:
+                        release.capture_source(self.root, source, self.target, "b" * 40, entries)
+                    self.assertIs(failure.exception, error)
+                    previous.assert_not_called()
+                    create.assert_not_called()
+            source.chmod(0o700)
+            (source / "source.rs").unlink()
+            source.chmod(0o500)
+            with patch.object(release, "commit_entries") as previous, \
+                 patch.object(release, "create_fresh_directory") as create:
+                with self.assertRaises(FileNotFoundError):
+                    release.capture_source(self.root, source, self.target, "a" * 40, entries)
+                previous.assert_not_called()
+                create.assert_not_called()
 
     def test_watched_subtrees_preserve_times_and_changed_ancestors_invalidate(self):
         first = {'vendor/pq/src/lib.rs': ('100644', b'unchanged'),
@@ -1140,6 +1446,14 @@ class TairaPrepareTests(unittest.TestCase):
             (self.root / "scripts/taira_release_check.py").write_text("raise RuntimeError('mutable gate must not execute')")
             selected = release.captured_gate(source, before)
             self.assertEqual(selected.SELECTION, ("captured regression",))
+            captured = source / "scripts/taira_release_check.py"
+            marker = self.target / "altered-captured-gate-executed"
+            captured.chmod(0o600)
+            captured.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+            captured.chmod(0o400)
+            with self.assertRaisesRegex(release.PrepareError, "captured native gate changed"):
+                release.captured_gate(source, before)
+            self.assertFalse(marker.exists())
 
     def test_isolated_cargo_ignores_home_and_ancestor_configuration(self):
         self.source.mkdir()
@@ -1238,6 +1552,332 @@ class TairaPrepareTests(unittest.TestCase):
         routine.mkdir(parents=True)
         return repo, routine
 
+    def llvm_tools(self):
+        directory = self.root / "llvm-tools"
+        directory.mkdir()
+        tools = []
+        for role, name, alias in (("compiler", "clang", "clang-18"), ("linker", "lld", "ld.lld-18")):
+            real = directory / name
+            real.write_bytes(("disposable " + role).encode())
+            real.chmod(0o755)
+            invocation = directory / alias
+            invocation.symlink_to(real)
+            tools.append((role, invocation, real))
+        return tuple(tools)
+
+    def test_system_linker_preserves_native_environment_without_resolving_tools(self):
+        environment = {"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": "/warm", "CARGO_INCREMENTAL": "0"}
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform=platform), patch.object(release.sys, "platform", platform), \
+                 patch.object(release, "stable_hash_path") as tool_hash, \
+                 patch.object(Path, "resolve") as resolve:
+                selected = release.development_linker_environment(environment, "system")
+                self.assertEqual(selected, environment)
+                self.assertIsNot(selected, environment)
+                tool_hash.assert_not_called()
+                resolve.assert_not_called()
+
+    def test_explicit_llvm_rejects_darwin_before_tool_inspection(self):
+        with patch.object(release.sys, "platform", "darwin"), \
+             patch.object(release, "stable_hash_path") as tool_hash:
+            with self.assertRaisesRegex(release.PrepareError, "only for Linux development checks"):
+                release.development_linker_environment({}, "llvm")
+            tool_hash.assert_not_called()
+
+    def test_llvm_selection_has_fixed_paths_exact_flags_and_reported_stable_identities(self):
+        self.assertEqual(release.LINUX_NATIVE_LLVM_TOOL_PATHS, (
+            ("compiler", Path("/usr/bin/clang-18"), Path("/usr/lib/llvm-18/bin/clang")),
+            ("linker", Path("/usr/bin/ld.lld-18"), Path("/usr/lib/llvm-18/bin/lld")),
+        ))
+        tools = self.llvm_tools()
+        environment = {"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": "/warm"}
+        output = io.StringIO()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+             contextlib.redirect_stdout(output):
+            selected = release.development_linker_environment(environment, "llvm")
+        self.assertEqual(selected, environment | {
+            "RUSTFLAGS": f"-Clinker={tools[0][2]} -Clink-arg=-fuse-ld={tools[1][1]}"})
+        self.assertNotIn("RUSTFLAGS", environment)
+        identity = json.loads(output.getvalue().splitlines()[0].split("llvm: ", 1)[1])
+        for role, invocation, path in tools:
+            self.assertEqual(identity[role], {"invocation": str(invocation), "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size})
+        self.assertIn("one-time dependency rebuild", output.getvalue())
+        self.assertIn("switching back invalidates it again", output.getvalue())
+
+    def test_default_and_explicit_llvm_missing_tools_stop_before_native_build_or_tests(self):
+        repo, routine = self.development_paths()
+        tools = self.llvm_tools()
+        for broken_index in (0, 1):
+            for state in ("missing", "nonexecutable"):
+                broken = tools[broken_index][2]
+                if state == "missing":
+                    saved = broken.with_suffix(".saved")
+                    broken.rename(saved)
+                else:
+                    broken.chmod(0o600)
+                try:
+                    for preference in (None, "llvm"):
+                        for focused in (None, ("cli=" + development_gate.STAGES[0][1][0],)):
+                            with self.subTest(tool=broken_index, state=state, preference=preference, focused=bool(focused)), \
+                                 patch.object(release.sys, "platform", "linux"), \
+                                 patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+                                 patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+                                 patch.object(development_gate, "run_checks") as check, \
+                                 patch.object(development_gate, "run_prequalification") as prequalify, \
+                                 contextlib.redirect_stdout(io.StringIO()):
+                                with self.assertRaisesRegex(release.PrepareError, "missing" if state == "missing" else "not executable") as failed:
+                                    release.development_check(repo, routine, {}, native_linker=preference, focused_regressions=focused)
+                                self.assertIn(str(tools[broken_index][1]), str(failed.exception))
+                                self.assertIn("clang-18" if broken_index == 0 else "lld-18", str(failed.exception))
+                                self.assertEqual("--native-linker system" in str(failed.exception), broken_index == 1)
+                                check.assert_not_called()
+                                prequalify.assert_not_called()
+                finally:
+                    if state == "missing":
+                        saved.rename(broken)
+                    broken.chmod(0o755)
+
+    def test_llvm_rejects_retargeted_or_unsafe_installed_tools(self):
+        tools = self.llvm_tools()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools):
+            tools[1][1].unlink()
+            tools[1][1].symlink_to(tools[0][2])
+            with self.assertRaisesRegex(release.PrepareError, "fixed installed path"):
+                release.development_linker_environment({}, "llvm")
+            tools[1][1].unlink()
+            tools[1][1].symlink_to(tools[1][2])
+            tools[1][2].chmod(0o777)
+            with self.assertRaisesRegex(release.ReleaseArtifactError, "group- or world-writable"):
+                release.development_linker_environment({}, "llvm")
+
+    def test_explicit_llvm_reaches_only_development_gate_after_sanitization_with_same_lane(self):
+        repo, routine = self.development_paths()
+        tools = self.llvm_tools()
+        for focused in (None, ("cli=" + development_gate.STAGES[0][1][0],)):
+            held = []
+            def check(root, *, environment, lock_fds, **options):
+                self.assertEqual(root, repo)
+                self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
+                self.assertEqual(environment["RUSTFLAGS"],
+                    f"-Clinker={tools[0][2]} -Clink-arg=-fuse-ld={tools[1][1]}")
+                self.assertNotIn("PRIVATE_KEY", environment)
+                self.assertNotIn("CARGO_ENCODED_RUSTFLAGS", environment)
+                self.assertNotIn("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", environment)
+                self.assertEqual(options["qualification_scope"], "full")
+                if focused:
+                    self.assertEqual(options["focused_regressions"], focused)
+                held.extend(lock_fds)
+                self.assertEqual(len(lock_fds), 1)
+                with self.assertRaisesRegex(release.PrepareError, "still running"):
+                    with release.cargo_lane(repo, routine, "development"):
+                        self.fail("LLVM selection must preserve the lane lock")
+            with self.subTest(focused=bool(focused)), patch.object(release.sys, "platform", "linux"), \
+                 patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+                 patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+                 patch.object(development_gate, "run_checks", side_effect=check) as full, \
+                 patch.object(development_gate, "run_prequalification", side_effect=check) as selected, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                release.development_check(repo, routine, {"PRIVATE_KEY": "never forward", "RUSTFLAGS": "bad",
+                    "CARGO_ENCODED_RUSTFLAGS": "bad", "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "bad"},
+                    native_linker="llvm", focused_regressions=focused, native_check_scope="full")
+                self.assertEqual((full.call_count, selected.call_count), (0, 1) if focused else (1, 0))
+            with self.assertRaises(OSError):
+                os.fstat(held[0])
+
+    def test_development_default_routes_linux_to_llvm_and_darwin_to_system(self):
+        repo, routine = self.development_paths()
+        tools = self.llvm_tools()
+        for platform in ("linux", "darwin"):
+            for focused in (None, ("cli=" + development_gate.STAGES[0][1][0],)):
+                with self.subTest(platform=platform, focused=bool(focused)), \
+                     patch.object(release.sys, "platform", platform), \
+                     patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+                     patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+                     patch.object(development_gate, "run_checks") as check, \
+                     patch.object(development_gate, "run_prequalification") as prequalify, \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    release.development_check(repo, routine, {}, focused_regressions=focused)
+                selected = prequalify if focused else check
+                selected.assert_called_once()
+                (check if focused else prequalify).assert_not_called()
+                environment = selected.call_args.kwargs["environment"]
+                self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
+                if platform == "linux":
+                    self.assertEqual(environment["RUSTFLAGS"],
+                        f"-Clinker={tools[0][2]} -Clink-arg=-fuse-ld={tools[1][1]}")
+                else:
+                    self.assertNotIn("RUSTFLAGS", environment)
+
+    def test_linux_explicit_system_runs_when_llvm_tools_are_absent(self):
+        repo, routine = self.development_paths()
+        tools = self.llvm_tools()
+        for _, _, path in tools:
+            path.unlink()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+             patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+             patch.object(development_gate, "run_checks") as check, \
+             contextlib.redirect_stdout(io.StringIO()):
+            release.development_check(repo, routine, {}, native_linker="system")
+        check.assert_called_once()
+        self.assertNotIn("RUSTFLAGS", check.call_args.kwargs["environment"])
+
+    def test_both_check_clis_forward_platform_default_and_explicit_native_linker_with_focus(self):
+        focus = "cli=" + development_gate.STAGES[0][1][0]
+        for platform, default in (("linux", "llvm"), ("darwin", "system")):
+            for entrypoint in ("release", "gate"):
+                for preference in (None, "system", "llvm"):
+                    for focused in (False, True):
+                        argv = (["taira_release.py", "check"] if entrypoint == "release" else ["taira_release_check.py"])
+                        if preference:
+                            argv.extend(("--native-linker", preference))
+                        if focused:
+                            argv.extend(("--focus-regression", focus))
+                        with self.subTest(platform=platform, entrypoint=entrypoint, preference=preference, focused=focused), \
+                             patch.dict(sys.modules, {"taira_release": release}), \
+                             patch.object(release.sys, "platform", platform), \
+                             patch.object(release.sys, "argv", argv), \
+                             patch.object(release, "development_check") as check:
+                            self.assertEqual((release.main if entrypoint == "release" else development_gate.main)(), 0)
+                        expected = {"native_check_scope": "basic", "native_linker": preference or default}
+                        if focused:
+                            expected["focused_regressions"] = (focus,)
+                        self.assertEqual(check.call_args.kwargs, expected)
+
+    def test_prepare_accepts_native_linker_and_scopes_exact_flags_to_native_gate(self):
+        arguments = ["prepare", "--expected-commit", "a" * 40, "--expected-signer", "A" * 40,
+                     "--output-dir", str(self.out), "--zig", str(self.zig), "--zig-sha256", "a" * 64,
+                     "--cargo-zigbuild", str(self.zigbuild), "--cargo-zigbuild-sha256", "b" * 64]
+        for platform, default in (("linux", "llvm"), ("darwin", "system")):
+            with patch.object(release.sys, "platform", platform):
+                self.assertEqual(release.parser().parse_args(arguments).native_linker, default)
+                for preference in ("system", "llvm"):
+                    self.assertEqual(release.parser().parse_args(arguments + ["--native-linker", preference]).native_linker, preference)
+        def check(_root, *, environment, **_kwargs):
+            self.assertNotIn("RUSTFLAGS", environment)
+            self.assertEqual(environment["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"), [
+                f"-Clinker={self.native_tools[0][2]}", f"-Clink-arg=-fuse-ld={self.native_tools[1][1]}"])
+            self.assertNotIn("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", environment)
+        def build(_root, _command, environment, log):
+            self.assertFalse(any(name in environment for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", "NATIVE_LINKER")))
+            self.binaries()
+            log.write_bytes(b"fixture compiler output\n")
+        with patch.object(release, "development_linker_environment", side_effect=AssertionError("prepare reached mutable workflow")), \
+             patch.dict(os.environ, {"NATIVE_LINKER": "llvm", "RUSTFLAGS": "bad", "CARGO_ENCODED_RUSTFLAGS": "bad",
+                                    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "bad"}):
+            result, _, _ = self.prepare(check=check, build=build)
+        identity = result["native_linker"]
+        self.assertEqual(identity["preference"], "system")
+        self.assertEqual(identity["platform"], sys.platform)
+        for role, invocation, path in self.native_tools:
+            self.assertEqual(identity["tools"][role], {"invocation": str(invocation), "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size})
+        self.assertEqual(release.read_record(self.out / "request.json")["native_linker"], identity)
+
+    def test_prepare_linux_llvm_uses_shared_exact_resolver_and_never_falls_back(self):
+        tools = self.llvm_tools()
+        self.args.native_linker = "llvm"
+        observed = []
+        def check(_root, *, environment, **_kwargs):
+            observed.append(environment["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"))
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools):
+            result, _, _ = self.prepare(check=check)
+            self.assertEqual(observed, [[f"-Clinker={tools[0][2]}", f"-Clink-arg=-fuse-ld={tools[1][1]}"]])
+            self.assertEqual(result["native_linker"]["preference"], "llvm")
+            tools[1][2].unlink()
+            with self.assertRaisesRegex(release.PrepareError, "requires installed LLVM 18"):
+                self.prepare(check=AssertionError("missing linker resumed checks"), build=AssertionError("missing linker built"))
+
+    def test_prepare_native_tool_changes_before_resume_reject_completed_capture(self):
+        for role, _invocation, path in self.native_tools:
+            with self.subTest(role=role):
+                self.args.output_dir = self.root / ("prepared-" + role)
+                self.out = self.args.output_dir
+                self.prepare()
+                old = path.read_bytes()
+                path.write_bytes(old + b" changed")
+                with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+                    self.prepare(check=AssertionError("changed tool resumed checks"), build=AssertionError("changed tool built"))
+                path.write_bytes(old)
+
+    def test_prepare_native_tool_change_during_gate_or_build_never_publishes_success(self):
+        for stage in ("cache", "gate", "build"):
+            with self.subTest(stage=stage):
+                self.out = self.root / ("changed-during-" + stage)
+                self.args.output_dir = self.out
+                path = self.native_tools[1][2]
+                old = path.read_bytes()
+                def check(_root, **_kwargs):
+                    if stage == "gate": path.write_bytes(old + b" changed")
+                def build(_root, _command, _env, log):
+                    self.binaries()
+                    log.write_bytes(b"fixture compiler output\n")
+                    path.write_bytes(old + b" changed")
+                with self.assertRaisesRegex(release.PrepareError, "native linker choice or tool identity changed"):
+                    self.prepare(check=check, build=build, cache_admission=(
+                        lambda *_a, **_k: path.write_bytes(old + b" changed")) if stage == "cache" else None)
+                if stage != "build":
+                    self.assertFalse((self.out / "checks.json").exists())
+                self.assertFalse((self.out / "result.json").exists())
+                self.assertFalse(any((self.out / "attempts").glob("*/capture.json")))
+                path.write_bytes(old)
+
+    def test_prepare_native_invocation_retarget_rejects_same_bytes_on_resume(self):
+        role, original, _ = self.native_tools[1]
+        alias = self.root / "native-linker-alias"
+        alias.symlink_to(original)
+        alternate = self.root / "native-linker-alternate"
+        alternate.write_bytes(original.read_bytes())
+        alternate.chmod(0o755)
+        self.native_tools[1] = (role, alias, original)
+        def resolve():
+            return tuple((role, invocation, invocation.resolve(strict=True))
+                         for role, invocation, _ in self.native_tools)
+        self.prepare(native_paths=resolve)
+        alias.unlink()
+        alias.symlink_to(alternate)
+        with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+            self.prepare(native_paths=resolve, check=AssertionError("retargeted linker resumed checks"))
+
+    def test_prepared_native_linux_system_keeps_fixed_clang_driver(self):
+        tools = self.llvm_tools()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+             patch.object(Path, "resolve", return_value=Path("/fixed/system-ld")):
+            paths = release.system_native_linker_paths()
+        self.assertEqual(paths, (tools[0], ("linker", Path("/usr/bin/ld"), Path("/fixed/system-ld"))))
+
+    def test_prepare_native_choice_change_does_not_reuse_successful_checkpoint(self):
+        tools = self.llvm_tools()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools):
+            self.prepare()
+            self.args.native_linker = "llvm"
+            with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+                self.prepare(check=AssertionError("choice changed but checks resumed"))
+
+    def test_prepared_native_system_resolves_apple_tools_and_preserves_spaces(self):
+        directory = self.root / "Xcode Beta.app"
+        directory.mkdir()
+        paths = [directory / name for name in ("clang", "ld")]
+        for path in paths:
+            path.write_bytes(b"fixture Apple executable")
+            path.chmod(0o755)
+        with patch.object(release.sys, "platform", "darwin"), \
+             patch.object(release.subprocess, "check_output", side_effect=[str(path) + "\n" for path in paths]) as find:
+            identity = release.preparation_native_linker("system")
+        self.assertEqual([call.args[0] for call in find.call_args_list], [
+            ["/usr/bin/xcrun", "--find", "clang"], ["/usr/bin/xcrun", "--find", "ld"]])
+        self.assertEqual(release.preparation_native_environment({}, identity)["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"),
+                         [f"-Clinker={paths[0]}", f"-Clink-arg=-fuse-ld={paths[1]}"])
+        with patch.object(release.sys, "platform", "darwin"), self.assertRaisesRegex(release.PrepareError, "only on Linux"):
+            release.preparation_native_linker("llvm")
+
     def test_development_target_defaults_and_explicit_selectors_must_agree(self):
         repo, routine = self.development_paths()
         self.assertEqual(release.development_target(repo, None, {"CARGO_TARGET_DIR": str(repo / "target")}), routine)
@@ -1304,8 +1944,8 @@ class TairaPrepareTests(unittest.TestCase):
                 with release.cargo_lane(repo, routine, "development"):
                     self.fail("must not admit competing check")
         with patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
-             patch.object(release.gate, "run_checks", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
-            release.development_check(repo, None, {"PRIVATE_KEY": "fixture must not cross", "RUSTFLAGS": "bad", "CARGO_BUILD_TARGET": "bad", "CARGO_INCREMENTAL": "0"})
+             patch.object(development_gate, "run_checks", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            release.development_check(repo, None, {"PRIVATE_KEY": "fixture must not cross", "RUSTFLAGS": "bad", "CARGO_BUILD_TARGET": "bad", "CARGO_INCREMENTAL": "0"}, native_linker="system")
         with self.assertRaises(OSError):
             os.fstat(descriptors[0])
         self.assertEqual(stat.S_IMODE(routine.stat().st_mode), target_mode)
@@ -1321,7 +1961,7 @@ class TairaPrepareTests(unittest.TestCase):
         argv = ["taira_release_check.py", "--repo-root", str(repo), "--target-dir", str(routine)]
         with patch.dict(sys.modules, {"taira_release": release}), patch.object(release.sys, "argv", argv), \
              patch.object(release, "development_check") as check:
-            self.assertEqual(release.gate.main(), 0)
+            self.assertEqual(development_gate.main(), 0)
         self.assertEqual(check.call_args.args[:2], (repo, routine))
 
     def test_focused_prequalification_keeps_development_lock_and_sanitized_environment(self):
@@ -1340,10 +1980,10 @@ class TairaPrepareTests(unittest.TestCase):
                 with release.cargo_lane(repo, routine, "development"):
                     self.fail("prequalification must hold the shared development lane")
         with patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
-             patch.object(release.gate, "run_prequalification", side_effect=diagnostic) as prequalify, \
-             patch.object(release.gate, "run_checks") as qualify, contextlib.redirect_stdout(io.StringIO()):
+             patch.object(development_gate, "run_prequalification", side_effect=diagnostic) as prequalify, \
+             patch.object(development_gate, "run_checks") as qualify, contextlib.redirect_stdout(io.StringIO()):
             release.development_check(repo, None, {"PRIVATE_KEY": "never forward", "RUSTFLAGS": "bad"},
-                                      focused_regressions=focused)
+                                      focused_regressions=focused, native_linker="system")
         prequalify.assert_called_once()
         qualify.assert_not_called()
         with self.assertRaises(OSError):
@@ -1354,17 +1994,41 @@ class TairaPrepareTests(unittest.TestCase):
     def test_invalid_focus_stops_before_target_or_tool_setup(self):
         repo, routine = self.development_paths()
         with patch.object(release, "isolated_cargo_environment") as tools, \
-             patch.object(release.gate, "run_prequalification") as prequalify:
-            with self.assertRaises(release.gate.CheckError):
+             patch.object(development_gate, "run_prequalification") as prequalify:
+            with self.assertRaises(release.PrepareError):
                 release.development_check(repo, routine, {}, focused_regressions=("core=*",))
         tools.assert_not_called()
         prequalify.assert_not_called()
         self.assertFalse((routine / ".taira-build-lane").exists())
 
+    def test_development_gate_failures_keep_nonzero_cli_status_and_exact_diagnostics(self):
+        repo, routine = self.development_paths()
+        focus = "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay"
+        for focused, entrypoint in ((False, "release"), (True, "release"),
+                                    (False, "gate"), (True, "gate")):
+            argv = (["taira_release.py", "check"] if entrypoint == "release" else ["taira_release_check.py"])
+            argv.extend(["--repo-root", str(repo), "--target-dir", str(routine), "--native-linker", "system"])
+            if focused:
+                argv.extend(["--focus-regression", focus])
+            output = io.StringIO()
+            method = "run_prequalification" if focused else "run_checks"
+            with self.subTest(focused=focused, entrypoint=entrypoint), \
+                 patch.dict(sys.modules, {"taira_release": release}), \
+                 patch.object(release.sys, "argv", argv), \
+                 patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+                 patch.object(development_gate, method, side_effect=development_gate.CheckError("exact development refusal")) as run, \
+                 contextlib.redirect_stderr(output), contextlib.redirect_stdout(io.StringIO()):
+                main = release.main if entrypoint == "release" else development_gate.main
+                self.assertEqual(main(), 1)
+            run.assert_called_once()
+            prefix = "taira-release" if entrypoint == "release" else "taira-check"
+            self.assertEqual(output.getvalue(), f"[{prefix}] FAIL: exact development refusal\n")
+            self.assertFalse((routine / "checks.json").exists())
+
     def test_prequalification_cannot_use_the_authenticated_release_target(self):
         repo, _ = self.development_paths()
         with patch.object(release, "isolated_cargo_environment") as tools, \
-             patch.object(release.gate, "run_prequalification") as prequalify:
+             patch.object(development_gate, "run_prequalification") as prequalify:
             with self.assertRaisesRegex(release.PrepareError, "authenticated release lane"):
                 release.development_check(repo, repo / "target", {}, focused_regressions=(
                     "core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay",))
@@ -1376,7 +2040,7 @@ class TairaPrepareTests(unittest.TestCase):
         with patch.object(release.sys, "argv", ["taira_release.py", "check", "--focus-regression", focus]), \
              patch.object(release, "development_check") as check:
             self.assertEqual(release.main(), 0)
-        self.assertEqual(check.call_args.kwargs, {"native_check_scope": "basic", "focused_regressions": (focus,)})
+        self.assertEqual(check.call_args.kwargs, {"native_check_scope": "basic", "native_linker": "llvm" if sys.platform == "linux" else "system", "focused_regressions": (focus,)})
         arguments = ["prepare", "--expected-commit", "a" * 40, "--expected-signer", "A" * 40,
                      "--output-dir", str(self.out), "--zig", str(self.zig), "--zig-sha256", "a" * 64,
                      "--cargo-zigbuild", str(self.zigbuild), "--cargo-zigbuild-sha256", "b" * 64,

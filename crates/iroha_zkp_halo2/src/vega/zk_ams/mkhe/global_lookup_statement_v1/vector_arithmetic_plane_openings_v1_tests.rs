@@ -1,4 +1,7 @@
+//! Current native40 plane geometry, custody and replay failure controls.
 use core::sync::atomic::Ordering;
+
+use iroha_crypto::confidential_spool::ConfidentialSpoolLayoutV1;
 
 use super::replay_caps_v1::{
     PlaneOpeningReplayPurposeV1, REPLAY_PURPOSE_COUNT_V1, replay_plane_count_v1,
@@ -11,8 +14,6 @@ fn source_axes_v1() -> PlaneOpeningSourceContextV1 {
         source_opening_record_digest: [0x22; 32],
         canonical_reopen_record_digest: [0x33; 32],
         radix_range_record_digest: [0x44; 32],
-        coefficient_residual_manifest_digest: [0x55; 32],
-        committed_mle_profile_digest: [0x66; 32],
     }
 }
 
@@ -46,45 +47,30 @@ fn complete_purpose_v1(
 
 #[test]
 fn exact_plane_roles_ranges_and_axes_are_frozen() {
-    let mut role_counts = [0_usize; 9];
+    let mut counts = [0_usize; 6];
     for ordinal in 0..PLANE_COUNT_V1 {
-        let coordinate = plane_coordinate_v1(ordinal).unwrap();
-        assert_eq!(usize::from(coordinate.ordinal), ordinal);
-        role_counts[coordinate.role as usize - 1] += 1;
-        match coordinate.role {
+        let c = plane_coordinate_v1(ordinal).unwrap();
+        assert_eq!(usize::from(c.ordinal), ordinal);
+        counts[c.role as usize - 1] += 1;
+        match c.role {
             GlobalLookupPlaneRoleV1::BooleanD
             | GlobalLookupPlaneRoleV1::BooleanS
             | GlobalLookupPlaneRoleV1::MixedTop => {
-                assert!(coordinate.group.is_some());
-                assert_eq!(
-                    (coordinate.unit, coordinate.column, coordinate.statement),
-                    (None, None, None)
-                );
+                assert!(c.group.is_some());
+                assert_eq!((c.unit, c.column), (None, None));
             }
             GlobalLookupPlaneRoleV1::ComparatorBorrow => {
-                assert!(coordinate.group.is_some() && coordinate.column.is_some());
-                assert_eq!((coordinate.unit, coordinate.statement), (None, None));
+                assert!(c.group.is_some() && c.column.is_some());
+                assert_eq!(c.unit, None);
             }
             GlobalLookupPlaneRoleV1::SmallSigned
             | GlobalLookupPlaneRoleV1::SmallNegativeMagnitude => {
-                assert!(coordinate.unit.is_some());
-                assert_eq!(
-                    (coordinate.group, coordinate.column, coordinate.statement),
-                    (None, None, None)
-                );
-            }
-            GlobalLookupPlaneRoleV1::ResidualQ3
-            | GlobalLookupPlaneRoleV1::ResidualQ5
-            | GlobalLookupPlaneRoleV1::ResidualQ8 => {
-                assert!(coordinate.statement.is_some());
-                assert_eq!(
-                    (coordinate.group, coordinate.unit, coordinate.column),
-                    (None, None, None)
-                );
+                assert!(c.unit.is_some());
+                assert_eq!((c.group, c.column), (None, None));
             }
         }
     }
-    assert_eq!(role_counts, [344, 344, 6_192, 344, 1_032, 1_032, 1, 1, 1]);
+    assert_eq!(counts, [344, 344, 6192, 344, 1032, 1032]);
     for role in [
         GlobalLookupPlaneRoleV1::BooleanD,
         GlobalLookupPlaneRoleV1::BooleanS,
@@ -92,50 +78,33 @@ fn exact_plane_roles_ranges_and_axes_are_frozen() {
         GlobalLookupPlaneRoleV1::MixedTop,
         GlobalLookupPlaneRoleV1::SmallSigned,
         GlobalLookupPlaneRoleV1::SmallNegativeMagnitude,
-        GlobalLookupPlaneRoleV1::ResidualQ3,
-        GlobalLookupPlaneRoleV1::ResidualQ5,
-        GlobalLookupPlaneRoleV1::ResidualQ8,
     ] {
-        assert_eq!(role_counts[role as usize - 1], role_plane_count_v1(role));
+        assert_eq!(counts[role as usize - 1], role_plane_count_v1(role));
     }
-    assert_eq!(
-        plane_coordinate_v1(PLANE_COUNT_V1),
-        Err(PlaneOpeningErrorV1::Shape)
-    );
+    for retired in [9288, 9289, 9290, usize::MAX] {
+        assert_eq!(
+            plane_coordinate_v1(retired),
+            Err(PlaneOpeningErrorV1::Shape)
+        );
+    }
 }
 
 #[test]
-fn group_major_beta_unit_and_q_boundaries_are_exact() {
-    for (ordinal, role, group, unit, column, statement) in [
-        (
-            0,
-            GlobalLookupPlaneRoleV1::BooleanD,
-            Some(0),
-            None,
-            None,
-            None,
-        ),
+fn group_major_beta_and_unit_boundaries_are_exact() {
+    for (ordinal, role, group, unit, column) in [
+        (0, GlobalLookupPlaneRoleV1::BooleanD, Some(0), None, None),
         (
             343,
             GlobalLookupPlaneRoleV1::BooleanD,
             Some(343),
             None,
             None,
-            None,
         ),
-        (
-            344,
-            GlobalLookupPlaneRoleV1::BooleanS,
-            Some(0),
-            None,
-            None,
-            None,
-        ),
+        (344, GlobalLookupPlaneRoleV1::BooleanS, Some(0), None, None),
         (
             687,
             GlobalLookupPlaneRoleV1::BooleanS,
             Some(343),
-            None,
             None,
             None,
         ),
@@ -145,7 +114,6 @@ fn group_major_beta_unit_and_q_boundaries_are_exact() {
             Some(0),
             None,
             Some(0),
-            None,
         ),
         (
             705,
@@ -153,7 +121,6 @@ fn group_major_beta_unit_and_q_boundaries_are_exact() {
             Some(0),
             None,
             Some(17),
-            None,
         ),
         (
             706,
@@ -161,91 +128,60 @@ fn group_major_beta_unit_and_q_boundaries_are_exact() {
             Some(1),
             None,
             Some(0),
-            None,
         ),
         (
-            6_879,
+            6879,
             GlobalLookupPlaneRoleV1::ComparatorBorrow,
             Some(343),
             None,
             Some(17),
-            None,
         ),
+        (6880, GlobalLookupPlaneRoleV1::MixedTop, Some(0), None, None),
         (
-            6_880,
+            7223,
             GlobalLookupPlaneRoleV1::MixedTop,
-            Some(0),
-            None,
+            Some(343),
             None,
             None,
         ),
         (
-            7_224,
+            7224,
             GlobalLookupPlaneRoleV1::SmallSigned,
             None,
             Some(0),
             None,
-            None,
         ),
         (
-            8_255,
+            8255,
             GlobalLookupPlaneRoleV1::SmallSigned,
             None,
-            Some(1_031),
-            None,
+            Some(1031),
             None,
         ),
         (
-            8_256,
+            8256,
             GlobalLookupPlaneRoleV1::SmallNegativeMagnitude,
             None,
             Some(0),
             None,
-            None,
         ),
         (
-            9_287,
+            9287,
             GlobalLookupPlaneRoleV1::SmallNegativeMagnitude,
             None,
-            Some(1_031),
+            Some(1031),
             None,
-            None,
-        ),
-        (
-            9_288,
-            GlobalLookupPlaneRoleV1::ResidualQ3,
-            None,
-            None,
-            None,
-            Some(3),
-        ),
-        (
-            9_289,
-            GlobalLookupPlaneRoleV1::ResidualQ5,
-            None,
-            None,
-            None,
-            Some(5),
-        ),
-        (
-            9_290,
-            GlobalLookupPlaneRoleV1::ResidualQ8,
-            None,
-            None,
-            None,
-            Some(8),
         ),
     ] {
-        let coordinate = plane_coordinate_v1(ordinal).unwrap();
+        let c = plane_coordinate_v1(ordinal).unwrap();
         assert_eq!(
             (
-                coordinate.role,
-                coordinate.group.map(usize::from),
-                coordinate.unit.map(usize::from),
-                coordinate.column.map(usize::from),
-                coordinate.statement
+                c.role,
+                c.group.map(usize::from),
+                c.unit.map(usize::from),
+                c.column.map(usize::from)
             ),
-            (role, group, unit, column, statement)
+            (role, group, unit, column)
         );
     }
     for literal in [
@@ -254,7 +190,7 @@ fn group_major_beta_unit_and_q_boundaries_are_exact() {
         b"signed-role=(r,e0,e1)",
         b"beta-order=group-major-then-column",
         b"Boolean-coordinate-bits-little-endian",
-        b"plane-order=bD[group],bS[group],beta[group][column],m[group],x[unit],n[unit],q3,q5,q8",
+        b"plane-order=bD[group],bS[group],beta[group][column],m[group],x[unit],n[unit]",
     ] {
         let schemas = [
             GROUP_AXIS_LANGUAGE_V1,
@@ -264,51 +200,54 @@ fn group_major_beta_unit_and_q_boundaries_are_exact() {
             PLANE_ORDER_LANGUAGE_V1,
         ]
         .concat();
-        assert!(
-            schemas
-                .windows(literal.len())
-                .any(|window| window == literal)
-        );
+        assert!(schemas.windows(literal.len()).any(|w| w == literal));
     }
 }
 
 #[test]
-fn one_snapshot_geometry_uses_only_the_exact_purpose_specific_cap_exception() {
-    assert_eq!(PLANE_COUNT_V1, 9_291);
-    assert_eq!(COMMITMENT_MASKS_V1, 9_291);
+fn ordered_plan_fits_without_changing_the_exact_single_file_cap_deficit() {
+    assert_eq!(PLANE_COUNT_V1, 9_288);
+    assert_eq!(COMMITMENT_MASKS_V1, 9_288);
     assert_eq!(SNAPSHOT_SLOTS_PER_PLANE_V1, 33);
-    assert_eq!(SNAPSHOT_SLOT_COUNT_V1, 306_603);
-    assert_eq!(RETAINED_VALUE_BYTES_V1, 4_871_159_808);
-    assert_eq!(RETAINED_BLINDING_BYTES_V1, 297_312);
-    assert_eq!(RETAINED_COMMITMENT_WIRE_BYTES_V1, 306_603);
-    assert_eq!(SNAPSHOT_SEMANTIC_BYTES_V1, 4_871_763_723);
-    assert_eq!(SNAPSHOT_ZERO_PADDING_BYTES_V1, 151_619_829);
-    assert_eq!(SNAPSHOT_PADDED_PLAINTEXT_BYTES_V1, 5_023_383_552);
-    assert_eq!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1, 4_905_648);
-    assert_eq!(SNAPSHOT_FILE_BYTES_V1, 5_028_289_200);
-    assert_eq!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1, 1_198_764_720);
+    assert_eq!(SNAPSHOT_SLOT_COUNT_V1, 306_504);
+    assert_eq!(RETAINED_VALUE_BYTES_V1, 4_869_586_944);
+    assert_eq!(RETAINED_BLINDING_BYTES_V1, 297_216);
+    assert_eq!(RETAINED_COMMITMENT_WIRE_BYTES_V1, 306_504);
+    assert_eq!(SNAPSHOT_SEMANTIC_BYTES_V1, 4_870_190_664);
+    assert_eq!(SNAPSHOT_ZERO_PADDING_BYTES_V1, 151_570_872);
+    assert_eq!(SNAPSHOT_PADDED_PLAINTEXT_BYTES_V1, 5_021_761_536);
+    assert_eq!(SNAPSHOT_AUTHENTICATION_TAG_BYTES_V1, 4_904_064);
+    assert_eq!(SNAPSHOT_FILE_BYTES_V1, 5_026_665_600);
+    assert_eq!(SNAPSHOT_GENERAL_FILE_CAP_EXCESS_BYTES_V1, 1_197_141_120);
     assert!(SNAPSHOT_SLOT_COUNT_V1 <= CONFIDENTIAL_SPOOL_MAX_SLOTS_V1);
     assert!(SNAPSHOT_FILE_BYTES_V1 > CONFIDENTIAL_SPOOL_MAX_FILE_BYTES_V1);
-    assert_eq!(
-        SNAPSHOT_SLOT_COUNT_V1,
-        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_SLOTS_V1
-    );
-    assert_eq!(
-        SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1,
-        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_PLAINTEXT_BYTES_V1
-    );
-    assert_eq!(
-        SNAPSHOT_FILE_BYTES_V1,
-        CONFIDENTIAL_SPOOL_GLOBAL_LOOKUP_PLANE_FILE_BYTES_V1
-    );
+    assert!(SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1 <= CONFIDENTIAL_SPOOL_MAX_PLAINTEXT_BYTES_V1);
     let context = plane_context_digest_v1(source_axes_v1()).unwrap();
-    let layout = approved_snapshot_layout_v1(context).unwrap();
-    assert_eq!(layout.slot_count_v1(), SNAPSHOT_SLOT_COUNT_V1);
-    assert_eq!(layout.plaintext_len_v1(), SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1);
-    assert_eq!(layout.file_len_v1(), SNAPSHOT_FILE_BYTES_V1);
     assert_eq!(
-        approved_snapshot_layout_v1([0; 32]),
-        Err(PlaneOpeningErrorV1::Resource)
+        ConfidentialSpoolLayoutV1::new_v1(
+            SNAPSHOT_SLOT_COUNT_V1,
+            SNAPSHOT_SLOT_PLAINTEXT_BYTES_V1,
+            context,
+        ),
+        Err(
+            iroha_crypto::confidential_spool::ConfidentialSpoolErrorV1::LimitExceeded(
+                "file length"
+            )
+        )
+    );
+    let plan = approved_snapshot_plan_v1(context).expect("ordered full geometry");
+    assert_eq!(plan.slot_count_v1(), SNAPSHOT_SLOT_COUNT_V1);
+    assert_eq!(
+        hex::encode(plan.descriptor_digest_v1()),
+        "d2ed7749c88a42e46acdf66882b1d3f5aa8af9851ec2df93ac14f853fbd8e092"
+    );
+    assert_eq!(
+        plan,
+        ordered_snapshot_v1::OrderedPlaneSpoolPlanV1::canonical_v1(context).unwrap()
+    );
+    assert_eq!(
+        approved_snapshot_plan_v1([0; 32]),
+        Err(PlaneOpeningErrorV1::Context)
     );
     assert!(
         SNAPSHOT_LAYOUT_LANGUAGE_V1
@@ -332,7 +271,35 @@ fn one_snapshot_geometry_uses_only_the_exact_purpose_specific_cap_exception() {
             .windows(b"shard".len())
             .any(|window| window == b"shard")
     );
-    assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    assert!(!CURRENT_UPSTREAM_COMPLETE_V1 && !CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+}
+
+#[test]
+fn record_rejects_a_substituted_ordered_plan_even_with_a_rehashed_record() {
+    let (mut owner, context) = test_owner_v1([0x95; 32]);
+    let record = &mut owner.live.as_mut().unwrap().record;
+    let expected = approved_snapshot_plan_v1(context)
+        .unwrap()
+        .descriptor_digest_v1();
+    assert_eq!(record.ordered_snapshot_plan_digest, expected);
+    for digest in [
+        [0; 32],
+        approved_snapshot_plan_v1([0x96; 32])
+            .unwrap()
+            .descriptor_digest_v1(),
+    ] {
+        record.ordered_snapshot_plan_digest = digest;
+        if digest != [0; 32] {
+            record.record_digest = plane_record_digest_v1(record).unwrap();
+        }
+        assert_eq!(
+            validate_plane_record_v1(record),
+            Err(PlaneOpeningErrorV1::Context)
+        );
+    }
+    record.ordered_snapshot_plan_digest = expected;
+    record.record_digest = plane_record_digest_v1(record).unwrap();
+    validate_plane_record_v1(record).unwrap();
 }
 
 #[test]
@@ -356,9 +323,9 @@ fn source_context_is_ordered_nonzero_and_swap_hostile() {
         Err(PlaneOpeningErrorV1::Context)
     );
     for literal in [
-        b"topology,challenge-manifest,basis,mapping".as_slice(),
+        b"native40-inventory,basis,mapping".as_slice(),
         b"source-replay-record,source-opening-record,canonical-reopen-record",
-        b"coefficient-residual-manifest,committed-MLE-profile",
+        b"radix-range-record",
     ] {
         assert!(
             SOURCE_CONTEXT_LANGUAGE_V1
@@ -371,18 +338,14 @@ fn source_context_is_ordered_nonzero_and_swap_hostile() {
 #[test]
 fn exact_replay_purposes_authorize_only_required_multi_use() {
     let purposes = [
-        PlaneOpeningReplayPurposeV1::Statement3DerivedLro,
-        PlaneOpeningReplayPurposeV1::Statement3CoefficientIpa,
-        PlaneOpeningReplayPurposeV1::Statement5DerivedLro,
-        PlaneOpeningReplayPurposeV1::Statement5CoefficientIpa,
-        PlaneOpeningReplayPurposeV1::Statement8DerivedLro,
-        PlaneOpeningReplayPurposeV1::Statement8CoefficientIpa,
+        PlaneOpeningReplayPurposeV1::Statement3Inputs,
+        PlaneOpeningReplayPurposeV1::Statement5Inputs,
+        PlaneOpeningReplayPurposeV1::Statement8Inputs,
     ];
-    let counts = purposes.map(|purpose| replay_plane_count_v1(purpose).unwrap());
-    assert_eq!(counts, [689, 1, 6_881, 1, 2_065, 1]);
-    assert_eq!(counts.into_iter().sum::<usize>(), 9_638);
-    assert_eq!(REPLAY_PURPOSE_COUNT_V1, 6);
-
+    let counts = purposes.map(|p| replay_plane_count_v1(p).unwrap());
+    assert_eq!(counts, [688, 6880, 2064]);
+    assert_eq!(counts.into_iter().sum::<usize>(), 9632);
+    assert_eq!(REPLAY_PURPOSE_COUNT_V1, 3);
     for role in [
         GlobalLookupPlaneRoleV1::BooleanD,
         GlobalLookupPlaneRoleV1::BooleanS,
@@ -390,22 +353,12 @@ fn exact_replay_purposes_authorize_only_required_multi_use() {
         GlobalLookupPlaneRoleV1::MixedTop,
         GlobalLookupPlaneRoleV1::SmallSigned,
         GlobalLookupPlaneRoleV1::SmallNegativeMagnitude,
-        GlobalLookupPlaneRoleV1::ResidualQ3,
-        GlobalLookupPlaneRoleV1::ResidualQ5,
-        GlobalLookupPlaneRoleV1::ResidualQ8,
     ] {
-        let uses = purposes
-            .iter()
-            .filter(|purpose| purpose.accepts_role_v1(role))
-            .count();
-        let expected = usize::from(matches!(
-            role,
-            GlobalLookupPlaneRoleV1::BooleanD
-                | GlobalLookupPlaneRoleV1::ResidualQ3
-                | GlobalLookupPlaneRoleV1::ResidualQ5
-                | GlobalLookupPlaneRoleV1::ResidualQ8
-        )) + 1;
-        assert_eq!(uses, expected);
+        let uses = purposes.iter().filter(|p| p.accepts_role_v1(role)).count();
+        assert_eq!(
+            uses,
+            usize::from(role == GlobalLookupPlaneRoleV1::BooleanD) + 1
+        );
     }
 }
 
@@ -414,12 +367,9 @@ fn every_permit_is_one_shot_and_full_consumption_releases_no_authority() {
     let before = TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst);
     let (mut owner, context) = test_owner_v1([0x7a; 32]);
     for purpose in [
-        PlaneOpeningReplayPurposeV1::Statement5DerivedLro,
-        PlaneOpeningReplayPurposeV1::Statement3CoefficientIpa,
-        PlaneOpeningReplayPurposeV1::Statement8DerivedLro,
-        PlaneOpeningReplayPurposeV1::Statement3DerivedLro,
-        PlaneOpeningReplayPurposeV1::Statement8CoefficientIpa,
-        PlaneOpeningReplayPurposeV1::Statement5CoefficientIpa,
+        PlaneOpeningReplayPurposeV1::Statement5Inputs,
+        PlaneOpeningReplayPurposeV1::Statement8Inputs,
+        PlaneOpeningReplayPurposeV1::Statement3Inputs,
     ] {
         owner = complete_purpose_v1(owner, context, purpose);
     }
@@ -434,7 +384,7 @@ fn wrong_order_context_duplicate_and_incomplete_replays_fail_closed() {
     let before = TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst);
     let (owner, context) = test_owner_v1([0x81; 32]);
     let mut replay = owner
-        .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3DerivedLro, context)
+        .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, context)
         .unwrap();
     assert_eq!(
         replay.absorb_next_authenticated_plane_v1(1),
@@ -449,10 +399,7 @@ fn wrong_order_context_duplicate_and_incomplete_replays_fail_closed() {
     let (owner, _) = test_owner_v1([0x82; 32]);
     assert!(
         owner
-            .start_replay_v1(
-                PlaneOpeningReplayPurposeV1::Statement3CoefficientIpa,
-                [0xff; 32]
-            )
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, [0xff; 32])
             .is_err()
     );
 
@@ -460,14 +407,11 @@ fn wrong_order_context_duplicate_and_incomplete_replays_fail_closed() {
     let owner = complete_purpose_v1(
         owner,
         context,
-        PlaneOpeningReplayPurposeV1::Statement3CoefficientIpa,
+        PlaneOpeningReplayPurposeV1::Statement3Inputs,
     );
     assert!(
         owner
-            .start_replay_v1(
-                PlaneOpeningReplayPurposeV1::Statement3CoefficientIpa,
-                context
-            )
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement3Inputs, context)
             .is_err()
     );
 
@@ -489,7 +433,7 @@ fn owner_zeroizes_on_unwind_and_record_context_tampering() {
     owner.live.as_mut().unwrap().record.context_digest = [0x93; 32];
     assert!(
         owner
-            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement8DerivedLro, context)
+            .start_replay_v1(PlaneOpeningReplayPurposeV1::Statement8Inputs, context)
             .is_err()
     );
     assert!(TEST_ZEROIZED_SNAPSHOT_HARNESSES_V1.load(Ordering::SeqCst) >= before + 2);
@@ -518,10 +462,14 @@ fn production_source_and_release_guards_are_static() {
         .split("pub(super) fn global_lookup_topology_digest_v1()")
         .nth(1)
         .unwrap()
-        .split("const fn endpoint_tag_v1")
+        .split("#[cfg(test)]")
         .next()
         .unwrap();
     assert!(!topology_body.contains("vector_arithmetic_plane_openings_v1"));
+    let registration = "#[path = \"vector_arithmetic_plane_openings_v1/ordered_snapshot_v1.rs\"]\nmod ordered_snapshot_v1;";
+    assert_eq!(production.matches(registration).count(), 1);
+    assert!(!production.contains(&format!("#[cfg(test)]\n{registration}")));
+    assert!(!production.contains("approved_snapshot_layout_v1"));
     assert!(!production.contains("std::path"));
     assert!(!production.contains("PathBuf"));
     assert!(!production.contains("ConfidentialSpoolSnapshotV1"));
@@ -540,12 +488,11 @@ fn production_source_and_release_guards_are_static() {
         assert!(production.contains(field));
     }
     assert_eq!((TRANSCRIPT_FRAMES_ADDED_V1, WIRE_BYTES_ADDED_V1), (0, 0));
-    assert!(!KAT_ORDINALS_CHANGED_V1);
     for gate in [
         CURRENT_UPSTREAM_COMPLETE_V1,
         PLANE_OPENING_MATERIALIZED_V1,
-        VECTOR_ARITHMETIC_PROOFS_WIRED_V1,
-        VECTOR_ARITHMETIC_PROOFS_VERIFIED_V1,
+        DIRECT_PRODUCT_SOURCE_REPLAYS_WIRED_V1,
+        COMPLETE_OPENING_EQUATIONS_VERIFIED_V1,
         ZERO_KNOWLEDGE_ACCEPTED_V1,
         OPERATIONAL_RECEIPT_ACCEPTED_V1,
         AUTHORITY_MINTED_V1,
@@ -554,5 +501,5 @@ fn production_source_and_release_guards_are_static() {
     ] {
         assert!(!gate);
     }
-    assert!(CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
+    assert!(!CURRENT_SINGLE_SNAPSHOT_BACKEND_FITS_V1);
 }

@@ -5,11 +5,10 @@ async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
         "derive unsigned alias lookup filtering authority fixture key",
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-warning-fanout"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(10),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");
@@ -48,11 +47,10 @@ async fn alias_lookup_by_account_rejects_unsigned_restricted_alias_lookup() {
         "derive alias lookup hidden-route authority fixture key",
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-denied-fanout"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(10),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");
     let request = routing::AliasLookupByAccountRequestDto {
@@ -88,11 +86,10 @@ async fn alias_lookup_by_account_rejects_invalid_auth_for_restricted_filter() {
         "derive invalid restricted alias lookup auth fixture key",
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-invalid-auth"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(10),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     let request = routing::AliasLookupByAccountRequestDto {
         account_id: authority.to_string(),
@@ -139,13 +136,15 @@ async fn alias_lookup_by_account_explicit_restricted_filter_requires_exact_resol
     let target =
         checked_torii_test_account_id(0x36, "derive alias lookup permission target fixture key");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-permission-fanout"));
-    let mut app =
-        mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_target_and_caller_bound_to_dataspace(
             &target,
             &caller,
             uaid,
             DataSpaceId::new(10),
-        ));
+        ),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &target, "merchant@restricted");
     let request = routing::AliasLookupByAccountRequestDto {
@@ -227,13 +226,15 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
     );
     let restricted_dataspace = DataSpaceId::new(10);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-permission-filter-fanout"));
-    let mut app =
-        mk_app_state_for_tests_with_world(world_with_target_and_caller_bound_to_dataspace(
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_target_and_caller_bound_to_dataspace(
             &target,
             &caller,
             uaid,
             restricted_dataspace,
-        ));
+        ),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &target, "merchant@restricted");
     bind_account_alias_for_test(&app, &target, "merchant@bank.restricted");
@@ -308,11 +309,10 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-lookup-offline"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(12),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(12)),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (_local_route, _foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(
                 &mut app,
@@ -396,7 +396,7 @@ async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
     let world = World::with([domain], [authority_account, account], []);
     let app = mk_app_state_for_tests_with_world(world);
     {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         let world = tx.world_mut_for_testing();
@@ -461,7 +461,7 @@ async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
     let authority_account = Account::new(authority.clone()).build(&authority);
     let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
     {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         tx.world_mut_for_testing()
@@ -632,7 +632,7 @@ async fn ram_lfe_program_policies_list_registered_program() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
@@ -719,7 +719,7 @@ async fn ram_lfe_execute_returns_receipt() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
@@ -792,7 +792,7 @@ async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
@@ -862,7 +862,7 @@ async fn ram_lfe_receipt_verify_rejects_expired_receipt() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_program_policy(&authority, &mut tx, &program_policy);
@@ -942,7 +942,7 @@ async fn identifier_policies_lists_registered_policy() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1012,7 +1012,7 @@ async fn identifier_policies_expose_programmed_ram_fhe_profile() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1129,14 +1129,7 @@ async fn identifier_resolve_returns_bound_account() {
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
-    let header = BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        None,
-        receipt.resolved_at_ms(),
-        0,
-    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1245,14 +1238,7 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
-    let header = BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        None,
-        receipt.resolved_at_ms(),
-        0,
-    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1356,14 +1342,7 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
-    let header = BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        None,
-        receipt.resolved_at_ms(),
-        0,
-    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1445,7 +1424,7 @@ async fn identifier_resolve_rejects_malformed_bfv_without_panicking() {
         .expect("unique app")
         .identifier_resolver = Some(resolver);
     {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         register_and_activate_identifier_policy_bundle(
@@ -1563,7 +1542,7 @@ async fn identifier_claim_receipt_normalizes_phone_input() {
     Arc::get_mut(&mut app)
         .expect("unique app")
         .identifier_resolver = Some(resolver.clone());
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1661,14 +1640,7 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
     let receipt_hash = receipt.payload.receipt_hash.to_string();
-    let header = BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        None,
-        receipt.resolved_at_ms(),
-        0,
-    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -2206,7 +2178,10 @@ async fn torii_norito_body_decodes_successful_responses() {
 }
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xBC; 32]);
     let routes = super::torii_all_dataspace_routes(app.as_ref());
@@ -2222,7 +2197,10 @@ async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unavailable_when_missing()
  {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let missing_id = ProofId {
@@ -2252,7 +2230,10 @@ async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unav
 }
 #[tokio::test]
 async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_only_unavailable() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (_local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let missing_id = ProofId {
@@ -2346,7 +2327,10 @@ async fn proof_record_get_advertises_cache_and_304() {
 }
 #[tokio::test]
 async fn public_proof_record_get_reads_global_protocol_artifacts_across_dataspaces() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xCD; 32]);
     let response = handler_proof_record_get(
@@ -2389,7 +2373,10 @@ async fn public_proof_record_get_reads_global_protocol_artifacts_across_dataspac
 }
 #[tokio::test]
 async fn proof_record_get_returns_not_found_when_all_routes_miss() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let missing_id = ProofId {
         backend: "stark/fri/poseidon-x7-goldilocks-6x64-v1-v1".to_owned(),
@@ -2431,14 +2418,7 @@ async fn proof_retention_status_reports_counts() {
     let boundary_height = current_height.saturating_sub(grace);
     let fresh_height = current_height;
     {
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("height>0"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         let mut insert_record = |proof_hash: [u8; 32], verified_at_height: u64| -> ProofId {

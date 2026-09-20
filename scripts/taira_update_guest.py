@@ -3,14 +3,19 @@
 
 Python reads public units/status and metadata only. Retained file metadata binds
 private configuration; the native daemon alone consumes config/key contents.
-No ledger removal, key/config rewrite, reset, signing, or transaction submission.
+No ledger removal, key/config rewrite, reset, or Python signing. An explicitly
+authorized native epoch supervisor owns ongoing maintenance transactions.
+Startup replay may expose a lower prefix; success still requires each retained
+checkpoint and a fresh anchored quorum. Heights within one process never regress.
 """
 import ast
 import base64
+import contextlib
 import hashlib
 import json
 import os
 import re
+import selectors
 from pathlib import Path
 import stat
 import subprocess
@@ -29,13 +34,18 @@ COHORT_OBSERVATION_SCHEMA = 'taira.cohort-observation-intent.v1'
 COHORT_REMAINING_ACTIONS = ('observe_cohort', 'verify_strict_restore',
                           'public_basic_doctor', 'publish_completion_receipts')
 FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
-                      'start-intent.json', 'failure.json')
+                      'start-intent.json', 'failure.json', 'epoch-supervisor-original.json',
+                      'epoch-supervisor-pause-intent.json', 'epoch-supervisor-paused.json')
 BOUND = False
+DEPLOYMENT_LOCK_FD = None
+SUPERVISOR_GUARD = None
+SUPERVISOR_GUARD_SEQUENCE = 0
+SUPERVISOR_NATIVE_SEQUENCE = 0
 
 
 def configure(plan):
     """Bind deployment-owned public paths once, before any guest observation."""
-    global BOUND, BASE, OLD, CANDIDATE_COMMIT, CONFIG_RELEASE, PREVIOUS_DAEMON, DAEMON, CLI
+    global BOUND, BASE, OLD, CANDIDATE_COMMIT, CONFIG_RELEASE, PREVIOUS_DAEMON, DAEMON, CLI, KAGAMI
     global ATTEMPT, NETWORK, ROLES, UNITS, REPLAY_BARRIER, PUBLIC_ORIGIN
     global STATE_ROOT, CONFIG_ROOT, GENESIS_MANIFEST, PORTS, PREDECESSOR
     need(not BOUND, 'one deployment per guest process')
@@ -52,6 +62,7 @@ def configure(plan):
     PREVIOUS_DAEMON = Path(installed['daemon'])
     DAEMON = BASE / ('release-' + plan['commit'] + '-' + plan['operation']) / 'bin/iroha3d_taira'
     CLI = DAEMON.with_name('iroha')
+    KAGAMI = DAEMON.with_name('kagami')
     ATTEMPT = BASE / plan['operation']
     NETWORK = deployment['network_id']
     ROLES = tuple(deployment['roles'])
@@ -68,6 +79,81 @@ ENV = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': '/root', 'LC_ALL': 'C'}
 def need(value, reason):
     if not value:
         raise RuntimeError(reason)
+
+
+def load_capacity(plan, capacity_source):
+    """Load only the source-bound maintained allocation evaluator."""
+    need(hashlib.sha256(capacity_source).hexdigest() == plan['capacity_sha256'],
+         'reviewed capacity checker changed')
+    capacity = {'__name__': 'taira_update_capacity'}
+    exec(compile(capacity_source, '<maintained-taira-capacity>', 'exec'), capacity)
+    return capacity
+
+
+def storage_capacity(plan, capacity_source, phase):
+    """Observe every allocating guest filesystem through the maintained checker."""
+    need(phase in ('prepare', 'apply'), 'unknown update storage phase')
+    capacity = load_capacity(plan, capacity_source)
+    identity = artifact_identity(plan['artifacts'])
+    runtime = plan['deployment']['runtime_root']
+    # Evidence allowances are explicit working budgets, not a promise that an
+    # arbitrary service can run forever without consuming its filesystem reserve.
+    requirements = [(runtime, 'update evidence and publication', 64 * 1024**2, 1024, 8)]
+    if phase == 'prepare':
+        requirements += [(runtime, 'candidate artifact ' + name, size, 1, 1)
+                         for name, _, _, size in identity]
+    else:
+        units = sum(len(base64.b64decode(row['after'], validate=True)) for row in plan['units'])
+        units += len(plan['epoch_supervisor']['after']['unit_bytes'].encode())
+        requirements += [
+            (str(SUPERVISOR_STATE_ROOT), 'supervisor publication', 64 * 1024**2, 1024, 8),
+            ('/etc/systemd/system', 'unit publication and rollback', 2 * units, 10, 0),
+            (plan['deployment']['state_root'], 'retained validator state', 0, 0, 0),
+        ]
+    allocations, observations = [], {}
+    for path, label, size, files, directories in requirements:
+        if path not in observations:
+            observations[path] = capacity['inspect_filesystem'](Path(path))
+        observed = observations[path]
+        bound = capacity['allocation_bound'](size, files, directories, observed['fragment_bytes'])
+        allocations.append(dict(path=path, label=label, **bound))
+    devices = set()
+    for path, observed in observations.items():
+        if observed['device'] not in devices:
+            allocations.append(dict(path=path, label='guest filesystem headroom',
+                                    bytes=2 * 1024**3, inodes=1024))
+            devices.add(observed['device'])
+    guest_plan = dict(schema=capacity['PLAN_SCHEMA'], allocations=allocations)
+    result = capacity['evaluate'](guest_plan, inspect=capacity['inspect_filesystem'])
+    need(result['passed'], 'insufficient guest capacity before ' + phase + ': ' + '; '.join(result['errors']))
+    need({row['device'] for row in result['filesystems']} == devices,
+         'guest allocation filesystems changed during admission')
+    guest_filesystems = {}
+    for path, observed in observations.items():
+        current = capacity['inspect_filesystem'](Path(path))
+        expected = {key: observed[key] for key in ('device', 'fragment_bytes')}
+        need({key: current[key] for key in expected} == expected,
+             'guest allocation path changed filesystem during admission')
+        guest_filesystems[path] = expected
+    return dict(schema='taira.update-storage-admission.v1', operation=plan['operation'],
+                commit=plan['commit'], phase=phase, capacity_sha256=plan['capacity_sha256'],
+                guest_plan=guest_plan, guest_capacity=result, guest_filesystems=guest_filesystems)
+
+
+def storage_capacity_locked(request):
+    """Return a metadata-only allocation observation under the existing update locks."""
+    plan = request['plan']
+    if request['phase'] == 'prepare':
+        # First supervisor installation needs the same root that transfer_code
+        # already creates for its deployment lock. Only coordination state is
+        # created before capacity admission; artifact/runtime writes wait.
+        for ancestor in SUPERVISOR_STATE_ROOT.parents:
+            stamp(ancestor, True)
+        SUPERVISOR_STATE_ROOT.mkdir(mode=0o700, exist_ok=True)
+    with deployment_locks(plan):
+        result = storage_capacity(plan, base64.b64decode(request['capacity_source'], validate=True),
+                                  request['phase'])
+    print(json.dumps(result), flush=True)
 
 
 def validate_failed_start_inputs(deployment, baseline, failed, records, operation,
@@ -91,11 +177,11 @@ def validate_failed_start_inputs(deployment, baseline, failed, records, operatio
                                                    separators=(',', ':')).encode()).hexdigest()},
         'failed-start completed predecessor proof differs')
     artifacts = failed.get('artifacts', [])
-    need([row.get('name') for row in artifacts] == ['iroha3d_taira', 'iroha']
+    need([row.get('name') for row in artifacts] == ['iroha3d_taira', 'iroha', 'kagami']
          and all(row.get('package') == package
                  and re.fullmatch('[0-9a-f]{64}', row.get('sha256', ''))
                  and type(row.get('size')) is int and 1_000_000 < row['size'] < 1024 ** 3
-                 for row, package in zip(artifacts, ('irohad', 'iroha_cli'), strict=True)),
+                 for row, package in zip(artifacts, ('irohad', 'iroha_cli', 'iroha_kagami'), strict=True)),
          'failed-start artifact identities differ')
     installed = {'commit': commit, 'attempt_name': attempt,
                  'daemon': str(Path(deployment['runtime_root']) /
@@ -123,8 +209,11 @@ def validate_failed_start_inputs(deployment, baseline, failed, records, operatio
         'units': units, 'automatic_old_binary_rollback_after_start': False},
         'failed-start startup marker differs')
     failure = records['failure.json']
-    need(set(failure) == {'error', 'new_start_attempted', 'installed_units'}
+    need(set(failure) == {'error', 'new_start_attempted', 'installed_units',
+                         'validator_stop_attempted', 'validator_stop_confirmed', 'epoch_supervisor_installed'}
          and isinstance(failure['error'], str) and failure['new_start_attempted'] is True
+         and failure['validator_stop_attempted'] is True
+         and failure['validator_stop_confirmed'] is True
          and failure['installed_units'] == roles, 'failed-start failure marker differs')
     before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
     need([row.get('role') for row in before] == roles
@@ -159,18 +248,65 @@ class FailedStartRecordBudget:
              'failed-start chain exceeds aggregate byte bound')
 
 
+def validate_retained_supervisor(failed, records, previous_plan):
+    """Authenticate original intent and the paused journal before replay recovery."""
+    value = validate_supervisor_update(failed['epoch_supervisor'], failed['deployment'],
+        failed['operation'], failed['commit'], failed['artifacts'])
+    need(failed['epoch_supervisor_installed'] == value['installed']
+         and records['failure.json']['epoch_supervisor_installed'] in (value['installed'], value['after']),
+         'failed-start supervisor installed closure differs')
+    original = records['epoch-supervisor-original.json']
+    need(isinstance(original, dict) and set(original) == {'original_service_state',
+        'successor_service_state', 'original_binding', 'installed_binding', 'journal_identity',
+        'native_preflight', 'native_observation'}
+        and original['original_service_state'] == value['original_service_state']
+        and original['successor_service_state'] == value['successor_service_state']
+        and original['original_binding'] == value['before']
+        and original['installed_binding'] == failed['epoch_supervisor_installed']
+        and isinstance(original['journal_identity'], list) and len(original['journal_identity']) == 2
+        and all(type(number) is int and number >= 0 for number in original['journal_identity']),
+        'failed-start supervisor original intent or journal identity differs')
+    if 'epoch_supervisor' in previous_plan:
+        previous = previous_plan['epoch_supervisor']
+        need(all(value[key] == previous[key] for key in
+                 ('original_service_state', 'successor_service_state', 'before')),
+             'failed-start supervisor ancestor changed original operator intent')
+    need(records['epoch-supervisor-pause-intent.json'] == {
+        'unit': SUPERVISOR_UNIT, 'operation': failed['operation'],
+        'original_service_state': original['original_service_state'],
+        'journal_identity': original['journal_identity']},
+        'failed-start supervisor pause intent differs')
+    paused = records['epoch-supervisor-paused.json']
+    need(isinstance(paused, dict) and set(paused) == {'operation', 'journal_identity', 'native_quiescence'}
+         and paused['operation'] == failed['operation']
+         and paused['journal_identity'] == original['journal_identity']
+         and isinstance(paused['native_quiescence'], dict),
+         'failed-start supervisor paused barrier differs')
+    for field, action in (('native_preflight', 'preflight'), ('native_observation', 'observe')):
+        report = supervisor_native_validate(json.dumps(original[field]).encode(), action, failed,
+                                            verify_current_journal=False)
+        need([report['journal']['device'], report['journal']['inode']] == original['journal_identity'],
+             'failed-start supervisor native original journal differs')
+    report = supervisor_native_validate(json.dumps(paused['native_quiescence']).encode(),
+        'quiescence', failed, verify_current_journal=False)
+    need([report['journal']['device'], report['journal']['inode']] == original['journal_identity']
+         and report['installed_policy_sha256'] == original['native_preflight']['installed_policy_sha256'],
+         'failed-start supervisor native paused journal or unit differs')
+
+
 def artifact_identity(artifacts):
     """Canonical identity ignores storage paths, never binary bytes or package identity."""
-    need(isinstance(artifacts, list) and len(artifacts) == 2,
-         'exact daemon and CLI artifacts required')
+    need(isinstance(artifacts, list) and len(artifacts) == 3,
+         'exact daemon, CLI and Kagami artifacts required')
     identity = []
     for row, (name, package) in zip(artifacts,
-            (('iroha3d_taira', 'irohad'), ('iroha', 'iroha_cli')), strict=True):
+            (('iroha3d_taira', 'irohad'), ('iroha', 'iroha_cli'),
+             ('kagami', 'iroha_kagami')), strict=True):
         need(row.get('name') == name and row.get('package') == package
              and isinstance(row.get('sha256'), str)
              and re.fullmatch('[0-9a-f]{64}', row['sha256'])
              and type(row.get('size')) is int and 1_000_000 < row['size'] < 1024 ** 3,
-             'invalid ordered daemon or CLI artifact identity')
+             'invalid ordered daemon, CLI or Kagami artifact identity')
         identity.append((name, package, row['sha256'], row['size']))
     return tuple(identity)
 
@@ -182,7 +318,7 @@ def validate_candidate_transition(commit, artifacts, completed_commit, installed
     candidate = artifact_identity(artifacts)
     if commit == installed_plan['commit']:
         need(candidate == artifact_identity(installed_plan['artifacts']),
-             'same source commit has different prepared daemon or CLI bytes')
+             'same source commit has different prepared daemon, CLI or Kagami bytes')
 
 
 def failed_attempt_reference_identity(reference):
@@ -251,6 +387,13 @@ def validate_failed_start_chain(reference, deployment, baseline, operation, load
         failed, records = load_attempt(ref)
         need(failed.get('operation') == ref['operation'], 'failed-start operation differs')
         validate_failed_start_prefix(failed, reference['attempts'][:index], installed)
+        if entries:
+            need(failed['epoch_supervisor']['installed'] ==
+                 entries[-1][1]['failure.json']['epoch_supervisor_installed'],
+                 'failed-start supervisor installed ancestry differs')
+        else:
+            need(failed['epoch_supervisor']['installed'] == failed['epoch_supervisor']['before'],
+                 'first failed-start supervisor differs from original installed binding')
         next_installed = validate_failed_start_inputs(
             deployment, baseline, failed, records, operation, previous_plan, installed)
         validate_candidate_transition(failed['commit'], failed['artifacts'],
@@ -258,6 +401,11 @@ def validate_failed_start_chain(reference, deployment, baseline, operation, load
         identity = artifact_identity(failed['artifacts'])
         need(source_artifacts.setdefault(failed['commit'], identity) == identity,
              'failed-start ancestry reused a source with different binary bytes')
+        validate_retained_supervisor(failed, records, previous_plan)
+        if entries:
+            need(records['epoch-supervisor-original.json']['journal_identity'] ==
+                 entries[0][1]['epoch-supervisor-original.json']['journal_identity'],
+                 'failed-start supervisor journal ancestry differs')
         before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
         if historical_health is None:
             historical_health = before
@@ -327,11 +475,13 @@ class NativeCommandFailure(RuntimeError):
 
 
 def command(argv, *, timeout=60, name=None, pass_fds=(), allowed_exit_codes=(0,)):
+    supervisor_guard_check()
     # Output may contain native configuration diagnostics; retain it privately,
     # never include arbitrary stderr/config-related output in the public report.
     result = subprocess.run(list(map(str, argv)), stdin=subprocess.DEVNULL,
                             capture_output=True, timeout=timeout, env=ENV,
                             pass_fds=pass_fds)
+    supervisor_guard_check()
     if name:
         write_new(ATTEMPT / (name + '.stdout'), result.stdout)
         write_new(ATTEMPT / (name + '.stderr'), result.stderr)
@@ -595,9 +745,9 @@ def snapshot_events(role, invocation):
 
 
 def native_kura_tip(role):
-    # Exact observed primary-lane hash journal; native tail/od project only the
+    # Exact observed chain-scoped hash journal; native tail/od project only the
     # final public 32-byte block hash. No ledger/state payload enters Python.
-    path = STATE_ROOT / role / 'storage/kura/blocks/lane_000_core/blocks.hashes'
+    path = STATE_ROOT / role / 'storage/kura/blocks/canonical/blocks.hashes'
     before = stamp(path)
     need(before[6] >= 32 and before[6] % 32 == 0, 'canonical Kura hash journal size differs')
     tail = subprocess.Popen(['/usr/bin/tail', '-c', '32', str(path)],
@@ -622,7 +772,7 @@ def native_kura_tip(role):
 def native_kura_hash(role, height):
     """Project one retained public hash; native tools alone read the journal."""
     need(role in ROLES and type(height) is int and height > 0, 'invalid retained Kura height')
-    path = STATE_ROOT / role / 'storage/kura/blocks/lane_000_core/blocks.hashes'
+    path = STATE_ROOT / role / 'storage/kura/blocks/canonical/blocks.hashes'
     before = stamp(path)
     need(before[6] >= height * 32, 'retained Kura height is missing')
     reader = subprocess.Popen(['/usr/bin/dd', 'if=' + str(path), 'bs=32',
@@ -735,6 +885,7 @@ def verify_restored_checkpoint(observation, checkpoint):
 
 
 def install_unit(path, raw, expected, mode):
+    supervisor_guard_check()
     need(path.read_bytes() == expected, 'installed unit changed before replacement')
     temporary = path.with_name(path.name + '.taira-update-next')
     write_new(temporary, raw, mode)
@@ -819,8 +970,9 @@ def observe_healthy_cohort(rows, before, *, after, commit, retained_tip,
     observations = []
     for index, (row, old, prior, minimum) in enumerate(zip(
             rows, before, verified, minimum_heights, strict=True)):
-        last_height = max(old['public']['height'],
-                          prior['public']['height'] if prior is not None and prior['public'] else 0)
+        # The stopped process's height is a completion target, not a lower
+        # bound for the new process's intermediate replay observations.
+        last_height = prior['public']['height'] if prior is not None and prior['public'] else 0
         new = observe(row, after=after, allow_unavailable=True,
                       expected_commit=commit, minimum_height=last_height)
         compare_retained_identity(old, new)
@@ -828,8 +980,6 @@ def observe_healthy_cohort(rows, before, *, after, commit, retained_tip,
         fresh = public is not None
         if fresh:
             need(public['commit'] == commit, 'candidate revision differs: ' + row['role'])
-            need(public['height'] >= old['public']['height'],
-                 'retained validator height regressed: ' + row['role'])
             if prior is not None and prior['public'] is not None:
                 need(public['height'] >= prior['public']['height'],
                      'committed catch-up height regressed: ' + row['role'])
@@ -998,6 +1148,569 @@ def cohort_observation_owner(pid=None):
             'argv': ['/usr/bin/python3', '-I', '-'], 'lock': {'device': device, 'inode': inode}}
 
 
+
+SUPERVISOR_UNIT = 'iroha-taira-epoch-supervisor.service'
+SUPERVISOR_STATE_ROOT = Path('/var/lib/taira-epoch-supervisor')
+SUPERVISOR_JOURNAL_DIR = SUPERVISOR_STATE_ROOT / 'journals'
+SUPERVISOR_READY_MAX_BYTES = 64 * 1024
+SUPERVISOR_BINDING_KEYS = frozenset({
+    'schema_version', 'release_source_commit', 'iroha_sha256', 'kagami_sha256',
+    'network_id', 'unit_spec', 'unit_bytes', 'unit_sha256', 'policy_bytes',
+    'policy_sha256', 'observation_trust_bytes', 'observation_trust_sha256',
+    'custody_bytes', 'custody_sha256',
+})
+
+
+def supervisor_argv(spec):
+    """Match the shared fixed public renderer without opening any input path."""
+    need(isinstance(spec, dict) and set(spec) == {
+        'schema_version', 'cli', 'admin_config', 'operator_key', 'policy', 'trust',
+        'custody', 'journal_dir', 'timeout_ms'}, 'supervisor unit spec fields differ')
+    need(type(spec['schema_version']) is int and spec['schema_version'] == 1
+         and type(spec['timeout_ms']) is int and 0 < spec['timeout_ms'] < 2 ** 64,
+         'supervisor unit version or finite timeout differs')
+    for key in ('cli', 'admin_config', 'operator_key', 'policy', 'trust', 'custody', 'journal_dir'):
+        raw = spec[key]
+        need(isinstance(raw, str) and re.fullmatch(r'/[A-Za-z0-9_./:@+-]+', raw)
+             and str(Path(raw)) == raw and '..' not in Path(raw).parts and '//' not in raw,
+             'unsafe supervisor literal path')
+    generation = Path(spec['policy']).parent
+    need(generation.parent == SUPERVISOR_STATE_ROOT / 'generations'
+         and re.fullmatch('[0-9a-f]{64}', generation.name)
+         and spec['journal_dir'] == str(SUPERVISOR_JOURNAL_DIR)
+         and Path(spec['cli']).name == 'iroha' and Path(spec['cli']).parent.name == 'bin',
+         'supervisor release or generation root differs')
+    for key, name in (('admin_config', 'administrator.toml'), ('operator_key', 'http-operator.key'),
+                      ('policy', 'policy.json'), ('trust', 'trust.json'), ('custody', 'custody.json')):
+        need(spec[key] == str(generation / name), 'supervisor generation file differs: ' + key)
+    return (spec['cli'], '--config', spec['admin_config'], '--operator-private-key-file',
+            spec['operator_key'], '--fee-payer', 'authority', 'taira', 'epoch-maintenance',
+            'supervise', '--policy', spec['policy'], '--trust', spec['trust'],
+            '--custody', spec['custody'], '--journal-dir', spec['journal_dir'],
+            '--timeout-ms', str(spec['timeout_ms']))
+
+
+def supervisor_public_json(raw):
+    """Decode only an explicitly public, bounded, duplicate-free projection."""
+    need(isinstance(raw, str) and 0 < len(raw.encode()) <= 1024 * 1024,
+         'invalid supervisor public projection size')
+    def unique(rows):
+        result = {}
+        for key, value in rows:
+            need(key not in result, 'duplicate supervisor public projection field')
+            result[key] = value
+        return result
+    return json.loads(raw, object_pairs_hook=unique)
+
+
+def validate_supervisor_binding(binding, commit, cli, kagami, network, artifacts=None):
+    """Bind public policy and unit structure; native preflight owns private custody."""
+    need(isinstance(binding, dict) and set(binding) == SUPERVISOR_BINDING_KEYS
+         and type(binding['schema_version']) is int and binding['schema_version'] == 1
+         and binding['release_source_commit'] == commit and binding['network_id'] == network,
+         'supervisor public binding fields or release differ')
+    spec = binding['unit_spec']
+    argv = supervisor_argv(spec)
+    need(argv[0] == str(cli), 'supervisor must use the exact admitted CLI path')
+    for field in ('iroha_sha256', 'kagami_sha256', 'unit_sha256', 'policy_sha256',
+                  'observation_trust_sha256', 'custody_sha256'):
+        need(isinstance(binding[field], str) and re.fullmatch('[0-9a-f]{64}', binding[field]),
+             'invalid supervisor digest: ' + field)
+    for stem in ('unit', 'policy', 'observation_trust', 'custody'):
+        raw = binding[stem + '_bytes']
+        need(isinstance(raw, str) and 0 < len(raw.encode()) <= 1024 * 1024
+             and hashlib.sha256(raw.encode()).hexdigest() == binding[stem + '_sha256'],
+             'supervisor public bytes differ: ' + stem)
+    need(Path(spec['policy']).parent.name == binding['policy_sha256'],
+         'supervisor generation does not bind exact raw policy')
+    policy = supervisor_public_json(binding['policy_bytes'])
+    need(isinstance(policy, dict) and set(policy) == {'schema_version', 'intent',
+        'release_source_commit', 'iroha_sha256', 'kagami', 'observation_trust_sha256',
+        'provision_timeout_ms'} and type(policy['schema_version']) is int
+        and policy['schema_version'] == 1 and policy['release_source_commit'] == commit
+        and policy['iroha_sha256'] == binding['iroha_sha256']
+        and policy['kagami'] == {'path': str(kagami), 'sha256': binding['kagami_sha256']}
+        and policy['observation_trust_sha256'] == binding['observation_trust_sha256']
+        and type(policy['provision_timeout_ms']) is int and 0 < policy['provision_timeout_ms'] < 2 ** 64,
+        'supervisor same-release policy differs')
+    intent = policy['intent']
+    need(isinstance(intent, dict) and set(intent) == {'authorization', 'network_id',
+        'administrator', 'payment_asset', 'transaction_fee_maximum', 'first_epoch',
+        'batch_epochs', 'operation_timeout_ms'} and intent['authorization'] == 'until_stopped'
+        and intent['network_id'] == network
+        and type(intent['first_epoch']) is int and 0 < intent['first_epoch'] < 2 ** 64
+        and type(intent['batch_epochs']) is int and 2 <= intent['batch_epochs'] <= 256
+        and type(intent['operation_timeout_ms']) is int and 0 < intent['operation_timeout_ms'] < 2 ** 64,
+        'explicit bounded ongoing supervisor authority required')
+    need(all(isinstance(intent[name], str) and intent[name] for name in
+             ('administrator', 'payment_asset', 'transaction_fee_maximum')),
+         'supervisor administrator or fee intent is absent')
+    trust = supervisor_public_json(binding['observation_trust_bytes'])
+    need(isinstance(trust, dict), 'supervisor observation trust must be public native JSON')
+    custody = supervisor_public_json(binding['custody_bytes'])
+    need(isinstance(custody, dict) and set(custody) == {'schema_version', 'seeds'}
+         and type(custody['schema_version']) is int and custody['schema_version'] == 1
+         and isinstance(custody['seeds'], list) and len(custody['seeds']) == 4,
+         'supervisor requires exact four-validator custody projection')
+    validators = []
+    for row in custody['seeds']:
+        need(isinstance(row, dict) and set(row) == {'validator', 'path'}
+             and isinstance(row['validator'], str) and row['validator']
+             and isinstance(row['path'], str) and Path(row['path']).is_absolute()
+             and str(Path(row['path'])) == row['path'] and '..' not in Path(row['path']).parts,
+             'invalid public seed custody reference')
+        validators.append(row['validator'])
+    need(len(set(validators)) == 4, 'duplicate supervisor validator custody')
+    if artifacts is not None:
+        identity = artifact_identity(artifacts)
+        need(identity[1][2] == binding['iroha_sha256'] and identity[2][2] == binding['kagami_sha256'],
+             'supervisor binaries differ from admitted update artifacts')
+    return binding
+
+
+def validate_supervisor_update(value, deployment, operation, commit, artifacts):
+    """Admit one explicit preprovisioned supervisor transition without host access."""
+    need(isinstance(value, dict) and set(value) == {'schema', 'operation',
+        'original_service_state', 'successor_service_state', 'before', 'installed', 'after', 'native_provisioning_receipt'}
+        and value['schema'] == 'taira.epoch-supervisor-update.v1'
+        and value['operation'] == operation
+        and value['original_service_state'] in ('absent', 'running', 'stopped')
+        and value['successor_service_state'] in ('running', 'stopped')
+        and (value['original_service_state'] == 'absent'
+             or value['successor_service_state'] == value['original_service_state'])
+        and ((value['before'] is None) == (value['original_service_state'] == 'absent')),
+        'explicit supervisor original intent and transition required')
+    previous = Path(deployment['current']['daemon'])
+    if value['before'] is not None:
+        validate_supervisor_binding(value['before'], deployment['current']['commit'],
+            previous.with_name('iroha'), previous.with_name('kagami'), deployment['network_id'])
+    installed = value['installed']
+    if installed is not None:
+        spec = installed['unit_spec']
+        validate_supervisor_binding(installed, installed['release_source_commit'], spec['cli'],
+            Path(spec['cli']).with_name('kagami'), deployment['network_id'])
+    release = Path(deployment['runtime_root']) / ('release-' + commit + '-' + operation) / 'bin'
+    validate_supervisor_binding(value['after'], commit, release / 'iroha', release / 'kagami',
+                                deployment['network_id'], artifacts)
+    receipt = value['native_provisioning_receipt']
+    need(isinstance(receipt, dict) and set(receipt) == {'path', 'sha256'}
+         and isinstance(receipt['path'], str)
+         and receipt['path'] == str(Path(value['after']['unit_spec']['policy']).parent / 'provisioning-receipt.json')
+         and isinstance(receipt['sha256'], str) and re.fullmatch('[0-9a-f]{64}', receipt['sha256']),
+         'exact native public provisioning receipt reference required')
+    return value
+
+
+def supervisor_worker(expected_argv):
+    """Bind the exact native worker without reading credentials or environment."""
+    props = systemd(SUPERVISOR_UNIT)
+    need(props['ActiveState'] == 'active' and props['SubState'] == 'running'
+         and props['ControlPID'] == '0' and re.fullmatch(r'0|[1-9][0-9]*', props['NRestarts'])
+         and re.fullmatch('[0-9a-f]{32}', props['InvocationID'])
+         and re.fullmatch('[1-9][0-9]*', props['MainPID']),
+         'epoch supervisor is not one stable running worker')
+    pid = int(props['MainPID'])
+    boot = read_bounded_proc(Path('/proc/sys/kernel/random/boot_id'), 64).decode('ascii').strip()
+    need(re.fullmatch('[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', boot),
+         'invalid epoch supervisor boot identity')
+    start = cohort_process_start_time(pid)
+    need(start > 0, 'invalid epoch supervisor start time')
+    process = Path('/proc') / str(pid)
+    raw = read_bounded_proc(process / 'cmdline', 16 * 1024)
+    expected = b'\0'.join(value.encode() for value in expected_argv) + b'\0'
+    need(raw == expected and os.readlink(process / 'exe') == expected_argv[0],
+         'epoch supervisor executable or argv differs')
+    need(systemd(SUPERVISOR_UNIT) == props and cohort_process_start_time(pid) == start
+         and read_bounded_proc(process / 'cmdline', 16 * 1024) == raw
+         and read_bounded_proc(Path('/proc/sys/kernel/random/boot_id'), 64).decode('ascii').strip() == boot
+         and os.readlink(process / 'exe') == expected_argv[0],
+         'epoch supervisor worker changed during observation')
+    return {'worker': {'boot_id': boot, 'pid': pid, 'start_time_ticks': start},
+            'systemd': props}
+
+
+def supervisor_public_ready_file(path):
+    """Read one root-owned public receipt through its held bounded descriptor."""
+    directory = stamp(path.parent, True)
+    need(stat.S_IMODE(directory[2]) == 0o700, 'unsafe supervisor journal directory mode')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(fd)
+        need(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and before.st_nlink == 1
+             and stat.S_IMODE(before.st_mode) == 0o600
+             and 0 < before.st_size <= SUPERVISOR_READY_MAX_BYTES,
+             'unsafe or oversized supervisor readiness receipt')
+        with os.fdopen(os.dup(fd), 'rb') as source:
+            raw = source.read(SUPERVISOR_READY_MAX_BYTES + 1)
+        after = os.fstat(fd)
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink',
+                  'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        need(all(getattr(before, field) == getattr(after, field) for field in fields)
+             and len(raw) == before.st_size
+             and (before.st_dev, before.st_ino) == tuple(stamp(path)[:2])
+             and stamp(path.parent, True)[:2] == directory[:2],
+             'supervisor readiness receipt changed during read')
+    finally:
+        os.close(fd)
+    def unique_pairs(rows):
+        result = {}
+        for key, value in rows:
+            need(key not in result, 'duplicate supervisor readiness field')
+            result[key] = value
+        return result
+    return json.loads(raw, object_pairs_hook=unique_pairs)
+
+
+def supervisor_ready_structure(policy_sha256, expected_argv, network_id):
+    """Revalidate native first-current-completion structure and exact worker custody.
+
+    Native code owns fresh four-peer finality authentication. This reader never
+    promotes a historical completion, verifies a proof in Python, or waits for
+    an artificial batch-end cursor before admitting the current worker.
+    """
+    need(re.fullmatch('[0-9a-f]{64}', policy_sha256), 'invalid supervisor policy digest')
+    before = supervisor_worker(expected_argv)
+    worker = before['worker']
+    need(isinstance(network_id, str) and '/' not in network_id and '\x00' not in network_id,
+         'invalid supervisor worker directory identity')
+    path = SUPERVISOR_JOURNAL_DIR / ('epoch-worker-' + network_id) / (
+        f"ready-{policy_sha256}-{worker['boot_id']}-{worker['pid']}-{worker['start_time_ticks']}.json")
+    try:
+        report = supervisor_public_ready_file(path)
+    except FileNotFoundError:
+        need(supervisor_worker(expected_argv) == before,
+             'supervisor worker changed while readiness was pending')
+        return None
+    need(isinstance(report, dict) and set(report) == {'schema_version', 'policy_sha256', 'worker',
+             'schedule_first_epoch', 'schedule_sha256', 'completion'}
+         and type(report['schema_version']) is int and report['schema_version'] == 1
+         and report['policy_sha256'] == policy_sha256 and report['worker'] == worker
+         and type(report['schedule_first_epoch']) is int and 0 <= report['schedule_first_epoch'] < 2 ** 64
+         and isinstance(report['schedule_sha256'], str) and re.fullmatch('[0-9a-f]{64}', report['schedule_sha256'])
+         and isinstance(report['worker'], dict)
+         and type(report['worker'].get('pid')) is int
+         and type(report['worker'].get('start_time_ticks')) is int,
+         'supervisor readiness policy or worker differs')
+    completion = report['completion']
+    need(isinstance(completion, dict) and set(completion) == {
+            'schema_version', 'network_id', 'target_epoch', 'transaction_hash',
+            'applied_height', 'parameter_sha256', 'carrier_sha256'}
+         and type(completion['schema_version']) is int and completion['schema_version'] == 1
+         and completion['network_id'] == network_id
+         and all(type(completion[name]) is int and 0 < completion[name] < 2 ** 64
+                 for name in ('target_epoch', 'applied_height'))
+         and all(isinstance(completion[name], str) and re.fullmatch('[0-9a-f]{64}', completion[name])
+                 for name in ('transaction_hash', 'parameter_sha256', 'carrier_sha256')),
+         'supervisor readiness lacks an exact native completion')
+    need(supervisor_worker(expected_argv) == before,
+         'supervisor worker changed after readiness read')
+    return {'path': str(path), 'worker': worker, 'observation': before, 'policy_sha256': policy_sha256,
+            'completion': completion, 'native_fresh_completion_claim': True,
+            'python_authenticated_finality': False}
+
+
+def supervisor_readiness(binding, deadline):
+    """Require fresh native Status proof in addition to the exact worker receipt."""
+    structure = supervisor_ready_structure(binding['policy_sha256'],
+        supervisor_argv(binding['unit_spec']), binding['network_id'])
+    if structure is None:
+        return None
+    spec, worker = binding['unit_spec'], structure['worker']
+    remaining_ms = min(spec['timeout_ms'], int((deadline - time.monotonic()) * 1000))
+    need(remaining_ms > 0, 'supervisor readiness original deadline exhausted')
+    argv = [spec['cli'], '--config', spec['admin_config'], '--operator-private-key-file',
+            spec['operator_key'], '--fee-payer', 'authority', 'taira', 'epoch-maintenance',
+            'supervisor-status', '--policy', spec['policy'], '--trust', spec['trust'],
+            '--journal-dir', spec['journal_dir'], '--boot-id', worker['boot_id'],
+            '--pid', str(worker['pid']), '--start-time-ticks', str(worker['start_time_ticks']),
+            '--timeout-ms', str(remaining_ms)]
+    raw = command(argv, timeout=remaining_ms / 1000, name='epoch-supervisor-authenticated-status')
+    need(0 < len(raw) <= SUPERVISOR_READY_MAX_BYTES, 'native supervisor status exceeds bound')
+    report = supervisor_public_json(raw.decode())
+    need(isinstance(report, dict) and set(report) == {'schema_version', 'policy_sha256',
+             'worker', 'initial_completion', 'current_completion'}
+         and type(report['schema_version']) is int and report['schema_version'] == 1
+         and report['policy_sha256'] == binding['policy_sha256'] and report['worker'] == worker
+         and report['initial_completion'] == structure['completion'],
+         'native supervisor status does not bind the observed initial completion')
+    current = report['current_completion']
+    need(isinstance(current, dict) and set(current) == set(structure['completion'])
+         and type(current['schema_version']) is int and current['schema_version'] == 1
+         and current['network_id'] == binding['network_id']
+         and all(type(current[key]) is int and 0 < current[key] < 2 ** 64
+                 for key in ('target_epoch', 'applied_height'))
+         and all(isinstance(current[key], str) and re.fullmatch('[0-9a-f]{64}', current[key])
+                 for key in ('transaction_hash', 'parameter_sha256', 'carrier_sha256')),
+         'native supervisor status current completion differs')
+    need(supervisor_worker(supervisor_argv(spec)) == structure['observation'],
+         'supervisor worker changed after native readiness authentication')
+    need(time.monotonic() < deadline, 'supervisor authentication exceeded original deadline')
+    return {'structure': structure, 'native_authenticated_status': report}
+
+
+def supervisor_native_argv(action, plan, timeout_ms):
+    """Bind one public wrapper and borrow the lifecycle deployment flock."""
+    need(action in ('preflight', 'observe', 'quiescence'),
+         'invalid read-only supervisor host action')
+    need(type(DEPLOYMENT_LOCK_FD) is int and DEPLOYMENT_LOCK_FD >= 0,
+         'supervisor native operation lacks held deployment flock')
+    need(not os.path.lexists(SUPERVISOR_STATE_ROOT / '.reset-owner.json'),
+         'retained reset owner blocks updater; read-only reconciliation required')
+    wrapper = ATTEMPT / 'epoch-supervisor-wrapper.json'
+    expected = (json.dumps(plan['epoch_supervisor'], sort_keys=True) + '\n').encode()
+    need(stamp(wrapper)[6] == len(expected) and wrapper.read_bytes() == expected,
+         'supervisor public wrapper changed')
+    return [CLI, 'taira', 'public-reset', 'epoch-supervisor-host', action,
+            '--wrapper', wrapper, '--timeout-ms', str(timeout_ms),
+            '--deployment-lock-fd', str(DEPLOYMENT_LOCK_FD)]
+
+
+def supervisor_native_validate(raw, action, plan, *, verify_current_journal=True):
+    """Bind the helper's public receipt; the native helper authenticates custody."""
+    need(action in ('preflight', 'observe', 'quiescence'), 'unexpected supervisor action')
+    need(0 < len(raw) <= SUPERVISOR_READY_MAX_BYTES,
+         'native supervisor public report exceeds bound')
+    report = supervisor_public_json(raw.decode())
+    wrapper = plan['epoch_supervisor']
+    after, installed = wrapper['after'], wrapper['installed']
+    installed_sha = None if installed is None else installed['policy_sha256']
+    allowed = (installed_sha,) if action == 'preflight' else (installed_sha, after['policy_sha256'])
+    need(isinstance(report, dict) and set(report) == {'schema', 'action', 'operation',
+        'policy_sha256', 'unit_sha256', 'provisioning_receipt', 'installed_policy_sha256',
+        'journal', 'worker', 'status', 'service_state'}
+        and report['schema'] == 'iroha.taira.epoch-supervisor-host.v1'
+        and report['action'] == action and report['operation'] == plan['operation']
+        and report['policy_sha256'] == after['policy_sha256']
+        and report['unit_sha256'] == after['unit_sha256']
+        and report['provisioning_receipt'] == wrapper['native_provisioning_receipt']
+        and report['installed_policy_sha256'] in allowed and report['status'] is None
+        and report['service_state'] in ('running', 'stopped', 'absent')
+        and ((report['installed_policy_sha256'] is None) == (report['service_state'] == 'absent'))
+        and (action != 'quiescence' or report['service_state'] != 'running')
+        and (action != 'observe' or ((report['worker'] is not None) == (report['service_state'] == 'running'))),
+        'native supervisor host receipt binding differs')
+    journal = report['journal']
+    need(isinstance(journal, dict) and set(journal) == {'path', 'device', 'inode', 'uid', 'gid', 'mode'}
+         and journal['path'] == str(SUPERVISOR_JOURNAL_DIR)
+         and all(type(journal[field]) is int for field in ('device', 'inode', 'uid', 'gid', 'mode'))
+         and journal['device'] >= 0 and journal['inode'] > 0
+         and journal['uid'] == journal['gid'] == 0 and journal['mode'] == 0o700,
+         'native supervisor journal custody differs')
+    if verify_current_journal:
+        actual = stamp(SUPERVISOR_JOURNAL_DIR, True)
+        need([journal['device'], journal['inode']] == actual[:2]
+             and stat.S_IMODE(actual[2]) == 0o700 and actual[3:5] == [0, 0],
+             'native supervisor journal identity changed')
+    worker = report['worker']
+    if worker is not None:
+        need(action == 'observe' and report['installed_policy_sha256'] is not None
+             and isinstance(worker, dict) and set(worker) == {
+                 'boot_id', 'pid', 'start_time_ticks', 'invocation_id', 'n_restarts'}
+             and isinstance(worker['boot_id'], str)
+             and re.fullmatch('[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', worker['boot_id'])
+             and isinstance(worker['invocation_id'], str) and re.fullmatch('[0-9a-f]{32}', worker['invocation_id'])
+             and type(worker['pid']) is int and 0 < worker['pid'] < 2 ** 32
+             and type(worker['start_time_ticks']) is int and 0 < worker['start_time_ticks'] < 2 ** 64
+             and type(worker['n_restarts']) is int and 0 <= worker['n_restarts'] < 2 ** 64,
+             'native supervisor worker observation differs')
+    return report
+
+
+def supervisor_native_report(action, plan):
+    global SUPERVISOR_NATIVE_SEQUENCE
+    SUPERVISOR_NATIVE_SEQUENCE += 1
+    need(action != 'quiescence', 'quiescence requires a retained native guard')
+    raw = command(supervisor_native_argv(action, plan, 90000),
+                  timeout=90, name=f'epoch-supervisor-native-{action}-{SUPERVISOR_NATIVE_SEQUENCE}',
+                  pass_fds=(DEPLOYMENT_LOCK_FD,))
+    return supervisor_native_validate(raw, action, plan)
+
+
+def supervisor_guard_check():
+    if SUPERVISOR_GUARD is not None:
+        need(SUPERVISOR_GUARD.poll() is None,
+             'native supervisor journal guard exited before deliberate release')
+
+
+def supervisor_guard_acquire(plan):
+    """Keep the native journal flock held across the whole paused transition."""
+    global SUPERVISOR_GUARD, SUPERVISOR_GUARD_SEQUENCE
+    need(SUPERVISOR_GUARD is None, 'supervisor journal guard already held')
+    timeout_ms = (COHORT_MAX_TIMEOUT_SECONDS + 600) * 1000
+    argv = supervisor_native_argv('quiescence', plan, timeout_ms)
+    SUPERVISOR_GUARD_SEQUENCE += 1
+    err_fd = os.open(ATTEMPT / f'epoch-supervisor-quiescence-{SUPERVISOR_GUARD_SEQUENCE}.stderr',
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        child = subprocess.Popen(list(map(str, argv)), stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=err_fd, env=ENV,
+            pass_fds=(DEPLOYMENT_LOCK_FD,))
+    finally:
+        os.close(err_fd)
+    SUPERVISOR_GUARD = child
+    try:
+        deadline = time.monotonic() + 90
+        raw = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            while not raw.endswith(b'\n'):
+                supervisor_guard_check()
+                remaining = deadline - time.monotonic()
+                need(remaining > 0, 'native journal guard admission timed out')
+                need(selector.select(remaining), 'native journal guard admission timed out')
+                value = os.read(child.stdout.fileno(), 1)
+                need(value and len(raw) < SUPERVISOR_READY_MAX_BYTES,
+                     'native journal guard receipt is missing or oversized')
+                raw.extend(value)
+        report = supervisor_native_validate(bytes(raw), 'quiescence', plan)
+        supervisor_guard_check()
+        record(f'epoch-supervisor-quiescence-{SUPERVISOR_GUARD_SEQUENCE}.json', report)
+        return report
+    except BaseException:
+        supervisor_guard_release(require_success=False)
+        raise
+
+
+def supervisor_guard_release(*, require_success=True):
+    """EOF is the only normal native guard release; never release parent flock."""
+    global SUPERVISOR_GUARD
+    child = SUPERVISOR_GUARD
+    if child is None:
+        return
+    SUPERVISOR_GUARD = None
+    premature = child.poll() is not None
+    child.stdin.close()
+    try:
+        code = child.wait(timeout=30)
+        if require_success:
+            with selectors.DefaultSelector() as selector:
+                selector.register(child.stdout, selectors.EVENT_READ)
+                need(selector.select(0) and os.read(child.stdout.fileno(), 1) == b'',
+                     'native journal guard emitted unexpected data or retained stdout after EOF')
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait(timeout=30)
+        if require_success:
+            raise RuntimeError('native journal guard failed to release after EOF')
+        return
+    finally:
+        child.stdout.close()
+    if require_success:
+        need(not premature and code == 0,
+             'native journal guard did not retain custody until deliberate release')
+
+
+def supervisor_installed_binding(plan):
+    """Observe the exact public unit that actually survived partial publication."""
+    path = Path('/etc/systemd/system') / SUPERVISOR_UNIT
+    installed = plan['epoch_supervisor']['installed']
+    if not os.path.lexists(path):
+        need(installed is None, 'installed supervisor unit disappeared')
+        return None
+    before = stamp(path)
+    raw = path.read_bytes()
+    need(before == stamp(path), 'supervisor unit changed during installed observation')
+    for binding in (installed, plan['epoch_supervisor']['after']):
+        if binding is not None and raw == binding['unit_bytes'].encode():
+            return binding
+    raise RuntimeError('supervisor installed unit is outside admitted predecessor/successor closure')
+
+
+def supervisor_capture(plan):
+    """Retain original operator intent independently from later paused observations."""
+    native = supervisor_native_report('preflight', plan)
+    observed = supervisor_native_report('observe', plan)
+    journal = stamp(SUPERVISOR_JOURNAL_DIR, True)
+    need(stat.S_IMODE(journal[2]) == 0o700, 'supervisor journal must remain root-private')
+    need(observed['installed_policy_sha256'] == native['installed_policy_sha256'],
+         'supervisor installed unit changed during original capture')
+    original = {'original_service_state': plan['epoch_supervisor']['original_service_state'],
+                'successor_service_state': plan['epoch_supervisor']['successor_service_state'],
+                'original_binding': plan['epoch_supervisor']['before'],
+                'installed_binding': plan['epoch_supervisor_installed'],
+                'journal_identity': journal[:2], 'native_preflight': native,
+                'native_observation': observed}
+    if 'failed_start' in plan:
+        prior = plan['failed_start']['attempts'][0]
+        retained = retained_public_record(BASE / prior['operation'], 'epoch-supervisor-original.json')
+        need(original['original_service_state'] == retained['original_service_state']
+             and original['successor_service_state'] == retained['successor_service_state']
+             and original['original_binding'] == retained['original_binding']
+             and original['journal_identity'] == retained['journal_identity'],
+             'supervisor recovery changed original operator intent or journal identity')
+    record('epoch-supervisor-original.json', original)
+    return original
+
+
+def supervisor_pause(plan, original):
+    """One durable stop attempt; an ambiguous reply admits read-only recovery only."""
+    record('epoch-supervisor-pause-intent.json', {
+        'unit': SUPERVISOR_UNIT, 'operation': plan['operation'],
+        'original_service_state': original['original_service_state'],
+        'journal_identity': original['journal_identity']})
+    if original['installed_binding'] is not None:
+        command(['/usr/bin/systemctl', 'stop', SUPERVISOR_UNIT], timeout=45,
+                name='epoch-supervisor-stop')
+    paused = supervisor_guard_acquire(plan)
+    need(paused['installed_policy_sha256'] == original['native_preflight']['installed_policy_sha256'],
+         'supervisor unit changed between original capture and pause')
+    need(stamp(SUPERVISOR_JOURNAL_DIR, True)[:2] == original['journal_identity'],
+         'supervisor journal replaced during pause')
+    record('epoch-supervisor-paused.json', {
+        'operation': plan['operation'], 'journal_identity': original['journal_identity'],
+        'native_quiescence': paused})
+
+
+def supervisor_contain(plan):
+    """Contain the candidate even when evidence publication has already failed."""
+    command(['/usr/bin/systemctl', 'stop', SUPERVISOR_UNIT], timeout=45,
+            name='epoch-supervisor-containment-stop')
+    if SUPERVISOR_GUARD is None:
+        return supervisor_guard_acquire(plan)
+    supervisor_guard_check()
+    return {'native_guard_retained': True}
+
+
+def supervisor_resume(plan, original):
+    """Publish the bound successor after cohort qualification; preserve stopped intent."""
+    binding = plan['epoch_supervisor']['after']
+    supervisor_native_report('preflight', plan)
+    supervisor_guard_check()
+    need(SUPERVISOR_GUARD is not None, 'supervisor publication requires held journal guard')
+    path = Path('/etc/systemd/system') / SUPERVISOR_UNIT
+    before = plan['epoch_supervisor_installed']
+    raw = binding['unit_bytes'].encode()
+    record('epoch-supervisor-unit-intent.json', {'before_sha256': None if before is None else before['unit_sha256'],
+        'after_sha256': binding['unit_sha256'], 'operation': plan['operation']})
+    if before is None:
+        need(not os.path.lexists(path), 'first supervisor install found existing unit')
+        write_new(path, raw, 0o644)
+    else:
+        install_unit(path, raw, before['unit_bytes'].encode(), 0o644)
+    command(['/usr/bin/systemctl', 'daemon-reload'], name='epoch-supervisor-reload')
+    need(stamp(SUPERVISOR_JOURNAL_DIR, True)[:2] == original['journal_identity'],
+         'supervisor journal changed before resume')
+    if original['successor_service_state'] == 'stopped':
+        supervisor_guard_check()
+        return {'original_service_state': original['original_service_state'],
+                'successor_service_state': 'stopped', 'running': False, 'native_guard_retained': True}
+    need(original['successor_service_state'] == 'running', 'supervisor resume lacks explicit running intent')
+    record('epoch-supervisor-start-intent.json', {'unit': SUPERVISOR_UNIT,
+        'operation': plan['operation'], 'policy_sha256': binding['policy_sha256'],
+        'journal_identity': original['journal_identity']})
+    deadline = time.monotonic() + min(binding['unit_spec']['timeout_ms'] / 1000, 90)
+    supervisor_guard_release()
+    command(['/usr/bin/systemctl', 'start', SUPERVISOR_UNIT],
+            timeout=min(45, max(0.001, deadline - time.monotonic())), name='epoch-supervisor-start')
+    while True:
+        ready = supervisor_readiness(binding, deadline)
+        need(time.monotonic() < deadline, 'supervisor readiness exceeded original startup deadline')
+        if ready is not None:
+            return {'original_service_state': original['original_service_state'],
+                    'successor_service_state': 'running', 'running': True, 'readiness': ready}
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
+
+
 def stopped_owner_maintenance(operation):
     """Let the native custody owner retire only the proven stopped cohort."""
     request_name = 'stopped-owner-maintenance-request.json'
@@ -1128,8 +1841,11 @@ def retained_attempt(plan):
             for checkpoint in records['checkpoint-stopped.json']:
                 require_retained_tip(checkpoint['role'], checkpoint['kura_tip'])
         installed_plan, records = entries[-1]
+        need(plan['epoch_supervisor']['installed'] == records['failure.json']['epoch_supervisor_installed'],
+             'retained supervisor installed closure differs from recovery plan')
         for artifact, path in zip(installed_plan['artifacts'],
-                                  (PREVIOUS_DAEMON, PREVIOUS_DAEMON.with_name('iroha')), strict=True):
+                                  (PREVIOUS_DAEMON, PREVIOUS_DAEMON.with_name('iroha'),
+                                   PREVIOUS_DAEMON.with_name('kagami')), strict=True):
             need(native_digest(path) == artifact['sha256'] and stamp(path)[6] == artifact['size'],
                  'failed-start installed artifact differs')
         before, checkpoints = records['before.json'], records['checkpoint-stopped.json']
@@ -1141,17 +1857,18 @@ def retained_attempt(plan):
     return before, checkpoints
 
 
-def apply(plan):
+def apply(plan, capacity_source):
     configure(plan)
     need(os.geteuid() == 0 and plan['network_id'] == NETWORK, 'guest or network differs')
     need(plan['commit'] != PREDECESSOR['commit'], 'candidate cannot repeat the completed runtime')
     need(tuple(row['role'] for row in plan['units']) == ROLES, 'four ordered roles required')
-    need([row['name'] for row in plan['artifacts']] == ['iroha3d_taira', 'iroha'],
-         'exact candidate daemon and same-revision CLI required')
+    need([row['name'] for row in plan['artifacts']] == ['iroha3d_taira', 'iroha', 'kagami'],
+         'exact same-release daemon, CLI and Kagami required')
+    capacity_before = storage_capacity(plan, capacity_source, 'apply')
     retained = retained_attempt(plan)
     # Installed unit bytes and retained config/state metadata bind the old cohort.
     # A crash-looping peer need not answer HTTP before the cohort is stopped.
-    for artifact, path in zip(plan['artifacts'], (DAEMON, CLI), strict=True):
+    for artifact, path in zip(plan['artifacts'], (DAEMON, CLI, KAGAMI), strict=True):
         need(native_digest(path) == artifact['sha256'], 'candidate digest differs')
         need(stamp(path)[6] == artifact['size'], 'candidate size differs')
         candidate_fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
@@ -1165,6 +1882,8 @@ def apply(plan):
     ATTEMPT.mkdir(mode=0o700)
     sync(BASE)
     record('intent.json', plan)
+    record('capacity-before-apply.json', capacity_before)
+    record('epoch-supervisor-wrapper.json', plan['epoch_supervisor'])
     # --version reports package semver, not a source commit. The candidate digest
     # binds the approved build here; /status verifies actual source after start.
     version = command([DAEMON, '--version'], name='candidate-version').decode()
@@ -1195,11 +1914,19 @@ def apply(plan):
     command(['/usr/bin/systemd-analyze', 'verify',
              *[ATTEMPT / (f'iroha3d-{row["role"]}.service') for row in plan['units']]],
             name='verify-units')
-    record('stop-intent.json', {'units': UNITS, 'configuration_or_ledger_mutation': False})
+    record('capacity-before-stop.json', storage_capacity(plan, capacity_source, 'apply'))
+    original_supervisor = supervisor_capture(plan)
     installed = []
     new_start_attempted = False
+    validator_stop_attempted = False
+    validator_stop_confirmed = False
     try:
+        supervisor_pause(plan, original_supervisor)
+        supervisor_guard_check()
+        record('stop-intent.json', {'units': UNITS, 'configuration_or_ledger_mutation': False})
+        validator_stop_attempted = True
         stopped = stop_all()
+        validator_stop_confirmed = True
         record('stopped.json', {'all_four_stopped': True, 'observations': stopped})
         for row, state in zip(before, stopped, strict=True):
             row['systemd'] = state['systemd']
@@ -1209,6 +1936,7 @@ def apply(plan):
         record('checkpoint-stopped.json', checkpoints)
         retained_tip = verify_stopped_cohort_prefixes(checkpoints)
         record('cohort-retained-tip.json', retained_tip)
+        supervisor_guard_check()
         stopped_owner_maintenance(plan['operation'])
         for row, original in zip(plan['units'], before, strict=True):
             path = Path('/etc/systemd/system') / f'iroha3d-{row["role"]}.service'
@@ -1263,7 +1991,10 @@ def apply(plan):
         record('cohort-ready.json', {'retained_tip': retained_tip, 'observations': final,
                                      'quorum_confirmations': final_samples,
                                      'startup_processes_unchanged': True})
-        result = {'schema': 'taira.daemon-update.result.v1', 'runtime_update_complete': True,
+        supervisor_result = supervisor_resume(plan, original_supervisor)
+        verify_cohort_processes(final, startup_processes)
+        record('epoch-supervisor-result.json', supervisor_result)
+        result = {'epoch_supervisor': supervisor_result, 'schema': 'taira.daemon-update.result.v1', 'runtime_update_complete': True,
                   'commit': plan['commit'], 'network_id': NETWORK, 'state_preserved': True,
                   'canary_applied_verified': False, 'application_ready': False,
                   'retained_native_snapshot_verified': True,
@@ -1275,27 +2006,35 @@ def apply(plan):
                   'historical_genesis_replay_supported': False,
                   'historical_replay_limitation': 'Preserve the authenticated current snapshot at or after the deployment replay floor. No historical blocks were rewritten.',
                   'next_action': 'prove a fresh signed transaction Applied under the new runtime'}
+        supervisor_guard_release()
         record('result.json', result)
         print(json.dumps(result), flush=True)
     except BaseException as error:
         try:
             record('failure.json', {'error': str(error), 'new_start_attempted': new_start_attempted,
-                                   'installed_units': [row['role'] for row in installed]})
+                'validator_stop_attempted': validator_stop_attempted,
+                'validator_stop_confirmed': validator_stop_confirmed,
+                'epoch_supervisor_installed': supervisor_installed_binding(plan),
+                'installed_units': [row['role'] for row in installed]})
         finally:
-            # Evidence storage failure must never suppress process containment.
+            # Guard failure must not suppress either independent containment action.
+            supervisor_guard_release(require_success=False)
             if new_start_attempted:
                 # Keep the failed candidate and its retained state for diagnosis,
                 # while preventing the service supervisor from repeating failures.
                 # The caller still owns the deployment lock throughout containment.
-                command(['/usr/bin/systemctl', 'stop', *UNITS], timeout=150,
-                        name='failed-start-stop')
+                try:
+                    supervisor_contain(plan)
+                finally:
+                    command(['/usr/bin/systemctl', 'stop', *UNITS], timeout=150,
+                            name='failed-start-stop')
                 stopped = [{'unit': unit, 'systemd': systemd(unit)} for unit in UNITS]
                 need(all(row['systemd']['MainPID'] == row['systemd']['ControlPID'] == '0'
                          and row['systemd']['ActiveState'] in ('inactive', 'failed')
                          for row in stopped), 'failed candidate cohort stop incomplete')
                 record('failed-start-stopped.json', {'all_four_stopped': True,
                                                    'observations': stopped})
-            else:
+            elif validator_stop_confirmed:
                 # No new daemon was allowed to execute retained state. Restore all
                 # old units, including any replacement completed before an I/O error.
                 for row, original in zip(plan['units'], before, strict=True):
@@ -1315,23 +2054,96 @@ def apply(plan):
                          'rollback did not retain the paused cohort: ' + unit)
                     restored.append({'unit': unit, 'systemd': state})
                 record('rollback.json', {'restored_previous_stopped_cohort': True,
-                                         'old_daemons_restarted': False, 'observations': restored})
+                    'old_daemons_restarted': False, 'supervisor_remains_paused': True,
+                    'observations': restored})
+            else:
+                # An ambiguous stop is never retried. Before-stop failures leave
+                # validators untouched; partial-stop failures require read-only
+                # manager reconciliation and admit no unit or state mutation.
+                record('reconciliation-required.json', {
+                    'validator_stop_attempted': validator_stop_attempted,
+                    'validator_stop_confirmed': False, 'recovery_only': True,
+                    'automatic_manager_retry': False})
+            supervisor_guard_release(require_success=False)
         raise
 
 
-def apply_locked(plan):
-    """Serialize the proven cohort transition across all local coordinators."""
+def verify_prepared_artifacts(plan):
+    """Observe all three preprovisioned binaries; never create or replace one."""
     import fcntl
-    root = Path(plan['deployment']['runtime_root'])
-    stamp(root, True)
-    path = root / '.routine-update.lock'
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    need(os.geteuid() == 0, 'artifact verification requires root')
+    identity = artifact_identity(plan['artifacts'])
+    need(re.fullmatch('[0-9a-f]{40}', plan['commit'])
+         and re.fullmatch('update-[0-9a-f]{32}', plan['operation']), 'invalid prepared operation')
+    root = stamp(SUPERVISOR_STATE_ROOT, True)
+    need(stat.S_IMODE(root[2]) == 0o700 and root[4] == 0, 'supervisor state root custody differs')
+    path = SUPERVISOR_STATE_ROOT / '.deployment.lock'
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
     try:
         before = os.fstat(fd)
-        need(stat.S_ISREG(before.st_mode) and before.st_uid == 0 and before.st_nlink == 1
-             and stat.S_IMODE(before.st_mode) == 0o600, 'invalid guest update lock')
+        need(stat.S_ISREG(before.st_mode) and before.st_uid == before.st_gid == 0
+             and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) == 0o600,
+             'invalid prepared artifact deployment lock')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        need((before.st_dev, before.st_ino) == tuple(stamp(path)[:2]), 'guest update lock changed')
-        apply(plan)
+        need((before.st_dev, before.st_ino) == tuple(stamp(path)[:2]), 'artifact deployment lock changed')
+        need(not os.path.lexists(SUPERVISOR_STATE_ROOT / '.reset-owner.json'),
+             'retained reset owner blocks artifact admission')
+        base = Path(plan['deployment']['runtime_root'])
+        release = base / ('release-' + plan['commit'] + '-' + plan['operation'])
+        for directory in (base, release, release / 'bin'):
+            metadata = stamp(directory, True)
+            need(metadata[4] == 0 and stat.S_IMODE(metadata[2]) == 0o700,
+                 'prepared artifact root custody differs')
+        for name, package, digest, size in identity:
+            binary = release / 'bin' / name
+            metadata = stamp(binary)
+            need(metadata[4] == 0 and stat.S_IMODE(metadata[2]) == 0o755
+                 and metadata[6] == size and native_digest(binary) == digest
+                 and stamp(binary) == metadata, 'preprovisioned candidate bytes or custody differ')
+        print(json.dumps({'schema': 'taira.prepared-update-artifacts.v1',
+            'operation': plan['operation'], 'commit': plan['commit'], 'artifacts': plan['artifacts'],
+            'runtime_mutated': False}), flush=True)
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def deployment_locks(plan):
+    """Hold the same two exact owner locks for storage admission and mutation."""
+    import fcntl
+    global DEPLOYMENT_LOCK_FD
+    held = []
+    try:
+        for root, name in ((Path(plan['deployment']['runtime_root']), '.routine-update.lock'),
+                           (SUPERVISOR_STATE_ROOT, '.deployment.lock')):
+            metadata = stamp(root, True)
+            if root == SUPERVISOR_STATE_ROOT:
+                need(stat.S_IMODE(metadata[2]) == 0o700 and metadata[4] == 0,
+                     'supervisor state root custody differs')
+            path = root / name
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            held.append(fd)
+            before = os.fstat(fd)
+            need(stat.S_ISREG(before.st_mode) and before.st_uid == before.st_gid == 0
+                 and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) == 0o600,
+                 'invalid guest deployment lock')
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            need((before.st_dev, before.st_ino) == tuple(stamp(path)[:2]),
+                 'guest deployment lock changed')
+        DEPLOYMENT_LOCK_FD = held[-1]
+        need(not os.path.lexists(SUPERVISOR_STATE_ROOT / '.reset-owner.json'),
+             'retained reset owner blocks updater; never reclaim or clear it')
+        yield
+    finally:
+        DEPLOYMENT_LOCK_FD = None
+        for fd in reversed(held):
+            os.close(fd)
+
+
+def apply_locked(plan, capacity_source):
+    """Hold both update flocks across pause, publication, resume and containment."""
+    with deployment_locks(plan):
+        try:
+            apply(plan, capacity_source)
+        finally:
+            supervisor_guard_release(require_success=False)

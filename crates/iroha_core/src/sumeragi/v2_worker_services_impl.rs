@@ -71,7 +71,7 @@ impl ProductionV2Services {
         runtime_capacity_available: bool,
     ) -> Result<V2CompletionRuntimeCutDecisionV1, String> {
         if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+            return Err(self.output_guard.restart_error());
         }
         let runtime_cut = |cut_at| {
             V2CompletionRuntimeCutDecisionV1::Runtime(V2CompletionRuntimeCutV1::new(
@@ -125,15 +125,11 @@ impl ProductionV2Services {
         // they are already retained on this serialized service. A full FIFO
         // therefore permits one relief step at the present cut; otherwise the
         // next Completion turn can consume them directly.
-        if !self.local_completions.is_empty() {
+        if let Some(completion) = self.available_local_completion() {
             if runtime_capacity_available {
                 return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
             }
-            let blocked_ordinal = self
-                .local_completions
-                .front()
-                .expect("non-empty local completion queue has a head")
-                .runtime_lifecycle_ordinal();
+            let blocked_ordinal = completion.runtime_lifecycle_ordinal();
             return capacity_relief_cut(Instant::now(), blocked_ordinal);
         }
 
@@ -611,7 +607,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         let Some(fanout) = self.recovered_decision_fetch_fanout(owner)? else {
             operation.complete();
             return Ok(true);
@@ -1361,7 +1357,7 @@ impl ProductionV2Services {
         let construction_guard = Arc::clone(&output_guard);
         let construction = construction_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| construction_guard.restart_error())?;
         if consensus_io_capacity == 0 || auxiliary_io_capacity == 0 || orphan_chunk_capacity == 0 {
             return Err("Sumeragi v2 service queue capacities must be non-zero".to_owned());
         }
@@ -1415,6 +1411,14 @@ impl ProductionV2Services {
             max_messages_per_fanout,
             max_peers_per_fanout,
             &timeout_certificate_targets,
+        )?;
+        // Terminal diagnostics do not enter the Ready-output scheduler again.
+        // Rebuild their bounded local custody before starting worker I/O, using
+        // this service's already validated context and complete roster PoPs.
+        super::evidence::recover_context_lifecycle_equivocations(
+            state.as_ref(),
+            &context,
+            &validator_set_pops,
         )?;
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
@@ -1498,9 +1502,9 @@ impl ProductionV2Services {
             return Err("Sumeragi v2 proposal work is terminal after Decision".to_owned());
         }
         let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
-        })?;
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| output_guard.restart_error())?;
         let sender = self
             .local_validator
             .ok_or_else(|| "observer cannot disperse a Sumeragi v2 proposal".to_owned())?;
@@ -1808,7 +1812,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         if tag.height() != self.context.height
             || round.context_id != self.context.id()
             || round.height != self.context.height
@@ -2057,7 +2061,7 @@ impl ProductionV2Services {
         subject: wire::BlockSubject,
     ) -> Result<(), String> {
         if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+            return Err(self.output_guard.restart_error());
         }
         self.locked_candidate_acquisition
             .as_mut()
@@ -2082,7 +2086,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         if let Some(existing) = self
             .merge_sidecar_deferrals
             .iter()
@@ -2154,7 +2158,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
             .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         if let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt() {
             if self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {
                 self.leader_wire_ingress
@@ -2557,7 +2561,7 @@ impl ProductionV2Services {
         executor: &mut V2EffectExecutor<R>,
     ) -> Result<usize, String> {
         if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+            return Err(self.output_guard.restart_error());
         }
         self.sweep_buffered_payload_chunk_lifecycles(executor)?;
         let ready = self
@@ -2801,8 +2805,7 @@ impl ProductionV2Services {
                         completion: None,
                         retained_runtime: false,
                     } if runtime_capacity_available => self
-                        .local_completions
-                        .front()
+                        .available_local_completion()
                         .cloned()
                         .map_or_else(IoCompletionTake::unavailable, |completion| {
                             IoCompletionTake::ready(PendingServiceCompletion::Local(completion))
@@ -2810,7 +2813,7 @@ impl ProductionV2Services {
                     completion => completion,
                 },
                 CompletionSource::Local if runtime_capacity_available => {
-                    self.local_completions.front().cloned().map_or_else(
+                    self.available_local_completion().cloned().map_or_else(
                         || self.take_io_completion(true),
                         |completion| {
                             IoCompletionTake::ready(PendingServiceCompletion::Local(completion))
@@ -2893,11 +2896,11 @@ impl ProductionV2Services {
         &mut self,
     ) -> Result<bool, String> {
         if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+            return Err(self.output_guard.restart_error());
         }
         if self.held_io_completion.is_none()
             && self.next_completion_source == CompletionSource::Local
-            && !self.local_completions.is_empty()
+            && self.available_local_completion().is_some()
         {
             return Ok(true);
         }
@@ -2905,11 +2908,11 @@ impl ProductionV2Services {
             return Ok(!completion.is_dedicated_lifecycle_completion());
         }
         let Some(io) = self.io.as_ref() else {
-            return Ok(!self.local_completions.is_empty());
+            return Ok(self.available_local_completion().is_some());
         };
         let completion = match io.try_recv_completion_unacknowledged() {
             Ok(completion) => completion,
-            Err(_) => return Ok(!self.local_completions.is_empty()),
+            Err(_) => return Ok(self.available_local_completion().is_some()),
         };
         let ordinary = !completion.is_dedicated_lifecycle_completion();
         assert!(
@@ -2931,11 +2934,11 @@ impl ProductionV2Services {
         &mut self,
     ) -> Result<LifecycleCompletionTakeV1, String> {
         if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+            return Err(self.output_guard.restart_error());
         }
         if self.held_io_completion.is_none()
             && self.next_completion_source == CompletionSource::Local
-            && !self.local_completions.is_empty()
+            && self.available_local_completion().is_some()
         {
             return Ok(LifecycleCompletionTakeV1::PassThrough);
         }
@@ -2947,7 +2950,7 @@ impl ProductionV2Services {
                 return Ok(LifecycleCompletionTakeV1::None);
             };
             let Ok(completion) = io.try_recv_completion_unacknowledged() else {
-                return if self.local_completions.is_empty() {
+                return if self.available_local_completion().is_none() {
                     Ok(LifecycleCompletionTakeV1::None)
                 } else {
                     Ok(LifecycleCompletionTakeV1::PassThrough)
@@ -3086,7 +3089,7 @@ impl ProductionV2Services {
         &mut self,
     ) -> Result<RecoveredLifecycleSignCompletionDrainV1, String> {
         if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+            return Err(self.output_guard.restart_error());
         }
         let take = self.take_recovered_lifecycle_sign_completion();
         let Some(PendingServiceCompletion::Io {
@@ -3112,7 +3115,7 @@ impl ProductionV2Services {
         &mut self,
     ) -> Result<LifecycleCertifiedServeCompletionDrainV1, String> {
         if self.output_guard.restart_required() {
-            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+            return Err(self.output_guard.restart_error());
         }
         let take = self.take_lifecycle_certified_serve_completion();
         let Some(PendingServiceCompletion::Io {
@@ -3152,8 +3155,8 @@ impl ProductionV2Services {
         limit: usize,
     ) -> Result<V2CompletionDrainOutcome, EffectExecutorError> {
         if self.output_guard.restart_required() {
-            return Err(executor
-                .external_service_failed("Sumeragi v2 consensus requires process restart", self));
+            let reason = self.output_guard.restart_error();
+            return Err(executor.external_service_failed(&reason, self));
         }
         let mut count = 0usize;
         let mut attempts = 0usize;
@@ -3697,7 +3700,7 @@ impl ProductionV2Services {
     fn output_permit(&self) -> Result<ConsensusOutputPermit<'_>, String> {
         self.output_guard
             .acquire()
-            .ok_or_else(|| "Sumeragi v2 canonical persistence requires restart recovery".to_owned())
+            .ok_or_else(|| self.output_guard.restart_error())
     }
     fn lock_pending_exact_output(
         &self,
@@ -4336,7 +4339,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         let mut released_kura_replica_advert_heights = BTreeSet::new();
         let outcome = self.kura_replica_advert_refresh.drive_turn(
             now,
@@ -4365,7 +4368,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         let mut released_kura_replica_advert_heights = BTreeSet::new();
         let pending_remains = {
             let mut pending = self.lock_pending_exact_output()?;
@@ -4393,7 +4396,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         self.validate_applied_height_output_handoff_authority(receipt, artifact)?;
         let (retired, retired_kura_replica_advert_heights) = {
             let mut pending = self.lock_pending_exact_output()?;
@@ -4439,7 +4442,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         self.validate_applied_height_output_handoff_authority(receipt, artifact)?;
         let retired = {
             let mut pending = self.lock_pending_exact_output()?;
@@ -4965,7 +4968,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         self.io()?.enqueue(command)?;
         operation.complete();
         Ok(())
@@ -5021,7 +5024,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         if reply_routes.is_empty() {
             iroha_logger::debug!(
                 "deferred certified Sumeragi v2 response after all retained reply routes retired"
@@ -5230,7 +5233,7 @@ impl ProductionV2Services {
         let operation = self
             .output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         if !message.is_lane_local() {
             return Err("v2 lane transport rejected a non-lane block message".to_owned());
         }
@@ -5277,7 +5280,7 @@ impl ProductionV2Services {
         let operation = self
             .output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         match (&reply_routes, &ingress_ownership) {
             (Some(routes), Some(ownership))
                 if ownership.validate_exact() && ownership.matches_reply_routes(Some(routes)) => {}
@@ -5368,7 +5371,7 @@ impl ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| self.output_guard.restart_error())?;
         let route_shape_is_valid = match message.as_ref() {
             CertifiedMergeSidecarMessage::Request(_) | CertifiedMergeSidecarMessage::Close(_) => {
                 reply_routes.is_none()

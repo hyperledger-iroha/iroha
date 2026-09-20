@@ -1630,7 +1630,7 @@ canonical Kagemusha share/QC boundary tests add two more names in the existing
 v2 module. Two historical autonomous hydration capacity regressions add two
 names in the existing lane-work module, bringing the
 current inventory to 881
-exact tests across 43 modules and 84 pre-network legs.
+exact tests across 43 modules and 88 pre-network legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
 identical periodic rediscovery even after live tag authority is relinquished,
@@ -1897,7 +1897,7 @@ three-per-materialized-authenticated-non-validator owners (`5N+3H` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-84 legs, including the governance-unlock audit module, the autonomous
+88 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
@@ -2489,18 +2489,27 @@ canonical JSON v1 file whose exact top-level fields are `approval_id`,
 `evidence_root_id`, `expected_duration_seconds`, `format`, `operations`,
 `profile`, `protected_tool_manifest_sha256`, and `schema_version`. Each ordered
 operation has exactly `arguments`, `operation_id`, `ordinal`, and `tool_id`.
-The four immutable inventories contain 23, 38, 7, and 8 operations,
+The four immutable inventories contain 23, 38, 8, and 8 operations,
 respectively; the canonical ordered IDs are recorded in the
 [multilane rehearsal runbook](runbooks/nexus_multilane_rehearsal.md#protected-release-approval-contract)
 and source-bound by `sumeragi_v2_release_approval_contract.py`. The canonical
 ordered operation-record SHA-256 values, in the same class order, are
 `782a3d17c988a4f99ee8ed8addc5a8311771809c07e8f4730c121e2d21b3ee96`,
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
-`a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`,
+`9df5a8d32471bd8cdecc654a8146f380597a1ca3c1824942aadbbbc8a1be2388`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
 The validator and receipt writer derive these exact cardinalities from the
-candidate-bound plans, so an unplanned eighth `network-scale-soak` operation
-is rejected without changing the authoritative seven-operation digest.
+candidate-bound plans, so an unplanned ninth `network-scale-soak` operation
+is rejected without changing the authoritative eight-operation digest.
+The three ordered scaling obligations belong to `release-bootstrap`: complete
+original-parent preflight and its retained archive; fixed five-paired-trial
+collection with the admitted plan, budget, launch descriptor and runtime seed
+owner; then complete archive inspection, all measured criteria, ten native
+archive replay checks and retained parent-record publication. These normalized
+records bind protected authorization to the current parent semantics. Actual
+execution uses the fixed descriptor-based collector launch and publishes
+`scaling-execution.json`; descriptor numbers and seed bytes never enter an
+operator approval record.
 
 An approval file must be owner-held, mode `0400`, single-link, bounded,
 canonical, and below trusted non-writable ancestry. Its command records use
@@ -2518,19 +2527,28 @@ granted an approval and does not by itself close a release gate.
 A production run cannot be started by invoking the candidate runner directly.
 The release operator first authenticates an out-of-tree copy of
 `bootstrap_sumeragi_v2_release.py`, the protected Python, Git, OpenSSH
-`ssh-keygen`, and Bash executables, the manifest and identity helpers, the SSH
+`ssh-keygen`, and Bash 5-or-newer executables, the manifest and identity helpers, the SSH
 allowed-signers and revocation policies, the receipt validator's localnet
 manifest support module, the private-runtime copy/prune helper, and every
 expected SHA-256 digest and signer fingerprint. The bootstrap archives that
 support module as the receipt validator's exact sibling so the validator can
-load it without consulting the working directory or `PYTHONPATH`. The
-protected interpreter must start in
-isolated, no-site mode; the evidence parent must already be owner-owned mode
+load it without consulting the working directory or `PYTHONPATH`. Both runner
+profiles reject Bash older than version 5 before launching any helper: the
+release channel requires dynamic descriptor-close scopes. The selected Bash
+still needs actual socket and saved-descriptor qualification for exec'ed
+helpers, including helpers launched from command or process substitutions and
+EXIT cleanup; a version check alone does not establish that boundary. The
+authenticated runner, its digest-pinned sourced support, and its Bash forks
+share gate authority. Temporary descriptor-close scopes do not isolate shell
+builtins in command substitutions, process substitutions, or parenthesized
+subshells from saved aliases, and must not be described as broader child
+isolation. The designated handoff is followed by permanent gate closure. The protected interpreter must start in
+isolated, no-bytecode, no-site mode (`-I -B -S`); the evidence parent must already be owner-owned mode
 `0700`, and the requested evidence child must not exist. The complete
 invocation passes those protected paths and digests explicitly, for example:
 
 ```bash
-/protected/python3 -I -S /protected/bootstrap_sumeragi_v2_release.py \
+/protected/python3 -I -B -S /protected/bootstrap_sumeragi_v2_release.py \
   --candidate-root /candidate/iroha \
   --evidence-dir /private/preexisting-parent/new-release-evidence \
   --expected-bootstrap-sha256 <sha256> \
@@ -2607,7 +2625,7 @@ runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
-receipt binds the 84 pre-network corridor legs and
+receipt binds the 88 pre-network corridor legs and
 their exact 881-test production inventory, the separate 531-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.

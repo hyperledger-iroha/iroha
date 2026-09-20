@@ -112,7 +112,9 @@ fn merge_carrier_alignment_rejects_equal_length_sequence_mismatch() {
 }
 #[test]
 fn retained_merge_reference_survives_remote_only_body_eviction() {
-    let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(nonzero!(2_usize));
+    let directory = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&directory, nonzero!(2_usize));
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     let mut generator = DummyBlocks::new();
     let genesis = generator.next();
     let mut entry = sample_merge_entry(1);
@@ -844,6 +846,11 @@ fn store_block_with_merge_entry_counts_budget() {
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
             .expect("initialize kura");
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::new(),
+    );
     let baseline = canonical_storage_budget_base_for_test(&kura);
     let association_stage_required = kura
         .canonical_association_stage_additional_bytes(block.as_ref(), None)
@@ -873,6 +880,11 @@ fn store_block_with_merge_entry_counts_budget() {
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
             .expect("initialize kura");
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::new(),
+    );
     let baseline = canonical_storage_budget_base_for_test(&kura);
     let parent_association_stage_required = kura
         .canonical_association_stage_additional_bytes(parent.as_ref(), None)
@@ -896,7 +908,10 @@ fn store_block_with_merge_entry_counts_budget() {
     let err = kura
         .store_block_with_merge_entry(block, &entry)
         .expect_err("transient pending/log duplication should exceed budget");
-    assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    assert!(
+        matches!(err, Error::StorageBudgetExceeded { .. }),
+        "unexpected storage rejection: {err:?}"
+    );
 }
 #[test]
 fn store_block_rejects_when_storage_exceeds_budget() {
@@ -910,6 +925,11 @@ fn store_block_rejects_when_storage_exceeds_budget() {
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
             .expect("initialize kura");
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &RuntimeLaneConfig::default(),
+        &BTreeMap::new(),
+    );
     let baseline = canonical_storage_budget_base_for_test(&kura);
     let block1_peak = block1_required.saturating_add(
         kura.canonical_association_stage_additional_bytes(block1.as_ref(), None)
@@ -926,7 +946,10 @@ fn store_block_rejects_when_storage_exceeds_budget() {
     let err = kura
         .store_block(block2)
         .expect_err("stored bytes should exceed budget");
-    assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    assert!(
+        matches!(err, Error::StorageBudgetExceeded { .. }),
+        "unexpected storage rejection: {err:?}"
+    );
 }
 #[test]
 fn store_block_rejects_when_single_block_exceeds_budget() {
@@ -1141,8 +1164,13 @@ fn replace_top_block_rejects_when_replacement_exceeds_budget() {
     let lane_entry = lane_config
         .entry(ownership.lane_id)
         .expect("default lane is configured");
-    kura.install_lane_incarnation_marker_for_test(lane_entry, ownership.lane_incarnation, 0)
-        .expect("install default lane marker");
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &lane_config,
+        &BTreeMap::from([(lane_entry.lane_id, ownership.lane_incarnation)]),
+    );
+    kura.restore_published_lane_geometry_for_test(&lane_config)
+        .expect("publish exact initial route");
     let small_bytes = kura
         .block_required_bytes_for_budget(&small_block, None, u64::MAX)
         .expect("small bytes");
@@ -1222,9 +1250,7 @@ fn store_block_rejects_when_sidecar_bytes_exceed_budget() {
     Arc::get_mut(&mut kura)
         .expect("exclusive kura handle")
         .max_disk_usage_bytes = exact_limit;
-    let blocks_dir = RuntimeLaneConfig::default()
-        .primary()
-        .blocks_dir(temp_dir.path());
+    let blocks_dir = Kura::canonical_storage_paths(temp_dir.path()).0;
     let pipeline_dir = blocks_dir.join(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
     std::fs::write(pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE), [0u8; 1])
@@ -1399,9 +1425,7 @@ fn kura_disk_usage_includes_temp_and_debug_files() {
         Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &RuntimeLaneConfig::default())
             .expect("initialize kura");
     let base = kura.disk_usage_bytes().expect("base usage");
-    let blocks_dir = RuntimeLaneConfig::default()
-        .primary()
-        .blocks_dir(temp_dir.path());
+    let blocks_dir = Kura::canonical_storage_paths(temp_dir.path()).0;
     let debug_path = kura
         .block_plain_text_path
         .lock()
@@ -1457,9 +1481,7 @@ fn purge_retired_segments_removes_retired_dir() {
         .refresh_total_disk_usage_bytes()
         .expect("measure total baseline");
     let retired_root = temp_dir.path().join("retired");
-    let retired_dir = RuntimeLaneConfig::default()
-        .primary()
-        .blocks_dir(&retired_root);
+    let retired_dir = retired_root.join("blocks/unowned-accounting-fixture");
     std::fs::create_dir_all(&retired_dir).expect("create retired block store");
     std::fs::write(retired_dir.join(DATA_FILE_NAME), [0u8; 11])
         .expect("write budgeted retired bytes");
@@ -1831,9 +1853,7 @@ fn retired_geometry_evidence_is_accounted_and_never_purged_as_unowned_segments()
         authenticated_journal
     );
     let retired_root = temp_dir.path().join("retired");
-    let retired_blocks = RuntimeLaneConfig::default()
-        .primary()
-        .blocks_dir(&retired_root);
+    let retired_blocks = retired_root.join("blocks/unowned-accounting-fixture");
     std::fs::create_dir_all(&retired_blocks).expect("create unowned retired blocks");
     std::fs::write(retired_blocks.join(DATA_FILE_NAME), [0u8; 3])
         .expect("write unowned retired block bytes");
@@ -1884,18 +1904,38 @@ fn store_block_rejects_when_other_lane_storage_exceeds_budget() {
     let exact_limit = canonical_storage_budget_base_for_test(&kura)
         .saturating_add(budget_limit)
         .saturating_add(association_stage_required);
+    let lane1_entry = kura
+        .lane_storage_entry(LaneId::from(1))
+        .expect("exact lane 1 identity");
+    let (certificate, signer_pops) = sample_committed_lane_block_session_for_kura(
+        lane1_entry.lane_id,
+        lane1_entry.dataspace_id,
+        1,
+    );
+    kura.persist_committed_lane_block_session(&certificate, &signer_pops)
+        .expect("store actual authenticated lane-1 evidence before reducing capacity");
+    let lane1_before = snapshot_regular_files_recursively(&lane1_entry.blocks_dir(&store_root));
+    assert!(
+        canonical_storage_budget_base_for_test(&kura)
+            .saturating_add(budget_limit)
+            .saturating_add(association_stage_required)
+            > exact_limit
+    );
     Arc::get_mut(&mut kura)
         .expect("exclusive kura handle")
         .max_disk_usage_bytes = exact_limit;
-    let lane1_entry = lane_config.entry(LaneId::from(1)).expect("lane 1 entry");
-    let lane1_blocks = lane1_entry.blocks_dir(&store_root);
-    std::fs::write(lane1_blocks.join(DATA_FILE_NAME), [0u8; 1]).expect("seed lane1 data");
-    kura.refresh_disk_usage_bytes()
-        .expect("refresh disk usage after lane1 seed");
     let err = kura
         .store_block(block)
         .expect_err("lane 1 bytes should exceed budget");
-    assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+    assert!(
+        matches!(err, Error::StorageBudgetExceeded { .. }),
+        "unexpected storage rejection: {err:?}"
+    );
+    assert_eq!(
+        snapshot_regular_files_recursively(&lane1_entry.blocks_dir(&store_root)),
+        lane1_before,
+        "budget rejection cannot reclaim live lane-1 evidence"
+    );
 }
 #[test]
 fn store_block_reclaims_retired_storage_when_budget_exceeded() {
@@ -1916,8 +1956,7 @@ fn store_block_reclaims_retired_storage_when_budget_exceeded() {
         .saturating_add(budget_limit)
         .saturating_add(association_stage_required);
     let retired_root = temp_dir.path().join("retired");
-    let lane_cfg = RuntimeLaneConfig::default();
-    let retired_dir = lane_cfg.primary().blocks_dir(&retired_root);
+    let retired_dir = retired_root.join("blocks/unowned-accounting-fixture");
     std::fs::create_dir_all(&retired_dir).expect("create retired dir");
     std::fs::write(retired_dir.join(DATA_FILE_NAME), [0u8; 1]).expect("seed retired file");
     kura.refresh_disk_usage_bytes()
@@ -2003,10 +2042,10 @@ fn store_block_with_merge_entry_repairs_post_commit_append_failure_on_exact_retr
     {
         let index = kura.transaction_entrypoint_index.lock();
         assert!(
-            index.complete,
-            "the combined ordinary/merge index becomes complete only after repair"
+            !index.complete,
+            "physical merge repair cannot authorize the replacement Network index"
         );
-        assert!(index.incomplete_merge_heights.is_empty());
+        assert!(index.incomplete_heights.contains(&nonzero!(2_usize)));
     }
 }
 #[test]
@@ -2122,6 +2161,9 @@ fn startup_repairs_each_block_first_merge_publication_crash_window() {
         let block = bind_merge_entry_to_carrier(blocks.next_with_results(), &mut entry);
         let block_hash = block.hash();
         kura.store_block(parent).expect("store carrier parent");
+        // Only a finalized predecessor may be promoted into the query index
+        // during restart; the incomplete merge carrier remains unindexed.
+        persist_v2_finality_chain_through(&kura, nonzero!(1_usize));
         kura.persist_pending_certified_merge_entry(&entry)
             .expect("stage exact recovery sidecar");
         let write_guard = kura.lock_block_store_for_write();
@@ -2172,16 +2214,20 @@ fn startup_repairs_each_block_first_merge_publication_crash_window() {
             "restart must retire the exact pending sidecar at crash window {published_merge_parts}"
         );
         let transaction_index = reopened.transaction_entrypoint_index.lock();
-        assert!(transaction_index.complete);
-        assert!(transaction_index.incomplete_merge_heights.is_empty());
-        assert_eq!(transaction_index.indexed_heights.len(), 2);
+        assert!(!transaction_index.complete);
+        assert!(
+            transaction_index
+                .incomplete_heights
+                .contains(&nonzero!(2_usize))
+        );
+        assert_eq!(transaction_index.indexed_heights.len(), 1);
         assert!(
             transaction_index
                 .indexed_heights
                 .contains(&nonzero!(1_usize))
         );
         assert!(
-            transaction_index
+            !transaction_index
                 .indexed_heights
                 .contains(&nonzero!(2_usize))
         );
@@ -2199,7 +2245,7 @@ fn merge_log_truncated_when_block_store_pruned() {
             .expect("initialize authenticated empty Kura");
     assert_eq!(initial_count.0, 0);
     publish_initial_configured_lane_geometry_for_test(&initial, &lane_cfg, &BTreeMap::new());
-    let merge_path = lane_cfg.primary().merge_log_path(initial.store_root());
+    let merge_path = Kura::canonical_storage_paths(&initial.store_root()).1;
     drop(initial);
     {
         let mut merge_log = MergeLedgerLog::open_at(&merge_path, MERGE_LEDGER_CACHE_CAPACITY)
@@ -2664,9 +2710,11 @@ fn unknown_marker_resolution_applies_or_discards_lane_association_stage() {
         let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         config.fsync_mode = FsyncMode::Batched;
         config.fsync_interval = Duration::from_secs(60);
+        let network_id;
         {
             let (kura, _) =
                 test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+            network_id = kura.bound_lane_storage_network().unwrap();
             let block = dummy_block_with_lane_payload_ownership(
                 lane_id,
                 DataSpaceId::UNIVERSAL,
@@ -2692,7 +2740,7 @@ fn unknown_marker_resolution_applies_or_discards_lane_association_stage() {
             assert!(kura.block_height_index.lock().is_empty());
             let transaction_index = kura.transaction_entrypoint_index.lock();
             assert!(transaction_index.indexed_heights.is_empty());
-            assert!(transaction_index.incomplete_merge_heights.is_empty());
+            assert!(transaction_index.incomplete_heights.is_empty());
             assert!(transaction_index.heights_by_entrypoint.is_empty());
             drop(transaction_index);
             assert_eq!(
@@ -2723,6 +2771,12 @@ fn unknown_marker_resolution_applies_or_discards_lane_association_stage() {
         )
         .expect("startup resolves lane association stage by marker");
         assert_eq!(count.0, usize::from(new_marker_won));
+        assert!(reopened.lane_storage_entries.lock().is_empty());
+        assert!(!reopened.canonical_association_stage_path().exists());
+        reopened.bind_lane_storage_network(network_id).unwrap();
+        reopened
+            .restore_published_lane_geometry_for_test(&RuntimeLaneConfig::default())
+            .expect("restore the original geometry before querying active associations");
         assert_eq!(
             reopened
                 .read_lane_block_artifact(lane_id, lane_block_height)
@@ -2734,7 +2788,7 @@ fn unknown_marker_resolution_applies_or_discards_lane_association_stage() {
 }
 
 #[test]
-fn finalized_merge_retry_preserves_exact_complete_transaction_index() {
+fn finalized_merge_retry_keeps_retired_network_projection_incomplete() {
     for append_tail in [false, true] {
         let dir = TempDir::new().expect("create exact merge retry root");
         let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
@@ -2758,8 +2812,7 @@ fn finalized_merge_retry_preserves_exact_complete_transaction_index() {
                     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
                     .unpack(|_| {})
                     .into();
-            tail.set_transaction_results(Vec::new(), &[], Vec::new())
-                .expect("attach the exact empty ordinary results");
+            install_network_index_test_outputs(&mut tail, Vec::new());
             tail.replace_signatures(BTreeSet::from([BlockSignature::new(
                 0,
                 SignatureOf::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), &tail.header()),
@@ -2768,7 +2821,7 @@ fn finalized_merge_retry_preserves_exact_complete_transaction_index() {
             kura.store_block(Arc::new(tail))
                 .expect("advance beyond finalized carrier");
         }
-        let expected = Some(BTreeSet::from([nonzero!(2_usize)]));
+        let expected = None;
         assert_eq!(
             kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
             expected
@@ -2780,7 +2833,7 @@ fn finalized_merge_retry_preserves_exact_complete_transaction_index() {
             assert_eq!(
                 kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
                 expected,
-                "retry must preserve the complete transaction index, append_tail={append_tail}"
+                "retry must not restore the retired merge transaction projection, append_tail={append_tail}"
             );
             assert_eq!(kura.merge_log.lock().total_entries, frame_count);
             assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
@@ -2804,14 +2857,15 @@ fn finalized_merge_retry_rejects_corrupt_finality_before_republishing_index() {
         .expect("indexed merge entry");
     assert_eq!(
         kura.get_block_heights_by_entrypoint_hash(entrypoint_hash),
-        Some(BTreeSet::from([nonzero!(2_usize)]))
+        None,
+        "a finalized merge sidecar is not a canonical Network source"
     );
     let index_census = || {
         let index = kura.transaction_entrypoint_index.lock();
         (
             index.complete,
             index.heights_by_entrypoint.clone(),
-            index.incomplete_merge_heights.clone(),
+            index.incomplete_heights.clone(),
         )
     };
     let original_index = index_census();

@@ -85,3 +85,37 @@ The scope is never inferred from absent files. `inrou` is rejected as an old
 spelling, an incomplete `full_inrou` budget fails, and a core budget with supplied
 Inrou inputs fails. Both scopes retain the same source/build identity, complete
 artifact-role, available-inode and physical backing checks.
+
+
+## Routine updater binding and admission
+
+The current `taira.runtime-deployment.v1` record requires `backing_ssh` (the
+approved Mac SSH argument vector and pinned host-key records) and `backing_path`
+(the canonical absolute VM backing directory), alongside its pinned guest route.
+The updater rejects missing, partial, or unknown fields. Author the explicit
+binding locally into a fresh record with the maintained command:
+
+```sh
+python3 scripts/taira_update.py --bind-backing-storage \
+  --deployment /owner/source-deployment.json \
+  --backing-route /owner/approved-mac-route.json \
+  --backing-path /Users/administrator/apps/approved-vm \
+  --output /owner/bound-deployment.json
+```
+
+The output parent must be owner-private. This command validates both route pins,
+contacts no host, preserves the source record byte for byte, and refuses an
+existing output or an already/partially bound source. Runtime update commands
+consume only the complete current schema; they do not infer backing ownership.
+
+Preparation checks Mac free space before contacting the guest, then evaluates
+actual artifact sizes, file-block slack, evidence budgets and per-filesystem
+guest headroom under the deployment locks. The final Mac check charges that full
+guest growth plus its own 2 GiB reserve. Each artifact transfer rechecks remaining
+guest allocation under the deployment lock before writing. Apply repeats Mac
+and guest admission, then rechecks guest capacity under the operation lock before
+creating its attempt and again before pausing services. Existing artifact copies
+remain charged by the filesystem and are not counted as future apply growth.
+Failures retain bounded public capacity receipts; no storage is deleted or reserved.
+
+Offline updater coverage: `python3 -m pytest -q scripts/tests/taira_update_test.py`.

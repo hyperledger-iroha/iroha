@@ -315,3 +315,57 @@ fn prepared_account_transaction_schemas_are_closed_and_exactly_typed() {
         );
     }
 }
+
+#[test]
+fn faucet_policy_schema_is_exact_public_discovery() {
+    let document = canonical_document();
+    let schemas = component_schemas(&document);
+    assert_strict_object_schema(
+        schemas,
+        "AccountFaucetAdvertisement",
+        &[
+            "schema_version",
+            "network_id",
+            "network_prefix",
+            "authority",
+            "asset_definition_id",
+            "amount",
+        ],
+        &[],
+    );
+    let schema = &schemas["AccountFaucetAdvertisement"];
+    assert_eq!(
+        schema["x-iroha-max-bytes"].as_u64(),
+        Some(iroha_torii_shared::account_faucet_policy::ACCOUNT_FAUCET_POLICY_MAX_BYTES as u64)
+    );
+    assert_eq!(
+        schema["properties"]["schema_version"]["const"].as_u64(),
+        Some(1)
+    );
+    for (field, reference) in [
+        ("network_id", "NetworkId"),
+        ("authority", "CanonicalAccountId"),
+        ("amount", "Quantity"),
+    ] {
+        assert_eq!(
+            schema["properties"][field]["$ref"].as_str(),
+            Some(format!("#/components/schemas/{reference}").as_str())
+        );
+    }
+    assert_eq!(
+        schema["properties"]["network_prefix"]["maximum"].as_u64(),
+        Some(u64::from(u16::MAX))
+    );
+    let operation = &document["paths"]["/v1/accounts/faucet/policy"]["get"];
+    assert_eq!(operation["x-iroha-tool-effect"].as_str(), Some("read"));
+    assert_eq!(
+        operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].as_str(),
+        Some("#/components/schemas/AccountFaucetAdvertisement")
+    );
+    assert!(operation["responses"].get("503").is_some());
+    assert!(operation.get("requestBody").is_none());
+    assert_eq!(
+        operation["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"].as_str(),
+        Some("no-store")
+    );
+}

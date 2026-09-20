@@ -49,7 +49,12 @@ pub use consensus_threshold::{
     encode_global_beacon_partial_signer_credential_v1,
     encode_parliament_tle_partial_release_signer_credential_v1,
     global_beacon_partial_signer_inventory_digest_v1,
+    global_beacon_partial_signer_public_inventory_digest_v1,
     parliament_tle_partial_release_signer_inventory_digest_v1,
+};
+#[cfg(unix)]
+pub(crate) use consensus_threshold::{
+    MAX_CONSENSUS_THRESHOLD_CREDENTIAL_BYTES_V1, decode_global_beacon_runtime_signer_v1,
 };
 pub use envelope::{
     SoftwareSignerEnvelopeErrorV1, SoftwareSignerKeyEnvelopeV1, SoftwareSignerWrappingKeyV1,

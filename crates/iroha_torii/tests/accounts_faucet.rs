@@ -106,6 +106,14 @@ fn build_faucet_test_context_with_registration(
     faucet_selector: Option<&str>,
     register_user: bool,
 ) -> FaucetTestContext {
+    build_faucet_test_context_with_enabled(prefund_user, faucet_selector, register_user, true)
+}
+fn build_faucet_test_context_with_enabled(
+    prefund_user: bool,
+    faucet_selector: Option<&str>,
+    register_user: bool,
+    faucet_enabled: bool,
+) -> FaucetTestContext {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let data_dir = tempfile::tempdir().expect("isolated faucet Torii persistence");
     cfg.torii.data_dir = data_dir
@@ -209,27 +217,13 @@ fn build_faucet_test_context_with_registration(
                 .into(),
             );
         }
-        let seed_tx = TransactionBuilder::new(
-            network_id,
-            authority_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(seed_instructions)
-        .sign(authority_kp.private_key());
-        let leader = checked_faucet_block_leader_fixture();
-        let unverified = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
-            seed_tx,
-        ))])
-        .chain(0, state.view().latest_block().as_deref())
-        .sign(leader.private_key())
-        .unpack(|_| {});
-        let mut state_block = state.block(unverified.header());
-        state_block.chain_id = chain_id.clone();
-        let valid = unverified
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        iroha_torii::test_utils::finalize_committed_block(&state, state_block, committed);
+        fixtures::commit_genesis_fixture(
+            &state,
+            &authority_id,
+            &authority_kp,
+            seed_instructions,
+            iroha_primitives::time::TimeSource::new_system(),
+        );
     }
     advance_faucet_state_chain(
         &state,
@@ -244,7 +238,7 @@ fn build_faucet_test_context_with_registration(
     let pow_scrypt_r = 1;
     let pow_scrypt_p = 1;
     let pow_max_anchor_age_blocks = 4;
-    cfg.torii.faucet = Some(iroha_config::parameters::actual::ToriiFaucet {
+    cfg.torii.faucet = faucet_enabled.then(|| iroha_config::parameters::actual::ToriiFaucet {
         authority: authority_id.clone(),
         private_key_file: "/runtime-only/faucet-signer.key".into(),
         signer: authority_kp.clone(),
@@ -1041,6 +1035,152 @@ async fn faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_re
         "25000",
         "exact replay must not charge or transfer twice"
     );
+    context.app.shutdown().await;
+}
+
+#[tokio::test]
+async fn accounts_faucet_policy_exposes_exact_public_configuration() {
+    let context = build_faucet_test_context(false);
+    let height_before = context.state.committed_height();
+    let queue_before = context.queue.active_len();
+    let resp = context
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/accounts/faucet/policy")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    40000,
+                ))))
+                .body(axum::body::Body::empty())
+                .expect("public policy request"),
+        )
+        .await
+        .expect("faucet policy response");
+    let resp = expect_status(resp, StatusCode::OK).await;
+    assert_eq!(resp.headers()[http::header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        resp.headers()[http::header::CONTENT_TYPE],
+        "application/json; charset=utf-8"
+    );
+    let body = to_bytes(resp.into_body(), 4096).await.expect("policy body");
+    let payload: norito::json::Value = norito::json::from_slice(&body).expect("policy JSON");
+    assert_eq!(
+        payload,
+        json_object(vec![
+            json_entry("schema_version", 1_u16),
+            json_entry("network_id", *context.state.network_id_ref()),
+            json_entry(
+                "network_prefix",
+                iroha_data_model::account::address::chain_discriminant(),
+            ),
+            json_entry("authority", context.authority_id.to_string()),
+            json_entry(
+                "asset_definition_id",
+                context.asset_definition_id.to_string()
+            ),
+            json_entry(
+                "amount",
+                iroha_primitives::numeric::Quantity::from(25_000_u32)
+            ),
+        ]),
+        "discovery exposes only the exact public policy fields",
+    );
+    assert_eq!(context.state.committed_height(), height_before);
+    assert_eq!(context.queue.active_len(), queue_before);
+    context.app.shutdown().await;
+}
+
+#[tokio::test]
+async fn accounts_faucet_policy_resolves_configured_asset_alias() {
+    let context = build_faucet_test_context_with_selector(false, Some("xor#universal"));
+    let resp = context
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/accounts/faucet/policy")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    40000,
+                ))))
+                .body(axum::body::Body::empty())
+                .expect("policy alias request"),
+        )
+        .await
+        .expect("policy alias response");
+    let resp = expect_status(resp, StatusCode::OK).await;
+    assert_eq!(resp.headers()[http::header::CACHE_CONTROL], "no-store");
+    let body = to_bytes(resp.into_body(), 4096)
+        .await
+        .expect("policy alias body");
+    let payload: norito::json::Value = norito::json::from_slice(&body).expect("policy alias JSON");
+    let expected_asset_definition_id = context.asset_definition_id.to_string();
+    assert_eq!(
+        payload
+            .get("asset_definition_id")
+            .and_then(norito::json::Value::as_str),
+        Some(expected_asset_definition_id.as_str()),
+    );
+    assert_eq!(context.queue.active_len(), 0);
+    context.app.shutdown().await;
+}
+
+#[tokio::test]
+async fn accounts_faucet_discovery_reports_disabled_service() {
+    let context = build_faucet_test_context_with_enabled(false, None, true, false);
+    for (path, status, code, message) in [
+        (
+            "/v1/accounts/faucet/policy",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "account_faucet_disabled",
+            "This network does not provide a testnet faucet.",
+        ),
+        (
+            "/v1/accounts/faucet/puzzle",
+            StatusCode::FORBIDDEN,
+            "query_validation_failed",
+            "Account faucet disabled",
+        ),
+    ] {
+        let resp = context
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        40000,
+                    ))))
+                    .header(http::header::ACCEPT, "application/json")
+                    .body(axum::body::Body::empty())
+                    .expect("disabled faucet request"),
+            )
+            .await
+            .expect("disabled faucet response");
+        let resp = expect_status(resp, status).await;
+        let body = to_bytes(resp.into_body(), 4096)
+            .await
+            .expect("disabled body");
+        let payload: norito::json::Value = norito::json::from_slice(&body).expect("disabled JSON");
+        assert_eq!(
+            payload.get("code").and_then(norito::json::Value::as_str),
+            Some(code)
+        );
+        assert!(
+            payload
+                .get("message")
+                .and_then(norito::json::Value::as_str)
+                .expect("disabled message")
+                .contains(message)
+        );
+    }
+    assert_eq!(context.queue.active_len(), 0);
     context.app.shutdown().await;
 }
 

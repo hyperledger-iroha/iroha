@@ -105,6 +105,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::{Zeroize as _, Zeroizing};
+mod scaling;
+
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {
     /// Optional Sora profile selector (multi-lane / dataspace defaults).
@@ -630,6 +632,7 @@ const LOCALNET_ALIAS_SETUP_PAYER_BALANCE: u64 = 10;
 const LOCALNET_ALIAS_SETUP_POLICY_VERSION: u16 = 1;
 const LOCALNET_RUNTIME_DIRECTORY: &str = "runtime";
 const LOCALNET_OPERATOR_SIGNER_KEY_FILE: &str = "operator-signer.key";
+const LOCALNET_LEDGER_SIGNER_KEY_FILE: &str = "ledger-signer.key";
 const LOCALNET_ONBOARDING_SIGNER_KEY_FILE: &str = "onboarding-signer.key";
 const LOCALNET_ONBOARDING_TOKEN_FILE: &str = "onboarding.token";
 const LOCALNET_FAUCET_AMOUNT: &str = "25000";
@@ -1042,8 +1045,11 @@ pub struct Args {
     /// Optional UTF-8 seed for deterministic development keys.
     ///
     /// Omit this option to generate independent keys from operating-system entropy.
-    #[arg(long, short)]
+    #[arg(long, short, conflicts_with = "scaling_lanes")]
     seed: Option<String>,
+    /// Fixed scaling only: inherited read-only nonblocking pipe with exactly 64 lowercase hex bytes and EOF.
+    #[arg(long, value_name = "FD", requires = "scaling_lanes", conflicts_with = "seed", value_parser = clap::value_parser!(i32).range(3..=65535))]
+    seed_fd: Option<i32>,
     /// Canonical chain identifier written into genesis, peer configs, and the client config.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
@@ -1057,6 +1063,14 @@ pub struct Args {
     /// Apply a localnet performance profile (10k TPS / 1s finality presets).
     #[arg(long, value_enum, value_name = "PROFILE")]
     perf_profile: Option<LocalnetPerfProfileArg>,
+    /// Generate a fixed execution-lane layout with four NPoS validators and autoscaling disabled.
+    /// Use the same private development seed and options for both variants.
+    #[arg(long, value_enum, value_name = "LANES", requires = "seed_fd")]
+    scaling_lanes: Option<scaling::ScalingLanes>,
+    /// Ordered workload accounts for a fixed scaling layout (4..=64, in groups of four).
+    /// Defaults to four when --scaling-lanes is present.
+    #[arg(long, value_name = "COUNT", requires = "scaling_lanes", value_parser = clap::value_parser!(u16).range(4..=64))]
+    scaling_accounts: Option<u16>,
     /// Host to bind P2P and Torii listeners to (host/IP only, no port).
     #[arg(long, default_value = DEFAULT_BIND_HOST, value_name = "HOST")]
     bind_host: String,
@@ -1089,7 +1103,7 @@ pub struct Args {
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..))]
     block_cadence_ms: Option<u64>,
     /// Consensus mode to emit in genesis/configs.
-    /// Defaults to `permissioned` for generic localnets.
+    /// Defaults to `permissioned` for generic localnets and `npos` for fixed scaling layouts.
     /// Sora profile localnets and perf profiles require `npos`.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
@@ -1112,10 +1126,13 @@ impl<T: Write> RunArgs<T> for Args {
         let Self {
             peers,
             seed,
+            seed_fd,
             chain_id,
             sora_profile,
             private_dataspace,
             perf_profile,
+            scaling_lanes,
+            scaling_accounts,
             bind_host,
             public_host,
             base_api_port,
@@ -1131,9 +1148,22 @@ impl<T: Write> RunArgs<T> for Args {
         // validation. Once validation succeeds, `LocalnetOptions` takes over
         // the same custody obligation through its `Drop` implementation.
         let mut seed = seed.map(Zeroizing::new);
+        if let Some(seed_fd) = seed_fd {
+            ensure!(
+                seed.is_none() && scaling_lanes.is_some(),
+                "fixed scaling requires only --seed-fd"
+            );
+            seed = Some(scaling::seed::read_development_seed(seed_fd)?);
+        } else {
+            ensure!(scaling_lanes.is_none(), "fixed scaling requires --seed-fd");
+        }
         let sora_profile = resolve_sora_profile(sora_profile, private_dataspace)?;
         let perf_profile = perf_profile.map(LocalnetPerfProfile::from);
-        let consensus_mode = resolve_requested_consensus_mode(consensus_mode, perf_profile);
+        let scaling = scaling::ScalingLayout::from_args(scaling_lanes, scaling_accounts)?;
+        let consensus_mode = resolve_requested_consensus_mode(
+            consensus_mode.or_else(|| scaling.map(|_| ConsensusModeArg::Npos)),
+            perf_profile,
+        );
         let mut assets = if sample_asset {
             vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
@@ -1164,7 +1194,7 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms,
         };
-        generate_localnet_inner(&opts, writer, Some(&chain_id))
+        generate_localnet_for_layout(&opts, writer, Some(&chain_id), scaling)
     }
 }
 struct Peer {
@@ -1208,12 +1238,21 @@ struct LocalnetPeerStoragePaths {
 }
 impl LocalnetPeerStoragePaths {
     fn new(out_dir: &Path, peer_index: usize) -> Self {
-        let state = out_dir.join("state").join(format!("peer{peer_index}"));
+        Self::from_roots(
+            out_dir.join("storage").join(format!("peer{peer_index}")),
+            out_dir.join("state").join(format!("peer{peer_index}")),
+        )
+    }
+    fn scaling(out_dir: &Path, peer_index: usize) -> Self {
+        let role = out_dir.join("storage").join(format!("peer{peer_index}"));
+        Self::from_roots(role.join("kura"), role.join("state"))
+    }
+    fn from_roots(kura: PathBuf, state: PathBuf) -> Self {
         let streaming = state.join("streaming");
         let torii = state.join("torii");
         let sorafs = state.join("sorafs");
         Self {
-            kura: out_dir.join("storage").join(format!("peer{peer_index}")),
+            kura,
             soracloud_runtime: state.join("soracloud_runtime"),
             tiered_state: state.join("tiered_state"),
             da_store: state.join("da_wsv_snapshots"),
@@ -1336,13 +1375,24 @@ fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) ->
 fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
     account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant)
 }
-#[allow(clippy::too_many_lines)]
 fn generate_localnet_inner<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
     chain_id: Option<&str>,
 ) -> Outcome {
+    generate_localnet_for_layout(opts, writer, chain_id, None)
+}
+#[allow(clippy::too_many_lines)]
+fn generate_localnet_for_layout<T: Write>(
+    opts: &LocalnetOptions,
+    writer: &mut BufWriter<T>,
+    chain_id: Option<&str>,
+    scaling: Option<scaling::ScalingLayout>,
+) -> Outcome {
     init_instruction_registry();
+    if let Some(layout) = scaling {
+        layout.validate(opts)?;
+    }
     let chain_id = resolve_localnet_chain_id(chain_id)?;
     let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
     let hosts = validate_localnet_options(opts, taira)?;
@@ -1367,9 +1417,13 @@ fn generate_localnet_inner<T: Write>(
         .wrap_err("prepare fresh localnet private output directory")?;
     let shell_out_dir = crate::shell::absolute_quote_path(&out_dir)
         .wrap_err("validate localnet output path for shell handoff commands")?;
-    write_localnet_gitignore(&out_dir)?;
-    tui::status("Copying rANS tables");
-    let rans_tables_path = copy_rans_tables(&out_dir)?;
+    let rans_tables_path = if scaling.is_none() {
+        write_localnet_gitignore(&out_dir)?;
+        tui::status("Copying rANS tables");
+        Some(copy_rans_tables(&out_dir)?)
+    } else {
+        None
+    };
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     // Keep every account literal and permission payload emitted by this localnet
@@ -1391,10 +1445,23 @@ fn generate_localnet_inner<T: Write>(
         chain_discriminant,
         taira,
     )?;
+    let scaling_accounts = scaling
+        .map(|layout| layout.identities(seed_bytes))
+        .transpose()?
+        .unwrap_or_default();
     let client_identity = localnet_ephemeral_identity(seed_bytes, b"operator-root")?;
+    let http_operator_identity = localnet_ephemeral_identity(seed_bytes, b"http-operator-root")?;
     let onboarding_identity = localnet_ephemeral_identity(seed_bytes, b"onboarding-root")?;
-    let runtime_bundle =
-        write_localnet_runtime_bundle(&out_dir, &client_identity, &onboarding_identity)?;
+    let runtime_bundle = if scaling.is_none() {
+        Some(write_localnet_runtime_bundle(
+            &out_dir,
+            &client_identity,
+            &http_operator_identity,
+            &onboarding_identity,
+        )?)
+    } else {
+        None
+    };
     if taira {
         write_taira_runtime_signer_keys(&out_dir, &peers)?;
         write_mint_finality_seeds(&out_dir, &peers)?;
@@ -1431,11 +1498,7 @@ fn generate_localnet_inner<T: Write>(
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
     let assets =
         effective_localnet_assets_for_client(&opts.assets, &client_identity.account_id, taira);
-    let gas_account_id = if npos_bootstrap {
-        Some(localnet_gas_account_id(&genesis_public_key))
-    } else {
-        None
-    };
+    let gas_account_id = localnet_gas_account_id(&genesis_public_key);
     let mut genesis =
         generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id, &peers)?;
     if opts.extra_accounts > 0 || !assets.is_empty() {
@@ -1457,6 +1520,9 @@ fn generate_localnet_inner<T: Write>(
         &client_identity.account_id,
         &onboarding_identity.account_id,
     )?;
+    if let Some(layout) = scaling {
+        genesis = layout.append_accounts(genesis, &scaling_accounts)?;
+    }
     genesis = apply_parameter_overrides(
         genesis,
         opts.peers,
@@ -1470,17 +1536,14 @@ fn generate_localnet_inner<T: Write>(
         &client_identity.account_id,
     )?;
     genesis = append_peer_pop(genesis, &peers)?;
+    let stake_amount =
+        localnet_npos_stake_amount(&genesis.effective_parameters()?, requested_stake_amount);
     if npos_bootstrap {
-        let gas_account_id = gas_account_id
-            .as_ref()
-            .expect("gas account id required for NPoS bootstrap");
-        let stake_amount =
-            localnet_npos_stake_amount(&genesis.effective_parameters()?, requested_stake_amount);
         genesis = append_localnet_npos_bootstrap(
             genesis,
             &LocalnetNposBootstrapContext {
                 peers: &peers,
-                gas_account_id,
+                gas_account_id: &gas_account_id,
                 stake_amount: &stake_amount,
                 sora_profile: opts.sora_profile,
                 genesis_account_id: &genesis_account_id,
@@ -1495,8 +1558,16 @@ fn generate_localnet_inner<T: Write>(
             &genesis_account_id,
             &client_identity.account_id,
         )?;
+    } else {
+        genesis = append_localnet_permissioned_lane_authority_bootstrap(
+            genesis,
+            &peers,
+            &gas_account_id,
+            &stake_amount,
+            taira,
+        )?;
     }
-    genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap)?;
+    genesis = apply_localnet_crypto_overrides(genesis)?;
     let alias_setup_request =
         localnet_alias_setup_request(&genesis_account_id, &client_identity.account_id, taira)?;
     let append_alias_setup_to_current_transaction = npos_bootstrap
@@ -1511,14 +1582,18 @@ fn generate_localnet_inner<T: Write>(
     )?;
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
-    let alias_setup_intent_path =
-        write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
+    let alias_setup_intent_path = if scaling.is_none() {
+        Some(write_localnet_alias_setup_intent(
+            &out_dir,
+            &alias_setup_request,
+        )?)
+    } else {
+        None
+    };
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
     let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);
-    let gas_account_id = gas_account_id
-        .as_ref()
-        .map(|account_id| account_id_runtime_literal(account_id, chain_discriminant));
+    let gas_account_id = account_id_runtime_literal(&gas_account_id, chain_discriminant);
     let trusted = peers
         .iter()
         .map(|p| format!("{}@{}", p.public_key, hosts.public.addr_literal(p.p2p_port)))
@@ -1542,7 +1617,11 @@ fn generate_localnet_inner<T: Write>(
     let bootstrap_peer = peers
         .first()
         .expect("localnet always has at least one peer");
-    let bootstrap_paths = LocalnetPeerStoragePaths::new(&out_dir, 0);
+    let bootstrap_paths = if scaling.is_some() {
+        LocalnetPeerStoragePaths::scaling(&out_dir, 0)
+    } else {
+        LocalnetPeerStoragePaths::new(&out_dir, 0)
+    };
     let bootstrap_config = render_peer_config(
         bootstrap_peer,
         &trusted,
@@ -1554,7 +1633,7 @@ fn generate_localnet_inner<T: Write>(
         ))),
         &bls_entries,
         &bootstrap_paths,
-        &rans_tables_path,
+        rans_tables_path.as_deref(),
         &chain_id,
         chain_discriminant,
         (&hosts.bind, &hosts.public),
@@ -1563,15 +1642,14 @@ fn generate_localnet_inner<T: Write>(
             npos_bootstrap,
             taira,
             operator_account: &operator_account_literal,
-            operator_private_key_file: &runtime_bundle.operator_signer_key,
+            operator_public_key: &http_operator_identity.public_key,
             onboarding_account: &onboarding_account_literal,
-            onboarding_private_key_file: &runtime_bundle.onboarding_signer_key,
-            onboarding_token_hash: &runtime_bundle.onboarding_token_hash,
+            runtime: runtime_bundle.as_ref(),
         },
         opts.sora_profile,
         lane_manifest_directory.as_deref(),
         dataspace_fault_tolerance,
-        gas_account_id.as_deref(),
+        &gas_account_id,
         tx_gossip_overrides,
         logger_filter,
         signature_batch_max_ed25519,
@@ -1579,7 +1657,18 @@ fn generate_localnet_inner<T: Write>(
         queue_capacity,
         sumeragi_body_bytes,
     );
+    let bootstrap_config = if let Some(layout) = scaling {
+        scaling::runtime_paths::bind(
+            layout.render_config(bootstrap_config, &scaling_accounts)?,
+            &bootstrap_paths,
+        )?
+    } else {
+        bootstrap_config
+    };
     let config = parse_localnet_peer_config(&bootstrap_config, None)?;
+    if scaling.is_some() {
+        scaling::runtime_paths::validate(&config, &bootstrap_paths)?;
+    }
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
     let confidential_policy_hash =
         iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
@@ -1588,12 +1677,14 @@ fn generate_localnet_inner<T: Write>(
         .with_consensus_meta();
     let genesis_public_key_path = out_dir.join(GENESIS_PUBLIC_KEY_FILE);
     let genesis_private_key_path = out_dir.join(GENESIS_PRIVATE_KEY_FILE);
-    write_genesis_key_files(
-        &genesis_public_key_path,
-        &genesis_private_key_path,
-        &genesis_public_key,
-        &genesis_private,
-    )?;
+    if scaling.is_none() {
+        write_genesis_key_files(
+            &genesis_public_key_path,
+            &genesis_private_key_path,
+            &genesis_public_key,
+            &genesis_private,
+        )?;
+    }
     let genesis_expected_hash = write_genesis(GenesisWriteContext {
         manifest: &genesis,
         public_key: &genesis_public_key,
@@ -1614,35 +1705,47 @@ fn generate_localnet_inner<T: Write>(
     )?;
     tui::status("Genesis staged and bootstrap-validated");
     tui::status("Writing peer configs");
+    let mut scaling_genesis_context = None;
+    let mut scaling_config_digests = Vec::new();
     for (idx, peer) in peers.iter().enumerate() {
-        let paths = LocalnetPeerStoragePaths::new(&out_dir, idx);
+        let paths = if scaling.is_some() {
+            LocalnetPeerStoragePaths::scaling(&out_dir, idx)
+        } else {
+            LocalnetPeerStoragePaths::new(&out_dir, idx)
+        };
         fs::create_dir_all(&paths.kura)
             .wrap_err_with(|| format!("failed to create kura dir {}", paths.kura.display()))?;
         fs::create_dir_all(&paths.state).wrap_err_with(|| {
             format!("failed to create peer state dir {}", paths.state.display())
         })?;
-        fs::create_dir_all(&paths.tiered_state).wrap_err_with(|| {
-            format!(
-                "failed to create tiered state dir {}",
-                paths.tiered_state.display()
-            )
-        })?;
-        fs::create_dir_all(&paths.da_store).wrap_err_with(|| {
-            format!(
-                "failed to create DA WSV snapshot dir {}",
-                paths.da_store.display()
-            )
-        })?;
+        if scaling.is_none() {
+            fs::create_dir_all(&paths.tiered_state).wrap_err_with(|| {
+                format!(
+                    "failed to create tiered state dir {}",
+                    paths.tiered_state.display()
+                )
+            })?;
+            fs::create_dir_all(&paths.da_store).wrap_err_with(|| {
+                format!(
+                    "failed to create DA WSV snapshot dir {}",
+                    paths.da_store.display()
+                )
+            })?;
+        }
         let rendered = render_peer_config(
             peer,
             &trusted,
             &peer_telemetry_urls,
             &genesis_public_key,
             &genesis_signed_path,
-            LocalnetGenesisIdentitySource::PublishedFile,
+            if scaling.is_some() {
+                LocalnetGenesisIdentitySource::BootstrapInline(genesis_expected_hash)
+            } else {
+                LocalnetGenesisIdentitySource::PublishedFile
+            },
             &bls_entries,
             &paths,
-            &rans_tables_path,
+            rans_tables_path.as_deref(),
             &chain_id,
             chain_discriminant,
             (&hosts.bind, &hosts.public),
@@ -1651,15 +1754,14 @@ fn generate_localnet_inner<T: Write>(
                 npos_bootstrap,
                 taira,
                 operator_account: &operator_account_literal,
-                operator_private_key_file: &runtime_bundle.operator_signer_key,
+                operator_public_key: &http_operator_identity.public_key,
                 onboarding_account: &onboarding_account_literal,
-                onboarding_private_key_file: &runtime_bundle.onboarding_signer_key,
-                onboarding_token_hash: &runtime_bundle.onboarding_token_hash,
+                runtime: runtime_bundle.as_ref(),
             },
             opts.sora_profile,
             lane_manifest_directory.as_deref(),
             dataspace_fault_tolerance,
-            gas_account_id.as_deref(),
+            &gas_account_id,
             tx_gossip_overrides,
             logger_filter,
             signature_batch_max_ed25519,
@@ -1667,6 +1769,14 @@ fn generate_localnet_inner<T: Write>(
             queue_capacity,
             sumeragi_body_bytes,
         );
+        let rendered = if let Some(layout) = scaling {
+            scaling::runtime_paths::bind(
+                layout.render_config(rendered, &scaling_accounts)?,
+                &paths,
+            )?
+        } else {
+            rendered
+        };
         let path = out_dir.join(format!("peer{idx}.toml"));
         let parsed_config =
             parse_localnet_peer_config(&rendered, Some(&path)).wrap_err_with(|| {
@@ -1681,22 +1791,47 @@ fn generate_localnet_inner<T: Write>(
                 genesis_expected_hash
             ));
         }
+        if scaling.is_some() && idx == 0 {
+            // Derive from the final signed body and this exact final effective
+            // config, never from the provisional policy-derivation config.
+            scaling_genesis_context = Some(scaling::genesis_context_bytes(
+                &genesis_json_path,
+                &genesis_signed_path,
+                &parsed_config,
+            )?);
+        }
         write_owner_only_localnet_file(&path, rendered.as_bytes())
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
+        if scaling.is_some() {
+            scaling_config_digests.push(iroha_crypto::sha256(rendered.as_bytes()));
+        }
+    }
+    if let Some(context) = &scaling_genesis_context {
+        let path = out_dir.join(scaling::GENESIS_CONTEXT_FILE);
+        write_owner_only_localnet_file(&path, &context)
+            .wrap_err("publish fixed scaling genesis context")?;
+        let persisted = crate::secure_fs::read_private_file(&path)
+            .wrap_err("read back fixed scaling genesis context")?;
+        ensure!(
+            persisted.as_slice() == context.as_slice(),
+            "fixed scaling genesis context changed during publication"
+        );
     }
     tui::status("Peer configs written and validated");
-    tui::status("Writing start/stop scripts");
-    let fee_asset_definition_id = localnet_fee_asset_literal();
-    write_scripts(
-        &out_dir,
-        opts.peers.get(),
-        sora_profile_enabled,
-        taira,
-        &client_account_literal,
-        &fee_asset_definition_id,
-    )?;
+    if scaling.is_none() {
+        tui::status("Writing start/stop scripts");
+        let fee_asset_definition_id = localnet_fee_asset_literal();
+        write_scripts(
+            &out_dir,
+            opts.peers.get(),
+            sora_profile_enabled,
+            taira,
+            &client_account_literal,
+            &fee_asset_definition_id,
+        )?;
+    }
     tui::status("Writing client config");
-    write_client_config(
+    let scaling_client_digest = write_client_config(
         &out_dir,
         opts.base_api_port,
         &hosts.public,
@@ -1704,36 +1839,76 @@ fn generate_localnet_inner<T: Write>(
         chain_discriminant,
         &client_identity,
     )?;
+    let scaling_account_digests = if let Some(layout) = scaling {
+        layout.write_accounts(
+            &out_dir,
+            opts.base_api_port,
+            &hosts.public,
+            &chain_id,
+            *config.common.chain_discriminant.value(),
+            &scaling_accounts,
+        )?
+    } else {
+        Vec::new()
+    };
     let primary_torii_url = hosts.public.torii_url(opts.base_api_port);
     let client_config_path = out_dir.join("client.toml");
     let start_path = out_dir.join("start.sh");
     let stop_path = out_dir.join("stop.sh");
-    write_localnet_readme(
-        &out_dir,
-        &chain_id,
-        opts.seed.as_deref(),
-        opts.consensus_mode,
-        opts.peers.get(),
-        &primary_torii_url,
-        &genesis_json_path,
-        &genesis_signed_path,
-        &genesis_expected_hash_path,
-        &genesis_public_key_path,
-        &genesis_private_key_path,
-        &client_config_path,
-        &start_path,
-        &stop_path,
-        &client_identity.account_literal(chain_discriminant),
-        &onboarding_identity.account_id.to_string(),
-        &runtime_bundle,
-        &alias_setup_intent_path,
-        &shell_out_dir,
-    )?;
-    crate::secure_fs::harden_private_tree_with_owner_executables(
-        &out_dir,
-        &[&start_path, &stop_path],
-    )
-    .wrap_err("harden fresh localnet private artifact tree")?;
+    if let Some(runtime_bundle) = runtime_bundle.as_ref() {
+        write_localnet_readme(
+            &out_dir,
+            &chain_id,
+            opts.seed.as_deref(),
+            opts.consensus_mode,
+            opts.peers.get(),
+            &primary_torii_url,
+            &genesis_json_path,
+            &genesis_signed_path,
+            &genesis_expected_hash_path,
+            &genesis_public_key_path,
+            &genesis_private_key_path,
+            &client_config_path,
+            &start_path,
+            &stop_path,
+            &client_identity.account_literal(chain_discriminant),
+            &onboarding_identity.account_id.to_string(),
+            runtime_bundle,
+            alias_setup_intent_path
+                .as_deref()
+                .ok_or_else(|| eyre!("ordinary localnet lost its alias intent"))?,
+            &shell_out_dir,
+        )?;
+    }
+    let generic_executables = [start_path.as_path(), stop_path.as_path()];
+    let executable_files: &[&Path] = if scaling.is_some() {
+        &[]
+    } else {
+        &generic_executables
+    };
+    crate::secure_fs::harden_private_tree_with_owner_executables(&out_dir, executable_files)
+        .wrap_err("harden fresh localnet private artifact tree")?;
+    if let Some(layout) = scaling {
+        let context = scaling_genesis_context
+            .as_deref()
+            .ok_or_else(|| eyre!("fixed generation lost its original genesis context"))?;
+        let mut anchors = scaling::anchors::Inputs::new(&out_dir, genesis_expected_hash)?;
+        anchors.authenticate(&peers, &scaling_config_digests, context)?;
+        return anchors.publish(
+            writer,
+            layout,
+            &peers,
+            &scaling_accounts,
+            &hosts.public,
+            &chain_id,
+            scaling_client_digest,
+            &scaling_account_digests,
+        );
+    }
+    let runtime_bundle =
+        runtime_bundle.ok_or_else(|| eyre!("ordinary localnet lost its runtime bundle"))?;
+    let alias_setup_intent_path =
+        alias_setup_intent_path.ok_or_else(|| eyre!("ordinary localnet lost its alias intent"))?;
     tui::success("Localnet ready");
     writeln!(writer, "out_dir: {}", out_dir.display())?;
     writeln!(writer, "chain_id: {}", chain_id)?;
@@ -1771,6 +1946,11 @@ fn generate_localnet_inner<T: Write>(
         writer,
         "operator_signer_key: {}",
         runtime_bundle.operator_signer_key.display()
+    )?;
+    writeln!(
+        writer,
+        "ledger_signer_key: {}",
+        runtime_bundle.ledger_signer_key.display()
     )?;
     writeln!(
         writer,
@@ -2362,10 +2542,9 @@ struct RenderPeerFeatures<'a> {
     npos_bootstrap: bool,
     taira: bool,
     operator_account: &'a str,
-    operator_private_key_file: &'a Path,
+    operator_public_key: &'a iroha_crypto::PublicKey,
     onboarding_account: &'a str,
-    onboarding_private_key_file: &'a Path,
-    onboarding_token_hash: &'a [u8; 32],
+    runtime: Option<&'a LocalnetRuntimeBundle>,
 }
 #[derive(Clone, Copy)]
 enum LocalnetGenesisIdentitySource {
@@ -2382,7 +2561,7 @@ fn render_peer_config(
     genesis_identity: LocalnetGenesisIdentitySource,
     bls_entries: &[BlsEntry],
     storage_paths: &LocalnetPeerStoragePaths,
-    rans_tables_path: &Path,
+    rans_tables_path: Option<&Path>,
     chain_id: &str,
     chain_discriminant: Option<u16>,
     hosts: (&CanonicalHost, &CanonicalHost),
@@ -2390,7 +2569,7 @@ fn render_peer_config(
     sora_profile: Option<SoraProfile>,
     lane_manifest_directory: Option<&Path>,
     dataspace_fault_tolerance: Option<u32>,
-    gas_account_id: Option<&str>,
+    gas_account_id: &str,
     tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
     logger_filter: Option<&str>,
     signature_batch_max_ed25519: Option<usize>,
@@ -2406,10 +2585,9 @@ fn render_peer_config(
         npos_bootstrap,
         taira,
         operator_account,
-        operator_private_key_file,
+        operator_public_key,
         onboarding_account,
-        onboarding_private_key_file,
-        onboarding_token_hash,
+        runtime,
     } = features;
     let localnet_operator_account = operator_account.to_owned();
     let genesis_account = AccountId::new(genesis_public_key.clone());
@@ -2651,24 +2829,23 @@ fn render_peer_config(
         Value::Integer(i64::from(LOCALNET_LANE_TEU_CAPACITY)),
     );
     nexus.insert("fusion".into(), Value::Table(fusion));
+    let stake_asset_id = localnet_stake_asset_literal();
+    let mut staking = Table::new();
+    staking.insert(
+        "stake_asset_id".into(),
+        Value::String(stake_asset_id.clone()),
+    );
+    staking.insert(
+        "stake_escrow_account_id".into(),
+        Value::String(gas_account_id.to_owned()),
+    );
+    staking.insert(
+        "slash_sink_account_id".into(),
+        Value::String(gas_account_id.to_owned()),
+    );
+    nexus.insert("staking".into(), Value::Table(staking));
     if npos_bootstrap {
-        let gas_account_id = gas_account_id.expect("localnet gas account id required");
-        let stake_asset_id = localnet_stake_asset_literal();
         let fee_asset_id = localnet_fee_asset_literal();
-        let mut staking = Table::new();
-        staking.insert(
-            "stake_asset_id".into(),
-            Value::String(stake_asset_id.clone()),
-        );
-        staking.insert(
-            "stake_escrow_account_id".into(),
-            Value::String(gas_account_id.to_owned()),
-        );
-        staking.insert(
-            "slash_sink_account_id".into(),
-            Value::String(gas_account_id.to_owned()),
-        );
-        nexus.insert("staking".into(), Value::Table(staking));
         let mut fees = Table::new();
         fees.insert("fee_asset_id".into(), Value::String(fee_asset_id));
         fees.insert("base_fee".into(), Value::String("0".to_owned()));
@@ -2774,14 +2951,12 @@ fn render_peer_config(
         );
     }
     pipeline.insert("signature_batch_max_bls".into(), Value::Integer(4i64));
-    if let Some(gas_account_id) = gas_account_id {
-        let mut gas = Table::new();
-        gas.insert(
-            "tech_account_id".into(),
-            Value::String(gas_account_id.to_owned()),
-        );
-        pipeline.insert("gas".into(), Value::Table(gas));
-    }
+    let mut gas = Table::new();
+    gas.insert(
+        "tech_account_id".into(),
+        Value::String(gas_account_id.to_owned()),
+    );
+    pipeline.insert("gas".into(), Value::Table(gas));
     root.insert("pipeline".into(), Value::Table(pipeline));
     let mut queue = Table::new();
     queue.insert(
@@ -2797,39 +2972,37 @@ fn render_peer_config(
         Value::Integer(i64::try_from(LOCALNET_QUEUE_TTL_MS).expect("queue ttl fits i64")),
     );
     root.insert("queue".into(), Value::Table(queue));
-    if npos_bootstrap {
-        let mut crypto = Table::new();
-        let allowed_signing = [
-            iroha_crypto::Algorithm::Ed25519,
-            iroha_crypto::Algorithm::Secp256k1,
-            iroha_crypto::Algorithm::BlsNormal,
-        ];
-        crypto.insert(
-            "allowed_signing".into(),
-            Value::Array(
-                allowed_signing
-                    .iter()
-                    .map(|algo| Value::String(algo.as_static_str().to_owned()))
-                    .collect(),
-            ),
-        );
-        let mut curves = Table::new();
-        let mut curve_ids = allowed_signing
-            .iter()
-            .filter_map(|algo| {
-                iroha_data_model::account::curve::CurveId::try_from_algorithm(*algo).ok()
-            })
-            .map(|curve| i64::from(curve.as_u8()))
-            .collect::<Vec<_>>();
-        curve_ids.sort_unstable();
-        curve_ids.dedup();
-        curves.insert(
-            "allowed_curve_ids".into(),
-            Value::Array(curve_ids.into_iter().map(Value::Integer).collect()),
-        );
-        crypto.insert("curves".into(), Value::Table(curves));
-        root.insert("crypto".into(), Value::Table(crypto));
-    }
+    let mut crypto = Table::new();
+    let allowed_signing = [
+        iroha_crypto::Algorithm::Ed25519,
+        iroha_crypto::Algorithm::Secp256k1,
+        iroha_crypto::Algorithm::BlsNormal,
+    ];
+    crypto.insert(
+        "allowed_signing".into(),
+        Value::Array(
+            allowed_signing
+                .iter()
+                .map(|algo| Value::String(algo.as_static_str().to_owned()))
+                .collect(),
+        ),
+    );
+    let mut curves = Table::new();
+    let mut curve_ids = allowed_signing
+        .iter()
+        .filter_map(|algo| {
+            iroha_data_model::account::curve::CurveId::try_from_algorithm(*algo).ok()
+        })
+        .map(|curve| i64::from(curve.as_u8()))
+        .collect::<Vec<_>>();
+    curve_ids.sort_unstable();
+    curve_ids.dedup();
+    curves.insert(
+        "allowed_curve_ids".into(),
+        Value::Array(curve_ids.into_iter().map(Value::Integer).collect()),
+    );
+    crypto.insert("curves".into(), Value::Table(curves));
+    root.insert("crypto".into(), Value::Table(crypto));
     let mut streaming = Table::new();
     streaming.insert(
         "identity_public_key".into(),
@@ -2848,37 +3021,39 @@ fn render_peer_config(
                 .into_owned(),
         ),
     );
-    let mut streaming_codec = Table::new();
-    streaming_codec.insert(
-        "cabac_mode".into(),
-        Value::String(codec_defaults::CABAC_MODE.to_owned()),
-    );
-    streaming_codec.insert(
-        "trellis_blocks".into(),
-        Value::Array(
-            codec_defaults::trellis_blocks()
-                .into_iter()
-                .map(|size| Value::Integer(i64::from(size)))
-                .collect(),
-        ),
-    );
-    streaming_codec.insert(
-        "rans_tables_path".into(),
-        Value::String(rans_tables_path.to_string_lossy().into_owned()),
-    );
-    streaming_codec.insert(
-        "entropy_mode".into(),
-        Value::String(codec_defaults::entropy_mode()),
-    );
-    streaming_codec.insert(
-        "bundle_width".into(),
-        Value::Integer(i64::from(codec_defaults::bundle_width())),
-    );
-    streaming_codec.insert(
-        "bundle_accel".into(),
-        Value::String(codec_defaults::bundle_accel()),
-    );
-    streaming.insert("codec".into(), Value::Table(streaming_codec));
+    if let Some(rans_tables_path) = rans_tables_path {
+        let mut streaming_codec = Table::new();
+        streaming_codec.insert(
+            "cabac_mode".into(),
+            Value::String(codec_defaults::CABAC_MODE.to_owned()),
+        );
+        streaming_codec.insert(
+            "trellis_blocks".into(),
+            Value::Array(
+                codec_defaults::trellis_blocks()
+                    .into_iter()
+                    .map(|size| Value::Integer(i64::from(size)))
+                    .collect(),
+            ),
+        );
+        streaming_codec.insert(
+            "rans_tables_path".into(),
+            Value::String(rans_tables_path.to_string_lossy().into_owned()),
+        );
+        streaming_codec.insert(
+            "entropy_mode".into(),
+            Value::String(codec_defaults::entropy_mode()),
+        );
+        streaming_codec.insert(
+            "bundle_width".into(),
+            Value::Integer(i64::from(codec_defaults::bundle_width())),
+        );
+        streaming_codec.insert(
+            "bundle_accel".into(),
+            Value::String(codec_defaults::bundle_accel()),
+        );
+        streaming.insert("codec".into(), Value::Table(streaming_codec));
+    }
     root.insert("streaming".into(), Value::Table(streaming));
     let mut sorafs_storage = Table::new();
     if sora_profile.is_some() {
@@ -3170,6 +3345,18 @@ fn render_peer_config(
     }
     root.insert("network".into(), Value::Table(network));
     let mut torii = Table::new();
+    // The runtime operator sidecar is generated from this same identity. Bind
+    // its public key on every peer while retaining node-key and replay guards.
+    let mut operator_signatures = Table::new();
+    operator_signatures.insert("enabled".into(), Value::Boolean(true));
+    operator_signatures.insert(
+        "allowed_public_keys".into(),
+        Value::Array(vec![Value::String(operator_public_key.to_string())]),
+    );
+    torii.insert(
+        "operator_signatures".into(),
+        Value::Table(operator_signatures),
+    );
     torii.insert(
         "address".into(),
         Value::String(bind_host.addr_literal(peer.api_port)),
@@ -3277,106 +3464,111 @@ fn render_peer_config(
         );
         torii.insert("mcp".into(), Value::Table(mcp));
     }
-    let mut account_onboarding = Table::new();
-    account_onboarding.insert(
-        "authority".into(),
-        Value::String(onboarding_account.to_owned()),
-    );
-    account_onboarding.insert(
-        "private_key_file".into(),
-        Value::String(onboarding_private_key_file.to_string_lossy().into_owned()),
-    );
-    account_onboarding.insert("lease_term_years".into(), Value::Integer(1));
-    account_onboarding.insert("additional_permissions".into(), Value::Array(Vec::new()));
-    let mut credential_scope = Table::new();
-    if taira {
-        credential_scope.insert(
-            "dataspace".into(),
-            Value::String(TAIRA_CANARY_DATASPACE_ALIAS.to_owned()),
-        );
-    } else {
-        credential_scope.insert(
-            "domain".into(),
-            Value::String(CLIENT_ACCOUNT_DOMAIN.to_owned()),
-        );
-    }
-    let mut credential = Table::new();
-    credential.insert(
-        "id".into(),
-        Value::String(LOCALNET_ONBOARDING_CREDENTIAL_ID.to_owned()),
-    );
-    credential.insert("scope".into(), Value::Table(credential_scope));
-    credential.insert(
-        "token_hash".into(),
-        Value::String(format!("blake3:{}", hex::encode(onboarding_token_hash))),
-    );
-    account_onboarding.insert(
-        "credentials".into(),
-        Value::Array(vec![Value::Table(credential)]),
-    );
-    if npos_bootstrap {
+    if let Some(runtime) = runtime {
+        let mut account_onboarding = Table::new();
         account_onboarding.insert(
-            "fee_sponsor_program_id".into(),
-            Value::String(fee_sponsor_program_id),
+            "authority".into(),
+            Value::String(onboarding_account.to_owned()),
         );
+        account_onboarding.insert(
+            "private_key_file".into(),
+            Value::String(runtime.onboarding_signer_key.to_string_lossy().into_owned()),
+        );
+        account_onboarding.insert("lease_term_years".into(), Value::Integer(1));
+        account_onboarding.insert("additional_permissions".into(), Value::Array(Vec::new()));
+        let mut credential_scope = Table::new();
+        if taira {
+            credential_scope.insert(
+                "dataspace".into(),
+                Value::String(TAIRA_CANARY_DATASPACE_ALIAS.to_owned()),
+            );
+        } else {
+            credential_scope.insert(
+                "domain".into(),
+                Value::String(CLIENT_ACCOUNT_DOMAIN.to_owned()),
+            );
+        }
+        let mut credential = Table::new();
+        credential.insert(
+            "id".into(),
+            Value::String(LOCALNET_ONBOARDING_CREDENTIAL_ID.to_owned()),
+        );
+        credential.insert("scope".into(), Value::Table(credential_scope));
+        credential.insert(
+            "token_hash".into(),
+            Value::String(format!(
+                "blake3:{}",
+                hex::encode(runtime.onboarding_token_hash)
+            )),
+        );
+        account_onboarding.insert(
+            "credentials".into(),
+            Value::Array(vec![Value::Table(credential)]),
+        );
+        if npos_bootstrap {
+            account_onboarding.insert(
+                "fee_sponsor_program_id".into(),
+                Value::String(fee_sponsor_program_id),
+            );
+        }
+        torii.insert(
+            "account_onboarding".into(),
+            Value::Table(account_onboarding),
+        );
+        let mut faucet = Table::new();
+        faucet.insert("enabled".into(), Value::Boolean(true));
+        faucet.insert(
+            "authority".into(),
+            Value::String(localnet_operator_account.clone()),
+        );
+        faucet.insert(
+            "private_key_file".into(),
+            Value::String(runtime.ledger_signer_key.to_string_lossy().into_owned()),
+        );
+        faucet.insert(
+            "asset_definition_id".into(),
+            Value::String(localnet_fee_asset_literal()),
+        );
+        faucet.insert(
+            "amount".into(),
+            Value::String(LOCALNET_FAUCET_AMOUNT.to_owned()),
+        );
+        faucet.insert(
+            "pow_difficulty_bits".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_DIFFICULTY_BITS),
+        );
+        faucet.insert(
+            "pow_scrypt_log_n".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_LOG_N),
+        );
+        faucet.insert(
+            "pow_scrypt_r".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_R),
+        );
+        faucet.insert(
+            "pow_scrypt_p".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_P),
+        );
+        faucet.insert(
+            "pow_max_anchor_age_blocks".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_MAX_ANCHOR_AGE_BLOCKS),
+        );
+        faucet.insert(
+            "pow_adaptive_lookback_blocks".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_LOOKBACK_BLOCKS),
+        );
+        faucet.insert(
+            "pow_adaptive_claims_per_extra_bit".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT),
+        );
+        faucet.insert(
+            "pow_adaptive_max_extra_bits".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_MAX_EXTRA_BITS),
+        );
+        // Local generated networks do not have finalized public Taira VRF seed material.
+        faucet.insert("pow_beacon_seed_enabled".into(), Value::Boolean(false));
+        torii.insert("faucet".into(), Value::Table(faucet));
     }
-    torii.insert(
-        "account_onboarding".into(),
-        Value::Table(account_onboarding),
-    );
-    let mut faucet = Table::new();
-    faucet.insert("enabled".into(), Value::Boolean(true));
-    faucet.insert(
-        "authority".into(),
-        Value::String(localnet_operator_account.clone()),
-    );
-    faucet.insert(
-        "private_key_file".into(),
-        Value::String(operator_private_key_file.to_string_lossy().into_owned()),
-    );
-    faucet.insert(
-        "asset_definition_id".into(),
-        Value::String(localnet_fee_asset_literal()),
-    );
-    faucet.insert(
-        "amount".into(),
-        Value::String(LOCALNET_FAUCET_AMOUNT.to_owned()),
-    );
-    faucet.insert(
-        "pow_difficulty_bits".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_DIFFICULTY_BITS),
-    );
-    faucet.insert(
-        "pow_scrypt_log_n".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_LOG_N),
-    );
-    faucet.insert(
-        "pow_scrypt_r".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_R),
-    );
-    faucet.insert(
-        "pow_scrypt_p".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_P),
-    );
-    faucet.insert(
-        "pow_max_anchor_age_blocks".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_MAX_ANCHOR_AGE_BLOCKS),
-    );
-    faucet.insert(
-        "pow_adaptive_lookback_blocks".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_LOOKBACK_BLOCKS),
-    );
-    faucet.insert(
-        "pow_adaptive_claims_per_extra_bit".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT),
-    );
-    faucet.insert(
-        "pow_adaptive_max_extra_bits".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_MAX_EXTRA_BITS),
-    );
-    // Local generated networks do not have finalized public Taira VRF seed material.
-    faucet.insert("pow_beacon_seed_enabled".into(), Value::Boolean(false));
-    torii.insert("faucet".into(), Value::Table(faucet));
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
     norito_rpc.insert("enabled".into(), Value::Boolean(true));
@@ -3691,11 +3883,7 @@ fn apply_parameter_overrides(
 }
 fn apply_localnet_crypto_overrides(
     genesis: RawGenesisTransaction,
-    npos_bootstrap: bool,
 ) -> Result<RawGenesisTransaction> {
-    if !npos_bootstrap {
-        return Ok(genesis);
-    }
     let mut crypto = genesis.crypto().clone();
     if !crypto
         .allowed_signing
@@ -4255,7 +4443,72 @@ fn append_localnet_npos_bootstrap(
             onboarding_account_id.clone(),
         ));
     }
-    for lane_id in public_validator_lanes {
+    append_public_lane_validator_registrations(
+        builder,
+        peers,
+        &public_validator_lanes,
+        stake_amount,
+        taira,
+    )
+    .build_raw()
+}
+fn append_localnet_permissioned_lane_authority_bootstrap(
+    genesis: RawGenesisTransaction,
+    peers: &[Peer],
+    escrow_account_id: &AccountId,
+    stake_amount: &Quantity,
+    taira: bool,
+) -> Result<RawGenesisTransaction> {
+    let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
+    let stake_asset_id = localnet_stake_asset_definition_id();
+    let registrations = BootstrapRegistrations::from_manifest(&genesis);
+    let mut builder = genesis.into_builder().next_transaction();
+    if !registrations.domains.contains(&nexus_domain) {
+        builder = builder.append_instruction(Register::domain(Domain::new(nexus_domain)));
+    }
+    if !registrations.accounts.contains(escrow_account_id) {
+        builder =
+            builder.append_instruction(Register::account(Account::new(escrow_account_id.clone())));
+    }
+    if !registrations.asset_defs.contains(&stake_asset_id) {
+        let definition = AssetDefinition::new(
+            stake_asset_id.clone(),
+            "Localnet Stake".to_owned(),
+            NumericSpec::default(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .with_metadata(Metadata::default());
+        builder = builder.append_instruction(Register::asset_definition(definition));
+    }
+    for peer in peers {
+        let validator_id = peer.validator_account_id(taira);
+        if !registrations.accounts.contains(&validator_id) {
+            builder =
+                builder.append_instruction(Register::account(Account::new(validator_id.clone())));
+        }
+        builder = builder.append_instruction(Mint::asset_quantity(
+            stake_amount.clone(),
+            AssetId::new(stake_asset_id.clone(), validator_id),
+        ));
+    }
+    append_public_lane_validator_registrations(
+        builder,
+        peers,
+        &[LaneId::SINGLE],
+        stake_amount,
+        taira,
+    )
+    .build_raw()
+}
+fn append_public_lane_validator_registrations(
+    mut builder: GenesisBuilder,
+    peers: &[Peer],
+    lanes: &[LaneId],
+    stake_amount: &Quantity,
+    taira: bool,
+) -> GenesisBuilder {
+    for &lane_id in lanes {
         builder = builder.next_transaction();
         for peer in peers {
             let validator_id = peer.validator_account_id(taira);
@@ -4273,7 +4526,7 @@ fn append_localnet_npos_bootstrap(
             });
         }
     }
-    builder.build_raw()
+    builder
 }
 #[allow(clippy::too_many_lines)]
 fn append_private_dataspace_genesis_bootstrap_for_client(
@@ -6001,6 +6254,7 @@ impl LocalnetClientIdentity {
     }
 }
 struct LocalnetRuntimeBundle {
+    ledger_signer_key: PathBuf,
     operator_signer_key: PathBuf,
     onboarding_signer_key: PathBuf,
     onboarding_token_file: PathBuf,
@@ -6026,16 +6280,25 @@ fn write_private_key_sidecar(path: &Path, private_key: &str) -> Result<()> {
 }
 fn write_localnet_runtime_bundle(
     out_dir: &Path,
-    operator: &LocalnetClientIdentity,
+    ledger: &LocalnetClientIdentity,
+    http_operator: &LocalnetClientIdentity,
     onboarding: &LocalnetClientIdentity,
 ) -> Result<LocalnetRuntimeBundle> {
+    ensure!(
+        ledger.public_key != http_operator.public_key
+            && ledger.public_key != onboarding.public_key
+            && http_operator.public_key != onboarding.public_key,
+        "localnet ledger, HTTP operator and onboarding signers must be distinct"
+    );
     let runtime_dir = out_dir.join(LOCALNET_RUNTIME_DIRECTORY);
     let runtime_dir = crate::secure_fs::prepare_empty_private_directory(&runtime_dir)
         .wrap_err("prepare localnet runtime credential directory")?;
+    let ledger_signer_key = runtime_dir.join(LOCALNET_LEDGER_SIGNER_KEY_FILE);
     let operator_signer_key = runtime_dir.join(LOCALNET_OPERATOR_SIGNER_KEY_FILE);
     let onboarding_signer_key = runtime_dir.join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE);
     let onboarding_token_file = runtime_dir.join(LOCALNET_ONBOARDING_TOKEN_FILE);
-    write_private_key_sidecar(&operator_signer_key, operator.private_key.as_str())?;
+    write_private_key_sidecar(&ledger_signer_key, ledger.private_key.as_str())?;
+    write_private_key_sidecar(&operator_signer_key, http_operator.private_key.as_str())?;
     write_private_key_sidecar(&onboarding_signer_key, onboarding.private_key.as_str())?;
     let mut token_entropy = [0_u8; 32];
     OsRng
@@ -6047,6 +6310,7 @@ fn write_localnet_runtime_bundle(
     crate::secure_fs::write_private_file_atomic(&onboarding_token_file, token.as_bytes())
         .wrap_err("write localnet onboarding token")?;
     Ok(LocalnetRuntimeBundle {
+        ledger_signer_key,
         operator_signer_key,
         onboarding_signer_key,
         onboarding_token_file,
@@ -6119,8 +6383,24 @@ fn write_client_config(
     chain_id: &str,
     chain_discriminant: Option<u16>,
     client: &LocalnetClientIdentity,
-) -> Result<()> {
-    let path = out_dir.join("client.toml");
+) -> Result<[u8; 32]> {
+    write_client_config_at(
+        &out_dir.join("client.toml"),
+        base_api_port,
+        torii_host,
+        chain_id,
+        chain_discriminant,
+        client,
+    )
+}
+fn write_client_config_at(
+    path: &Path,
+    base_api_port: u16,
+    torii_host: &CanonicalHost,
+    chain_id: &str,
+    chain_discriminant: Option<u16>,
+    client: &LocalnetClientIdentity,
+) -> Result<[u8; 32]> {
     // Render explicitly to avoid pretty-printer wrapping the long keys.
     let torii_host = torii_host.url_host();
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
@@ -6158,9 +6438,9 @@ fn write_client_config(
         private_key = client.private_key.as_str(),
         public_key = client.public_key,
     ));
-    write_owner_only_localnet_file(&path, rendered.as_bytes())
-        .wrap_err_with(|| format!("write operator client config {}", path.display()))?;
-    Ok(())
+    write_owner_only_localnet_file(path, rendered.as_bytes())
+        .wrap_err_with(|| format!("write localnet client config {}", path.display()))?;
+    Ok(iroha_crypto::sha256(rendered.as_bytes()))
 }
 #[allow(clippy::too_many_arguments)]
 fn write_localnet_readme(
@@ -6209,6 +6489,15 @@ fn write_localnet_readme(
             )
         })
         .unwrap_or_default();
+    let profile_notes = concat!(
+        "- Generated peer configs enable structural `torii.account_onboarding` and KAGEMUSHA V1 reserve routing\n",
+        "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
+        "Run `kagami docker` without `--seed` against this directory to validate the exact ",
+        "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
+        "authoritative prepared bundle. The resulting Compose manifest embeds only read-only ",
+        "paths to the three public runtime artifacts. The signing key is never mounted at ",
+        "runtime; keep it offline and never commit it.\n\n",
+    );
     let rendered = format!(
         concat!(
             "# Kagami Localnet\n\n",
@@ -6228,20 +6517,15 @@ fn write_localnet_readme(
             "- KAGEMUSHA V1 asset alias: `{kagemusha_alias}`\n",
             "- Initial KAGEMUSHA asset reserve: `{kagemusha_quantity}`\n",
             "{taira_catalog_note}",
-            "- Ephemeral operator authority: `{operator_account_id}`\n",
+            "- Ephemeral ledger administrator: `{operator_account_id}`\n",
             "- Ephemeral onboarding authority: `{onboarding_account_id}`\n",
-            "- Operator signer sidecar: `{operator_signer_key}`\n",
+            "- Ledger/faucet signer sidecar: `{ledger_signer_key}`\n",
+            "- Dedicated HTTP operator signer sidecar: `{operator_signer_key}`\n",
             "- Onboarding signer sidecar: `{onboarding_signer_key}`\n",
             "- Onboarding API token sidecar: `{onboarding_token_file}`\n",
             "- Secret-free alias setup intent: `{alias_setup_intent}`\n",
             "- KAGEMUSHA reserve account: deterministic account derived from the exact genesis network id and asset definition\n",
-            "- Generated peer configs enable structural `torii.account_onboarding` and KAGEMUSHA V1 reserve routing\n",
-            "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
-            "Run `kagami docker` without `--seed` against this directory to validate the exact ",
-            "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
-            "authoritative prepared bundle. The resulting Compose manifest embeds only read-only ",
-            "paths to the three public runtime artifacts. The signing key is never mounted at ",
-            "runtime; keep it offline and never commit it.\n\n",
+            "{profile_notes}",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -6255,6 +6539,7 @@ fn write_localnet_readme(
         ),
         chain_id = chain_id,
         seed_line = seed_line,
+        profile_notes = profile_notes,
         consensus_mode = consensus_mode_label(consensus_mode),
         peers = peers,
         torii_url = torii_url,
@@ -6270,6 +6555,7 @@ fn write_localnet_readme(
         taira_catalog_note = taira_catalog_note,
         operator_account_id = operator_account_id,
         onboarding_account_id = onboarding_account_id,
+        ledger_signer_key = runtime_bundle.ledger_signer_key.display(),
         operator_signer_key = runtime_bundle.operator_signer_key.display(),
         onboarding_signer_key = runtime_bundle.onboarding_signer_key.display(),
         onboarding_token_file = runtime_bundle.onboarding_token_file.display(),
@@ -6381,6 +6667,34 @@ mod tests {
         let operator_identity =
             localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
                 .expect("rebuild deterministic operator identity");
+        let http_operator_identity = localnet_ephemeral_identity(
+            opts.seed.as_deref().map(str::as_bytes),
+            b"http-operator-root",
+        )
+        .expect("rebuild deterministic HTTP operator identity");
+        let client: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("client.toml")).expect("generated client"),
+        )
+        .expect("parse generated client");
+        let client_key = client["account"]["private_key"]
+            .as_str()
+            .expect("client private key")
+            .parse::<ExposedPrivateKey>()
+            .expect("decode client key");
+        let client_key = KeyPair::from_private_key(client_key.0).expect("derive client public key");
+        let http_key = localnet_test_sidecar_key(
+            &temp
+                .path()
+                .join(LOCALNET_RUNTIME_DIRECTORY)
+                .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
+        );
+        assert_eq!(client_key.public_key(), &operator_identity.public_key);
+        assert_eq!(
+            client["account"]["public_key"].as_str(),
+            Some(client_key.public_key().to_string().as_str())
+        );
+        assert_eq!(http_key.public_key(), &http_operator_identity.public_key);
+        assert_ne!(client_key.public_key(), http_key.public_key());
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated Taira genesis");
         let definitions = manifest
@@ -6594,6 +6908,11 @@ mod tests {
                     !fixture_accounts.contains(grant.destination()),
                     "public fixture received a Taira permission"
                 );
+                assert_ne!(
+                    grant.destination(),
+                    &http_operator_identity.account_id,
+                    "HTTP authentication must not acquire ledger administration grants"
+                );
             }
             if let Some(RegisterBox::Domain(register)) =
                 instruction.as_any().downcast_ref::<RegisterBox>()
@@ -6659,12 +6978,24 @@ mod tests {
         // ValidBlock validation; require the persisted result to retain that success.
         let signed = read_signed_genesis(&temp.path().join("genesis.signed.nrt"))
             .expect("read native executed Taira genesis");
-        for index in 0..signed.external_transactions().count() {
+        signed
+            .validate_output_merkle_cache()
+            .expect("generated genesis has complete typed execution outputs");
+        for index in 0..signed.network_entrypoint_count() {
+            let (_, output) = signed
+                .network_output_at(u32::try_from(index).expect("genesis input fits u32"))
+                .expect("genesis input must have its exact Network output");
             assert!(
-                signed.error(index).is_none(),
+                output.result.as_ref().is_ok(),
                 "genesis transaction {index} failed"
             );
         }
+        assert!(
+            signed
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
+            "all generated genesis invocation outputs must be successful"
+        );
 
         let start_script = fs::read_to_string(temp.path().join("start.sh"))
             .expect("read generated Taira start script");
@@ -6682,6 +7013,35 @@ mod tests {
             let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
                 .expect("read Taira peer config");
             let parsed = actual::Root::from_toml_source(source).expect("parse Taira peer config");
+            assert!(parsed.torii.operator_signatures.enabled);
+            assert!(parsed.torii.operator_signatures.allow_node_key);
+            assert_eq!(
+                parsed.torii.operator_signatures.allowed_public_keys,
+                vec![http_operator_identity.public_key.clone()],
+                "each validator must authorize exactly the dedicated HTTP operator"
+            );
+            assert!(
+                !parsed
+                    .torii
+                    .operator_signatures
+                    .allowed_public_keys
+                    .contains(client_key.public_key())
+            );
+            let faucet = parsed
+                .torii
+                .faucet
+                .as_ref()
+                .expect("native faucet admission");
+            assert_eq!(faucet.authority, operator_identity.account_id);
+            assert_eq!(faucet.signer.public_key(), client_key.public_key());
+            assert_ne!(faucet.signer.public_key(), http_key.public_key());
+            assert_eq!(
+                faucet
+                    .private_key_file
+                    .file_name()
+                    .and_then(|name| name.to_str()),
+                Some(LOCALNET_LEDGER_SIGNER_KEY_FILE)
+            );
             assert!(parsed.nexus.governance.default_module.is_none());
             assert!(
                 parsed
@@ -6970,6 +7330,7 @@ mod tests {
     fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {
         localnet_genesis_for_opts_and_client(opts, &localnet_client_account_id())
     }
+    #[allow(clippy::too_many_lines)]
     fn localnet_genesis_for_opts_and_client(
         opts: &LocalnetOptions,
         client_account_id: &AccountId,
@@ -7039,14 +7400,14 @@ mod tests {
         };
         genesis = append_peer_pop(genesis, &peers)
             .expect("append generated localnet fixture topology and proofs of possession");
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
+        let stake_amount = localnet_npos_stake_amount(
+            &genesis
+                .effective_parameters()
+                .expect("generated localnet genesis has one structured parameter block"),
+            requested_stake_amount,
+        );
         if npos_bootstrap {
-            let gas_account_id = localnet_gas_account_id(&genesis_public_key);
-            let stake_amount = localnet_npos_stake_amount(
-                &genesis
-                    .effective_parameters()
-                    .expect("generated localnet genesis has one structured parameter block"),
-                requested_stake_amount,
-            );
             genesis = append_localnet_npos_bootstrap(
                 genesis,
                 &LocalnetNposBootstrapContext {
@@ -7068,8 +7429,17 @@ mod tests {
                 client_account_id,
             )
             .expect("append private-dataspace genesis bootstrap");
+        } else {
+            genesis = append_localnet_permissioned_lane_authority_bootstrap(
+                genesis,
+                &peers,
+                &gas_account_id,
+                &stake_amount,
+                false,
+            )
+            .expect("append localnet permissioned lane authority bootstrap");
         }
-        apply_localnet_crypto_overrides(genesis, npos_bootstrap)
+        apply_localnet_crypto_overrides(genesis)
             .expect("apply generated localnet fixture cryptography overrides")
     }
     include!("localnet/private_profile_bootstrap_tests.rs");
@@ -8788,6 +9158,161 @@ mod tests {
         );
     }
     #[test]
+    #[allow(clippy::too_many_lines)]
+    fn permissioned_localnet_bootstraps_lane_zero_authority_from_trusted_peers() {
+        use std::collections::BTreeSet;
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("localnet-permissioned-lane-authority".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 34080,
+            base_p2p_port: 34337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_cadence_ms: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+        };
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+            .expect("parse generated genesis");
+        let mut validators = Vec::new();
+        let mut activations = Vec::new();
+        for instruction in manifest.instructions() {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                validators.push(register);
+            }
+            if let Some(activate) = instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+            {
+                activations.push(activate);
+            }
+        }
+        assert_eq!(
+            validators.len(),
+            4,
+            "expected one lane-0 validator registration per trusted peer"
+        );
+        let min_stake = iroha_config::parameters::defaults::nexus::staking::min_validator_stake();
+        for register in &validators {
+            assert_eq!(register.lane_id, LaneId::SINGLE);
+            assert_eq!(register.validator, register.stake_account);
+            assert!(register.initial_stake >= min_stake);
+        }
+        let peers = build_peers(
+            opts.peers.get(),
+            opts.seed.as_ref().map(String::as_bytes),
+            opts.base_api_port,
+            opts.base_p2p_port,
+        )
+        .expect("test localnet peer key generation should succeed");
+        let trusted_peer_ids: BTreeSet<_> = peers
+            .iter()
+            .map(|peer| PeerId::from(peer.public_key.clone()))
+            .collect();
+        let registered_peer_ids: BTreeSet<_> = validators
+            .iter()
+            .map(|register| register.peer_id.clone())
+            .collect();
+        assert_eq!(
+            registered_peer_ids, trusted_peer_ids,
+            "lane-0 validators must be exactly the trusted peers"
+        );
+        assert_eq!(activations.len(), 4);
+        for activate in &activations {
+            assert_eq!(activate.lane_id, LaneId::SINGLE);
+        }
+        let registered_validators: BTreeSet<_> = validators
+            .iter()
+            .map(|register| register.validator.clone())
+            .collect();
+        let activated_validators: BTreeSet<_> = activations
+            .iter()
+            .map(|activate| activate.validator.clone())
+            .collect();
+        assert_eq!(activated_validators, registered_validators);
+        let stake_asset_id = localnet_stake_asset_definition_id();
+        for register in &validators {
+            let stake_asset = AssetId::new(stake_asset_id.clone(), register.stake_account.clone());
+            assert!(
+                manifest.instructions().any(|instruction| {
+                    matches!(
+                        instruction.as_any().downcast_ref::<MintBox>(),
+                        Some(MintBox::Asset(mint))
+                            if mint.destination() == &stake_asset
+                                && mint.object() >= &register.initial_stake
+                    )
+                }),
+                "validator stake account must be funded with at least its initial stake"
+            );
+        }
+        let registered_accounts: BTreeSet<_> = manifest
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<RegisterBox>() {
+                    Some(RegisterBox::Account(register)) => {
+                        Some(account_id_runtime_literal(register.object().id(), None))
+                    }
+                    _ => None,
+                },
+            )
+            .collect();
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let nexus = peer_cfg
+            .get("nexus")
+            .and_then(toml::Value::as_table)
+            .expect("nexus table");
+        let staking = nexus
+            .get("staking")
+            .and_then(toml::Value::as_table)
+            .expect("nexus staking table");
+        for key in ["stake_escrow_account_id", "slash_sink_account_id"] {
+            let literal = staking
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .expect("staking account literal");
+            assert!(
+                registered_accounts.contains(literal),
+                "{key} must name an account registered in genesis"
+            );
+        }
+        assert_eq!(
+            staking.get("stake_asset_id").and_then(toml::Value::as_str),
+            Some(localnet_stake_asset_literal().as_str())
+        );
+        assert!(!nexus.contains_key("fees"));
+        assert!(!nexus.contains_key("storage"));
+        assert!(
+            manifest
+                .crypto()
+                .allowed_signing
+                .contains(&iroha_crypto::Algorithm::BlsNormal)
+        );
+        let config_signing = peer_cfg
+            .get("crypto")
+            .and_then(|crypto| crypto.get("allowed_signing"))
+            .and_then(toml::Value::as_array)
+            .expect("crypto.allowed_signing");
+        assert!(
+            config_signing
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .any(|value| value == "bls_normal")
+        );
+    }
+    #[test]
     fn localnet_npos_stake_amount_respects_min_self_bond() {
         let mut params = Parameters::default();
         let npos = SumeragiNposParameters {
@@ -10110,10 +10635,12 @@ mod tests {
     #[test]
     fn client_config_selects_the_generated_identity_file_only() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let root = crate::secure_fs::prepare_empty_private_directory(tmp.path())
+            .expect("prepare private client config directory");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
         write_client_config(
-            tmp.path(),
+            &root,
             8080,
             &host,
             DEFAULT_CHAIN_ID,
@@ -10121,8 +10648,7 @@ mod tests {
             &localnet_client_identity(None, false).expect("default client"),
         )
         .expect("write client config");
-        let contents =
-            fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
+        let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
         assert!(contents.contains("private_key = \"802620"));
         let value: toml::Value = toml::from_str(&contents).expect("parse client config");
         assert_eq!(
@@ -10156,10 +10682,12 @@ mod tests {
     #[test]
     fn client_config_records_chain_discriminant_when_known() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let root = crate::secure_fs::prepare_empty_private_directory(tmp.path())
+            .expect("prepare private client config directory");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
         write_client_config(
-            tmp.path(),
+            &root,
             8080,
             &host,
             DEFAULT_CHAIN_ID,
@@ -10167,8 +10695,7 @@ mod tests {
             &localnet_client_identity(None, false).expect("default client"),
         )
         .expect("write client config");
-        let contents =
-            fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
+        let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
         let value: toml::Value = toml::from_str(&contents).expect("parse client config");
         let account = value
             .get("account")
@@ -10312,6 +10839,42 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(operator_mint_permissions, vec![expected_permission]);
+        for peer_index in 0..opts.peers.get() {
+            let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
+                .expect("read generated permissioned peer config");
+            let parsed = actual::Root::from_toml_source(source)
+                .expect("parse generated permissioned peer config");
+            assert!(parsed.torii.operator_signatures.enabled);
+            assert!(parsed.torii.operator_signatures.allow_node_key);
+            assert_eq!(
+                parsed.torii.operator_signatures.allowed_public_keys,
+                vec![
+                    localnet_test_sidecar_key(
+                        &temp
+                            .path()
+                            .join(LOCALNET_RUNTIME_DIRECTORY)
+                            .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE)
+                    )
+                    .public_key()
+                    .clone()
+                ],
+                "generic localnet must authorize exactly its dedicated HTTP operator"
+            );
+            assert!(
+                !parsed
+                    .torii
+                    .operator_signatures
+                    .allowed_public_keys
+                    .contains(&operator.public_key)
+            );
+            let faucet = parsed
+                .torii
+                .faucet
+                .as_ref()
+                .expect("native faucet admission");
+            assert_eq!(faucet.authority, operator.account_id);
+            assert_eq!(faucet.signer.public_key(), &operator.public_key);
+        }
     }
     #[test]
     fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
@@ -10332,24 +10895,47 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-        let contents =
-            fs::read_to_string(temp.path().join("genesis.json")).expect("read generated genesis");
-        let client_account_id = account_id_runtime_literal(
-            &localnet_client_account_id(),
-            /* chain_discriminant */ None,
+        let client_config: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("client.toml")).expect("read generated client"),
+        )
+        .expect("parse generated client");
+        let client_public_key = client_config["account"]["public_key"]
+            .as_str()
+            .expect("generated client public key")
+            .parse::<iroha_crypto::PublicKey>()
+            .expect("canonical client public key");
+        let operator =
+            localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
+                .expect("derive generated operator");
+        assert_eq!(client_public_key, operator.public_key);
+        let client_fee_asset = AssetId::new(
+            localnet_fee_asset_definition_id(),
+            AccountId::new(client_public_key),
         );
-        let expected_mint = format!(
-            "\"destination\": \"{}#{}\"",
-            localnet_fee_asset_literal(),
-            client_account_id
-        );
+        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+            .expect("parse generated genesis");
+        let minted = manifest
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
+                    Some(MintBox::Asset(mint)) if mint.destination() == &client_fee_asset => {
+                        Some(mint.object().clone())
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
         assert!(
-            contents.contains(&expected_mint),
+            !minted.is_empty(),
             "generated genesis should fund the client signer fee asset"
         );
-        assert!(
-            contents.contains(&LOCALNET_FAUCET_AUTHORITY_BALANCE.to_string()),
-            "generated genesis should give the reused local faucet signer enough XOR for repeated claims"
+        assert_eq!(
+            minted,
+            vec![
+                Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+                Quantity::from(LOCALNET_FAUCET_AUTHORITY_BALANCE),
+            ],
+            "generated genesis should fund alias setup and the reused faucet signer exactly once each"
         );
     }
     #[test]
@@ -10467,7 +11053,34 @@ mod tests {
             faucet.get("enabled").and_then(toml::Value::as_bool),
             Some(true)
         );
-        let expected_authority = localnet_client_account_literal(None);
+        let operator =
+            localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
+                .expect("derive generated operator");
+        let client_config: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("client.toml")).expect("read generated client"),
+        )
+        .expect("parse generated client");
+        let client_public_key = client_config["account"]["public_key"]
+            .as_str()
+            .expect("generated client public key")
+            .parse::<iroha_crypto::PublicKey>()
+            .expect("canonical client public key");
+        assert_eq!(client_public_key, operator.public_key);
+        let expected_authority = operator.account_literal(None);
+        let http_key = localnet_test_sidecar_key(
+            &temp
+                .path()
+                .join(LOCALNET_RUNTIME_DIRECTORY)
+                .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
+        );
+        let ledger_key = localnet_test_sidecar_key(
+            &temp
+                .path()
+                .join(LOCALNET_RUNTIME_DIRECTORY)
+                .join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
+        );
+        assert_eq!(ledger_key.public_key(), &operator.public_key);
+        assert_ne!(ledger_key.public_key(), http_key.public_key());
         let expected_fee_asset = localnet_fee_asset_literal();
         assert_eq!(
             faucet.get("authority").and_then(toml::Value::as_str),
@@ -10484,7 +11097,7 @@ mod tests {
                     .canonicalize()
                     .expect("canonical localnet root")
                     .join(LOCALNET_RUNTIME_DIRECTORY)
-                    .join(LOCALNET_OPERATOR_SIGNER_KEY_FILE)
+                    .join(LOCALNET_LEDGER_SIGNER_KEY_FILE)
             )
         );
         assert_eq!(
@@ -10668,9 +11281,11 @@ mod tests {
     #[test]
     fn client_config_renders_ipv6_torii_url() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let root = crate::secure_fs::prepare_empty_private_directory(tmp.path())
+            .expect("prepare private client config directory");
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
         write_client_config(
-            tmp.path(),
+            &root,
             8080,
             &host,
             DEFAULT_CHAIN_ID,
@@ -10678,8 +11293,7 @@ mod tests {
             &localnet_client_identity(None, false).expect("default client"),
         )
         .expect("write client config");
-        let contents =
-            fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
+        let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
         assert!(contents.contains("torii_url = \"http://[::1]:8080/\""));
     }
     #[test]
@@ -10687,6 +11301,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
         let runtime_bundle = LocalnetRuntimeBundle {
+            ledger_signer_key: tmp.path().join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
             onboarding_signer_key: tmp.path().join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
             onboarding_token_file: tmp.path().join(LOCALNET_ONBOARDING_TOKEN_FILE),
@@ -10725,7 +11340,9 @@ mod tests {
         assert!(!contents.contains("IROHA_GENESIS_SIGNED_FILE"));
         assert!(!contents.contains("IROHA_GENESIS_EXPECTED_HASH_FILE"));
         assert!(!contents.contains("IROHA_GENESIS_PRIVATE_KEY_FILE"));
-        assert!(contents.contains("- Ephemeral operator authority: `"));
+        assert!(contents.contains("- Ephemeral ledger administrator: `"));
+        assert!(contents.contains("- Ledger/faucet signer sidecar: `"));
+        assert!(contents.contains("- Dedicated HTTP operator signer sidecar: `"));
         assert!(contents.contains("- Ephemeral onboarding authority: `"));
         assert!(
             contents.contains(
@@ -10739,6 +11356,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let shell_out_dir = crate::shell::quote_path(tmp.path()).expect("quote temp path");
         let runtime_bundle = LocalnetRuntimeBundle {
+            ledger_signer_key: tmp.path().join(LOCALNET_LEDGER_SIGNER_KEY_FILE),
             operator_signer_key: tmp.path().join(LOCALNET_OPERATOR_SIGNER_KEY_FILE),
             onboarding_signer_key: tmp.path().join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE),
             onboarding_token_file: tmp.path().join(LOCALNET_ONBOARDING_TOKEN_FILE),
@@ -10819,6 +11437,70 @@ mod tests {
             b"do not overwrite"
         );
     }
+    fn localnet_test_sidecar_key(path: &Path) -> KeyPair {
+        let record = Zeroizing::new(fs::read_to_string(path).expect("read fixture signer sidecar"));
+        let private = record
+            .trim()
+            .parse::<ExposedPrivateKey>()
+            .expect("decode fixture signer");
+        KeyPair::from_private_key(private.0).expect("derive fixture signer public key")
+    }
+
+    #[test]
+    fn localnet_runtime_bundle_separates_ledger_and_http_operator_custody() {
+        let seed = Some(b"localnet-separated-custody".as_slice());
+        let ledger = localnet_ephemeral_identity(seed, b"operator-root").expect("ledger identity");
+        let http = localnet_ephemeral_identity(seed, b"http-operator-root").expect("HTTP identity");
+        let onboarding =
+            localnet_ephemeral_identity(seed, b"onboarding-root").expect("onboarding identity");
+        assert_eq!(
+            http.public_key,
+            localnet_ephemeral_identity(seed, b"http-operator-root")
+                .unwrap()
+                .public_key
+        );
+        assert_ne!(ledger.public_key, http.public_key);
+        let root = tempfile::tempdir().expect("runtime bundle parent");
+        let bundle = write_localnet_runtime_bundle(root.path(), &ledger, &http, &onboarding)
+            .expect("write separated runtime bundle");
+        assert_eq!(
+            localnet_test_sidecar_key(&bundle.ledger_signer_key).public_key(),
+            &ledger.public_key
+        );
+        assert_eq!(
+            localnet_test_sidecar_key(&bundle.operator_signer_key).public_key(),
+            &http.public_key
+        );
+        assert_eq!(
+            localnet_test_sidecar_key(&bundle.onboarding_signer_key).public_key(),
+            &onboarding.public_key
+        );
+        for path in [
+            &bundle.ledger_signer_key,
+            &bundle.operator_signer_key,
+            &bundle.onboarding_signer_key,
+        ] {
+            assert!(path.is_file());
+            #[cfg(unix)]
+            {
+                let metadata = fs::symlink_metadata(path).expect("signer custody metadata");
+                assert_eq!(metadata.mode() & 0o777, 0o600);
+                assert_eq!(metadata.nlink(), 1);
+            }
+        }
+        for (ledger, http, onboarding) in [
+            (&ledger, &ledger, &onboarding),
+            (&ledger, &http, &ledger),
+            (&ledger, &http, &http),
+        ] {
+            let rejected = tempfile::tempdir().expect("rejected bundle parent");
+            assert!(
+                write_localnet_runtime_bundle(rejected.path(), ledger, http, onboarding).is_err()
+            );
+            assert!(!rejected.path().join(LOCALNET_RUNTIME_DIRECTORY).exists());
+        }
+    }
+
     #[test]
     fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {
         let operator = localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"operator-root")
@@ -10828,10 +11510,15 @@ mod tests {
                 .expect("derive onboarding identity");
         let first = tempfile::tempdir().expect("first runtime parent");
         let second = tempfile::tempdir().expect("second runtime parent");
-        let first_bundle = write_localnet_runtime_bundle(first.path(), &operator, &onboarding)
-            .expect("write first runtime bundle");
-        let second_bundle = write_localnet_runtime_bundle(second.path(), &operator, &onboarding)
-            .expect("write second runtime bundle");
+        let http_operator =
+            localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"http-operator-root")
+                .expect("derive HTTP operator identity");
+        let first_bundle =
+            write_localnet_runtime_bundle(first.path(), &operator, &http_operator, &onboarding)
+                .expect("write first runtime bundle");
+        let second_bundle =
+            write_localnet_runtime_bundle(second.path(), &operator, &http_operator, &onboarding)
+                .expect("write second runtime bundle");
         assert_ne!(
             first_bundle.onboarding_token_hash, second_bundle.onboarding_token_hash,
             "a reproducible key seed must never make API tokens reproducible"

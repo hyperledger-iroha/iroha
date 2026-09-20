@@ -530,7 +530,13 @@ fn torii_proxy_strict_response_working_set_bytes() -> Option<usize> {
         // decode-allocation ceiling is a conservative bound for each graph.
         snapshot
             .checked_mul(QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS.checked_add(2)?)?
-            .checked_add(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_BYTES.checked_mul(4)?)
+            .checked_add(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_BYTES.checked_mul(4)?)?
+            // A canonical retry reads its historical enclosing carrier, whose
+            // size is independent of the small retried request. The same W slot
+            // owns its enforced decode budget and authentication buffers.
+            .checked_add(
+                iroha_core::state::State::canonical_queue_plan_input_read_working_set_bytes()?,
+            )
     }
     #[cfg(not(feature = "connect"))]
     {

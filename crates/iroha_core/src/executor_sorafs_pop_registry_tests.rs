@@ -276,7 +276,6 @@ mod sorafs_pop_registry_admission {
                 nonzero!(2_u64),
                 None,
                 None,
-                None,
                 NOW * 1_000,
                 0,
             ));
@@ -353,7 +352,6 @@ mod sorafs_pop_registry_admission {
         let state = fixture();
         let mut block = state.block(BlockHeader::new(
             nonzero!(2_u64),
-            None,
             None,
             None,
             NOW * 1_000,
@@ -476,7 +474,6 @@ mod sorafs_pop_registry_admission {
         let state = fixture();
         let mut block = state.block(BlockHeader::new(
             nonzero!(2_u64),
-            None,
             None,
             None,
             NOW * 1_000,

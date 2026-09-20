@@ -172,12 +172,12 @@ pub(crate) struct FastpqSourceCaptureAccumulator {
 }
 
 impl FastpqSourceCaptureAccumulator {
-    /// Transfer an exact set of captures with their transcripts before inventory sealing.
-    /// A missing source, sealed scope or sticky failure leaves the accumulator unchanged.
-    pub(crate) fn take_unsealed_sources(
-        &mut self,
+    /// Require an exact healthy, still-owned selection without transferring captures.
+    /// Validation changes neither entries nor the seal/error state.
+    pub(crate) fn validate_unsealed_selection(
+        &self,
         entry_hashes: &BTreeSet<Hash>,
-    ) -> Result<BTreeMap<Hash, FastpqCapturedTranscriptSource>, FastpqSourceCaptureError> {
+    ) -> Result<(), FastpqSourceCaptureError> {
         if let Some(error) = self.error {
             return Err(error);
         }
@@ -191,6 +191,16 @@ impl FastpqSourceCaptureAccumulator {
                 });
             }
         }
+        Ok(())
+    }
+
+    /// Transfer an exact set of captures with their transcripts before inventory sealing.
+    /// A missing source, sealed scope or sticky failure leaves the accumulator unchanged.
+    pub(crate) fn take_unsealed_sources(
+        &mut self,
+        entry_hashes: &BTreeSet<Hash>,
+    ) -> Result<BTreeMap<Hash, FastpqCapturedTranscriptSource>, FastpqSourceCaptureError> {
+        self.validate_unsealed_selection(entry_hashes)?;
         Ok(entry_hashes
             .iter()
             .filter_map(|entry_hash| {

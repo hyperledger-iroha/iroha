@@ -88,7 +88,6 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
         NonZeroU64::new(1).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );

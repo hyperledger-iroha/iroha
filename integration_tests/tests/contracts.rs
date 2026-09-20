@@ -1666,11 +1666,7 @@ async fn wait_for_cross_peer_rbc_diagnostics(
                         deadline.min(Instant::now() + CONTRACT_RBC_REPLAY_ATTEMPT_TIMEOUT);
                     builder.torii_request_timeout = contract_rbc_remaining(attempt_deadline)?;
                     let client = builder.build()?;
-                    let diagnostics_client = client.clone();
-                    let diagnostics = read_on_dedicated_thread(move || {
-                        diagnostics_client.get_sumeragi_diagnostics()
-                    })
-                    .await?;
+                    let diagnostics = client.get_sumeragi_diagnostics().await?;
                     contract_rbc_remaining(attempt_deadline)?;
                     let queried = if can_query
                         && diagnostics.npos.is_some()

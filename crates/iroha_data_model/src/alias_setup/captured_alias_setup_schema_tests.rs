@@ -1,9 +1,6 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
 
 const CASES: &[crate::captured_schema_tests::Case] = &[
-    crate::captured_schema_tests::Case::bidirectional::<super::AliasRegistryRoutingActivationV1>(
-        "iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::AliasDataspaceBootstrapGrantV1>(
         "iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1",
     ),

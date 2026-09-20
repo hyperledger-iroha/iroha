@@ -18,7 +18,6 @@ fn recovered_proposal_continuation_case(commit_state: u8, body_state: u8) {
         NonZeroU64::new(round.height).unwrap(),
         None,
         None,
-        None,
         8_214,
         0,
     );

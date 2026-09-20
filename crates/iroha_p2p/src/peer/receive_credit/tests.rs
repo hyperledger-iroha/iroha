@@ -368,15 +368,11 @@ fn canonical_record_rejects_substitution_replay_and_extra_inner_frame() {
     let mut wire = Vec::new();
     run::receive_credit_encode(&value, &mut wire).unwrap();
     let caps = crate::network::TopicFrameCaps::uniform(1024);
-    assert!(
-        run::receive_credit_decode::<Fixture, Cipher>(&wire, Class::RecoveryData, caps).is_ok()
-    );
-    assert!(run::receive_credit_decode::<Fixture, Cipher>(&wire, Class::Payload, caps).is_err());
+    assert!(run::receive_credit_decode::<Fixture>(&wire, Class::RecoveryData, caps).is_ok());
+    assert!(run::receive_credit_decode::<Fixture>(&wire, Class::Payload, caps).is_err());
     let original = wire.clone();
     wire.extend_from_slice(&original);
-    assert!(
-        run::receive_credit_decode::<Fixture, Cipher>(&wire, Class::RecoveryData, caps).is_err()
-    );
+    assert!(run::receive_credit_decode::<Fixture>(&wire, Class::RecoveryData, caps).is_err());
 }
 
 #[test]

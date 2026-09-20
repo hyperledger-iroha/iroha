@@ -164,6 +164,50 @@
         ],
         "type": "object"
       },
+      "AccountAliasNotFoundV1": {
+        "additionalProperties": false,
+        "description": "Typed absence detail for the exact requested canonical account alias. The enclosing HTTP404 and account_alias_not_found code are checked separately.",
+        "properties": {
+          "alias": {
+            "description": "Exact canonical requested account alias.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "type": "object"
+      },
+      "AccountAliasesByAccountNotFoundV1": {
+        "additionalProperties": false,
+        "description": "Typed absence detail for the complete canonical account and optional namespace filters. Both nullable filters are required; omitted filters are explicit null. The enclosing HTTP404 and account_aliases_by_account_not_found code are checked separately.",
+        "properties": {
+          "account_id": {
+            "description": "Exact canonical requested account identifier.",
+            "type": "string"
+          },
+          "dataspace": {
+            "description": "Exact canonical requested dataspace filter, or null when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "domain": {
+            "description": "Exact canonical requested domain filter, or null when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "account_id",
+          "dataspace",
+          "domain"
+        ],
+        "type": "object"
+      },
       "AccountAssetListItem": {
         "additionalProperties": true,
         "properties": {
@@ -325,6 +369,43 @@
           "network_prefix",
           "allowed_signing",
           "default_signing"
+        ],
+        "type": "object",
+        "x-iroha-max-bytes": 4096
+      },
+      "AccountFaucetAdvertisement": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "asset_definition_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/CanonicalAccountId"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "network_prefix": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "network_id",
+          "network_prefix",
+          "authority",
+          "asset_definition_id",
+          "amount"
         ],
         "type": "object",
         "x-iroha-max-bytes": 4096
@@ -3117,6 +3198,61 @@
         ],
         "type": "object"
       },
+      "AliasSetupDiagnosticV1": {
+        "additionalProperties": false,
+        "description": "One native secret-free diagnostic. Nullable context fields default to null when omitted; report diagnostics are sorted by their canonical native field order.",
+        "properties": {
+          "actual": {
+            "description": "Redacted actual value, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "description": "Stable machine-readable diagnostic code.",
+            "type": "string"
+          },
+          "config_path": {
+            "description": "Associated configuration path, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected": {
+            "description": "Redacted expected value, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "$ref": "#/components/schemas/AliasSetupValidationPhaseV1"
+          },
+          "remediation": {
+            "description": "Human-readable corrective action.",
+            "type": "string"
+          },
+          "resource": {
+            "description": "Canonical resource text, when available.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AliasSetupSeverityV1"
+          }
+        },
+        "required": [
+          "phase",
+          "code",
+          "severity",
+          "remediation"
+        ],
+        "type": "object"
+      },
       "AliasSetupPlanRequestV1": {
         "additionalProperties": false,
         "properties": {
@@ -3147,17 +3283,12 @@
           "diagnostics": {
             "description": "Deterministically sorted, secret-free diagnostics with phase, stable code, severity, resource, expected/actual values, and remediation.",
             "items": {
-              "$ref": "#/components/schemas/JsonValue"
+              "$ref": "#/components/schemas/AliasSetupDiagnosticV1"
             },
             "type": "array"
           },
           "status": {
-            "enum": [
-              "ready",
-              "pending",
-              "blocked"
-            ],
-            "type": "string"
+            "$ref": "#/components/schemas/AliasSetupStatusV1"
           },
           "version": {
             "enum": [
@@ -3170,6 +3301,74 @@
           "version",
           "status",
           "diagnostics"
+        ],
+        "type": "object"
+      },
+      "AliasSetupSeverityV1": {
+        "additionalProperties": false,
+        "description": "Native tagged severity value; unit variants require an explicit null value.",
+        "properties": {
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "severity",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AliasSetupStatusV1": {
+        "additionalProperties": false,
+        "description": "Native tagged status value; unit variants require an explicit null value.",
+        "properties": {
+          "status": {
+            "enum": [
+              "ready",
+              "pending",
+              "blocked"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "status",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AliasSetupValidationPhaseV1": {
+        "additionalProperties": false,
+        "description": "Native tagged phase value; unit variants require an explicit null value.",
+        "properties": {
+          "phase": {
+            "enum": [
+              "config",
+              "catalog",
+              "bootstrap",
+              "world_state",
+              "planning"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "phase",
+          "value"
         ],
         "type": "object"
       },
@@ -4270,15 +4469,39 @@
       "BlockExecutionReceiptProof": {
         "additionalProperties": false,
         "properties": {
-          "leaf": {
-            "$ref": "#/components/schemas/Hash"
+          "output": {
+            "additionalProperties": false,
+            "description": "Complete typed output committed as the Merkle leaf; it is not a leaf hash or a projected status.",
+            "properties": {
+              "detail": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/JsonValue"
+                  }
+                ],
+                "description": "Canonical detail for the selected ExecutionOutputV1 variant, retaining its full source descriptor, result, receipts and completion records. The Norito data model defines and validates the nested variant fields."
+              },
+              "kind": {
+                "enum": [
+                  "network",
+                  "pipeline",
+                  "time"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "detail"
+            ],
+            "type": "object"
           },
           "proof": {
             "$ref": "#/components/schemas/BlockMerkleProof"
           }
         },
         "required": [
-          "leaf",
+          "output",
           "proof"
         ],
         "type": "object"
@@ -4380,16 +4603,6 @@
               }
             ]
           },
-          "result_merkle_root": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "sccp_commitment_root": {
             "anyOf": [
               {
@@ -4412,7 +4625,6 @@
           "height",
           "prev_block_hash",
           "merkle_root",
-          "result_merkle_root",
           "da_proof_policies_hash",
           "da_commitments_hash",
           "da_pin_intents_hash",
@@ -4662,27 +4874,27 @@
               },
               "type": "array"
             },
-            "description": "FASTPQ transfer transcripts keyed by canonical transaction entrypoint hash literal.",
+            "description": "Complete FASTPQ transcript map keyed by exact execution-call hash literal, authenticated by the exact executed wire.",
             "propertyNames": {
               "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$"
             },
             "type": "object"
           },
-          "result_commitment": {
+          "output_commitment": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/BlockMerkleCommitment"
               }
             ],
-            "description": "Claimed root and exact leaf count for the mandatory execution proof; its leaf count must equal entry_commitment.leaf_count and it must be verified against separately authenticated block finality."
+            "description": "Claimed root and exact leaf count for the complete typed-output tree, which may contain more leaves than the Network input tree. Authenticate against exact executed-wire finality."
           },
-          "result_proof": {
+          "output_proof": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/BlockExecutionReceiptProof"
               }
             ],
-            "description": "Mandatory execution result proof at the same execution-order index as entry_proof."
+            "description": "Full typed Network output and its audit path. Network.input_index joins the authenticated input proof; Pipeline and Time outputs have no Network input leaf."
           }
         },
         "required": [
@@ -4692,8 +4904,8 @@
           "entry_hash",
           "entry_commitment",
           "entry_proof",
-          "result_commitment",
-          "result_proof",
+          "output_commitment",
+          "output_proof",
           "fastpq_transcripts"
         ],
         "type": "object"
@@ -4847,6 +5059,49 @@
           "genesis_finality_proof",
           "status",
           "finality_proof"
+        ],
+        "type": "object"
+      },
+      "BridgeFinalityAttestationTipMismatchV1": {
+        "additionalProperties": false,
+        "description": "Unsigned, selector-bound HTTP 409 progress for a finality snapshot race. requested_height, applied_height and status_height must be positive and not all equal; challenge must be nonzero. All other attestation validation failures remain fixed.",
+        "properties": {
+          "applied_height": {
+            "description": "Applied immutable state-view tip.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "challenge": {
+            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "node_id": {
+            "description": "Configured canonical PeerId of the node which would sign a successful attestation.",
+            "type": "string"
+          },
+          "requested_height": {
+            "description": "Exact requested attestation height.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status_height": {
+            "description": "Durable decision height in independently captured reducer status.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requested_height",
+          "applied_height",
+          "status_height",
+          "challenge",
+          "node_id",
+          "network_id"
         ],
         "type": "object"
       },
@@ -8840,12 +9095,21 @@
       "ErrorDetails": {
         "additionalProperties": false,
         "properties": {
+          "account_alias_not_found": {
+            "$ref": "#/components/schemas/AccountAliasNotFoundV1"
+          },
+          "account_aliases_by_account_not_found": {
+            "$ref": "#/components/schemas/AccountAliasesByAccountNotFoundV1"
+          },
           "actual": {
             "description": "Actual field value, status, profile, or discriminant.",
             "maxLength": 1024,
             "minLength": 1,
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
+          },
+          "alias_setup_report": {
+            "$ref": "#/components/schemas/AliasSetupReportV1"
           },
           "axt": {
             "$ref": "#/components/schemas/AxtErrorDetails"
@@ -8887,6 +9151,9 @@
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
           },
+          "finality_attestation_failure": {
+            "$ref": "#/components/schemas/FinalityAttestationFailure"
+          },
           "hint": {
             "description": "Actionable debugging hint for callers.",
             "maxLength": 1024,
@@ -8907,6 +9174,9 @@
             "minLength": 1,
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
+          },
+          "pipeline_transaction_status_not_found": {
+            "$ref": "#/components/schemas/PipelineTransactionStatusNotFoundV1"
           },
           "profile": {
             "description": "Network profile involved in the error.",
@@ -10206,6 +10476,53 @@
           "bootstrap_count"
         ],
         "type": "object"
+      },
+      "FinalityAttestationFailure": {
+        "additionalProperties": false,
+        "description": "Unsigned request-bound failure; never authenticates readiness or finality. TipChanged requires tip_mismatch; every other reason requires null. All nested selectors must match the outer request and independently retained node/network. Carried only in ErrorEnvelope details.finality_attestation_failure under code bridge_finality_attestation_failure; other error details must be absent.",
+        "properties": {
+          "challenge": {
+            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/FinalityAttestationFailureReason"
+          },
+          "tip_mismatch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BridgeFinalityAttestationTipMismatchV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "challenge",
+          "height",
+          "reason",
+          "tip_mismatch"
+        ],
+        "type": "object"
+      },
+      "FinalityAttestationFailureReason": {
+        "description": "One case-sensitive scalar JSON string naming the failure variant, for example GenesisUncommitted. Tagged objects and alternate spellings are invalid. Only ConsensusUninitialized and GenesisUncommitted permit genesis-readiness retries. TipChanged is general snapshot progress only with an exact bound tip_mismatch payload; scaling genesis readiness treats it as conflict.",
+        "enum": [
+          "ConsensusUninitialized",
+          "GenesisUncommitted",
+          "RestartRequired",
+          "TipChanged",
+          "ConflictingState",
+          "FinalityUnavailable",
+          "InternalFailure"
+        ],
+        "type": "string"
       },
       "GoldilocksDigest384V1": {
         "description": "Six canonical little-endian Goldilocks field elements (48 bytes total).",
@@ -25726,24 +26043,17 @@
         "additionalProperties": false,
         "properties": {
           "hash": {
-            "description": "Canonical signed transaction hash (64 lowercase hexadecimal digits with the Iroha hash marker set).",
+            "description": "Exact requested network entrypoint hash (64 lowercase hexadecimal digits with the Iroha hash marker set), including the outer sealed-reveal identity.",
             "type": "string"
           },
           "transaction": {
             "$ref": "#/components/schemas/JsonValue",
-            "description": "Exact committed transaction with authenticated entrypoint, result, and durable batch receipts."
-          },
-          "trigger_completions": {
-            "items": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "type": "array"
+            "description": "Exact Network input and sole full typed output, with separate input/output proofs, result, durable batch receipts and owned callback completions. Independent Pipeline and Time outputs require their own authenticated output proofs."
           }
         },
         "required": [
           "hash",
-          "transaction",
-          "trigger_completions"
+          "transaction"
         ],
         "type": "object"
       },
@@ -25776,11 +26086,37 @@
         ],
         "type": "object"
       },
+      "PipelineTransactionStatusNotFoundV1": {
+        "additionalProperties": false,
+        "description": "Typed absence detail for the exact requested transaction hash and read scope. The enclosing HTTP404 and pipeline_transaction_status_not_found code are checked separately.",
+        "properties": {
+          "hash": {
+            "description": "Exact canonical requested signed transaction hash (64 lowercase hexadecimal digits with the Iroha hash marker set).",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "type": "string"
+          },
+          "scope": {
+            "description": "Exact read scope applied by Torii.",
+            "enum": [
+              "local",
+              "global"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash",
+          "scope"
+        ],
+        "type": "object"
+      },
       "PipelineTransactionStatusResponse": {
         "additionalProperties": false,
         "properties": {
           "hash": {
-            "description": "Canonical signed transaction hash (hex, lowercase).",
+            "description": "Exact canonical requested signed transaction hash (64 lowercase hexadecimal digits with the Iroha hash marker set).",
             "maxLength": 64,
             "minLength": 64,
             "pattern": "^[0-9a-f]{63}[13579bdf]$",
@@ -51901,6 +52237,52 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/accounts/faucet/policy": {
+      "get": {
+        "description": "Return the configured faucet public policy for this exact network and address profile. The authority, resolved canonical asset definition and exact Quantity amount are discovery data, not a signature or independent funding authority pin. Compare them with an independently trusted operator policy before preparation or submission. This read neither signs nor submits a transaction and requires no new block.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountFaucetAdvertisement"
+                }
+              }
+            },
+            "description": "Current enabled faucet public policy.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Do not retain policy responses as current authority.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The account faucet is disabled (account_faucet_disabled), or its configured policy is unavailable."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read the enabled faucet public policy.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_faucet_policy_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/accounts/faucet/prepare": {
       "post": {
         "description": "Validate one solved proof-of-work claim and current faucet state without mutation, then quote and sign one authenticated exact transaction envelope.",
@@ -54783,11 +55165,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Malformed or unsupported lifecycle planning request.",
+            "description": "Malformed or unsupported lifecycle planning request. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -54836,15 +55223,45 @@
               }
             }
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signed caller lacks the ownership or permission required by the requested plan. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "409": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned.",
+            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -54860,11 +55277,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "A committed planning anchor is not yet available.",
+            "description": "A committed planning anchor is not yet available. ErrorEnvelope code alias_setup_pending carries the native report at details.alias_setup_report with status pending. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55066,9 +55488,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             },
-            "description": "Account alias list not found.",
+            "description": "Only ErrorEnvelope code account_aliases_by_account_not_found with details.account_aliases_by_account_not_found matching the exact requested canonical account_id, dataspace, and domain (both nullable filters are required) denotes absence. HTTP404 alone, generic errors, and mismatched selectors never establish absence.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55252,11 +55679,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Malformed or unsupported lifecycle planning request.",
+            "description": "Malformed or unsupported lifecycle planning request. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55305,15 +55737,45 @@
               }
             }
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signed caller lacks the ownership or permission required by the requested plan. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "409": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned.",
+            "description": "Live mapping, owner, CAS, policy, asset, deadline, or quote state conflicts. No executable plan is returned. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55329,11 +55791,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "A committed planning anchor is not yet available.",
+            "description": "A committed planning anchor is not yet available. ErrorEnvelope code alias_setup_pending carries the native report at details.alias_setup_report with status pending. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55535,9 +56002,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             },
-            "description": "Alias not found.",
+            "description": "Only ErrorEnvelope code account_alias_not_found with details.account_alias_not_found matching the exact requested canonical alias denotes absence. HTTP404 alone, generic errors, and mismatched selectors never establish absence.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55946,11 +56418,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Malformed or empty setup intent.",
+            "description": "Malformed or empty setup intent. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -55999,15 +56476,45 @@
               }
             }
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signed caller lacks the ownership or permission required by the requested plan. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "409": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Live state, mapping, or guarded quote conflicts with the requested intent. No partial executable plan is returned.",
+            "description": "Live state, mapping, or guarded quote conflicts with the requested intent. No partial executable plan is returned. ErrorEnvelope code alias_setup_rejected carries the native report at details.alias_setup_report with status blocked. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -56023,11 +56530,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AliasSetupReportV1"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "A committed planning anchor is not yet available.",
+            "description": "A committed planning anchor is not yet available. ErrorEnvelope code alias_setup_pending carries the native report at details.alias_setup_report with status pending. No executable plan is returned.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -56697,7 +57209,7 @@
     },
     "/v1/bridge/finality/attestation/{height}": {
       "get": {
-        "description": "Signs the caller's exact non-zero 32-byte challenge, canonical node identity, current authoritative Sumeragi-v2 status, exact durable-tip proof, committed genesis block hash, and Kura-backed height-one genesis proof. The requested height must equal the immutable state-view tip. Responses are never cacheable.",
+        "description": "Signs the caller's exact non-zero 32-byte challenge, canonical node identity, current authoritative Sumeragi-v2 status, exact durable-tip proof, committed genesis block hash, and Kura-backed height-one genesis proof. The requested height must equal the immutable state-view tip. Responses are never cacheable. Exact positive requested, applied, or independently sampled status height disagreement returns typed HTTP 409 progress. Progress is unsigned and never replaces successful attestation authentication.",
         "operationId": "bridgeFinalityAttestation",
         "parameters": [
           {
@@ -56755,6 +57267,13 @@
                   "const": "X-Iroha-Finality-Challenge, Accept",
                   "type": "string"
                 }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
               }
             }
           },
@@ -56781,6 +57300,13 @@
                   "const": "X-Iroha-Finality-Challenge, Accept",
                   "type": "string"
                 }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
               }
             }
           },
@@ -56792,7 +57318,7 @@
                 }
               }
             },
-            "description": "Requested height is not the exact durable tip or finality is unavailable.",
+            "description": "HTTP routing or endpoint absence is a fixed failure and does not establish startup or finality snapshot progress.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -56805,6 +57331,13 @@
                 "description": "The response varies by challenge and representation.",
                 "schema": {
                   "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
                   "type": "string"
                 }
               }
@@ -56833,18 +57366,30 @@
                   "const": "X-Iroha-Finality-Challenge, Accept",
                   "type": "string"
                 }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
               }
             }
           },
-          "503": {
+          "409": {
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             },
-            "description": "Authoritative Sumeragi-v2 status is unavailable or restart is required.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -56857,6 +57402,89 @@
                 "description": "The response varies by challenge and representation.",
                 "schema": {
                   "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason InternalFailure. Signing or representation failed; this fixed failure grants neither readiness nor snapshot progress.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
                   "type": "string"
                 }
               }
@@ -73155,7 +73783,7 @@
     },
     "/v1/ledger/block/{height}": {
       "get": {
-        "description": "Returns only the canonical result-bearing SignedBlockWire whose block hash is bound to the finalized state journal at the requested height. A Kura body which is merely staged, resultless, or inconsistent with that journal is never returned. The application/x-norito response is the exact byte carrier consumed by authenticated BlockProofs verification and is bounded to 32 MiB.",
+        "description": "Returns the original canonical result-bearing SignedBlockWire selected by the finalized state journal at the requested height. The complete stored bytes must match the executed-wire hash and length authenticated by its CommitQC, and the complete source/output structure must validate. Staged, resultless, inconsistent, or unauthenticated bodies are never returned. Authenticated wire length is admitted before body I/O. The application/x-norito response is bounded to 32 MiB; source, output, and transcript work is bounded by the configured query_max_fetch_size. These are wire and work limits, not a complete decoded-memory reservation.",
         "operationId": "ledgerExecutedBlockWire",
         "parameters": [
           {
@@ -73203,7 +73831,7 @@
                 }
               }
             },
-            "description": "The height is not finalized or its canonical body is unavailable."
+            "description": "The height is not present in the finalized state journal."
           },
           "413": {
             "content": {
@@ -73215,6 +73843,16 @@
             },
             "description": "The canonical wire exceeds the authenticated carrier limit."
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Source, output, or transcript work exceeds the configured query_max_fetch_size."
+          },
           "500": {
             "content": {
               "application/json": {
@@ -73223,7 +73861,7 @@
                 }
               }
             },
-            "description": "Finalized state and canonical block storage are inconsistent."
+            "description": "The finalized body or its exact finality authority is unavailable, inconsistent, or invalid."
           }
         },
         "security": [
@@ -73247,7 +73885,7 @@
     },
     "/v1/ledger/block/{height}/proof/{entry_hash}": {
       "get": {
-        "description": "Returns result-bearing inclusion and execution Merkle proofs for the specified transaction entrypoint. Response commitments are claims until matched against a target-specific anchor derived from separately authenticated block finality.",
+        "description": "Returns a Network input inclusion proof and the proof of its complete typed execution output from a body authenticated against the finalized state journal and exact CommitQC executed-wire hash and length. The input and output trees may have different leaf counts: Pipeline and Time outputs are not Network inputs. The entry hash names the outer transaction entrypoint, including a sealed entrypoint. The complete source/output structure is validated before selecting the requested entry. The stored wire and complete Norito proof response are each bounded to 32 MiB; source, output, and transcript work is bounded by the configured query_max_fetch_size. Response commitments remain claims until matched against a target-specific anchor derived from separately authenticated block finality.",
         "operationId": "ledgerBlockProof",
         "parameters": [
           {
@@ -73279,11 +73917,14 @@
                 "schema": {
                   "description": "Canonical Norito encoding of `BlockProofs`.",
                   "format": "binary",
-                  "type": "string"
+                  "maxLength": 33554432,
+                  "minLength": 1,
+                  "type": "string",
+                  "x-iroha-max-bytes": 33554432
                 }
               }
             },
-            "description": "Merkle proofs for the requested entrypoint."
+            "description": "Network input inclusion and complete typed execution-output proofs for the requested outer entrypoint."
           },
           "400": {
             "content": {
@@ -73303,7 +73944,37 @@
                 }
               }
             },
-            "description": "Block or entrypoint not found."
+            "description": "The height is not finalized or the requested outer Network entrypoint is absent."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated stored wire or complete Norito proof response exceeds its 32 MiB limit."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Source, output, or transcript work exceeds the configured query_max_fetch_size."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The finalized body, finality authority, or complete source/output structure is unavailable, inconsistent, or invalid."
           }
         },
         "security": [
@@ -73312,7 +73983,7 @@
             "IrohaApiToken": []
           }
         ],
-        "summary": "Fetch Merkle proofs for a block entrypoint.",
+        "summary": "Fetch Network input and execution-output Merkle proofs.",
         "tags": [
           "Ledger"
         ],
@@ -81256,7 +81927,7 @@
     },
     "/v1/pipeline/transactions/batch": {
       "post": {
-        "description": "Submit a non-empty Norito-encoded batch of SignedTransaction payloads. The encoded and declared-decoded byte size is bounded by `torii.max_content_len`, the exact top-level count is bounded by `torii.transaction_ingress.max_batch_transactions`, and queue admission is atomic for the whole batch.",
+        "description": "Submit a bounded non-empty Norito batch of exact signed transactions. Full decode, signature, policy and route preflight precede dispatch. Each entry then uses canonical single-transaction durable admission; batching is not atomic admission or execution. HTTP 202 acknowledges every input with x-iroha-transactions-accepted. HTTP 207 returns every signed identity in input order with its HTTP status and rejection code. Reconcile any unknown outcome before retrying its exact transaction; never resend the whole batch automatically.",
         "requestBody": {
           "content": {
             "application/x-norito": {
@@ -81270,15 +81941,58 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
+            "description": "Every input durably admitted; empty body.",
+            "headers": {
+              "x-iroha-transactions-accepted": {
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "207": {
+            "description": "Dispatched batch with per-entry outcomes; earlier acceptance remains durable.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "signed_transaction_hash",
+                      "status",
+                      "reject_code"
+                    ],
+                    "properties": {
+                      "signed_transaction_hash": {
+                        "type": "string",
+                        "pattern": "^[A-Fa-f0-9]{64}$"
+                      },
+                      "status": {
+                        "type": "integer",
+                        "description": "202 or the single-submit error status."
+                      },
+                      "reject_code": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
                 }
               }
-            },
-            "description": "Successful response"
+            }
+          },
+          "400": {
+            "description": "Full-batch preflight rejected before any new entry was dispatched."
+          },
+          "429": {
+            "description": "Request preauthentication capacity rejected before dispatch."
           }
         },
         "summary": "Submit a batch of versioned signed transactions.",
@@ -81448,7 +82162,22 @@
                 }
               }
             },
-            "description": "Pipeline status not found; Torii has no cached entry for the hash yet."
+            "description": "Only HTTP404 with ErrorEnvelope code pipeline_transaction_status_not_found and details.pipeline_transaction_status_not_found containing the exact requested canonical hash and scope denotes pending absence. Global absence requires typed selector-bound absence from every authoritative shard; HTTP404 alone never establishes absence."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "An authoritative shard is unavailable; ErrorEnvelope code route_unavailable denotes an incomplete global observation. An unavailable shard never counts as absence."
           }
         },
         "security": [

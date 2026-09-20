@@ -8,6 +8,9 @@
 //! implemented here.  Success is therefore deliberately non-authorizing and the
 //! composite boundary still reports the complete RNS/qPCS stage unavailable.
 
+#[cfg(test)]
+use super::rns_native_qpcs_leaf::RnsNativeLeafPayloadV1;
+use super::rns_native_qpcs_leaf::{RnsNativeLeafCacheV1, RnsNativeOracleV1, oracle_node_hash_v1};
 use super::{
     manifest::ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
     rns_native_profile::{
@@ -23,7 +26,18 @@ use super::{
         ZkAmsMkheRnsNativeQpcsRelationBindingV1, ZkAmsMkheRnsNativeQpcsRelationLineageV1,
     },
 };
-use crate::vega::sponge::Keccak256;
+use super::{
+    rns_native_proof_hash::{
+        RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
+        RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+        decode_proof_digest_v1,
+    },
+    rns_native_proof_sampling::{
+        MAX_CHALLENGE_ATTEMPTS_V1, RnsNativeChallengeCoordinateV1,
+        derive_fq2_challenge_v1 as sample_fq2_challenge_v1, sample_challenge_attempt_v1,
+    },
+    rns_native_qpcs_field_wire::{RNS_NATIVE_QPCS_FQ2_BYTES_V1, decode_fq2_v1},
+};
 
 const PREFIX_MAGIC_V1: [u8; 4] = *b"ZQPX";
 const PREFIX_VERSION_V1: u8 = 1;
@@ -34,8 +48,8 @@ const RELATION_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * REPETITIONS_V
 const EVALUATION_COUNT_V1: usize = RELATION_COUNT_V1 * ROWS_PER_REPETITION_V1;
 const EVALUATION_BYTES_V1: usize = EVALUATION_COUNT_V1 * 8;
 pub(super) const COORDINATE_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * ROWS_PER_LIMB_V1;
-pub(super) const FQ2_BYTES_V1: usize = 16;
-pub(super) const DIGEST_BYTES_V1: usize = 32;
+pub(super) const FQ2_BYTES_V1: usize = RNS_NATIVE_QPCS_FQ2_BYTES_V1;
+pub(super) const DIGEST_BYTES_V1: usize = fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1;
 pub(super) const LEAF_BYTES_V1: usize = COORDINATE_COUNT_V1 * FQ2_BYTES_V1;
 pub(super) const QUERY_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1 as usize;
 pub(super) const MAX_OPENED_LEAVES_V1: usize = 2 * QUERY_COUNT_V1;
@@ -44,12 +58,17 @@ const MAX_TREE_BYTES_V1: usize =
     MAX_OPENED_LEAVES_V1 * LEAF_BYTES_V1 + MAX_AUTHENTICATION_HASHES_V1 * DIGEST_BYTES_V1;
 pub(super) const DOMAIN_SIZE_V1: usize = 1 << ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1;
 pub(super) const FRI_ONE_SIZE_V1: usize = DOMAIN_SIZE_V1 / 2;
-const MAX_CHALLENGE_ATTEMPTS_V1: u16 = 256;
 const TREE_COUNT_V1: usize = 3;
 const CHECKED_FOLD_COUNT_V1: u8 = 1;
 const TREE_DESCRIPTOR_BYTES_V1: usize = 2 + 2 + 4 + 4;
-const PREFIX_HEADER_BYTES_V1: usize =
-    4 + 4 + 3 * 2 + 2 + 2 * 4 + TREE_COUNT_V1 * TREE_DESCRIPTOR_BYTES_V1 + 13 * DIGEST_BYTES_V1;
+pub(super) const PREFIX_HEADER_BYTES_V1: usize = 4
+    + 4
+    + 3 * 2
+    + 2
+    + 2 * 4
+    + TREE_COUNT_V1 * TREE_DESCRIPTOR_BYTES_V1
+    + 32
+    + 12 * DIGEST_BYTES_V1;
 
 const SECTION_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.section-binding";
@@ -57,13 +76,6 @@ const RLWE_AGGREGATION_IDENTITY_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.rlwe-aggregation-identity";
 const EVALUATION_BINDING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.ordered-evaluations";
-const RELATION_POINT_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.relation-point";
-const BATCH_CHALLENGE_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.ten-row-batch";
-const FOLD_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.fri-fold-0";
-const TREE_LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.tree-leaf";
-const TREE_NODE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.tree-node";
 const RESIDUAL_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.prefix.unverified-residual";
 
@@ -77,9 +89,9 @@ const _: () = {
     assert!(EVALUATION_COUNT_V1 == 400);
     assert!(EVALUATION_BYTES_V1 == 3_200);
     assert!(COORDINATE_COUNT_V1 == 400);
-    assert!(LEAF_BYTES_V1 == 6_400);
-    assert!(MAX_TREE_BYTES_V1 == 2_156_544);
-    assert!(PREFIX_HEADER_BYTES_V1 == 476);
+    assert!(LEAF_BYTES_V1 == 6_000);
+    assert!(MAX_TREE_BYTES_V1 == 2_082_816);
+    assert!(PREFIX_HEADER_BYTES_V1 == 668);
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,30 +124,30 @@ impl std::error::Error for RnsNativeQpcsPrefixErrorV1 {}
 
 #[derive(Clone, Copy)]
 struct PrefixContextV1 {
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    transcript_digest: [u8; DIGEST_BYTES_V1],
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
-    qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
-    rns_aggregation_seed: [u8; DIGEST_BYTES_V1],
-    relation_seed: [u8; DIGEST_BYTES_V1],
-    batching_seed: [u8; DIGEST_BYTES_V1],
-    fold_zero_seed: [u8; DIGEST_BYTES_V1],
-    query_seed: [u8; DIGEST_BYTES_V1],
-    quotient_root: [u8; DIGEST_BYTES_V1],
-    fri_zero_root: [u8; DIGEST_BYTES_V1],
-    fri_one_root: [u8; DIGEST_BYTES_V1],
-    section_binding_digest: [u8; DIGEST_BYTES_V1],
-    equation_commitment_digests: [[u8; DIGEST_BYTES_V1]; 2],
-    limb_commitment_digests: [[u8; DIGEST_BYTES_V1]; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
+    parameter_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
+    q_mask_s_root: ProofDigestV1,
+    qpcs_pre_relation_transcript_digest: ProofDigestV1,
+    rns_aggregation_seed: ProofDigestV1,
+    relation_seed: ProofDigestV1,
+    batching_seed: ProofDigestV1,
+    fold_zero_seed: ProofDigestV1,
+    query_seed: ProofDigestV1,
+    quotient_root: ProofDigestV1,
+    fri_zero_root: ProofDigestV1,
+    fri_one_root: ProofDigestV1,
+    section_binding_digest: ProofDigestV1,
+    equation_commitment_digests: [ProofDigestV1; 2],
+    limb_commitment_digests: [ProofDigestV1; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1],
 }
 
 impl PrefixContextV1 {
     fn from_transcript_v1(
         transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-        parameter_digest: [u8; DIGEST_BYTES_V1],
-        equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-        limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-        query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+        parameter_digest: [u8; 32],
+        equation_commitment_digests: &[ProofDigestV1],
+        limb_commitment_digests: &[ProofDigestV1],
+        query_opening_digests: &[ProofDigestV1],
     ) -> Result<Self, RnsNativeQpcsPrefixErrorV1> {
         if equation_commitment_digests.len() != 2
             || limb_commitment_digests.len() != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
@@ -158,8 +170,8 @@ impl PrefixContextV1 {
         let quotient_root = transcript.qpcs_quotient_root();
         let fri_zero_root = fri_roots[0].root();
         let fri_one_root = fri_roots[1].root();
+        hash_context_v1(parameter_digest)?;
         if [
-            parameter_digest,
             transcript_digest,
             q_mask_s_root,
             qpcs_pre_relation_transcript_digest,
@@ -172,7 +184,7 @@ impl PrefixContextV1 {
             fri_zero_root,
             fri_one_root,
         ]
-        .contains(&[0; DIGEST_BYTES_V1])
+        .contains(&ProofDigestV1::ZERO)
         {
             return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
         }
@@ -224,10 +236,10 @@ impl PrefixContextV1 {
 )]
 pub(super) struct RnsNativeQpcsRelationScheduleV1 {
     lineage: Option<ZkAmsMkheRnsNativeQpcsRelationLineageV1>,
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    q_mask_s_root: [u8; DIGEST_BYTES_V1],
-    qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
-    relation_seed: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
+    q_mask_s_root: ProofDigestV1,
+    qpcs_pre_relation_transcript_digest: ProofDigestV1,
+    relation_seed: ProofDigestV1,
     points: [u64; RELATION_COUNT_V1],
 }
 
@@ -248,18 +260,18 @@ impl RnsNativeQpcsRelationScheduleV1 {
 
     fn from_bound_parts_v1(
         lineage: Option<ZkAmsMkheRnsNativeQpcsRelationLineageV1>,
-        parameter_digest: [u8; DIGEST_BYTES_V1],
-        q_mask_s_root: [u8; DIGEST_BYTES_V1],
-        qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
-        relation_seed: [u8; DIGEST_BYTES_V1],
+        parameter_digest: [u8; 32],
+        q_mask_s_root: ProofDigestV1,
+        qpcs_pre_relation_transcript_digest: ProofDigestV1,
+        relation_seed: ProofDigestV1,
     ) -> Result<Self, RnsNativeQpcsPrefixErrorV1> {
+        hash_context_v1(parameter_digest)?;
         let identities = [
-            parameter_digest,
             q_mask_s_root,
             qpcs_pre_relation_transcript_digest,
             relation_seed,
         ];
-        if identities.contains(&[0; DIGEST_BYTES_V1])
+        if identities.contains(&ProofDigestV1::ZERO)
             || identities
                 .iter()
                 .enumerate()
@@ -299,7 +311,7 @@ impl RnsNativeQpcsRelationScheduleV1 {
         reason = "the private qPCS prover adapter will mint this owner before quotient roots"
     )]
     pub(super) fn from_relation_binding_v1(
-        parameter_digest: [u8; DIGEST_BYTES_V1],
+        parameter_digest: [u8; 32],
         binding: ZkAmsMkheRnsNativeQpcsRelationBindingV1,
     ) -> Result<Self, RnsNativeQpcsPrefixErrorV1> {
         let q_mask_s_root = binding.q_mask_s_root();
@@ -338,10 +350,10 @@ impl RnsNativeQpcsRelationScheduleV1 {
 
     pub(super) fn validate_context_v1(
         &self,
-        parameter_digest: [u8; DIGEST_BYTES_V1],
-        q_mask_s_root: [u8; DIGEST_BYTES_V1],
-        qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
-        relation_seed: [u8; DIGEST_BYTES_V1],
+        parameter_digest: [u8; 32],
+        q_mask_s_root: ProofDigestV1,
+        qpcs_pre_relation_transcript_digest: ProofDigestV1,
+        relation_seed: ProofDigestV1,
     ) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
         if self.parameter_digest != parameter_digest
             || self.q_mask_s_root != q_mask_s_root
@@ -354,19 +366,19 @@ impl RnsNativeQpcsRelationScheduleV1 {
         Ok(())
     }
 
-    pub(super) const fn parameter_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn parameter_digest(&self) -> [u8; 32] {
         self.parameter_digest
     }
 
-    pub(super) const fn q_mask_s_root(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn q_mask_s_root(&self) -> ProofDigestV1 {
         self.q_mask_s_root
     }
 
-    pub(super) const fn qpcs_pre_relation_transcript_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn qpcs_pre_relation_transcript_digest(&self) -> ProofDigestV1 {
         self.qpcs_pre_relation_transcript_digest
     }
 
-    pub(super) const fn relation_seed(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn relation_seed(&self) -> ProofDigestV1 {
         self.relation_seed
     }
 
@@ -380,22 +392,22 @@ impl RnsNativeQpcsRelationScheduleV1 {
     }
 
     #[cfg(test)]
-    pub(super) fn test_fixture_v1(parameter_digest: [u8; DIGEST_BYTES_V1]) -> Self {
+    pub(super) fn test_fixture_v1(parameter_digest: [u8; 32]) -> Self {
         Self::test_fixture_with_binding_v1(
             parameter_digest,
-            [0xc1; DIGEST_BYTES_V1],
-            [0xc2; DIGEST_BYTES_V1],
-            [0xc3; DIGEST_BYTES_V1],
+            super::rns_native_proof_hash::test_proof_digest_v1(b"q-mask-s", 0),
+            super::rns_native_proof_hash::test_proof_digest_v1(b"pre-relation", 0),
+            super::rns_native_proof_hash::test_proof_digest_v1(b"relation-seed", 0),
             [1; RELATION_COUNT_V1],
         )
     }
 
     #[cfg(test)]
     pub(super) const fn test_fixture_with_binding_v1(
-        parameter_digest: [u8; DIGEST_BYTES_V1],
-        q_mask_s_root: [u8; DIGEST_BYTES_V1],
-        qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
-        relation_seed: [u8; DIGEST_BYTES_V1],
+        parameter_digest: [u8; 32],
+        q_mask_s_root: ProofDigestV1,
+        qpcs_pre_relation_transcript_digest: ProofDigestV1,
+        relation_seed: ProofDigestV1,
         points: [u64; RELATION_COUNT_V1],
     ) -> Self {
         Self {
@@ -410,10 +422,10 @@ impl RnsNativeQpcsRelationScheduleV1 {
 
     #[cfg(test)]
     pub(super) const fn test_fixture_with_lineage_v1(
-        parameter_digest: [u8; DIGEST_BYTES_V1],
-        q_mask_s_root: [u8; DIGEST_BYTES_V1],
-        qpcs_pre_relation_transcript_digest: [u8; DIGEST_BYTES_V1],
-        relation_seed: [u8; DIGEST_BYTES_V1],
+        parameter_digest: [u8; 32],
+        q_mask_s_root: ProofDigestV1,
+        qpcs_pre_relation_transcript_digest: ProofDigestV1,
+        relation_seed: ProofDigestV1,
         points: [u64; RELATION_COUNT_V1],
         lineage: ZkAmsMkheRnsNativeQpcsRelationLineageV1,
     ) -> Self {
@@ -468,16 +480,16 @@ struct PrefixViewV1<'a> {
 )]
 pub(super) struct RnsNativeQpcsFoldZeroStageV1<'a> {
     relation_schedule: Option<RnsNativeQpcsRelationScheduleV1>,
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    transcript_digest: [u8; DIGEST_BYTES_V1],
-    query_seed: [u8; DIGEST_BYTES_V1],
-    section_binding_digest: [u8; DIGEST_BYTES_V1],
-    fri_one_root: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
+    query_seed: ProofDigestV1,
+    section_binding_digest: ProofDigestV1,
+    fri_one_root: ProofDigestV1,
     queries: [u32; QUERY_COUNT_V1],
     fri_one_indices: IndexSetV1,
     fri_one_values: &'a [u8],
     evaluations: &'a [u8],
-    evaluation_binding_digest: [u8; DIGEST_BYTES_V1],
+    evaluation_binding_digest: ProofDigestV1,
     residual: &'a [u8],
 }
 
@@ -490,23 +502,23 @@ impl<'a> RnsNativeQpcsFoldZeroStageV1<'a> {
             .ok_or(RnsNativeQpcsPrefixErrorV1::InvalidOrder)
     }
 
-    pub(super) const fn parameter_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn parameter_digest(&self) -> [u8; 32] {
         self.parameter_digest
     }
 
-    pub(super) const fn transcript_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn transcript_digest(&self) -> ProofDigestV1 {
         self.transcript_digest
     }
 
-    pub(super) const fn query_seed(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn query_seed(&self) -> ProofDigestV1 {
         self.query_seed
     }
 
-    pub(super) const fn section_binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn section_binding_digest(&self) -> ProofDigestV1 {
         self.section_binding_digest
     }
 
-    pub(super) const fn fri_one_root(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn fri_one_root(&self) -> ProofDigestV1 {
         self.fri_one_root
     }
 
@@ -526,7 +538,7 @@ impl<'a> RnsNativeQpcsFoldZeroStageV1<'a> {
         self.evaluations
     }
 
-    pub(super) const fn evaluation_binding_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn evaluation_binding_digest(&self) -> ProofDigestV1 {
         self.evaluation_binding_digest
     }
 
@@ -544,12 +556,12 @@ pub(super) struct IndexSetV1 {
 #[derive(Clone, Copy)]
 struct FrontierNodeV1 {
     index: u32,
-    digest: [u8; DIGEST_BYTES_V1],
+    digest: ProofDigestV1,
 }
 
 const EMPTY_FRONTIER_NODE_V1: FrontierNodeV1 = FrontierNodeV1 {
     index: 0,
-    digest: [0; DIGEST_BYTES_V1],
+    digest: ProofDigestV1::ZERO,
 };
 
 struct DecoderV1<'a> {
@@ -595,10 +607,15 @@ impl<'a> DecoderV1<'a> {
         ))
     }
 
-    fn digest(&mut self) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsPrefixErrorV1> {
-        self.take(DIGEST_BYTES_V1)?
+    fn public_digest(&mut self) -> Result<[u8; 32], RnsNativeQpcsPrefixErrorV1> {
+        self.take(32)?
             .try_into()
             .map_err(|_| RnsNativeQpcsPrefixErrorV1::Truncated)
+    }
+
+    fn digest(&mut self) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
+        decode_proof_digest_v1(self.take(DIGEST_BYTES_V1)?)
+            .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidHeader)
     }
 }
 
@@ -732,9 +749,9 @@ impl Fq2ParametersV1 {
 /// never grants candidate, readiness, or release authority.
 pub(super) fn authenticate_rns_native_qpcs_prefix_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    equation_commitment_digests: &[ProofDigestV1],
+    limb_commitment_digests: &[ProofDigestV1],
+    query_opening_digests: &[ProofDigestV1],
     proof: &'a [u8],
 ) -> Result<RnsNativeQpcsFoldZeroStageV1<'a>, RnsNativeQpcsPrefixErrorV1> {
     let initial = authenticate_rns_native_qpcs_initial_v1(transcript, query_opening_digests, proof)
@@ -759,9 +776,9 @@ pub(super) fn authenticate_rns_native_qpcs_prefix_v1<'a>(
 pub(super) fn authenticate_rns_native_qpcs_prefix_with_schedule_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     relation_schedule: RnsNativeQpcsRelationScheduleV1,
-    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    equation_commitment_digests: &[ProofDigestV1],
+    limb_commitment_digests: &[ProofDigestV1],
+    query_opening_digests: &[ProofDigestV1],
     proof: &'a [u8],
 ) -> Result<RnsNativeQpcsFoldZeroStageV1<'a>, RnsNativeQpcsPrefixErrorV1> {
     let initial = authenticate_rns_native_qpcs_initial_v1(transcript, query_opening_digests, proof)
@@ -889,7 +906,7 @@ fn verify_prefix_parts_with_schedule_v1<'a>(
         fri_one_indices,
         view.fri_one.values,
     )?;
-    if residual_digest_v1(context, view.residual)? == [0; DIGEST_BYTES_V1] {
+    if residual_digest_v1(context, view.residual)? == ProofDigestV1::ZERO {
         return Err(RnsNativeQpcsPrefixErrorV1::InvalidHeader);
     }
     Ok(RnsNativeQpcsFoldZeroStageV1 {
@@ -983,7 +1000,7 @@ fn decode_prefix_exact_v1<'a>(
         descriptor.authentication_bytes = usize::try_from(decoder.u32()?)
             .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?;
     }
-    let parameter_digest = decoder.digest()?;
+    let parameter_digest = decoder.public_digest()?;
     let transcript_digest = decoder.digest()?;
     let rns_aggregation_seed = decoder.digest()?;
     let relation_seed = decoder.digest()?;
@@ -1147,16 +1164,16 @@ pub(super) fn validate_leaf_values_v1(
     values: &[u8],
     opened: usize,
 ) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
-    if values.len() != opened * LEAF_BYTES_V1 {
+    let expected = opened
+        .checked_mul(LEAF_BYTES_V1)
+        .ok_or(RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?;
+    if values.len() != expected {
         return Err(RnsNativeQpcsPrefixErrorV1::InvalidCount);
     }
     for leaf in values.chunks_exact(LEAF_BYTES_V1) {
-        for coordinate in 0..COORDINATE_COUNT_V1 {
-            let offset = coordinate * FQ2_BYTES_V1;
-            let modulus = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[coordinate / ROWS_PER_LIMB_V1];
-            if read_u64_v1(leaf, offset)? >= modulus || read_u64_v1(leaf, offset + 8)? >= modulus {
-                return Err(RnsNativeQpcsPrefixErrorV1::NonCanonicalResidue);
-            }
+        for (coordinate, pair) in leaf.chunks_exact(FQ2_BYTES_V1).enumerate() {
+            decode_fq2_v1(coordinate / ROWS_PER_LIMB_V1, pair)
+                .map_err(|_| RnsNativeQpcsPrefixErrorV1::NonCanonicalResidue)?;
         }
     }
     Ok(())
@@ -1168,8 +1185,8 @@ pub(super) fn authenticate_tree_v1(
     length: usize,
     role: TreeRoleV1,
     layer: u8,
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    expected_root: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
+    expected_root: ProofDigestV1,
 ) -> Result<(), RnsNativeQpcsPrefixErrorV1> {
     if !length.is_power_of_two()
         || indices.len == 0
@@ -1178,19 +1195,21 @@ pub(super) fn authenticate_tree_v1(
     {
         return Err(RnsNativeQpcsPrefixErrorV1::InvalidCount);
     }
+    let oracle = leaf_oracle_v1(role, layer, length)?;
+    let mut leaves = RnsNativeLeafCacheV1::new(parameter_digest, oracle)
+        .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidContext)?;
     let mut current = [EMPTY_FRONTIER_NODE_V1; MAX_OPENED_LEAVES_V1];
     let mut next = [EMPTY_FRONTIER_NODE_V1; MAX_OPENED_LEAVES_V1];
     for (position, node) in current.iter_mut().enumerate().take(indices.len) {
         let start = position * LEAF_BYTES_V1;
         *node = FrontierNodeV1 {
             index: indices.values[position],
-            digest: tree_leaf_hash_v1(
-                parameter_digest,
-                role,
-                layer,
-                length,
-                &tree.values[start..start + LEAF_BYTES_V1],
-            )?,
+            digest: leaves
+                .leaf(
+                    indices.values[position],
+                    &tree.values[start..start + LEAF_BYTES_V1],
+                )
+                .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidMerklePath)?,
         };
     }
     let mut current_len = indices.len;
@@ -1215,12 +1234,12 @@ pub(super) fn authenticate_tree_v1(
                 let start = authentication_cursor
                     .checked_mul(DIGEST_BYTES_V1)
                     .ok_or(RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?;
-                let sibling = tree
-                    .authentication
-                    .get(start..start + DIGEST_BYTES_V1)
-                    .ok_or(RnsNativeQpcsPrefixErrorV1::InvalidMerklePath)?
-                    .try_into()
-                    .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidMerklePath)?;
+                let sibling = decode_proof_digest_v1(
+                    tree.authentication
+                        .get(start..start + DIGEST_BYTES_V1)
+                        .ok_or(RnsNativeQpcsPrefixErrorV1::InvalidMerklePath)?,
+                )
+                .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidMerklePath)?;
                 authentication_cursor += 1;
                 if node.index.is_multiple_of(2) {
                     left = node.digest;
@@ -1239,6 +1258,7 @@ pub(super) fn authenticate_tree_v1(
                     layer,
                     length,
                     height,
+                    node.index / 2,
                     left,
                     right,
                 )?,
@@ -1312,23 +1332,19 @@ fn verify_relations_openings_and_batch_with_schedule_v1(
         let modulus = field.modulus;
         let mut batch = [[Fq2V1::ZERO; 2]; ROWS_PER_LIMB_V1];
         for (row, coefficients) in batch.iter_mut().enumerate() {
-            coefficients[0] = derive_fq2_challenge_v1(
-                BATCH_CHALLENGE_DOMAIN_V1,
+            coefficients[0] = derive_batch_challenge_v1(
                 context.parameter_digest,
                 context.batching_seed,
                 limb,
                 row,
                 0,
-                modulus,
             )?;
-            coefficients[1] = derive_fq2_challenge_v1(
-                BATCH_CHALLENGE_DOMAIN_V1,
+            coefficients[1] = derive_batch_challenge_v1(
                 context.parameter_digest,
                 context.batching_seed,
                 limb,
                 row,
                 1,
-                modulus,
             )?;
         }
         for repetition in 0..REPETITIONS_V1 {
@@ -1400,14 +1416,12 @@ fn verify_first_fold_v1(
     for (limb, field) in fields.into_iter().enumerate() {
         let mut alphas = [Fq2V1::ZERO; ROWS_PER_LIMB_V1];
         for (row, alpha) in alphas.iter_mut().enumerate() {
-            *alpha = derive_fq2_challenge_v1(
-                FOLD_CHALLENGE_DOMAIN_V1,
+            *alpha = derive_fold_challenge_v1(
                 context.parameter_digest,
                 context.fold_zero_seed,
+                0,
                 limb,
                 row,
-                0,
-                field.modulus,
             )?;
         }
         for &query in queries {
@@ -1440,30 +1454,28 @@ fn derive_relation_points_v1(
 }
 
 fn derive_relation_points_from_seed_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    relation_seed: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
+    relation_seed: ProofDigestV1,
 ) -> Result<[u64; RELATION_COUNT_V1], RnsNativeQpcsPrefixErrorV1> {
+    let hash_context = hash_context_v1(parameter_digest)?;
     let mut points = [0_u64; RELATION_COUNT_V1];
     for (limb, &modulus) in ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1.iter().enumerate() {
-        let zone = u64::MAX - u64::MAX % modulus;
         for repetition in 0..REPETITIONS_V1 {
             let coordinate = limb * REPETITIONS_V1 + repetition;
             let prior = &points[limb * REPETITIONS_V1..coordinate];
             let mut accepted = None;
             for attempt in 0..MAX_CHALLENGE_ATTEMPTS_V1 {
-                let candidate = derive_candidate_v1(
-                    RELATION_POINT_DOMAIN_V1,
-                    parameter_digest,
+                let point = sample_challenge_attempt_v1(
+                    &hash_context,
                     relation_seed,
-                    limb,
-                    repetition,
-                    0,
-                    modulus,
+                    RnsNativeChallengeCoordinateV1::RelationPoint {
+                        limb: limb as u8,
+                        repetition: repetition as u8,
+                    },
                     attempt,
-                    0,
-                )?;
-                if candidate < zone {
-                    let point = candidate % modulus;
+                )
+                .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidChallenge)?;
+                if let Some(point) = point {
                     if point != 0
                         && !prior.contains(&point)
                         && mod_add_v1(
@@ -1484,88 +1496,53 @@ fn derive_relation_points_from_seed_v1(
     Ok(points)
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "every fixed challenge axis is explicitly domain separated"
-)]
-fn derive_candidate_v1(
-    domain: &[u8],
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    seed: [u8; DIGEST_BYTES_V1],
+fn derive_batch_challenge_v1(
+    parameter_digest: [u8; 32],
+    seed: ProofDigestV1,
     limb: usize,
     row: usize,
-    component: usize,
-    modulus: u64,
-    attempt: u16,
-    half: u8,
-) -> Result<u64, RnsNativeQpcsPrefixErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(domain);
-    hash.update(&[PREFIX_VERSION_V1]);
-    hash.update(&parameter_digest);
-    hash.update(&seed);
-    hash.update(&[
-        u8::try_from(limb).map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?,
-        u8::try_from(row).map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?,
-        u8::try_from(component).map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?,
-        half,
-    ]);
-    hash.update(&modulus.to_be_bytes());
-    hash.update(&attempt.to_be_bytes());
-    let digest = hash.finalize();
-    Ok(u64::from_be_bytes(digest[..8].try_into().map_err(
-        |_| RnsNativeQpcsPrefixErrorV1::InvalidChallenge,
-    )?))
+    coefficient: usize,
+) -> Result<Fq2V1, RnsNativeQpcsPrefixErrorV1> {
+    if limb >= ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 || row >= ROWS_PER_LIMB_V1 || coefficient >= 2 {
+        return Err(RnsNativeQpcsPrefixErrorV1::InvalidChallenge);
+    }
+    sample_fq2_challenge_v1(
+        &hash_context_v1(parameter_digest)?,
+        seed,
+        RnsNativeChallengeCoordinateV1::Batch {
+            limb: limb as u8,
+            row: row as u8,
+            coefficient: coefficient as u8,
+            component: 0,
+        },
+    )
+    .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidChallenge)
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "every fixed challenge axis is explicitly domain separated"
-)]
-fn derive_fq2_challenge_v1(
-    domain: &[u8],
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    seed: [u8; DIGEST_BYTES_V1],
+pub(super) fn derive_fold_challenge_v1(
+    parameter_digest: [u8; 32],
+    seed: ProofDigestV1,
+    layer: usize,
     limb: usize,
     row: usize,
-    component: usize,
-    modulus: u64,
 ) -> Result<Fq2V1, RnsNativeQpcsPrefixErrorV1> {
-    let zone = u64::MAX - u64::MAX % modulus;
-    for attempt in 0..MAX_CHALLENGE_ATTEMPTS_V1 {
-        let c0 = derive_candidate_v1(
-            domain,
-            parameter_digest,
-            seed,
-            limb,
-            row,
-            component,
-            modulus,
-            attempt,
-            0,
-        )?;
-        let c1 = derive_candidate_v1(
-            domain,
-            parameter_digest,
-            seed,
-            limb,
-            row,
-            component,
-            modulus,
-            attempt,
-            1,
-        )?;
-        if c0 < zone && c1 < zone {
-            let value = Fq2V1 {
-                c0: c0 % modulus,
-                c1: c1 % modulus,
-            };
-            if value != Fq2V1::ZERO {
-                return Ok(value);
-            }
-        }
+    if layer >= usize::from(ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1)
+        || limb >= ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
+        || row >= ROWS_PER_LIMB_V1
+    {
+        return Err(RnsNativeQpcsPrefixErrorV1::InvalidChallenge);
     }
-    Err(RnsNativeQpcsPrefixErrorV1::InvalidChallenge)
+    sample_fq2_challenge_v1(
+        &hash_context_v1(parameter_digest)?,
+        seed,
+        RnsNativeChallengeCoordinateV1::FriFold {
+            layer: layer as u8,
+            limb: limb as u8,
+            row: row as u8,
+            component: 0,
+        },
+    )
+    .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidChallenge)
 }
 
 pub(super) fn derive_fields_v1()
@@ -1657,211 +1634,251 @@ fn read_value_from_slice_v1(
         .checked_mul(LEAF_BYTES_V1)
         .and_then(|value| value.checked_add(coordinate * FQ2_BYTES_V1))
         .ok_or(RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?;
-    Ok(Fq2V1 {
-        c0: read_u64_v1(values, offset)?,
-        c1: read_u64_v1(values, offset + 8)?,
-    })
+    decode_fq2_v1(
+        coordinate / ROWS_PER_LIMB_V1,
+        values
+            .get(offset..offset + FQ2_BYTES_V1)
+            .ok_or(RnsNativeQpcsPrefixErrorV1::Truncated)?,
+    )
+    .map_err(|_| RnsNativeQpcsPrefixErrorV1::NonCanonicalResidue)
 }
 
-pub(super) fn tree_leaf_hash_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
+fn hash_context_v1(
+    parameter_digest: [u8; 32],
+) -> Result<RnsNativeProofHashContextV1, RnsNativeQpcsPrefixErrorV1> {
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidContext)?;
+    if context.parameter_digest() != parameter_digest {
+        return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
+    }
+    Ok(context)
+}
+
+fn tree_hash_role_v1(
     role: TreeRoleV1,
     layer: u8,
     length: usize,
-    values: &[u8],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsPrefixErrorV1> {
-    if values.len() != LEAF_BYTES_V1 {
-        return Err(RnsNativeQpcsPrefixErrorV1::InvalidCount);
+) -> Result<RnsNativeProofHashRoleV1, RnsNativeQpcsPrefixErrorV1> {
+    match role {
+        TreeRoleV1::Quotient if layer == 0 && length == DOMAIN_SIZE_V1 => {
+            Ok(RnsNativeProofHashRoleV1::Quotient)
+        }
+        TreeRoleV1::Fri
+            if layer < ZK_AMS_MKHE_RNS_NATIVE_FRI_ROUNDS_V1
+                && length == DOMAIN_SIZE_V1 >> layer =>
+        {
+            Ok(RnsNativeProofHashRoleV1::Fri)
+        }
+        _ => Err(RnsNativeQpcsPrefixErrorV1::InvalidCount),
     }
-    let mut hash = Keccak256::new();
-    hash.update(TREE_LEAF_DOMAIN_V1);
-    hash.update(&[PREFIX_VERSION_V1, role as u8, layer]);
-    hash.update(&parameter_digest);
-    hash.update(
-        &u32::try_from(length)
-            .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(
-        &u16::try_from(COORDINATE_COUNT_V1)
-            .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(values);
-    Ok(hash.finalize())
+}
+
+fn leaf_oracle_v1(
+    role: TreeRoleV1,
+    layer: u8,
+    length: usize,
+) -> Result<RnsNativeOracleV1, RnsNativeQpcsPrefixErrorV1> {
+    tree_hash_role_v1(role, layer, length)?;
+    Ok(match role {
+        TreeRoleV1::Quotient => RnsNativeOracleV1::Quotient,
+        TreeRoleV1::Fri => RnsNativeOracleV1::Fri { layer },
+    })
+}
+
+#[cfg(test)]
+pub(super) fn tree_leaf_hash_v1(
+    parameter_digest: [u8; 32],
+    role: TreeRoleV1,
+    layer: u8,
+    length: usize,
+    index: u32,
+    values: &[u8],
+) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
+    let oracle = leaf_oracle_v1(role, layer, length)?;
+    RnsNativeLeafPayloadV1::from_canonical_values(parameter_digest, oracle, values)
+        .and_then(|payload| payload.at_index(index))
+        .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidContext)
 }
 
 #[allow(
     clippy::too_many_arguments,
-    reason = "the Merkle domain includes every fixed tree axis"
+    reason = "every fixed oracle position is explicitly bound"
 )]
 pub(super) fn tree_node_hash_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
     role: TreeRoleV1,
     layer: u8,
     length: usize,
     height: usize,
-    left: [u8; DIGEST_BYTES_V1],
-    right: [u8; DIGEST_BYTES_V1],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsPrefixErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(TREE_NODE_DOMAIN_V1);
-    hash.update(&[PREFIX_VERSION_V1, role as u8, layer]);
-    hash.update(&parameter_digest);
-    hash.update(
-        &u32::try_from(length)
-            .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(&[
-        u8::try_from(height).map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?
-    ]);
-    hash.update(&left);
-    hash.update(&right);
-    Ok(hash.finalize())
+    index: u32,
+    left: ProofDigestV1,
+    right: ProofDigestV1,
+) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
+    tree_hash_role_v1(role, layer, length)?;
+    if height == 0 || height > length.ilog2() as usize || index as usize >= length >> height {
+        return Err(RnsNativeQpcsPrefixErrorV1::InvalidCount);
+    }
+    let oracle = match role {
+        TreeRoleV1::Quotient => RnsNativeOracleV1::Quotient,
+        TreeRoleV1::Fri => RnsNativeOracleV1::Fri { layer },
+    };
+    oracle_node_hash_v1(parameter_digest, oracle, height, index, [left, right])
+        .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidContext)
 }
 
-fn section_binding_digest_v1(
-    transcript_digest: [u8; DIGEST_BYTES_V1],
-    equation_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    limb_commitment_digests: &[[u8; DIGEST_BYTES_V1]],
-    query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsPrefixErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(SECTION_BINDING_DOMAIN_V1);
-    hash.update(&[PREFIX_VERSION_V1]);
-    hash.update(&transcript_digest);
-    hash.update(&[
-        u8::try_from(equation_commitment_digests.len())
-            .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?,
-        u8::try_from(limb_commitment_digests.len())
-            .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?,
-    ]);
-    hash.update(
-        &u16::try_from(query_opening_digests.len())
-            .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    for digest in equation_commitment_digests
-        .iter()
-        .chain(limb_commitment_digests)
-        .chain(query_opening_digests)
-    {
-        hash.update(digest);
-    }
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
+fn binding_hash_v1(
+    domain: &[u8],
+    fields: &[&[u8]],
+) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
+    // The caller supplies only one of this module's fixed proof-binding roles.
+    let role_index = if domain == SECTION_BINDING_DOMAIN_V1 {
+        0
+    } else if domain == EVALUATION_BINDING_DOMAIN_V1 {
+        1
+    } else if domain == RLWE_AGGREGATION_IDENTITY_DOMAIN_V1 {
+        2
+    } else if domain == RESIDUAL_DOMAIN_V1 {
+        3
+    } else {
+        return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
+    };
+    let digest = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidContext)?
+        .hash(
+            RnsNativeProofHashRoleV1::Transcript,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1 {
+                level: 1,
+                index: role_index,
+                counter: 0,
+            },
+            fields,
+        )
+        .map_err(|_| RnsNativeQpcsPrefixErrorV1::InvalidContext)?;
+    if digest == ProofDigestV1::ZERO {
         return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
     }
     Ok(digest)
+}
+
+fn section_binding_digest_v1(
+    transcript_digest: ProofDigestV1,
+    equation_commitment_digests: &[ProofDigestV1],
+    limb_commitment_digests: &[ProofDigestV1],
+    query_opening_digests: &[ProofDigestV1],
+) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
+    if equation_commitment_digests.len() != 2
+        || limb_commitment_digests.len() != ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1
+        || query_opening_digests.len() != QUERY_COUNT_V1
+    {
+        return Err(RnsNativeQpcsPrefixErrorV1::InvalidCount);
+    }
+    let equations: [u8; 2 * DIGEST_BYTES_V1] = core::array::from_fn(|i| {
+        equation_commitment_digests[i / DIGEST_BYTES_V1][i % DIGEST_BYTES_V1]
+    });
+    let limbs: [u8; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * DIGEST_BYTES_V1] =
+        core::array::from_fn(|i| limb_commitment_digests[i / DIGEST_BYTES_V1][i % DIGEST_BYTES_V1]);
+    let queries: [u8; QUERY_COUNT_V1 * DIGEST_BYTES_V1] =
+        core::array::from_fn(|i| query_opening_digests[i / DIGEST_BYTES_V1][i % DIGEST_BYTES_V1]);
+    binding_hash_v1(
+        SECTION_BINDING_DOMAIN_V1,
+        &[
+            SECTION_BINDING_DOMAIN_V1,
+            &[PREFIX_VERSION_V1],
+            transcript_digest.as_bytes(),
+            &equations,
+            &limbs,
+            &queries,
+        ],
+    )
 }
 
 fn evaluation_binding_digest_v1(
     context: PrefixContextV1,
     evaluations: &[u8],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsPrefixErrorV1> {
+) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
     if evaluations.len() != EVALUATION_BYTES_V1 {
         return Err(RnsNativeQpcsPrefixErrorV1::InvalidCount);
     }
-    let mut hash = Keccak256::new();
-    hash.update(EVALUATION_BINDING_DOMAIN_V1);
-    hash.update(&[PREFIX_VERSION_V1]);
-    hash.update(&context.parameter_digest);
-    hash.update(&context.transcript_digest);
-    hash.update(&context.relation_seed);
-    hash.update(&context.section_binding_digest);
     let aggregation_identity = rlwe_aggregation_identity_v1(context)?;
-    hash.update(
-        &u16::try_from(EVALUATION_COUNT_V1)
-            .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
+    const RECORD_BYTES: usize = 3 + 2 * DIGEST_BYTES_V1 + 8;
+    let mut records = [0_u8; EVALUATION_COUNT_V1 * RECORD_BYTES];
     for limb in 0..ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 {
         for repetition in 0..REPETITIONS_V1 {
             for role in 0..ROWS_PER_REPETITION_V1 {
                 let row = repetition * ROWS_PER_REPETITION_V1 + role;
                 let relation = limb * REPETITIONS_V1 + repetition;
-                let offset = relation * 16 + role * 8;
-                hash.update(&[
-                    u8::try_from(limb)
-                        .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?,
-                    u8::try_from(row)
-                        .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?,
-                    u8::try_from(role)
-                        .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?,
-                ]);
-                // Row roles are Product/OpeningQuotient, not RLWE equation
-                // ordinals. Bind the ordered equation pair through one exact
-                // transcript-derived aggregation identity in every record.
-                hash.update(&aggregation_identity);
-                hash.update(&context.limb_commitment_digests[limb]);
-                hash.update(
-                    evaluations
-                        .get(offset..offset + 8)
-                        .ok_or(RnsNativeQpcsPrefixErrorV1::Truncated)?,
+                let record = &mut records[(relation * 2 + role) * RECORD_BYTES
+                    ..(relation * 2 + role + 1) * RECORD_BYTES];
+                record[..3].copy_from_slice(&[limb as u8, row as u8, role as u8]);
+                record[3..3 + DIGEST_BYTES_V1].copy_from_slice(aggregation_identity.as_bytes());
+                record[3 + DIGEST_BYTES_V1..3 + 2 * DIGEST_BYTES_V1]
+                    .copy_from_slice(context.limb_commitment_digests[limb].as_bytes());
+                record[3 + 2 * DIGEST_BYTES_V1..].copy_from_slice(
+                    &evaluations[relation * 16 + role * 8..relation * 16 + role * 8 + 8],
                 );
             }
         }
     }
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
-        return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
-    }
-    Ok(digest)
+    binding_hash_v1(
+        EVALUATION_BINDING_DOMAIN_V1,
+        &[
+            EVALUATION_BINDING_DOMAIN_V1,
+            &[PREFIX_VERSION_V1],
+            &context.parameter_digest,
+            context.transcript_digest.as_bytes(),
+            context.relation_seed.as_bytes(),
+            context.section_binding_digest.as_bytes(),
+            &(EVALUATION_COUNT_V1 as u16).to_be_bytes(),
+            &records,
+        ],
+    )
 }
 
 fn rlwe_aggregation_identity_v1(
     context: PrefixContextV1,
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsPrefixErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(RLWE_AGGREGATION_IDENTITY_DOMAIN_V1);
-    hash.update(&[PREFIX_VERSION_V1, 2]);
-    hash.update(&context.parameter_digest);
-    hash.update(&context.transcript_digest);
-    hash.update(&context.rns_aggregation_seed);
-    for (ordinal, digest) in context.equation_commitment_digests.iter().enumerate() {
-        hash.update(&[
-            u8::try_from(ordinal).map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?
-        ]);
-        hash.update(digest);
-    }
-    let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
-        return Err(RnsNativeQpcsPrefixErrorV1::InvalidContext);
-    }
-    Ok(digest)
+) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
+    binding_hash_v1(
+        RLWE_AGGREGATION_IDENTITY_DOMAIN_V1,
+        &[
+            RLWE_AGGREGATION_IDENTITY_DOMAIN_V1,
+            &[PREFIX_VERSION_V1, 2],
+            &context.parameter_digest,
+            context.transcript_digest.as_bytes(),
+            context.rns_aggregation_seed.as_bytes(),
+            context.equation_commitment_digests[0].as_bytes(),
+            context.equation_commitment_digests[1].as_bytes(),
+        ],
+    )
 }
 
 fn residual_digest_v1(
     context: PrefixContextV1,
     residual: &[u8],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsPrefixErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(RESIDUAL_DOMAIN_V1);
-    hash.update(&[PREFIX_VERSION_V1]);
-    for digest in [
-        context.parameter_digest,
-        context.transcript_digest,
-        context.rns_aggregation_seed,
-        context.relation_seed,
-        context.batching_seed,
-        context.fold_zero_seed,
-        context.query_seed,
-        context.quotient_root,
-        context.fri_zero_root,
-        context.fri_one_root,
-        context.section_binding_digest,
-    ] {
-        hash.update(&digest);
-    }
-    hash.update(&rlwe_aggregation_identity_v1(context)?);
-    hash.update(
-        &u32::try_from(residual.len())
-            .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(residual);
-    Ok(hash.finalize())
+) -> Result<ProofDigestV1, RnsNativeQpcsPrefixErrorV1> {
+    let length = u32::try_from(residual.len())
+        .map_err(|_| RnsNativeQpcsPrefixErrorV1::ArithmeticOverflow)?;
+    binding_hash_v1(
+        RESIDUAL_DOMAIN_V1,
+        &[
+            RESIDUAL_DOMAIN_V1,
+            &[PREFIX_VERSION_V1],
+            &context.parameter_digest,
+            context.transcript_digest.as_bytes(),
+            context.rns_aggregation_seed.as_bytes(),
+            context.relation_seed.as_bytes(),
+            context.batching_seed.as_bytes(),
+            context.fold_zero_seed.as_bytes(),
+            context.query_seed.as_bytes(),
+            context.quotient_root.as_bytes(),
+            context.fri_zero_root.as_bytes(),
+            context.fri_one_root.as_bytes(),
+            context.section_binding_digest.as_bytes(),
+            rlwe_aggregation_identity_v1(context)?.as_bytes(),
+            &length.to_be_bytes(),
+            residual,
+        ],
+    )
 }
 
 fn read_u64_v1(bytes: &[u8], offset: usize) -> Result<u64, RnsNativeQpcsPrefixErrorV1> {

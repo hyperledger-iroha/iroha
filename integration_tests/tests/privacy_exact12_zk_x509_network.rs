@@ -338,7 +338,7 @@ async fn query_tip(
     let contains_transaction = if let Some(transaction) = transaction {
         let expected = transaction.hash_as_entrypoint();
         let matches = tip
-            .entrypoint_hashes()
+            .network_input_hashes()
             .filter(|observed| observed == &expected)
             .count();
         ensure!(

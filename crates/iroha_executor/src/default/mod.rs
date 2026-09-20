@@ -1033,7 +1033,6 @@ mod core_authorization_dispatch_tests {
                         NonZeroU64::new(2).expect("non-genesis block height"),
                         None,
                         None,
-                        None,
                         0,
                         0,
                     ),
@@ -2545,7 +2544,6 @@ pub mod account {
                             NonZeroU64::new(2).expect("non-genesis block height"),
                             None,
                             None,
-                            None,
                             0,
                             0,
                         ),
@@ -3546,7 +3544,6 @@ pub mod asset {
                 let asset = AssetId::new(asset_definition, account.clone());
                 let header = BlockHeader::new(
                     NonZeroU64::new(height).expect("height > 0"),
-                    None,
                     None,
                     None,
                     0,

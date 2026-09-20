@@ -123,10 +123,7 @@ use iroha_data_model::{
             ModerationLedgerCyclePublicationV1, ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
-    transaction::{
-        Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
-        TransactionPayload,
-    },
+    transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanRecordSorafsProofOutcome,
@@ -14764,45 +14761,33 @@ fn inspect_indexed_appeal_finance_transaction(
     block_height: NonZeroUsize,
     expected_block_hash: HashOf<BlockHeader>,
 ) -> AppealFinanceAuthoritativeTransactionOutcomeV1 {
-    let Some(block) = kura.get_block(block_height) else {
-        return classify_exact_appeal_finance_entrypoint_outcome(
-            transaction_hash,
-            false,
-            None,
-            std::iter::empty::<(
-                HashOf<SignedTransaction>,
-                AppealFinanceCommittedExternalOutcomeV1,
-            )>(),
-        );
-    };
-    let Ok(block_height_u64) = u64::try_from(block_height.get()) else {
+    let Ok((header, outcome)) = crate::canonical_history::exact_external_outcome(
+        kura,
+        block_height,
+        expected_block_hash,
+        transaction_hash,
+    ) else {
         return AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable;
     };
-    if block.header().height().get() != block_height_u64 || block.hash() != expected_block_hash {
-        return AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable;
-    }
-    let block_timestamp_ms =
-        u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-    let block_hash = *expected_block_hash.as_ref();
-    let external_entrypoint_count = block.external_entrypoint_count();
+    let applied_block = Some((
+        header.height().get(),
+        *expected_block_hash.as_ref(),
+        u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX),
+    ));
     classify_exact_appeal_finance_entrypoint_outcome(
         transaction_hash,
         true,
-        Some((block_height_u64, block_hash, block_timestamp_ms)),
-        block
-            .entrypoint_results()
-            .take(external_entrypoint_count)
-            .filter_map(|(_, entrypoint, result)| {
-                let TransactionEntrypoint::External(transaction) = entrypoint else {
-                    return None;
-                };
-                let outcome = if result.0.is_ok() {
+        applied_block,
+        outcome.map(|applied| {
+            (
+                *transaction_hash,
+                if applied {
                     AppealFinanceCommittedExternalOutcomeV1::Applied
                 } else {
                     AppealFinanceCommittedExternalOutcomeV1::Rejected
-                };
-                Some((transaction.hash(), outcome))
-            }),
+                },
+            )
+        }),
     )
 }
 fn observe_appeal_finance_finalized_state(
@@ -14817,33 +14802,40 @@ fn observe_appeal_finance_finalized_state(
     let view = state.state.view();
     let finalized_cursor = appeal_finance_finalized_cursor_from_view(&view)?;
     let record = view.world().asset_escrows().get(escrow_id).cloned();
-    let transaction_outcome = transaction_hash.map(|transaction_hash| {
-        match view
-            .transactions()
-            .get(&iroha_core::tx::external_entrypoint_hash_from_signed_hash(
-                transaction_hash.clone(),
-            )) {
-            None => AppealFinanceAuthoritativeTransactionOutcomeV1::Absent,
-            Some(block_height) if block_height.get() > view.block_hashes().len() => {
-                AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable
-            }
-            Some(block_height) => {
-                let Some(expected_block_hash) = view
-                    .block_hashes()
-                    .get(block_height.get().saturating_sub(1))
-                    .copied()
-                else {
-                    return AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable;
-                };
-                inspect_indexed_appeal_finance_transaction(
-                    view.kura(),
-                    transaction_hash,
-                    block_height,
-                    expected_block_hash,
-                )
-            }
-        }
+    // Capture all economic state and the exact indexed carrier in one view.
+    // Historical authentication owns no World read lock.
+    let indexed = transaction_hash.map(|hash| {
+        let input = iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash);
+        let height = view.transactions().get(&input);
+        let carrier = height.and_then(|height| {
+            view.block_hashes()
+                .get(height.get() - 1)
+                .copied()
+                .map(|hash| (height, hash))
+        });
+        (input, height, carrier)
     });
+    drop(view);
+    let transaction_outcome = transaction_hash
+        .zip(indexed)
+        .map(|(hash, (_, height, carrier))| match (height, carrier) {
+            (None, _) => AppealFinanceAuthoritativeTransactionOutcomeV1::Absent,
+            (Some(_), None) => AppealFinanceAuthoritativeTransactionOutcomeV1::Unavailable,
+            (Some(_), Some((height, expected))) => {
+                inspect_indexed_appeal_finance_transaction(&state.kura, hash, height, expected)
+            }
+        });
+    let current = state.state.view();
+    let cursor_height = usize::try_from(finalized_cursor.height).ok()?;
+    if current
+        .block_hashes()
+        .get(cursor_height.checked_sub(1)?)
+        .map(|hash| *hash.as_ref())
+        != Some(finalized_cursor.block_hash)
+        || indexed.is_some_and(|(input, height, _)| current.transactions().get(&input) != height)
+    {
+        return None;
+    }
     Some((finalized_cursor, record, transaction_outcome))
 }
 #[cfg(test)]
@@ -17148,37 +17140,27 @@ fn inspect_indexed_repair_transaction(
     block_height: NonZeroUsize,
     expected_block_hash: HashOf<BlockHeader>,
 ) -> RepairAuthoritativeTransactionOutcomeV1 {
-    let Some(block) = kura.get_block(block_height) else {
-        return classify_exact_repair_entrypoint_outcome(
-            transaction_hash,
-            false,
-            std::iter::empty::<(HashOf<SignedTransaction>, RepairCommittedExternalOutcomeV1)>(),
-        );
-    };
-    let Ok(block_height_u64) = u64::try_from(block_height.get()) else {
+    let Ok((_header, outcome)) = crate::canonical_history::exact_external_outcome(
+        kura,
+        block_height,
+        expected_block_hash,
+        transaction_hash,
+    ) else {
         return RepairAuthoritativeTransactionOutcomeV1::Unavailable;
     };
-    if block.header().height().get() != block_height_u64 || block.hash() != expected_block_hash {
-        return RepairAuthoritativeTransactionOutcomeV1::Unavailable;
-    }
-    let external_entrypoint_count = block.external_entrypoint_count();
     classify_exact_repair_entrypoint_outcome(
         transaction_hash,
         true,
-        block
-            .entrypoint_results()
-            .take(external_entrypoint_count)
-            .filter_map(|(_, entrypoint, result)| {
-                let TransactionEntrypoint::External(transaction) = entrypoint else {
-                    return None;
-                };
-                let outcome = if result.0.is_ok() {
+        outcome.map(|applied| {
+            (
+                *transaction_hash,
+                if applied {
                     RepairCommittedExternalOutcomeV1::Applied
                 } else {
                     RepairCommittedExternalOutcomeV1::Rejected
-                };
-                Some((transaction.hash(), outcome))
-            }),
+                },
+            )
+        }),
     )
 }
 fn observe_exact_sorafs_repair_transaction(
@@ -17190,36 +17172,33 @@ fn observe_exact_sorafs_repair_transaction(
     let finalized_cursor = sorafs_repair_finalized_cursor_from_view(&view)?;
     let reconciliation =
         reconcile_sorafs_repair_transaction_in_view(&view, request, finalized_cursor)?;
-    let transaction_outcome =
-        match view
-            .transactions()
-            .get(&iroha_core::tx::external_entrypoint_hash_from_signed_hash(
-                transaction_hash.clone(),
-            )) {
-            None => RepairAuthoritativeTransactionOutcomeV1::Absent,
-            Some(block_height) if block_height.get() > view.block_hashes().len() => {
-                RepairAuthoritativeTransactionOutcomeV1::Unavailable
-            }
-            Some(block_height) => {
-                let Some(expected_block_hash) = view
-                    .block_hashes()
-                    .get(block_height.get().saturating_sub(1))
-                    .copied()
-                else {
-                    return Some(RepairExactTransactionObservationV1 {
-                        reconciliation,
-                        finalized_cursor,
-                        transaction_outcome: RepairAuthoritativeTransactionOutcomeV1::Unavailable,
-                    });
-                };
-                inspect_indexed_repair_transaction(
-                    view.kura(),
-                    transaction_hash,
-                    block_height,
-                    expected_block_hash,
-                )
-            }
-        };
+    let input = iroha_core::tx::external_entrypoint_hash_from_signed_hash(*transaction_hash);
+    let indexed_height = view.transactions().get(&input);
+    let carrier = indexed_height.and_then(|height| {
+        view.block_hashes()
+            .get(height.get() - 1)
+            .copied()
+            .map(|hash| (height, hash))
+    });
+    drop(view);
+    let transaction_outcome = match (indexed_height, carrier) {
+        (None, _) => RepairAuthoritativeTransactionOutcomeV1::Absent,
+        (Some(_), None) => RepairAuthoritativeTransactionOutcomeV1::Unavailable,
+        (Some(_), Some((height, expected))) => {
+            inspect_indexed_repair_transaction(&state.kura, transaction_hash, height, expected)
+        }
+    };
+    let current = state.state.view();
+    let cursor_height = usize::try_from(finalized_cursor.height).ok()?;
+    if current
+        .block_hashes()
+        .get(cursor_height.checked_sub(1)?)
+        .map(|hash| *hash.as_ref())
+        != Some(finalized_cursor.block_hash)
+        || current.transactions().get(&input) != indexed_height
+    {
+        return None;
+    }
     Some(RepairExactTransactionObservationV1 {
         reconciliation,
         finalized_cursor,
@@ -37037,7 +37016,6 @@ mod advert_tests {
             NonZeroU64::new(1).expect("non-zero fixture block height"),
             None,
             None,
-            None,
             PROOF_OUTCOME_TEST_BLOCK_TIME_UNIX * 1_000,
             0,
         );
@@ -38021,7 +37999,6 @@ mod advert_tests {
         let height = TEST_BLOCK_HEIGHT.fetch_add(1, Ordering::Relaxed);
         BlockHeader::new(
             std::num::NonZeroU64::new(height).expect("test block height is non-zero"),
-            None,
             None,
             None,
             0,
@@ -39167,7 +39144,6 @@ mod advert_tests {
         let app = mk_app_state_for_tests();
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero fixture block height"),
-            None,
             None,
             None,
             0,

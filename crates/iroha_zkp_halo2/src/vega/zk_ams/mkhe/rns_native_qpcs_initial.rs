@@ -6,6 +6,9 @@
 //! equations remain unavailable.  A successful return therefore never mints
 //! a receipt and cannot grant proof, readiness, or release authority.
 
+#[cfg(test)]
+use super::rns_native_qpcs_leaf::RnsNativeLeafPayloadV1;
+use super::rns_native_qpcs_leaf::{RnsNativeLeafCacheV1, RnsNativeOracleV1, oracle_node_hash_v1};
 use super::{
     rns_native_profile::{
         ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1,
@@ -17,29 +20,36 @@ use super::{
     },
     rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
 };
+// Keccak is retained only for the public canonical parameter identity.
+use super::{
+    rns_native_proof_hash::{
+        RnsNativeProofDigestV1 as ProofDigestV1, RnsNativeProofHashContextV1,
+        RnsNativeProofHashPhaseV1, RnsNativeProofHashPositionV1, RnsNativeProofHashRoleV1,
+        decode_proof_digest_v1,
+    },
+    rns_native_proof_sampling::derive_query_indices_v1,
+    rns_native_qpcs_field_wire::{RNS_NATIVE_QPCS_FQ2_BYTES_V1, decode_fq2_v1},
+};
 use crate::vega::sponge::Keccak256;
 
 const QPCS_BODY_MAGIC_V1: [u8; 4] = *b"ZQPB";
 const QPCS_BODY_VERSION_V1: u8 = 1;
 const ROWS_PER_LIMB_V1: usize = 10;
-const FQ2_BYTES_V1: usize = 16;
-const DIGEST_BYTES_V1: usize = 32;
+const FQ2_BYTES_V1: usize = RNS_NATIVE_QPCS_FQ2_BYTES_V1;
+const DIGEST_BYTES_V1: usize = fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1;
 const QUERY_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_QUERY_COUNT_V1 as usize;
 const OPENED_LEAF_COUNT_V1: usize = 2 * QUERY_COUNT_V1;
 const COORDINATE_COUNT_V1: usize = ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1 * ROWS_PER_LIMB_V1;
 const LEAF_BYTES_V1: usize = COORDINATE_COUNT_V1 * FQ2_BYTES_V1;
 const DOMAIN_SIZE_V1: usize = 1 << ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1;
-const QUERY_BOUND_V1: u64 = (DOMAIN_SIZE_V1 / 2) as u64;
-const MAX_QUERY_ATTEMPTS_V1: u16 = 256;
 const MAX_INITIAL_AUTHENTICATION_HASHES_V1: usize = 3_392;
 const MAX_INITIAL_TREE_BYTES_V1: usize =
     OPENED_LEAF_COUNT_V1 * LEAF_BYTES_V1 + MAX_INITIAL_AUTHENTICATION_HASHES_V1 * DIGEST_BYTES_V1;
-const QPCS_BODY_HEADER_BYTES_V1: usize = 4 + 4 + 3 * 2 + 3 * 4 + 5 * DIGEST_BYTES_V1;
+pub(super) const MAX_INITIAL_AND_QUOTIENT_BYTES_V1: usize = 2 * MAX_INITIAL_TREE_BYTES_V1;
+pub(super) const QPCS_BODY_HEADER_BYTES_V1: usize =
+    4 + 4 + 3 * 2 + 3 * 4 + 32 + 4 * DIGEST_BYTES_V1;
 
 const PARAMETER_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.parameters";
-const QUERY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.initial-query";
-const LEAF_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.initial-leaf";
-const NODE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.initial-node";
 const QUERY_OPENING_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.rns-native-qpcs.initial-query-opening";
 const CONTINUATION_DOMAIN_V1: &[u8] =
@@ -51,15 +61,15 @@ const _: () = {
     assert!(QUERY_COUNT_V1 == 160);
     assert!(ROWS_PER_LIMB_V1 == 10);
     assert!(COORDINATE_COUNT_V1 == 400);
-    assert!(LEAF_BYTES_V1 == 6_400);
+    assert!(LEAF_BYTES_V1 == 6_000);
     assert!(OPENED_LEAF_COUNT_V1 == 320);
-    assert!(MAX_INITIAL_TREE_BYTES_V1 == 2_156_544);
-    assert!(2 * MAX_INITIAL_TREE_BYTES_V1 == 4_313_088);
+    assert!(MAX_INITIAL_TREE_BYTES_V1 == 2_082_816);
+    assert!(2 * MAX_INITIAL_TREE_BYTES_V1 == 4_165_632);
     assert!(
         2 * MAX_INITIAL_TREE_BYTES_V1
-            == ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1 as usize
+            <= ZK_AMS_MKHE_RNS_NATIVE_INITIAL_MULTIPROOF_MAX_BYTES_V1 as usize
     );
-    assert!(QPCS_BODY_HEADER_BYTES_V1 == 186);
+    assert!(QPCS_BODY_HEADER_BYTES_V1 == 250);
     assert!(MAX_INITIAL_TREE_BYTES_V1 < ZK_AMS_MKHE_RNS_NATIVE_QPCS_MAX_BYTES_V1 as usize);
 };
 
@@ -100,10 +110,10 @@ impl std::error::Error for RnsNativeQpcsInitialErrorV1 {}
 
 #[derive(Clone, Copy)]
 struct InitialContextV1 {
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    transcript_digest: [u8; DIGEST_BYTES_V1],
-    query_seed: [u8; DIGEST_BYTES_V1],
-    initial_root: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
+    transcript_digest: ProofDigestV1,
+    query_seed: ProofDigestV1,
+    initial_root: ProofDigestV1,
 }
 
 impl InitialContextV1 {
@@ -131,9 +141,9 @@ impl InitialContextV1 {
             || transcript.profile_digest() != profile.profile_digest
             || transcript.topology_digest() != topology.topology_digest
             || transcript.release_candidate_digest() != release_candidate
-            || transcript_digest == [0; DIGEST_BYTES_V1]
-            || query_seed == [0; DIGEST_BYTES_V1]
-            || initial_root == [0; DIGEST_BYTES_V1]
+            || transcript_digest == ProofDigestV1::ZERO
+            || query_seed == ProofDigestV1::ZERO
+            || initial_root == ProofDigestV1::ZERO
         {
             return Err(RnsNativeQpcsInitialErrorV1::InvalidContext);
         }
@@ -155,12 +165,12 @@ struct IndexSetV1 {
 #[derive(Clone, Copy)]
 struct FrontierNodeV1 {
     index: u32,
-    digest: [u8; DIGEST_BYTES_V1],
+    digest: ProofDigestV1,
 }
 
 const EMPTY_FRONTIER_NODE_V1: FrontierNodeV1 = FrontierNodeV1 {
     index: 0,
-    digest: [0; DIGEST_BYTES_V1],
+    digest: ProofDigestV1::ZERO,
 };
 
 #[derive(Clone, Copy)]
@@ -188,7 +198,7 @@ pub(super) struct RnsNativeQpcsInitialStageV1<'a> {
 }
 
 impl<'a> RnsNativeQpcsInitialStageV1<'a> {
-    pub(super) const fn parameter_digest(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn parameter_digest(&self) -> [u8; 32] {
         self.context.parameter_digest
     }
 
@@ -252,10 +262,15 @@ impl<'a> DecoderV1<'a> {
         Ok(u32::from_be_bytes(bytes))
     }
 
-    fn digest(&mut self) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsInitialErrorV1> {
-        self.take(DIGEST_BYTES_V1)?
+    fn public_digest(&mut self) -> Result<[u8; 32], RnsNativeQpcsInitialErrorV1> {
+        self.take(32)?
             .try_into()
             .map_err(|_| RnsNativeQpcsInitialErrorV1::Truncated)
+    }
+
+    fn digest(&mut self) -> Result<ProofDigestV1, RnsNativeQpcsInitialErrorV1> {
+        decode_proof_digest_v1(self.take(DIGEST_BYTES_V1)?)
+            .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidHeader)
     }
 }
 
@@ -267,7 +282,7 @@ impl<'a> DecoderV1<'a> {
 #[cfg(test)]
 pub(super) fn verify_rns_native_qpcs_initial_v1(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    expected_query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    expected_query_opening_digests: &[ProofDigestV1],
     proof: &[u8],
 ) -> Result<(), RnsNativeQpcsInitialErrorV1> {
     authenticate_rns_native_qpcs_initial_v1(transcript, expected_query_opening_digests, proof)
@@ -278,7 +293,7 @@ pub(super) fn verify_rns_native_qpcs_initial_v1(
 /// next private qPCS substage.
 pub(super) fn authenticate_rns_native_qpcs_initial_v1<'a>(
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
-    expected_query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    expected_query_opening_digests: &[ProofDigestV1],
     proof: &'a [u8],
 ) -> Result<RnsNativeQpcsInitialStageV1<'a>, RnsNativeQpcsInitialErrorV1> {
     preflight_proof_v1(proof)?;
@@ -289,7 +304,7 @@ pub(super) fn authenticate_rns_native_qpcs_initial_v1<'a>(
 #[cfg(test)]
 fn verify_initial_with_context_v1(
     context: InitialContextV1,
-    expected_query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    expected_query_opening_digests: &[ProofDigestV1],
     proof: &[u8],
 ) -> Result<(), RnsNativeQpcsInitialErrorV1> {
     authenticate_initial_with_context_v1(context, expected_query_opening_digests, proof).map(drop)
@@ -297,7 +312,7 @@ fn verify_initial_with_context_v1(
 
 fn authenticate_initial_with_context_v1<'a>(
     context: InitialContextV1,
-    expected_query_opening_digests: &[[u8; DIGEST_BYTES_V1]],
+    expected_query_opening_digests: &[ProofDigestV1],
     proof: &'a [u8],
 ) -> Result<RnsNativeQpcsInitialStageV1<'a>, RnsNativeQpcsInitialErrorV1> {
     preflight_proof_v1(proof)?;
@@ -324,7 +339,7 @@ fn authenticate_initial_with_context_v1<'a>(
         expected_query_opening_digests,
     )?;
     let continuation_digest = continuation_digest_v1(context, view.continuation)?;
-    if continuation_digest == [0; DIGEST_BYTES_V1] {
+    if continuation_digest == ProofDigestV1::ZERO {
         return Err(RnsNativeQpcsInitialErrorV1::InvalidHeader);
     }
     Ok(RnsNativeQpcsInitialStageV1 {
@@ -346,7 +361,7 @@ fn preflight_proof_v1(proof: &[u8]) -> Result<(), RnsNativeQpcsInitialErrorV1> {
     Ok(())
 }
 
-fn canonical_parameter_digest_v1() -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsInitialErrorV1> {
+pub(super) fn canonical_parameter_digest_v1() -> Result<[u8; 32], RnsNativeQpcsInitialErrorV1> {
     let manifest = zk_ams_mkhe_rns_native_profile_manifest_v1()
         .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)?;
     manifest
@@ -385,62 +400,19 @@ fn canonical_parameter_digest_v1() -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpc
         hash.update(&modulus.to_be_bytes());
     }
     let digest = hash.finalize();
-    if digest == [0; DIGEST_BYTES_V1] {
+    if digest == [0; 32] {
         return Err(RnsNativeQpcsInitialErrorV1::InvalidContext);
     }
     Ok(digest)
 }
 
 fn derive_queries_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    query_seed: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
+    query_seed: ProofDigestV1,
 ) -> Result<[u32; QUERY_COUNT_V1], RnsNativeQpcsInitialErrorV1> {
-    derive_queries_with_v1(|ordinal, attempt| {
-        let mut hash = Keccak256::new();
-        hash.update(QUERY_DOMAIN_V1);
-        hash.update(&[QPCS_BODY_VERSION_V1]);
-        hash.update(&parameter_digest);
-        hash.update(&query_seed);
-        hash.update(
-            &u16::try_from(ordinal)
-                .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?
-                .to_be_bytes(),
-        );
-        hash.update(&attempt.to_be_bytes());
-        let digest = hash.finalize();
-        let candidate = u64::from_be_bytes(
-            digest[..8]
-                .try_into()
-                .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidQuerySchedule)?,
-        );
-        Ok(candidate)
-    })
-}
-
-fn derive_queries_with_v1<F>(
-    mut candidate: F,
-) -> Result<[u32; QUERY_COUNT_V1], RnsNativeQpcsInitialErrorV1>
-where
-    F: FnMut(usize, u16) -> Result<u64, RnsNativeQpcsInitialErrorV1>,
-{
-    let zone = u64::MAX - u64::MAX % QUERY_BOUND_V1;
-    let mut queries = [0_u32; QUERY_COUNT_V1];
-    for ordinal in 0..QUERY_COUNT_V1 {
-        let mut accepted = None;
-        for attempt in 0..MAX_QUERY_ATTEMPTS_V1 {
-            let sampled = candidate(ordinal, attempt)?;
-            if sampled < zone {
-                let query = u32::try_from(sampled % QUERY_BOUND_V1)
-                    .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
-                if !queries[..ordinal].contains(&query) {
-                    accepted = Some(query);
-                    break;
-                }
-            }
-        }
-        queries[ordinal] = accepted.ok_or(RnsNativeQpcsInitialErrorV1::InvalidQuerySchedule)?;
-    }
-    Ok(queries)
+    let context = hash_context_v1(parameter_digest)?;
+    derive_query_indices_v1(&context, query_seed)
+        .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidQuerySchedule)
 }
 
 fn query_pair_indices_v1(
@@ -527,7 +499,7 @@ fn decode_initial_proof_exact_v1<'a>(
         .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
     let continuation_bytes = usize::try_from(decoder.u32()?)
         .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
-    let parameter_digest = decoder.digest()?;
+    let parameter_digest = decoder.public_digest()?;
     let transcript_digest = decoder.digest()?;
     let query_seed = decoder.digest()?;
     let initial_root = decoder.digest()?;
@@ -586,75 +558,69 @@ fn validate_leaf_values_v1(values: &[u8]) -> Result<(), RnsNativeQpcsInitialErro
         return Err(RnsNativeQpcsInitialErrorV1::InvalidCount);
     }
     for leaf in values.chunks_exact(LEAF_BYTES_V1) {
-        for coordinate in 0..COORDINATE_COUNT_V1 {
-            let offset = coordinate
-                .checked_mul(FQ2_BYTES_V1)
-                .ok_or(RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
-            let c0 = read_u64_v1(leaf, offset)?;
-            let c1 = read_u64_v1(leaf, offset + 8)?;
-            let modulus = ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[coordinate / ROWS_PER_LIMB_V1];
-            if c0 >= modulus || c1 >= modulus {
-                return Err(RnsNativeQpcsInitialErrorV1::NonCanonicalResidue);
-            }
+        for (coordinate, pair) in leaf.chunks_exact(FQ2_BYTES_V1).enumerate() {
+            decode_fq2_v1(coordinate / ROWS_PER_LIMB_V1, pair)
+                .map_err(|_| RnsNativeQpcsInitialErrorV1::NonCanonicalResidue)?;
         }
     }
     Ok(())
 }
 
-fn leaf_hash_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    values: &[u8],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsInitialErrorV1> {
-    if values.len() != LEAF_BYTES_V1 {
-        return Err(RnsNativeQpcsInitialErrorV1::InvalidCount);
+fn hash_context_v1(
+    parameter_digest: [u8; 32],
+) -> Result<RnsNativeProofHashContextV1, RnsNativeQpcsInitialErrorV1> {
+    let context = RnsNativeProofHashContextV1::canonical()
+        .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)?;
+    if context.parameter_digest() != parameter_digest {
+        return Err(RnsNativeQpcsInitialErrorV1::InvalidContext);
     }
-    let mut hash = Keccak256::new();
-    hash.update(LEAF_DOMAIN_V1);
-    hash.update(&[QPCS_BODY_VERSION_V1]);
-    hash.update(&parameter_digest);
-    hash.update(
-        &u32::try_from(DOMAIN_SIZE_V1)
-            .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(
-        &u16::try_from(COORDINATE_COUNT_V1)
-            .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(values);
-    Ok(hash.finalize())
+    Ok(context)
+}
+
+#[cfg(test)]
+fn leaf_hash_v1(
+    parameter_digest: [u8; 32],
+    index: u32,
+    values: &[u8],
+) -> Result<ProofDigestV1, RnsNativeQpcsInitialErrorV1> {
+    RnsNativeLeafPayloadV1::from_canonical_values(
+        parameter_digest,
+        RnsNativeOracleV1::Initial,
+        values,
+    )
+    .and_then(|payload| payload.at_index(index))
+    .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
 fn node_hash_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
     height: usize,
-    left: [u8; DIGEST_BYTES_V1],
-    right: [u8; DIGEST_BYTES_V1],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsInitialErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(NODE_DOMAIN_V1);
-    hash.update(&[QPCS_BODY_VERSION_V1]);
-    hash.update(&parameter_digest);
-    hash.update(
-        &u32::try_from(DOMAIN_SIZE_V1)
-            .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(&[
-        u8::try_from(height).map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?
-    ]);
-    hash.update(&left);
-    hash.update(&right);
-    Ok(hash.finalize())
+    index: u32,
+    left: ProofDigestV1,
+    right: ProofDigestV1,
+) -> Result<ProofDigestV1, RnsNativeQpcsInitialErrorV1> {
+    if height == 0
+        || height > usize::from(ZK_AMS_MKHE_RNS_NATIVE_LDE_DOMAIN_LOG2_V1)
+        || index as usize >= DOMAIN_SIZE_V1 >> height
+    {
+        return Err(RnsNativeQpcsInitialErrorV1::InvalidCount);
+    }
+    oracle_node_hash_v1(
+        parameter_digest,
+        RnsNativeOracleV1::Initial,
+        height,
+        index,
+        [left, right],
+    )
+    .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
 fn authenticate_initial_tree_v1(
     values: &[u8],
     authentication: &[u8],
     indices: IndexSetV1,
-    parameter_digest: [u8; DIGEST_BYTES_V1],
-    expected_root: [u8; DIGEST_BYTES_V1],
+    parameter_digest: [u8; 32],
+    expected_root: ProofDigestV1,
 ) -> Result<(), RnsNativeQpcsInitialErrorV1> {
     if indices.len != OPENED_LEAF_COUNT_V1
         || values.len() != indices.len * LEAF_BYTES_V1
@@ -662,6 +628,8 @@ fn authenticate_initial_tree_v1(
     {
         return Err(RnsNativeQpcsInitialErrorV1::InvalidCount);
     }
+    let mut leaves = RnsNativeLeafCacheV1::new(parameter_digest, RnsNativeOracleV1::Initial)
+        .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)?;
     let mut current = [EMPTY_FRONTIER_NODE_V1; OPENED_LEAF_COUNT_V1];
     let mut next = [EMPTY_FRONTIER_NODE_V1; OPENED_LEAF_COUNT_V1];
     for (position, node) in current.iter_mut().enumerate().take(indices.len) {
@@ -670,7 +638,12 @@ fn authenticate_initial_tree_v1(
             .ok_or(RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
         *node = FrontierNodeV1 {
             index: indices.values[position],
-            digest: leaf_hash_v1(parameter_digest, &values[start..start + LEAF_BYTES_V1])?,
+            digest: leaves
+                .leaf(
+                    indices.values[position],
+                    &values[start..start + LEAF_BYTES_V1],
+                )
+                .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidMerklePath)?,
         };
     }
     let mut current_len = indices.len;
@@ -695,11 +668,12 @@ fn authenticate_initial_tree_v1(
                 let start = authentication_cursor
                     .checked_mul(DIGEST_BYTES_V1)
                     .ok_or(RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
-                let sibling = authentication
-                    .get(start..start + DIGEST_BYTES_V1)
-                    .ok_or(RnsNativeQpcsInitialErrorV1::InvalidMerklePath)?
-                    .try_into()
-                    .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidMerklePath)?;
+                let sibling = decode_proof_digest_v1(
+                    authentication
+                        .get(start..start + DIGEST_BYTES_V1)
+                        .ok_or(RnsNativeQpcsInitialErrorV1::InvalidMerklePath)?,
+                )
+                .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidMerklePath)?;
                 authentication_cursor += 1;
                 if node.index.is_multiple_of(2) {
                     left = node.digest;
@@ -712,7 +686,7 @@ fn authenticate_initial_tree_v1(
             }
             next[next_len] = FrontierNodeV1 {
                 index: node.index / 2,
-                digest: node_hash_v1(parameter_digest, height, left, right)?,
+                digest: node_hash_v1(parameter_digest, height, node.index / 2, left, right)?,
             };
             next_len += 1;
         }
@@ -736,16 +710,19 @@ fn bind_query_openings_v1(
     queries: &[u32; QUERY_COUNT_V1],
     indices: IndexSetV1,
     values: &[u8],
-    expected: &[[u8; DIGEST_BYTES_V1]],
+    expected: &[ProofDigestV1],
 ) -> Result<(), RnsNativeQpcsInitialErrorV1> {
     let half = u32::try_from(DOMAIN_SIZE_V1 / 2)
         .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
+    let mut leaves =
+        RnsNativeLeafCacheV1::new(context.parameter_digest, RnsNativeOracleV1::Initial)
+            .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)?;
     for (ordinal, base) in queries.iter().copied().enumerate() {
         let paired = base
             .checked_add(half)
             .ok_or(RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
-        let first = leaf_hash_at_index_v1(context.parameter_digest, indices, values, base)?;
-        let second = leaf_hash_at_index_v1(context.parameter_digest, indices, values, paired)?;
+        let first = leaf_hash_at_index_v1(&mut leaves, indices, values, base)?;
+        let second = leaf_hash_at_index_v1(&mut leaves, indices, values, paired)?;
         if expected.get(ordinal).copied()
             != Some(query_opening_digest_v1(
                 context, ordinal, base, paired, first, second,
@@ -762,34 +739,45 @@ fn query_opening_digest_v1(
     ordinal: usize,
     base: u32,
     paired: u32,
-    first: [u8; DIGEST_BYTES_V1],
-    second: [u8; DIGEST_BYTES_V1],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsInitialErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(QUERY_OPENING_DOMAIN_V1);
-    hash.update(&[QPCS_BODY_VERSION_V1]);
-    hash.update(&context.parameter_digest);
-    hash.update(&context.transcript_digest);
-    hash.update(&context.query_seed);
-    hash.update(&context.initial_root);
-    hash.update(
-        &u16::try_from(ordinal)
-            .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(&base.to_be_bytes());
-    hash.update(&paired.to_be_bytes());
-    hash.update(&first);
-    hash.update(&second);
-    Ok(hash.finalize())
+    first: ProofDigestV1,
+    second: ProofDigestV1,
+) -> Result<ProofDigestV1, RnsNativeQpcsInitialErrorV1> {
+    if ordinal >= QUERY_COUNT_V1
+        || base as usize >= DOMAIN_SIZE_V1 / 2
+        || paired as usize != base as usize + DOMAIN_SIZE_V1 / 2
+    {
+        return Err(RnsNativeQpcsInitialErrorV1::InvalidQuerySchedule);
+    }
+    hash_context_v1(context.parameter_digest)?
+        .hash(
+            RnsNativeProofHashRoleV1::Initial,
+            RnsNativeProofHashPhaseV1::Opening,
+            RnsNativeProofHashPositionV1 {
+                level: 0,
+                index: ordinal as u64,
+                counter: 0,
+            },
+            &[
+                QUERY_OPENING_DOMAIN_V1,
+                &[QPCS_BODY_VERSION_V1],
+                context.transcript_digest.as_bytes(),
+                context.query_seed.as_bytes(),
+                context.initial_root.as_bytes(),
+                &base.to_be_bytes(),
+                &paired.to_be_bytes(),
+                first.as_bytes(),
+                second.as_bytes(),
+            ],
+        )
+        .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
-fn leaf_hash_at_index_v1(
-    parameter_digest: [u8; DIGEST_BYTES_V1],
+fn leaf_hash_at_index_v1<'a>(
+    leaves: &mut RnsNativeLeafCacheV1<'a>,
     indices: IndexSetV1,
-    values: &[u8],
+    values: &'a [u8],
     index: u32,
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsInitialErrorV1> {
+) -> Result<ProofDigestV1, RnsNativeQpcsInitialErrorV1> {
     let position = indices.values[..indices.len]
         .binary_search(&index)
         .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidQuerySchedule)?;
@@ -799,39 +787,33 @@ fn leaf_hash_at_index_v1(
     let leaf = values
         .get(start..start + LEAF_BYTES_V1)
         .ok_or(RnsNativeQpcsInitialErrorV1::Truncated)?;
-    leaf_hash_v1(parameter_digest, leaf)
+    leaves
+        .leaf(index, leaf)
+        .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
 fn continuation_digest_v1(
     context: InitialContextV1,
     continuation: &[u8],
-) -> Result<[u8; DIGEST_BYTES_V1], RnsNativeQpcsInitialErrorV1> {
-    let mut hash = Keccak256::new();
-    hash.update(CONTINUATION_DOMAIN_V1);
-    hash.update(&[QPCS_BODY_VERSION_V1]);
-    hash.update(&context.parameter_digest);
-    hash.update(&context.transcript_digest);
-    hash.update(&context.query_seed);
-    hash.update(&context.initial_root);
-    hash.update(
-        &u32::try_from(continuation.len())
-            .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?
-            .to_be_bytes(),
-    );
-    hash.update(continuation);
-    Ok(hash.finalize())
-}
-
-fn read_u64_v1(bytes: &[u8], offset: usize) -> Result<u64, RnsNativeQpcsInitialErrorV1> {
-    let end = offset
-        .checked_add(8)
-        .ok_or(RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
-    let encoded: [u8; 8] = bytes
-        .get(offset..end)
-        .ok_or(RnsNativeQpcsInitialErrorV1::Truncated)?
-        .try_into()
-        .map_err(|_| RnsNativeQpcsInitialErrorV1::Truncated)?;
-    Ok(u64::from_be_bytes(encoded))
+) -> Result<ProofDigestV1, RnsNativeQpcsInitialErrorV1> {
+    let length = u32::try_from(continuation.len())
+        .map_err(|_| RnsNativeQpcsInitialErrorV1::ArithmeticOverflow)?;
+    hash_context_v1(context.parameter_digest)?
+        .hash(
+            RnsNativeProofHashRoleV1::Initial,
+            RnsNativeProofHashPhaseV1::Binding,
+            RnsNativeProofHashPositionV1::default(),
+            &[
+                CONTINUATION_DOMAIN_V1,
+                &[QPCS_BODY_VERSION_V1],
+                context.transcript_digest.as_bytes(),
+                context.query_seed.as_bytes(),
+                context.initial_root.as_bytes(),
+                &length.to_be_bytes(),
+                continuation,
+            ],
+        )
+        .map_err(|_| RnsNativeQpcsInitialErrorV1::InvalidContext)
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! Exact 40-limb commitment-inventory prerequisite for the cross-field proof.
 //!
 //! The preceding source/terminal stage authenticates the confidential source,
-//! the terminal Hyrax openings, the zero-padding proof, and the opaque outer
+//! the terminal Hyrax openings, mandatory live-source padding, and the opaque outer
 //! cross-field section as one context.  It cannot hand commitment points to a
 //! relation verifier, however, because the nested proof body previously had no
 //! canonical schema.  This module closes exactly that transport gap.
@@ -46,6 +46,9 @@ use super::{
         ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1, ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1,
         ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1, ZK_AMS_MKHE_RNS_NATIVE_RADIX_LOG2_V1,
     },
+    rns_native_proof_hash::{
+        RnsNativeDigestIdentityV1 as DigestIdentityV1, RnsNativeProofDigestV1 as ProofDigestV1,
+    },
     rns_native_rlwe_source_statement::RnsNativeRlweSourceStatementStageV1,
     rns_native_section_codec::{
         CROSS_LOOKUP_FIXED_BYTES_V1, RnsNativeBoundCrossFieldGlobalLookupV1,
@@ -61,7 +64,6 @@ use super::{
     rns_native_terminal_cross_basis::RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
     rns_native_transcript::ZkAmsMkheRnsNativeChallengeSeedsV1,
     rns_native_wire::ZK_AMS_MKHE_RNS_NATIVE_CROSS_FIELD_LOOKUP_SECTION_MAX_BYTES_V1,
-    rns_native_zero_padding_commitment::RnsNativeZeroPaddingCommitmentPrerequisiteV1,
 };
 use crate::vega::{VegaT256PointV1 as Point, sponge::Keccak256};
 
@@ -206,8 +208,8 @@ const _: () = {
     assert!(QPCS_EVALUATION_BYTES_V1 == 3_200);
     assert!(HEADER_BYTES_V1 == 136);
     assert!(MIN_PROOF_BYTES_V1 == 1_605_553);
-    assert!(PROOF_MAX_BYTES_V1 == 8_385_797);
-    assert!(RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 == 6_780_245);
+    assert!(PROOF_MAX_BYTES_V1 == 8_384_533);
+    assert!(RNS_NATIVE_CROSS_FIELD_INVENTORY_CONTINUATION_MAX_BYTES_V1 == 6_778_981);
     assert!(MIN_PROOF_BYTES_V1 < PROOF_MAX_BYTES_V1);
     assert!(COMPARATOR_BOOLEAN_DISJOINT_PRODUCT_ARGUMENT_AVAILABLE_V1);
     assert!(!RANGE_AND_CARRY_RELATIONS_VERIFIED_V1);
@@ -1146,8 +1148,8 @@ fn codec_digest_v1(bytes: &[u8]) -> [u8; DIGEST_BYTES_V1] {
     hash.finalize()
 }
 
-fn absorb_digest_v1(hash: &mut Keccak256, digest: [u8; DIGEST_BYTES_V1]) {
-    hash.update(&digest);
+fn absorb_digest_v1(hash: &mut Keccak256, digest: impl Into<DigestIdentityV1>) {
+    hash.update(digest.into().as_bytes());
 }
 
 /// Opaque one-shot projection of only the successor-independent inventory
@@ -1283,10 +1285,6 @@ fn prior_context_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
         .terminal()
         .validate_context_v1(transcript)
         .map_err(|_| RnsNativeCrossFieldInventoryErrorV1::InvalidContext)?;
-    linked
-        .zero_padding()
-        .validate_context_v1(transcript)
-        .map_err(|_| RnsNativeCrossFieldInventoryErrorV1::InvalidContext)?;
     let source = linked.source();
     let layout = source.snapshot().layout();
     let qpcs = source.qpcs();
@@ -1307,54 +1305,48 @@ fn prior_context_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     hash.update(PRIOR_CONTEXT_DOMAIN_V1);
     hash.update(&[INVENTORY_VERSION_V1]);
     for digest in [
-        transcript.profile_manifest_digest(),
-        transcript.profile_digest(),
-        transcript.topology_digest(),
-        transcript.release_candidate_digest(),
-        transcript.statement_digest(),
-        transcript.operational_context_digest(),
-        transcript.source_binding_digest(),
-        transcript.main_snapshot_digest(),
-        transcript.nonce_snapshot_digest(),
-        transcript.source_receipt_digest(),
-        transcript.governed_roster_digest(),
-        transcript.public_ciphertext_digest(),
-        transcript.mapping_root(),
-        transcript.terminal_hyrax_root(),
-        transcript.cross_basis_bridge_root(),
-        transcript.qpcs_initial_root(),
-        transcript.qpcs_quotient_root(),
-        transcript.cross_field_root(),
-        transcript.global_lookup_root(),
-        transcript.zero_padding_root(),
-        transcript.transcript_digest(),
-        source.public_key_digest(),
-        source.public_bundle_digest(),
-        source.formula_digest(),
-        source.mapping_digest(),
-        source.aggregation_schedule_digest(),
-        source.preflight_statement_digest(),
-        qpcs.parameter_digest(),
-        qpcs.transcript_digest(),
-        qpcs.query_seed(),
-        qpcs.section_binding_digest(),
-        qpcs.schedule_digest(),
-        qpcs.evaluation_binding_digest(),
-        linked.terminal().binding_digest(),
-        linked.terminal().hyrax_digest(),
-        linked.terminal().bp_digest(),
-        linked.terminal().bridge_root(),
-        linked.zero_padding().binding_digest(),
-        linked.zero_padding().point_set_digest(),
-        linked.zero_padding().root(),
-        linked.zero_padding().proof_digest(),
-        linked.formula_digest(),
-        linked.opening_bundle_digest(),
-        linked.aggregate_point_digest(),
-        linked.point_bundle_digest(),
-        linked.limb_bundle_digest(),
-        linked.round_bundle_digest(),
-        linked.zero_limb_bundle_digest(),
+        DigestIdentityV1::from(transcript.profile_manifest_digest()),
+        DigestIdentityV1::from(transcript.profile_digest()),
+        DigestIdentityV1::from(transcript.topology_digest()),
+        DigestIdentityV1::from(transcript.release_candidate_digest()),
+        DigestIdentityV1::from(transcript.statement_digest()),
+        DigestIdentityV1::from(transcript.operational_context_digest()),
+        DigestIdentityV1::from(transcript.source_binding_digest()),
+        DigestIdentityV1::from(transcript.main_snapshot_digest()),
+        DigestIdentityV1::from(transcript.nonce_snapshot_digest()),
+        DigestIdentityV1::from(transcript.source_receipt_digest()),
+        DigestIdentityV1::from(transcript.governed_roster_digest()),
+        DigestIdentityV1::from(transcript.public_ciphertext_digest()),
+        DigestIdentityV1::from(transcript.mapping_root()),
+        DigestIdentityV1::from(transcript.terminal_hyrax_root()),
+        DigestIdentityV1::from(transcript.cross_basis_bridge_root()),
+        DigestIdentityV1::from(transcript.qpcs_initial_root()),
+        DigestIdentityV1::from(transcript.qpcs_quotient_root()),
+        DigestIdentityV1::from(transcript.cross_field_root()),
+        DigestIdentityV1::from(transcript.global_lookup_root()),
+        DigestIdentityV1::from(transcript.transcript_digest()),
+        DigestIdentityV1::from(source.public_key_digest()),
+        DigestIdentityV1::from(source.public_bundle_digest()),
+        DigestIdentityV1::from(source.formula_digest()),
+        DigestIdentityV1::from(source.mapping_digest()),
+        DigestIdentityV1::from(source.aggregation_schedule_digest()),
+        DigestIdentityV1::from(source.preflight_statement_digest()),
+        DigestIdentityV1::from(qpcs.parameter_digest()),
+        DigestIdentityV1::from(qpcs.transcript_digest()),
+        DigestIdentityV1::from(qpcs.query_seed()),
+        DigestIdentityV1::from(qpcs.section_binding_digest()),
+        DigestIdentityV1::from(qpcs.schedule_digest()),
+        DigestIdentityV1::from(qpcs.evaluation_binding_digest()),
+        DigestIdentityV1::from(linked.terminal().binding_digest()),
+        DigestIdentityV1::from(linked.terminal().hyrax_digest()),
+        DigestIdentityV1::from(linked.terminal().bp_digest()),
+        DigestIdentityV1::from(linked.terminal().bridge_root()),
+        DigestIdentityV1::from(linked.formula_digest()),
+        DigestIdentityV1::from(linked.opening_bundle_digest()),
+        DigestIdentityV1::from(linked.aggregate_point_digest()),
+        DigestIdentityV1::from(linked.point_bundle_digest()),
+        DigestIdentityV1::from(linked.limb_bundle_digest()),
+        DigestIdentityV1::from(linked.round_bundle_digest()),
     ] {
         absorb_digest_v1(&mut hash, digest);
     }
@@ -1369,9 +1361,6 @@ fn prior_context_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     }
     for seed in transcript.ordered_challenge_seeds() {
         absorb_digest_v1(&mut hash, seed);
-    }
-    for digest in linked.zero_padding().limb_padding_digests() {
-        absorb_digest_v1(&mut hash, *digest);
     }
     for digest in cross
         .point_evaluation_digests()
@@ -1399,15 +1388,15 @@ fn prerequisite_binding_digest_v1<S: ZkAmsMkheRnsNativeSourceSnapshotV1>(
     hash.update(PREREQUISITE_DOMAIN_V1);
     hash.update(&[INVENTORY_VERSION_V1]);
     for digest in [
-        view.prior_context_digest,
-        linked.source().statement_anchor_digest(),
-        linked.source().qpcs().residual_digest(),
-        linked.cross_proof_digest(),
-        linked.cross_link_digest(),
-        linked.anchor_digest(),
-        view.inventory_root,
-        view.continuation_digest,
-        view.codec_digest,
+        DigestIdentityV1::from(view.prior_context_digest),
+        DigestIdentityV1::from(linked.source().statement_anchor_digest()),
+        DigestIdentityV1::from(linked.source().qpcs().residual_digest()),
+        DigestIdentityV1::from(linked.cross_proof_digest()),
+        DigestIdentityV1::from(linked.cross_link_digest()),
+        DigestIdentityV1::from(linked.anchor_digest()),
+        DigestIdentityV1::from(view.inventory_root),
+        DigestIdentityV1::from(view.continuation_digest),
+        DigestIdentityV1::from(view.codec_digest),
     ] {
         absorb_digest_v1(&mut hash, digest);
     }
@@ -1473,7 +1462,7 @@ pub(super) struct RnsNativeCrossFieldInventoryPrerequisiteV1<
     qpcs_evaluations: CanonicalQpcsEvaluationGridV1<'source>,
     inventory: &'proof [u8],
     continuation: &'proof [u8],
-    terminal_transcript_digest: [u8; DIGEST_BYTES_V1],
+    terminal_transcript_digest: ProofDigestV1,
     prior_context_digest: [u8; DIGEST_BYTES_V1],
     inventory_root: [u8; DIGEST_BYTES_V1],
     continuation_digest: [u8; DIGEST_BYTES_V1],
@@ -1503,7 +1492,7 @@ impl<'source, 'proof, S: ZkAmsMkheRnsNativeSourceSnapshotV1>
     /// Exact final terminal transcript that authenticated this inventory.
     /// The direct claimed-frame adapter uses this private identity to reject
     /// cross-session inventory/claim pairing before exposing any successor.
-    pub(super) const fn terminal_transcript_digest_v1(&self) -> [u8; DIGEST_BYTES_V1] {
+    pub(super) const fn terminal_transcript_digest_v1(&self) -> ProofDigestV1 {
         self.terminal_transcript_digest
     }
 
@@ -1683,7 +1672,6 @@ pub(super) fn authenticate_rns_native_cross_field_inventory_from_sealed_pre_qpcs
     transcript: &ZkAmsMkheRnsNativeChallengeSeedsV1,
     source: RnsNativeRlweSourceStatementStageV1<'source, S>,
     terminal: RnsNativeTerminalCrossBasisKernelPrerequisiteV1,
-    zero_padding: RnsNativeZeroPaddingCommitmentPrerequisiteV1,
     bound: RnsNativeBoundCrossFieldGlobalLookupV1<'proof>,
     preflight: RnsNativePreQpcsQMaskInventoryPreflightV1<'proof>,
 ) -> Result<
@@ -1694,14 +1682,9 @@ where
     S: ZkAmsMkheRnsNativeSourceSnapshotV1,
 {
     let (cross, view) = preflight.into_exact_bound_view_v1(bound)?;
-    let linked = link_rns_native_source_terminal_cross_field_v1(
-        transcript,
-        source,
-        terminal,
-        zero_padding,
-        cross,
-    )
-    .map_err(|_| RnsNativeCrossFieldInventoryErrorV1::InvalidContext)?;
+    let linked =
+        link_rns_native_source_terminal_cross_field_v1(transcript, source, terminal, cross)
+            .map_err(|_| RnsNativeCrossFieldInventoryErrorV1::InvalidContext)?;
     let qpcs_evaluations = CanonicalQpcsEvaluationGridV1::from_authenticated_bytes_v1(
         linked.source().qpcs().evaluations(),
     )?;

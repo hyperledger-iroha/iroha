@@ -29,6 +29,8 @@ This crate hosts cross-component tests for Iroha.
 - Feature flags: `telemetry` (default), `fault_injection`, `js_host_parity`, `zk-stark`, and the non-shipping `privacy-release-evidence` gate. Enable with `cargo test -p integration_tests --features "<feature list>"`.
 - Norito FEC parity, missing-chunk recovery and corruption tests run in the ordinary `nexus_and_streaming` harness using its local GF(256) helpers; no optional external Reed–Solomon dependency is needed.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.
+- The Sumeragi runner restart scenarios retain an exact four-validator committee with one outage and a seven-validator committee with two outages. Run the focused seven-validator case with `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated sumeragi_v2_runner::authoritative_v2_finalizes_through_two_validator_restarts -- --exact --nocapture --test-threads=1`. The original `sumeragi_v2_runner::authoritative_v2_finalizes_through_validator_restart` remains the four-validator case. Both require account application, cryptographically authenticated finality from the original complete equal-vote committee, committed-block agreement, and restored node identities before and after the outage. Each scenario submits exactly three transactions and waits for the last one to apply everywhere without further submissions.
+- The explicit long restart qualification is `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test sumeragi_v2_runner_isolated sumeragi_v2_runner::authoritative_v2_validator_restart_qualification_32_seeds -- --exact --ignored --nocapture --test-threads=1`. It executes 32 fixed seeds across `(validators, offline) = (4, 1), (7, 1), (7, 2)`: 96 sequential networks with deterministic rotating outage subsets, never more than `f` outages. Unset `IROHA_TEST_NETWORK_BASE_SEED`; the matrix rejects a global override that would collapse distinct seeds. A sandbox skip fails this qualification even without `IROHA_TEST_REQUIRE_NETWORK`. The test prints each case's seed, topology, and completion only after all finality and application assertions pass; adding the matrix to source does not establish that it has passed.
 - The four-peer autoscale A/B/A lifecycle and rotating-validator Native AMX release gates remain in the ordinary, non-ignored Cargo inventory so release automation can detect renames or ignored tests. Plain developer suites take a fast opt-out; set `IROHA_RUN_IGNORED=1` with the exact test filter to execute them locally. Production uses `IROHA_MULTILANE_RELEASE_MODE=1`, requires a real network, and rejects missing completion markers.
 - Plain `cargo test` now uses Cargo's native jobserver and libtest's native thread selection; the workspace no longer serializes every developer build or test globally. Memory-constrained and release-evidence wrappers set scoped `--jobs`, `RUST_TEST_THREADS`, debug, and incremental limits only for their own runs.
 - High-count integration-test suites in workspace crates use explicit grouped harnesses instead of Cargo's automatic one-file-one-binary discovery, reducing duplicate test binary linking in default workspace runs.
@@ -103,8 +105,8 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
 - `core_api::config::startup_configuration_is_read_only_on_four_validators` reads the explicit startup configuration through native operator authentication on four validators. It requires a signed POST to `/v1/configuration` to fail with HTTP 405 and `method_not_allowed`, and verifies that the complete effective configuration remains unchanged. Runtime HTTP configuration mutation is not supported.
 - Native BPNG alias bootstrap retained-Kura coverage lives in
   `tests/alias_registry_bootstrap_network.rs` in `network_functional`. It requires
-  four real NPoS validators, native paid SNS quotes/leases, future-height routing
-  activation and an exact-owner bootstrap grant, then restarts the same peers
+  four real NPoS validators, native paid SNS quotes/leases routed through the
+  universal registry from genesis and an exact-owner bootstrap grant, then restarts the same peers
   with snapshots disabled, Strict Kura and only an additive BPNG dataspace
   catalog entry. It checks exact leases, domains, parameters, balances and
   transaction results, plus original stored SignedBlock execution plans and
@@ -116,9 +118,9 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   checks the stopped Kura/CommitQC evidence for exactly one appended certified
   BPNG lane block. Missing binaries, networking or persisted evidence fail; no
   success-by-skip is accepted.
-  Its pre-activation universal-domain alias is a historical control, **not**
-  qualification of a private-to-universal routing transition; genuine historical
-  private-lane replay remains a separate release prerequisite. Ordinary
+  The first paid universal-domain alias precedes the owner bootstrap grant;
+  paid dataspace and domain leases then execute before the private catalog entry
+  exists. No routing activation parameter or migration carriers are required. Ordinary
   transaction fees are zero from the original test genesis to isolate real SNS
   lease charges, so this is not production-fee qualification. Existing-file-only
   Fast Kura inspection verifies finality without starting a writer; only the
@@ -227,3 +229,24 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   required; source presence does not qualify the partition, authenticated
   state-root convergence, or proof-backed payouts. The controlled partition
   affects consensus votes; transaction and payload transport remain live.
+
+### Parliament timed-OVN deadline/retry corridor
+
+The feature-isolated `sora_parliament_lifecycle_smoke` target includes
+`failure_paths::private_ballot_retry::four_validator_private_ballot_deadline_retry_exhaustion_and_restore`.
+It registers actual private-ballot sessions, rejects premature failure and old-TLE
+reuse, derives registration-deadline NoResult, admits one fresh retry, exhausts
+the frozen limit, checks four-peer revision-4 finality and restores a validator.
+It does not replace the sibling proof-valid timed-OVN aggregate-opening test or
+provide deployment/audit qualification. Later-phase private deadline retries and
+partial-write rollback still need separate four-validator coverage.
+
+Prebuild the same-source native `iroha3d` with `test-network-parliament-signers`
+and the ordinary `iroha` CLI; point `TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS`
+and `TEST_NETWORK_BIN_IROHA` to those exact artifacts. With
+`IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1`,
+run `cargo test --locked -p integration_tests --features parliament-test-signers --test sora_parliament_lifecycle_smoke failure_paths::private_ballot_retry::four_validator_private_ballot_deadline_retry_exhaustion_and_restore -- --exact --nocapture --test-threads=1`.
+The new scenario rejects an unavailable network even in a developer run; require
+network startup for the whole target so sibling optional sandbox skips cannot be
+counted as successful qualification. Deterministic test signers are feature
+isolated and are not a deployment-selected custody provider.

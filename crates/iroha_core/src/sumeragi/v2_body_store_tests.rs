@@ -1,5 +1,8 @@
 #[cfg(test)]
 mod tests {
+    mod retained_validation_tests {
+        include!("v2_body_store/retained_validation_tests.rs");
+    }
     use super::{
         BlockSignaturePolicy, BodyValidationError, BodyValidationRejectionIdentity,
         DEFAULT_V2_BODY_STORE_MAX_BYTES_PER_HEIGHT, QuarantinedValidationOutcome,
@@ -34,6 +37,7 @@ mod tests {
     enum FixtureValidationError {
         MissingMergeSidecar(CertifiedMergeLedgerReference),
         Invalid(&'static str),
+        Local(&'static str),
     }
     impl std::fmt::Display for FixtureValidationError {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,15 +45,21 @@ mod tests {
                 Self::MissingMergeSidecar(reference) => {
                     write!(formatter, "missing merge sidecar {}", reference.entry_hash)
                 }
-                Self::Invalid(reason) => formatter.write_str(reason),
+                Self::Invalid(reason) | Self::Local(reason) => formatter.write_str(reason),
             }
         }
     }
     impl BodyValidationError for FixtureValidationError {
+        fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity> {
+            match self {
+                Self::Invalid(_) => Some(BodyValidationRejectionIdentity::Rejected),
+                Self::MissingMergeSidecar(_) | Self::Local(_) => None,
+            }
+        }
         fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
             match self {
                 Self::MissingMergeSidecar(reference) => Some(reference),
-                Self::Invalid(_) => None,
+                Self::Invalid(_) | Self::Local(_) => None,
             }
         }
     }
@@ -172,7 +182,6 @@ mod tests {
         };
         let header = BlockHeader::new(
             NonZeroU64::new(round.height).expect("non-zero height"),
-            None,
             None,
             None,
             1_000,
@@ -1123,9 +1132,26 @@ mod tests {
         let (context, keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&context, &keys, None);
         let mut result_bearing = decode_framed_signed_block(&body).expect("decode fixture body");
-        result_bearing
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("attach empty deterministic execution result");
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &result_bearing,
+                &[],
+                Vec::new(),
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            result_bearing.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+        }
+        .expect("attach empty deterministic execution result");
         assert!(!result_bearing.is_resultless_proposal());
         let result_bearing_wire = result_bearing
             .encode_wire()
@@ -1145,6 +1171,190 @@ mod tests {
             store.store(result_bearing_manifest, result_bearing_wire),
             Err(V2BodyStoreError::ResultBearingProposal)
         ));
+    }
+    #[test]
+    fn local_validation_capacity_leaves_body_markers_untouched_and_restart_revalidates() {
+        use crate::sumeragi::{v2_apply::V2ApplyService, v2_body_store::LocalValidationRefusal};
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let before = durable_files_snapshot(directory.path());
+        let error = store.execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+            Err::<wire::ExecutionCommitment, _>(V2ApplyService::classify_native_amx_evidence_byte_budget_error(
+                crate::kura::NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalStablePairCapacity {
+                    required_bytes: 65, configured_bytes: 64,
+                },
+            ))
+        }).expect_err("local capacity cannot become a durable rejection");
+        assert!(matches!(
+            error,
+            V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(_))
+        ));
+        assert_eq!(durable_files_snapshot(directory.path()), before);
+        assert!(store.rejected.is_empty());
+        assert!(store.validated.is_empty());
+        drop(store);
+        let mut reopened =
+            V2BodyStore::open(directory.path(), context.clone()).expect("cold reopen");
+        assert!(reopened.pending_revalidation.is_empty());
+        let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        let outcome = reopened
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Ok::<_, String>(commitment)
+            })
+            .expect("Strict restart retries the exact body after repair");
+        assert_eq!(
+            outcome.validated_receipt().unwrap().execution_commitment(),
+            commitment
+        );
+        drop(reopened);
+        let mut quarantined =
+            V2BodyStore::open(directory.path(), context).expect("reopen success marker");
+        let marker_before = durable_files_snapshot(directory.path());
+        assert!(matches!(
+            quarantined.revalidate_recovered_markers(|_| {
+                Err::<wire::ExecutionCommitment, _>(LocalValidationRefusal::RecoveryRequired(
+                    "canonical storage unavailable".to_owned(),
+                ))
+            }),
+            Err(V2BodyStoreError::LocalValidation(_))
+        ));
+        assert_eq!(quarantined.pending_revalidation.len(), 1);
+        assert!(quarantined.validated.is_empty());
+        assert!(quarantined.rejected.is_empty());
+        assert_eq!(durable_files_snapshot(directory.path()), marker_before);
+        quarantined
+            .revalidate_recovered_markers(|_| Ok::<_, String>(commitment))
+            .expect("unchanged marker promotes after exact successful replay");
+        assert_eq!(quarantined.validated.len(), 1);
+    }
+
+    #[test]
+    fn local_candidate_drain_observation_never_persists_rejection() {
+        use crate::{
+            block::BlockValidationError,
+            state::{LaneLifecycleError, MergeLedgerCommitError},
+            sumeragi::{v2_apply::V2ApplyService, v2_body_store::LocalValidationRefusal},
+        };
+
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let before = durable_files_snapshot(directory.path());
+        let reason = "local drain evidence could not authenticate its retained owner";
+        let merge_failures = [
+            MergeLedgerCommitError::Persistence(crate::kura::Error::IO(
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, reason),
+                directory.path().join("drain-evidence"),
+            )),
+            MergeLedgerCommitError::LocalDrainObservation(Box::new(
+                MergeLedgerCommitError::ExecutionMarkerConflict(reason.to_owned()),
+            )),
+            MergeLedgerCommitError::LocalDrainObservation(Box::new(
+                MergeLedgerCommitError::ExecutionBatchInvalid(reason.to_owned()),
+            )),
+        ];
+        let failures = merge_failures
+            .into_iter()
+            .map(BlockValidationError::from_certified_merge_stage_error)
+            .chain([
+                BlockValidationError::from_autoscale_lifecycle_error(
+                    LaneLifecycleError::DrainObservation(
+                        MergeLedgerCommitError::ExecutionMarkerConflict(reason.to_owned()),
+                    ),
+                ),
+                BlockValidationError::from_autoscale_lifecycle_error(LaneLifecycleError::Storage(
+                    reason.to_owned(),
+                )),
+            ]);
+        for candidate_error in failures {
+            let BlockValidationError::LocalStorageRecoveryRequired { reason: diagnostic } =
+                &candidate_error
+            else {
+                panic!("local evidence must retain its provenance at the block boundary");
+            };
+            assert!(diagnostic.contains(reason));
+            let expected_diagnostic = diagnostic.clone();
+            let error = store
+                .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |block| {
+                    Err::<wire::ExecutionCommitment, _>(
+                        V2ApplyService::classify_candidate_validation_error(
+                            None,
+                            block,
+                            &candidate_error,
+                        ),
+                    )
+                })
+                .expect_err("local candidate failure cannot authorize a semantic marker");
+            assert!(matches!(
+                error,
+                V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(actual))
+                    if actual == expected_diagnostic
+            ));
+            assert_eq!(durable_files_snapshot(directory.path()), before);
+            assert!(store.rejected.is_empty());
+            assert!(store.validated.is_empty());
+        }
+
+        drop(store);
+        let mut reopened = V2BodyStore::open(directory.path(), context).expect("Strict reopen");
+        assert!(reopened.pending_revalidation.is_empty());
+        // The identical diagnostic without local observation provenance remains
+        // a deterministic rejection; classification never parses error text.
+        let candidate_error = BlockValidationError::from_certified_merge_stage_error(
+            MergeLedgerCommitError::ExecutionBatchInvalid(reason.to_owned()),
+        );
+        assert!(matches!(
+            candidate_error,
+            BlockValidationError::ExecutionContextInvalid(_)
+        ));
+        let outcome = reopened
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |block| {
+                Err::<wire::ExecutionCommitment, _>(
+                    V2ApplyService::classify_candidate_validation_error(
+                        None,
+                        block,
+                        &candidate_error,
+                    ),
+                )
+            })
+            .expect("deterministic candidate error persists its rejection");
+        assert!(outcome.rejection_identity().is_some());
+        assert_eq!(reopened.rejected.len(), 1);
+        assert!(
+            reopened
+                .validated_path_for(receipt.round(), receipt.subject())
+                .exists()
+        );
+    }
+    #[test]
+    fn native_amx_hard_budget_failure_remains_a_deterministic_rejection() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context).expect("open store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let outcome = store.execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+            Err::<wire::ExecutionCommitment, _>(crate::sumeragi::v2_apply::V2ApplyService::classify_native_amx_evidence_byte_budget_error(
+                crate::kura::NativeAmxParticipantApplicationEvidenceByteBudgetError::HardGeometry(
+                    crate::kura::NativeAmxParticipantApplicationEvidenceGeometryError::ManifestStandaloneLimit {
+                        bytes: 65,
+                        limit: 64,
+                    },
+                ),
+            ))
+        }).expect("hard protocol bound is deterministic");
+        assert!(outcome.rejection_identity().is_some());
+        assert!(
+            store
+                .validated_path_for(receipt.round(), receipt.subject())
+                .exists()
+        );
+        assert_eq!(store.rejected.len(), 1);
     }
     #[test]
     fn typed_validation_deferral_and_durable_rejection_never_mint_success_receipts() {
@@ -1263,6 +1473,99 @@ mod tests {
             execution_commitment
         );
     }
+    #[test]
+    fn local_validation_failure_keeps_exact_body_undecided_for_retry() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context).unwrap();
+        let receipt = store.store(manifest, body).unwrap();
+        let before = durable_files_snapshot(directory.path());
+        let loaded_before = store.load(&receipt).unwrap();
+        let error = store
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Local(
+                    "local canonical read failed",
+                ))
+            })
+            .expect_err("local inability cannot establish an invalid proposal");
+        assert!(matches!(error, V2BodyStoreError::LocalValidation(_)));
+        assert!(store.validated.is_empty());
+        assert!(store.rejected.is_empty());
+        assert_eq!(durable_files_snapshot(directory.path()), before);
+        assert_eq!(store.load(&receipt).unwrap(), loaded_before);
+        let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        let result = store
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Ok::<_, FixtureValidationError>(commitment)
+            })
+            .expect("the original body can still obtain its first semantic outcome");
+        assert_eq!(
+            result.validated_receipt().unwrap().execution_commitment(),
+            commitment
+        );
+        assert!(store.rejected.is_empty());
+    }
+
+    #[test]
+    fn local_replay_failure_keeps_success_and_rejection_markers_quarantined() {
+        for rejected in [false, true] {
+            let directory = TempDir::new().unwrap();
+            let (context, keys) = context_and_keys();
+            let (body, manifest) = body_and_manifest(&context, &keys, None);
+            let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
+            let receipt = store.store(manifest, body).unwrap();
+            let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+            let outcome = store
+                .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                    if rejected {
+                        Err(FixtureValidationError::Invalid("deterministic rejection"))
+                    } else {
+                        Ok(commitment)
+                    }
+                })
+                .unwrap();
+            assert_eq!(outcome.rejection_reason().is_some(), rejected);
+            assert_eq!(outcome.validated_receipt().is_some(), !rejected);
+            drop(store);
+            let mut reopened = V2BodyStore::open(directory.path(), context).unwrap();
+            let files = durable_files_snapshot(directory.path());
+            assert_eq!(reopened.pending_revalidation.len(), 1);
+            let error = reopened
+                .revalidate_recovered_markers(|_| {
+                    Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Local(
+                        "local read is unavailable during replay",
+                    ))
+                })
+                .expect_err("local failure cannot reproduce a persisted rejection code");
+            assert!(matches!(error, V2BodyStoreError::LocalValidation(_)));
+            assert_eq!(reopened.pending_revalidation.len(), 1);
+            assert!(reopened.validated.is_empty());
+            assert!(reopened.rejected.is_empty());
+            assert!(reopened.retired_revalidation.is_empty());
+            assert_eq!(durable_files_snapshot(directory.path()), files);
+            assert!(matches!(
+                reopened.ensure_recovered_markers_revalidated(),
+                Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
+            ));
+            reopened
+                .revalidate_recovered_markers(|_| {
+                    if rejected {
+                        Err(FixtureValidationError::Invalid(
+                            "same deterministic rejection",
+                        ))
+                    } else {
+                        Ok(commitment)
+                    }
+                })
+                .expect("retry still has the exact original marker to authenticate");
+            reopened.ensure_recovered_markers_revalidated().unwrap();
+            assert_eq!(reopened.rejected.len(), usize::from(rejected));
+            assert_eq!(reopened.validated.len(), usize::from(!rejected));
+            assert_eq!(durable_files_snapshot(directory.path()), files);
+        }
+    }
+
     #[test]
     fn durable_validation_binds_rejection_and_typed_deferral_to_the_exact_body() {
         let directory = TempDir::new().expect("temporary directory");

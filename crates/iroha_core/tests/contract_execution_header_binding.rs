@@ -134,7 +134,6 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
         nonzero!(1_u64),
         None,
         None,
-        None,
         0,
         0,
     ));

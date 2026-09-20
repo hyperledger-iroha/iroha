@@ -706,6 +706,20 @@ fn internal_proxy_http_envelope_accounts_decode_shared_frame_local_clone_and_scr
             !omitted.phases_fit(),
             "omitting the strict response reservation must fail admission"
         );
+        let canonical_read =
+            iroha_core::state::State::canonical_queue_plan_input_read_working_set_bytes().unwrap();
+        assert!(
+            canonical_read > envelope.body_bytes,
+            "a tiny retry still owns its complete historical carrier read"
+        );
+        let omitted = ToriiProxyHttpIngressEnvelope {
+            working_set_bytes: envelope.working_set_bytes - canonical_read,
+            ..envelope
+        };
+        assert!(
+            !omitted.phases_fit(),
+            "certificate-response space cannot replace the historical carrier read reservation"
+        );
     }
     assert_eq!(envelope.body_bytes, 17);
     assert_eq!(envelope.decode_allocated_bytes, 17);

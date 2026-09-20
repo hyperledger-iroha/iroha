@@ -21,18 +21,18 @@ struct CanonicalReopenRecordV1 {
 }
 /// Opaque next state retaining the complete replay owner and bounded columns.
 #[must_use = "dropping this owner closes the source openings and canonical replay"]
-pub(in crate::vega::zk_ams::mkhe) struct Phase23GlobalLookupSourceReopenedV1<K, P> {
-    replay: Phase23GlobalLookupSourceReplayV1<K, P>,
+pub(in crate::vega::zk_ams::mkhe) struct Phase23GlobalLookupSourceReopenedV1<R, K, P> {
+    replay: Phase23GlobalLookupSourceReplayV1<R, K, P>,
     weighted_columns: WeightedOpeningColumnsV1,
     record: CanonicalReopenRecordV1,
 }
-impl<K, P> Phase23GlobalLookupSourceReplayV1<K, P> {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> Phase23GlobalLookupSourceReplayV1<R, K, P> {
     /// Consume this owner into the later authenticated canonical pass. The
     /// production seal is currently uninhabited; no generic callback escapes.
     pub(in crate::vega::zk_ams::mkhe) fn into_canonical_opening_replay_v1(
         self,
         seal: GlobalLookupCanonicalReopenSealV1,
-    ) -> Result<Phase23GlobalLookupSourceReopenedV1<K, P>, ZkAmsMkheErrorV1> {
+    ) -> Result<Phase23GlobalLookupSourceReopenedV1<R, K, P>, ZkAmsMkheErrorV1> {
         CanonicalReopenIngressV1 {
             replay: Some(self),
             seal: Some(seal),
@@ -40,12 +40,12 @@ impl<K, P> Phase23GlobalLookupSourceReplayV1<K, P> {
         .run_v1()
     }
 }
-struct CanonicalReopenIngressV1<K, P> {
-    replay: Option<Phase23GlobalLookupSourceReplayV1<K, P>>,
+struct CanonicalReopenIngressV1<R, K, P> {
+    replay: Option<Phase23GlobalLookupSourceReplayV1<R, K, P>>,
     seal: Option<GlobalLookupCanonicalReopenSealV1>,
 }
-impl<K, P> CanonicalReopenIngressV1<K, P> {
-    fn run_v1(mut self) -> Result<Phase23GlobalLookupSourceReopenedV1<K, P>, ZkAmsMkheErrorV1> {
+impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> CanonicalReopenIngressV1<R, K, P> {
+    fn run_v1(mut self) -> Result<Phase23GlobalLookupSourceReopenedV1<R, K, P>, ZkAmsMkheErrorV1> {
         // Take both authority owners before validation or authenticated I/O.
         let mut replay = self
             .replay

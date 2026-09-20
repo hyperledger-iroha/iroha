@@ -34,7 +34,6 @@ fn test_header() -> BlockHeader {
         NonZeroU64::new(1).expect("one is nonzero"),
         None,
         None,
-        None,
         0,
         0,
     )

@@ -2,13 +2,16 @@
 //! Native AMX multidataspace routing integration coverage.
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
+#[path = "kura_storage_support.rs"]
+mod kura_storage_support;
+
 use integration_tests::sandbox;
 use iroha::nexus;
 use iroha::{
     blocking::Client,
     crypto::{Hash, HashOf, SignatureOf},
     data_model::{
-        Level, ValidationFail,
+        Level,
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{
@@ -61,15 +64,7 @@ use iroha::{
         parameter::{Parameter, system::SumeragiNposParameters},
         permission::Permission,
         prelude::Quantity,
-        query::{
-            block::prelude::FindBlocks,
-            error::QueryExecutionFail,
-            musubi::prelude::{
-                FindMusubiArchiveLocationsV1, FindMusubiArchiveRetentionV1,
-                FindMusubiExactPackageV1, FindMusubiExactReleaseV1, FindMusubiOrderedPrefixV1,
-                FindMusubiResolverIndexV1,
-            },
-        },
+        query::block::prelude::FindBlocks,
         sorafs::{
             capacity::ProviderId,
             pin_registry::{
@@ -80,7 +75,7 @@ use iroha::{
         },
         transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
     },
-    query::QueryError,
+    query::AsyncQueryBuilderExt,
 };
 use iroha_config::{
     kura::FsyncMode,
@@ -92,7 +87,6 @@ use iroha_config::{
 use iroha_config_base::WithOrigin;
 use iroha_core::{da::proof_policy_bundle, kura::Kura};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
-use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::sorafs::{
     CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
 };
@@ -119,10 +113,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
     time::{Duration, Instant},
 };
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 use toml::{Table, Value as TomlValue};
 #[path = "native_amx_routing/qualification_scenarios.rs"]
 mod qualification_scenarios;
@@ -641,8 +632,12 @@ fn musubi_fault_replication_order(
         metadata: Vec::new(),
     }
 }
-fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinalizedAnchorV1> {
-    let blocks = client.client().query(FindBlocks).execute_all()?;
+async fn musubi_fault_finalized_anchor(client: &Client) -> Result<ProviderIngestFinalizedAnchorV1> {
+    let blocks = client
+        .account_client()
+        .query(FindBlocks)
+        .execute_all()
+        .await?;
     // `FindBlocks` is newest-first, so the first row is the exact finalized
     // prefix on which the completion transaction is prepared.
     let latest = blocks
@@ -713,12 +708,11 @@ async fn submit_and_wait_for_approval(
     )
     .await
     .map_err(|_| eyre!("timed out opening transaction event stream"))??;
-    let submitter_for_submit = submitter.clone();
-    let transaction_for_submit = transaction.clone();
-    spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
+    submitter
+        .account_client()
+        .submit_transaction(&transaction)
         .await
-        .map_err(|err| eyre!("submit task join error: {err}"))?
-        .map_err(|err| eyre!("failed to submit native AMX transaction: {err}"))?;
+        .wrap_err("failed to submit native AMX transaction")?;
     let outcome = match timeout(STATUS_WAIT_TIMEOUT, async {
         while let Some(next) = events.next().await {
             let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
@@ -758,11 +752,16 @@ async fn wait_for_block_with_entrypoint(
     let started = Instant::now();
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match client.client().query(FindBlocks).execute_all() {
+        match client
+            .account_client()
+            .query(FindBlocks)
+            .execute_all()
+            .await
+        {
             Ok(blocks) => {
                 if let Some(block) = blocks.into_iter().find(|block| {
                     block
-                        .entrypoint_hashes()
+                        .network_input_hashes()
                         .any(|hash| hash == entrypoint_hash)
                 }) {
                     return Ok(block);
@@ -879,11 +878,10 @@ async fn wait_for_rejected_transaction(
     let started = Instant::now();
     let mut last_status: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let client = client.clone();
-        let response =
-            spawn_blocking(move || client.client().get_transaction_status_response(hash))
-                .await
-                .map_err(|error| eyre!("{context}: status task join error: {error}"))??;
+        let response = client
+            .client()
+            .fetch_transaction_status_response_global(hash)
+            .await?;
         if let Some(response) = response {
             let kind = response.status.kind.clone();
             if kind == "Rejected" {
@@ -898,14 +896,21 @@ async fn wait_for_rejected_transaction(
         "{context}: timed out waiting for rejection; last status={last_status:?}"
     ))
 }
-fn musubi_fault_snapshot_and_time(client: &Client) -> Result<(MusubiRegistrySnapshotV1, u64)> {
-    let resolver = client
-        .client()
-        .query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
-            package: musubi_fault_package(),
-            requirement: None,
-            page: musubi_fault_page(),
-        }))?;
+async fn musubi_fault_snapshot_and_time(
+    client: &Client,
+) -> Result<(MusubiRegistrySnapshotV1, u64)> {
+    let resolver = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .resolver_index(&MusubiResolverIndexQueryV1 {
+                package: musubi_fault_package(),
+                requirement: None,
+                page: musubi_fault_page(),
+            })
+            .await?,
+        "Musubi resolver_index",
+    )?;
     ensure!(
         resolver.items.is_empty(),
         "Musubi fault package unexpectedly exists before publication"
@@ -914,7 +919,11 @@ fn musubi_fault_snapshot_and_time(client: &Client) -> Result<(MusubiRegistrySnap
         resolver.network_id == *client.client().network_id(),
         "Musubi resolver page used a different network identity"
     );
-    let blocks = client.client().query(FindBlocks).execute_all()?;
+    let blocks = client
+        .account_client()
+        .query(FindBlocks)
+        .execute_all()
+        .await?;
     let latest = blocks
         .first()
         .ok_or_else(|| eyre!("Musubi fault fixture has no finalized block"))?;
@@ -1061,7 +1070,7 @@ async fn prepare_selectable_musubi_publication(
     let commitment = musubi_fault_archive_commitment();
     let archive_id = commitment.archive_id();
     let (manifest, lock) = musubi_fault_release_manifest_and_lock();
-    let (_, latest_time_ms) = musubi_fault_snapshot_and_time(submitter)?;
+    let (_, latest_time_ms) = musubi_fault_snapshot_and_time(submitter).await?;
     let staging_receipt =
         musubi_fault_staging_receipt(submitter, latest_time_ms, &commitment, &manifest);
     let archive_transaction = {
@@ -1144,7 +1153,7 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: issue three-replica order"),
     )
     .await?;
-    let anchor = musubi_fault_finalized_anchor(submitter)?;
+    let anchor = musubi_fault_finalized_anchor(submitter).await?;
     let completion_transaction = {
         let account = submitter.account_client();
         account
@@ -1239,7 +1248,7 @@ async fn prepare_selectable_musubi_publication(
         &format!("{context}: bind selectable archive location"),
     )
     .await?;
-    let (snapshot, _) = musubi_fault_snapshot_and_time(submitter)?;
+    let (snapshot, _) = musubi_fault_snapshot_and_time(submitter).await?;
     let publication = MusubiPublicationV1 {
         manifest: manifest.clone(),
         resolution: MusubiResolutionProofV1 { snapshot, lock },
@@ -1275,85 +1284,125 @@ async fn prepare_selectable_musubi_publication(
         replication_order,
     })
 }
-fn is_query_not_found(error: &QueryError) -> bool {
-    matches!(
-        error,
-        QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
-    )
+fn require_musubi_found<T: std::fmt::Debug>(
+    result: iroha::client::musubi::QueryResult<T>,
+    context: &str,
+) -> Result<T> {
+    match result {
+        iroha::client::musubi::QueryResult::Found(value) => Ok(value),
+        other => Err(eyre!(
+            "{context}: expected a current typed Musubi result, got {other:?}"
+        )),
+    }
 }
-fn assert_musubi_publication_absent(
+fn is_musubi_not_found<T>(result: &iroha::client::musubi::QueryResult<T>) -> bool {
+    matches!(result, iroha::client::musubi::QueryResult::NotFound)
+}
+#[test]
+fn typed_musubi_queries_distinguish_found_absent_and_stale_results() {
+    use iroha::client::musubi::QueryResult;
+    assert_eq!(
+        require_musubi_found(QueryResult::Found(7_u64), "fixture").unwrap(),
+        7
+    );
+    assert!(require_musubi_found(QueryResult::<u64>::NotFound, "fixture").is_err());
+    assert!(require_musubi_found(QueryResult::<u64>::StaleCursor, "fixture").is_err());
+    assert!(is_musubi_not_found(&QueryResult::<u64>::NotFound));
+    assert!(!is_musubi_not_found(&QueryResult::Found(7_u64)));
+    assert!(!is_musubi_not_found(&QueryResult::<u64>::StaleCursor));
+}
+
+async fn assert_musubi_publication_absent(
     client: &Client,
     release: &MusubiReleaseIdV1,
     archive_id: ArchiveId,
     context: &str,
 ) -> Result<MusubiRegistrySnapshotV1> {
     let package_error = client
-        .client()
-        .query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
+        .account_client()
+        .musubi()
+        .exact_package(&MusubiExactPackageQueryV1 {
             package: release.package.clone(),
-        }))
-        .expect_err("faulted Musubi publication must not create its home package");
+        })
+        .await?;
     ensure!(
-        is_query_not_found(&package_error),
+        is_musubi_not_found(&package_error),
         "{context}: exact package query failed unexpectedly: {package_error:?}"
     );
     let release_error = client
-        .client()
-        .query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
+        .account_client()
+        .musubi()
+        .exact_release(&MusubiExactReleaseQueryV1 {
             release: release.clone(),
-        }))
-        .expect_err("faulted Musubi publication must not create its home release");
+        })
+        .await?;
     ensure!(
-        is_query_not_found(&release_error),
+        is_musubi_not_found(&release_error),
         "{context}: exact release query failed unexpectedly: {release_error:?}"
     );
-    let resolver = client
-        .client()
-        .query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
-            package: release.package.clone(),
-            requirement: None,
-            page: musubi_fault_page(),
-        }))?;
+    let resolver = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .resolver_index(&MusubiResolverIndexQueryV1 {
+                package: release.package.clone(),
+                requirement: None,
+                page: musubi_fault_page(),
+            })
+            .await?,
+        "Musubi resolver_index",
+    )?;
     ensure!(
         resolver.items.is_empty() && resolver.next_cursor.is_none(),
         "{context}: faulted publication left a universal resolver row"
     );
     let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
-    let directory = client
-        .client()
-        .query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
-            prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
-                .expect("Musubi fault directory prefix"),
-            page: musubi_fault_page(),
-        }))?;
+    let directory = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .ordered_prefix(&MusubiOrderedPrefixQueryV1 {
+                prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
+                    .expect("Musubi fault directory prefix"),
+                page: musubi_fault_page(),
+            })
+            .await?,
+        "Musubi ordered_prefix",
+    )?;
     ensure!(
         directory.namespace_binding == musubi_fault_namespace_binding()
             && directory.items.is_empty()
             && directory.next_cursor.is_none(),
         "{context}: faulted publication changed its binding or public-directory projection"
     );
-    let locations = client
-        .client()
-        .query_single(FindMusubiArchiveLocationsV1::new(
-            MusubiArchiveLocationQueryV1 {
+    let locations = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .archive_locations(&MusubiArchiveLocationQueryV1 {
                 archive_id,
                 page: musubi_fault_page(),
-            },
-        ))?;
+            })
+            .await?,
+        "Musubi archive_locations",
+    )?;
     ensure!(
         locations.archive.archive_id == archive_id
             && locations.items.is_empty()
             && locations.next_cursor.is_none(),
         "{context}: fault fixture archive registration or location state changed"
     );
-    let retention = client
-        .client()
-        .query_single(FindMusubiArchiveRetentionV1::new(
-            MusubiArchiveRetentionQueryV1 {
+    let retention = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .archive_retention(&MusubiArchiveRetentionQueryV1 {
                 archive_ids: vec![archive_id],
                 expected_snapshot: None,
-            },
-        ))?;
+            })
+            .await?,
+        "Musubi archive_retention",
+    )?;
     let [decision] = retention.items.as_slice() else {
         return Err(eyre!(
             "{context}: exact archive-retention query returned the wrong item count"
@@ -1379,64 +1428,79 @@ fn assert_musubi_publication_absent(
     );
     Ok(resolver.snapshot)
 }
-fn assert_selectable_musubi_archive_without_release(
+async fn assert_selectable_musubi_archive_without_release(
     client: &Client,
     fixture: &SelectableMusubiPublicationFixture,
     context: &str,
 ) -> Result<MusubiRegistrySnapshotV1> {
     let package_error = client
-        .client()
-        .query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
+        .account_client()
+        .musubi()
+        .exact_package(&MusubiExactPackageQueryV1 {
             package: fixture.release.package.clone(),
-        }))
-        .expect_err("unpublished selectable fixture must not create its home package");
+        })
+        .await?;
     ensure!(
-        is_query_not_found(&package_error),
+        is_musubi_not_found(&package_error),
         "{context}: exact package query failed unexpectedly: {package_error:?}"
     );
     let release_error = client
-        .client()
-        .query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
+        .account_client()
+        .musubi()
+        .exact_release(&MusubiExactReleaseQueryV1 {
             release: fixture.release.clone(),
-        }))
-        .expect_err("unpublished selectable fixture must not create its home release");
+        })
+        .await?;
     ensure!(
-        is_query_not_found(&release_error),
+        is_musubi_not_found(&release_error),
         "{context}: exact release query failed unexpectedly: {release_error:?}"
     );
-    let resolver = client
-        .client()
-        .query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
-            package: fixture.release.package.clone(),
-            requirement: None,
-            page: musubi_fault_page(),
-        }))?;
+    let resolver = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .resolver_index(&MusubiResolverIndexQueryV1 {
+                package: fixture.release.package.clone(),
+                requirement: None,
+                page: musubi_fault_page(),
+            })
+            .await?,
+        "Musubi resolver_index",
+    )?;
     ensure!(
         resolver.items.is_empty() && resolver.next_cursor.is_none(),
         "{context}: unpublished selectable fixture has a resolver row"
     );
     let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
-    let directory = client
-        .client()
-        .query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
-            prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
-                .expect("Musubi fault directory prefix"),
-            page: musubi_fault_page(),
-        }))?;
+    let directory = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .ordered_prefix(&MusubiOrderedPrefixQueryV1 {
+                prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
+                    .expect("Musubi fault directory prefix"),
+                page: musubi_fault_page(),
+            })
+            .await?,
+        "Musubi ordered_prefix",
+    )?;
     ensure!(
         directory.namespace_binding == fixture.binding
             && directory.items.is_empty()
             && directory.next_cursor.is_none(),
         "{context}: unpublished selectable fixture changed its directory projection"
     );
-    let locations = client
-        .client()
-        .query_single(FindMusubiArchiveLocationsV1::new(
-            MusubiArchiveLocationQueryV1 {
+    let locations = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .archive_locations(&MusubiArchiveLocationQueryV1 {
                 archive_id: fixture.archive_id,
                 page: musubi_fault_page(),
-            },
-        ))?;
+            })
+            .await?,
+        "Musubi archive_locations",
+    )?;
     let [location] = locations.items.as_slice() else {
         return Err(eyre!(
             "{context}: selectable fixture returned {} locations instead of one",
@@ -1452,14 +1516,17 @@ fn assert_selectable_musubi_archive_without_release(
             && location.state == MusubiArchiveLocationStateV1::Healthy,
         "{context}: selectable archive location differs from finalized evidence: {location:?}"
     );
-    let retention = client
-        .client()
-        .query_single(FindMusubiArchiveRetentionV1::new(
-            MusubiArchiveRetentionQueryV1 {
+    let retention = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .archive_retention(&MusubiArchiveRetentionQueryV1 {
                 archive_ids: vec![fixture.archive_id],
                 expected_snapshot: None,
-            },
-        ))?;
+            })
+            .await?,
+        "Musubi archive_retention",
+    )?;
     let [decision] = retention.items.as_slice() else {
         return Err(eyre!(
             "{context}: selectable fixture retention query returned the wrong item count"
@@ -1486,17 +1553,21 @@ fn assert_selectable_musubi_archive_without_release(
     );
     Ok(resolver.snapshot)
 }
-fn assert_selectable_musubi_publication_present(
+async fn assert_selectable_musubi_publication_present(
     client: &Client,
     fixture: &SelectableMusubiPublicationFixture,
     context: &str,
 ) -> Result<MusubiRegistrySnapshotV1> {
-    let package =
+    let package = require_musubi_found(
         client
-            .client()
-            .query_single(FindMusubiExactPackageV1::new(MusubiExactPackageQueryV1 {
+            .account_client()
+            .musubi()
+            .exact_package(&MusubiExactPackageQueryV1 {
                 package: fixture.release.package.clone(),
-            }))?;
+            })
+            .await?,
+        "Musubi exact_package",
+    )?;
     ensure!(
         package.package == fixture.release.package
             && package.claimed_namespace == fixture.binding.namespace
@@ -1504,12 +1575,16 @@ fn assert_selectable_musubi_publication_present(
             && package.member_accounts == vec![ALICE_ID.clone()],
         "{context}: home package record is incomplete: {package:?}"
     );
-    let release =
+    let release = require_musubi_found(
         client
-            .client()
-            .query_single(FindMusubiExactReleaseV1::new(MusubiExactReleaseQueryV1 {
+            .account_client()
+            .musubi()
+            .exact_release(&MusubiExactReleaseQueryV1 {
                 release: fixture.release.clone(),
-            }))?;
+            })
+            .await?,
+        "Musubi exact_release",
+    )?;
     ensure!(
         release.home_release.manifest == fixture.manifest
             && release.home_release.release_digest == fixture.manifest.release_digest()
@@ -1517,13 +1592,18 @@ fn assert_selectable_musubi_publication_present(
             && !release.home_release.yank.yanked,
         "{context}: home release record is incomplete: {release:?}"
     );
-    let resolver = client
-        .client()
-        .query_single(FindMusubiResolverIndexV1::new(MusubiResolverIndexQueryV1 {
-            package: fixture.release.package.clone(),
-            requirement: None,
-            page: musubi_fault_page(),
-        }))?;
+    let resolver = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .resolver_index(&MusubiResolverIndexQueryV1 {
+                package: fixture.release.package.clone(),
+                requirement: None,
+                page: musubi_fault_page(),
+            })
+            .await?,
+        "Musubi resolver_index",
+    )?;
     let [row] = resolver.items.as_slice() else {
         return Err(eyre!(
             "{context}: resolver returned {} rows instead of one",
@@ -1543,13 +1623,18 @@ fn assert_selectable_musubi_publication_present(
         "{context}: universal resolver row is incomplete: {row:?}"
     );
     let directory_prefix = format!("{MUSUBI_FAULT_NAMESPACE}/");
-    let directory = client
-        .client()
-        .query_single(FindMusubiOrderedPrefixV1::new(MusubiOrderedPrefixQueryV1 {
-            prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
-                .expect("Musubi fault directory prefix"),
-            page: musubi_fault_page(),
-        }))?;
+    let directory = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .ordered_prefix(&MusubiOrderedPrefixQueryV1 {
+                prefix: MusubiOrderedPrefixV1::new(&directory_prefix)
+                    .expect("Musubi fault directory prefix"),
+                page: musubi_fault_page(),
+            })
+            .await?,
+        "Musubi ordered_prefix",
+    )?;
     let [entry] = directory.items.as_slice() else {
         return Err(eyre!(
             "{context}: directory returned {} entries instead of one",
@@ -1565,14 +1650,17 @@ fn assert_selectable_musubi_publication_present(
             && entry.latest_selectable.as_ref() == Some(&fixture.release.version),
         "{context}: universal directory entry is incomplete: {entry:?}"
     );
-    let locations = client
-        .client()
-        .query_single(FindMusubiArchiveLocationsV1::new(
-            MusubiArchiveLocationQueryV1 {
+    let locations = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .archive_locations(&MusubiArchiveLocationQueryV1 {
                 archive_id: fixture.archive_id,
                 page: musubi_fault_page(),
-            },
-        ))?;
+            })
+            .await?,
+        "Musubi archive_locations",
+    )?;
     let [location] = locations.items.as_slice() else {
         return Err(eyre!(
             "{context}: published archive returned {} locations instead of one",
@@ -1587,14 +1675,17 @@ fn assert_selectable_musubi_publication_present(
             && location.state == MusubiArchiveLocationStateV1::Healthy,
         "{context}: published archive location is incomplete: {location:?}"
     );
-    let retention = client
-        .client()
-        .query_single(FindMusubiArchiveRetentionV1::new(
-            MusubiArchiveRetentionQueryV1 {
+    let retention = require_musubi_found(
+        client
+            .account_client()
+            .musubi()
+            .archive_retention(&MusubiArchiveRetentionQueryV1 {
                 archive_ids: vec![fixture.archive_id],
                 expected_snapshot: None,
-            },
-        ))?;
+            })
+            .await?,
+        "Musubi archive_retention",
+    )?;
     let [decision] = retention.items.as_slice() else {
         return Err(eyre!(
             "{context}: published retention query returned the wrong item count"
@@ -1750,62 +1841,58 @@ fn native_amx_source_id(transaction: &SignedTransaction) -> [u8; Hash::LENGTH] {
     source_id.copy_from_slice(transaction.hash().as_ref());
     source_id
 }
-fn next_universal_autonomous_lane_author_peer(
+async fn next_universal_autonomous_lane_author_peer(
     peers: &[NetworkPeer],
     context: &str,
 ) -> Result<usize> {
-    let diagnostics = peers
-        .iter()
-        .enumerate()
-        .map(|(index, peer)| {
-            let diagnostics = peer
-                .client()
-                .client().get_sumeragi_diagnostics()
-                .wrap_err_with(|| format!("{context}: query pre-cut peer {index} diagnostics"))?;
-            let ownership = diagnostics
-                .lane_payload_ownerships
-                .iter()
-                .find(|ownership| {
-                    ownership.lane_id == LaneId::new(UNIVERSAL_LANE)
-                        && ownership.dataspace_id == DataSpaceId::UNIVERSAL
-                })
-                .cloned()
-                .ok_or_else(|| {
-                    eyre!("{context}: pre-cut peer {index} has no universal-lane frontier")
-                })?;
-            ownership.validate_replay_material().map_err(|err| {
-                eyre!(
-                    "{context}: pre-cut peer {index} has an invalid universal-lane frontier: {err:?}"
-                )
+    let mut ownerships = Vec::with_capacity(peers.len());
+    for (index, peer) in peers.iter().enumerate() {
+        let diagnostics = peer
+            .client()
+            .client()
+            .get_sumeragi_diagnostics()
+            .await
+            .wrap_err_with(|| format!("{context}: query pre-cut peer {index} diagnostics"))?;
+        let ownership = diagnostics
+            .lane_payload_ownerships
+            .iter()
+            .find(|ownership| {
+                ownership.lane_id == LaneId::new(UNIVERSAL_LANE)
+                    && ownership.dataspace_id == DataSpaceId::UNIVERSAL
+            })
+            .cloned()
+            .ok_or_else(|| {
+                eyre!("{context}: pre-cut peer {index} has no universal-lane frontier")
             })?;
-            let descriptor_hash = ownership.lane_block_descriptor_hash.ok_or_else(|| {
-                eyre!("{context}: universal-lane frontier has no descriptor hash")
-            })?;
-            ensure!(
-                diagnostics.committed_lane_blocks.iter().any(|block| {
-                    block.lane_id == ownership.lane_id
-                        && block.dataspace_id == ownership.dataspace_id
-                        && block.lane_incarnation == ownership.lane_incarnation
-                        && block.lane_block_height == ownership.lane_block_height
-                        && block.lane_block_view == ownership.lane_block_view
-                        && block.descriptor_hash == descriptor_hash
-                        && block.executable_payload_available
-                        && matches!(
-                            block.execution_status.as_str(),
-                            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
-                        )
-                }),
-                "{context}: pre-cut peer {index} universal-lane frontier is not durably applied"
-            );
-            Ok(ownership)
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .wrap_err_with(|| format!("{context}: derive exact pre-cut universal-lane frontiers"))?;
-    let reference = diagnostics
+        ownership.validate_replay_material().map_err(|err| {
+            eyre!("{context}: pre-cut peer {index} has an invalid universal-lane frontier: {err:?}")
+        })?;
+        let descriptor_hash = ownership
+            .lane_block_descriptor_hash
+            .ok_or_else(|| eyre!("{context}: universal-lane frontier has no descriptor hash"))?;
+        ensure!(
+            diagnostics.committed_lane_blocks.iter().any(|block| {
+                block.lane_id == ownership.lane_id
+                    && block.dataspace_id == ownership.dataspace_id
+                    && block.lane_incarnation == ownership.lane_incarnation
+                    && block.lane_block_height == ownership.lane_block_height
+                    && block.lane_block_view == ownership.lane_block_view
+                    && block.descriptor_hash == descriptor_hash
+                    && block.executable_payload_available
+                    && matches!(
+                        block.execution_status.as_str(),
+                        COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
+                    )
+            }),
+            "{context}: pre-cut peer {index} universal-lane frontier is not durably applied"
+        );
+        ownerships.push(ownership);
+    }
+    let reference = ownerships
         .first()
         .ok_or_else(|| eyre!("{context}: phase-cut network has no lane diagnostics"))?;
     ensure!(
-        diagnostics.iter().all(|ownership| ownership == reference),
+        ownerships.iter().all(|ownership| ownership == reference),
         "{context}: validators do not share one exact universal-lane frontier"
     );
     let validator_set = &reference.lane_block_descriptor_validator_set;
@@ -1881,7 +1968,7 @@ fn assert_grouped_native_amx_execution(
         "grouped Native AMX release evidence reused a transaction entrypoint"
     );
     let ordered_entrypoints = block
-        .entrypoint_hashes()
+        .network_input_hashes()
         .map(Hash::from)
         .filter(|hash| submitted_entrypoints.contains(hash))
         .collect::<Vec<_>>();
@@ -1973,9 +2060,8 @@ async fn wait_for_grouped_native_amx_durable_application(
     let mut last_error: Option<String> = None;
     let descriptor = &evidence.bank_leg.participant_proposal.descriptor;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let client = client.clone();
-        match spawn_blocking(move || client.client().get_sumeragi_diagnostics()).await {
-            Ok(Ok(diagnostics)) => {
+        match client.client().get_sumeragi_diagnostics().await {
+            Ok(diagnostics) => {
                 let application_rows = diagnostics
                     .native_amx_participant_applications
                     .iter()
@@ -2009,8 +2095,7 @@ async fn wait_for_grouped_native_amx_durable_application(
                     "typed diagnostics did not expose the exact two-source BANK durable application: {application_rows:?}"
                 ));
             }
-            Ok(Err(error)) => last_error = Some(error.to_string()),
-            Err(error) => last_error = Some(format!("diagnostics task join error: {error}")),
+            Err(error) => last_error = Some(error.to_string()),
         }
         sleep(STATUS_POLL_INTERVAL).await;
     }
@@ -2228,9 +2313,8 @@ async fn wait_for_diagnostics_native_amx_evidence(
     let started = Instant::now();
     let mut last_error: Option<String> = None;
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let client = client.clone();
-        match spawn_blocking(move || client.client().get_sumeragi_diagnostics()).await {
-            Ok(Ok(status)) => {
+        match client.client().get_sumeragi_diagnostics().await {
+            Ok(status) => {
                 let commitment = status
                     .lane_settlement_commitments
                     .iter()
@@ -2260,8 +2344,7 @@ async fn wait_for_diagnostics_native_amx_evidence(
                     "typed diagnostics omitted the exact commitment or relay receipt".to_owned(),
                 );
             }
-            Ok(Err(err)) => last_error = Some(err.to_string()),
-            Err(err) => last_error = Some(format!("diagnostics task join error: {err}")),
+            Err(err) => last_error = Some(err.to_string()),
         }
         sleep(STATUS_POLL_INTERVAL).await;
     }
@@ -2615,7 +2698,7 @@ async fn submit_grouped_native_amx_transactions(
     for transaction in &transactions {
         ensure!(
             block
-                .entrypoint_hashes()
+                .network_input_hashes()
                 .any(|hash| hash == transaction.hash_as_entrypoint()),
             "{context}: Torii accepted the two-source batch but the sources landed in separate canonical blocks"
         );
@@ -2693,14 +2776,12 @@ fn decode_block_index_entry(bytes: &[u8], height: u64) -> Result<(u64, u64)> {
     let length = u64::from_le_bytes(entry[8..].try_into().expect("index length is eight bytes"));
     Ok((offset, length))
 }
-fn native_amx_primary_blocks_dir(peer: &NetworkPeer) -> std::path::PathBuf {
-    ActualLaneConfig::from_catalog(&native_amx_lane_catalog())
-        .primary()
-        .blocks_dir(peer.kura_store_dir())
+fn native_amx_canonical_blocks_dir(peer: &NetworkPeer) -> std::path::PathBuf {
+    Kura::canonical_storage_paths(&peer.kura_store_dir()).0
 }
 fn native_amx_block_index_entry(peer: &NetworkPeer, height: u64) -> Result<(u64, u64)> {
     decode_block_index_entry(
-        &fs::read(native_amx_primary_blocks_dir(peer).join("blocks.index"))?,
+        &fs::read(native_amx_canonical_blocks_dir(peer).join("blocks.index"))?,
         height,
     )
 }
@@ -2740,15 +2821,25 @@ fn canonical_native_amx_height_artifact(name: &str) -> Option<(NativeAmxArtifact
 }
 fn native_amx_artifact_snapshot(
     peer: &NetworkPeer,
+    evidence: &GroupedNativeAmxEvidence,
     selection: NativeAmxArtifactSelection,
 ) -> Result<Vec<(String, Hash)>> {
-    let lane_config = ActualLaneConfig::from_catalog(&native_amx_lane_catalog());
-    let bank_entry = lane_config
-        .entry(LaneId::new(BANK_LANE))
-        .ok_or_else(|| eyre!("Native AMX lane catalog omitted BANK storage"))?;
-    let artifact_dir = bank_entry
-        .blocks_dir(peer.kura_store_dir())
-        .join("lane_artifacts");
+    let descriptor = &evidence.bank_leg.participant_proposal.descriptor;
+    ensure!(
+        descriptor.lane_id == LaneId::new(BANK_LANE)
+            && descriptor.dataspace_id == DataSpaceId::new(BANK_DATASPACE),
+        "Native AMX evidence must identify the expected BANK route"
+    );
+    let artifact_dir = kura_storage_support::lane_instance_blocks_dir(
+        &peer.kura_store_dir(),
+        *peer.client().client().network_id(),
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        Some(descriptor.lane_incarnation),
+        Some(0),
+    )?
+    .ok_or_else(|| eyre!("Native AMX BANK storage instance is absent"))?
+    .join("lane_artifacts");
     let mut snapshot = Vec::new();
     for entry in fs::read_dir(&artifact_dir)
         .wrap_err_with(|| format!("scan Native AMX evidence {}", artifact_dir.display()))?
@@ -2797,8 +2888,11 @@ fn native_amx_artifact_snapshot(
     snapshot.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Ok(snapshot)
 }
-fn native_amx_evidence_artifact_snapshot(peer: &NetworkPeer) -> Result<Vec<(String, Hash)>> {
-    let snapshot = native_amx_artifact_snapshot(peer, NativeAmxArtifactSelection::All)?;
+fn native_amx_evidence_artifact_snapshot(
+    peer: &NetworkPeer,
+    evidence: &GroupedNativeAmxEvidence,
+) -> Result<Vec<(String, Hash)>> {
+    let snapshot = native_amx_artifact_snapshot(peer, evidence, NativeAmxArtifactSelection::All)?;
     ensure!(
         snapshot
             .iter()
@@ -2849,7 +2943,7 @@ fn evict_native_amx_carrier_body_offline(peer: &NetworkPeer, height: u64) -> Res
         "Native AMX carrier index was not durably marked evicted: offset={offset}, length={retained_len}, expected={payload_len}"
     );
     ensure!(
-        !native_amx_primary_blocks_dir(peer)
+        !native_amx_canonical_blocks_dir(peer)
             .join("da_blocks")
             .join(format!("{height_u64:020}.norito"))
             .exists(),
@@ -2876,20 +2970,21 @@ fn remove_latest_native_amx_manifest_offline(
     drop(kura);
     Ok(())
 }
-fn ensure_entrypoint_committed_once(
+async fn ensure_entrypoint_committed_once(
     client: &Client,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     context: &str,
 ) -> Result<()> {
     let occurrences = client
-        .client()
+        .account_client()
         .query(FindBlocks)
         .execute_all()
+        .await
         .wrap_err_with(|| format!("{context}: query canonical blocks"))?
         .iter()
         .map(|block| {
             block
-                .entrypoint_hashes()
+                .network_input_hashes()
                 .filter(|hash| *hash == entrypoint_hash)
                 .count()
         })

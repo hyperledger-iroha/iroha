@@ -3,16 +3,20 @@
 //! This typed owner accepts an independently retained launch plan and separately
 //! supplied input digests. It returns no artifact until both consuming owners
 //! finish. No exported field, digest, roster or boolean can supply launch trust.
-//! TODO: connect secure retained input handles, pre-submit signed-byte retention,
-//! the pinned executable invocation and a descriptor-owned atomic output sink.
+//! The filesystem and command modules retain secure inputs and atomically publish
+//! under their original descriptors. Launch facts consume the original collector
+//! journal, including signed bytes retained before submission. The parent owns
+//! executable/runtime admission, terminal status and release qualification.
 
+pub(crate) mod facts_command;
 pub(crate) mod filesystem;
 pub(crate) mod launcher;
+pub(crate) mod stopped_tip_command;
 
 use super::*;
 use iroha_core::kura::{
     CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceError, CanonicalKuraEvidenceLimits,
-    CanonicalKuraEvidenceReader, CanonicalKuraMergeRequest,
+    CanonicalKuraEvidenceReader,
 };
 use std::path::Path;
 
@@ -25,7 +29,9 @@ pub struct SuppliedHeightEvidence {
     pub height: u64,
     /// Canonical framed BridgeFinalityProof bytes.
     pub finality: Vec<u8>,
-    /// Canonical CommittedTransaction bytes in complete merged leaf order.
+    /// Complete post-context set and its exact authenticated ordinary-write witness.
+    pub contexts: Vec<u8>,
+    /// Canonical CommittedTransaction bytes in complete Native input order.
     pub queries: Vec<Vec<u8>>,
 }
 
@@ -35,6 +41,8 @@ pub struct HeightInputBinding {
     pub height: u64,
     /// Iroha Hash of the retained canonical finality bytes.
     pub finality_hash: Hash,
+    /// Iroha Hash of the complete retained context evidence.
+    pub contexts_hash: Hash,
     /// Iroha Hash of each retained canonical query, in exact leaf order.
     pub query_hashes: Vec<Hash>,
 }
@@ -54,7 +62,7 @@ struct HeightProofV1 {
     height: u64,
     finality: Vec<u8>,
     carrier: Vec<u8>,
-    merge_entry: Option<Vec<u8>>,
+    contexts: Vec<u8>,
     queries: Vec<Vec<u8>>,
 }
 
@@ -93,7 +101,13 @@ impl VerifiedExport {
     /// pinned verifier, retain the canonical artifact, and join every row to its
     /// independently admitted schedule/trace. Hashes use canonical lowercase hex;
     /// authority uses canonical domainless I105; lane and dataspace are integers.
-    pub fn json_projection(&self) -> Result<Vec<u8>> {
+    /// The independently supplied maximum must be nonzero and at most 256 MiB.
+    /// It includes array delimiters and commas; failure returns no partial rows.
+    pub fn json_projection(&self, maximum: u64) -> Result<Vec<u8>> {
+        ensure!(
+            maximum > 0 && maximum <= MAX_PROOF_BYTES,
+            "projection maximum must be between 1 byte and 256 MiB"
+        );
         // Bound all row temporaries before constructing JSON values. The bounded
         // serializer counts before allocating each <=1 KiB row destination.
         let reserve = u64::try_from(self.rows.len())?
@@ -106,10 +120,22 @@ impl VerifiedExport {
                 .is_some_and(|n| n <= self.output_limit),
             "projection output reservation exceeded"
         );
-        let mut output = Vec::with_capacity(usize::try_from(reserve)?);
+        let allocation = usize::try_from(reserve.min(maximum))?;
+        ensure!(allocation >= 2, "projection exceeds independent maximum");
+        let mut output = Vec::with_capacity(allocation);
         output.push(b'[');
         for (index, row) in self.rows.iter().enumerate() {
             let bytes = projection_row(row)?;
+            let prospective = output
+                .len()
+                .checked_add(usize::from(index > 0))
+                .and_then(|n| n.checked_add(bytes.len()))
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(|| eyre!("projection length overflow"))?;
+            ensure!(
+                prospective <= allocation,
+                "projection exceeds independent maximum"
+            );
             if index > 0 {
                 output.push(b',');
             }
@@ -130,8 +156,9 @@ fn projection_row(row: &ExportRowV1) -> Result<String> {
         "entrypoint_hash": (r.entrypoint_hash.to_string()),
         "carrier_height": (r.carrier_height),
         "carrier_hash": (r.carrier_hash.to_string()),
-        "merge_entry_hash": (r.merge_entry_hash.to_string()),
-        "merge_epoch": (r.merge_epoch),
+        "admission_carrier_hash": (r.admission_carrier_hash.to_string()),
+        "input_descriptor_hash": (r.input_descriptor_hash.to_string()),
+        "instance_id": (r.instance_id.to_string()),
         "leaf_index": (r.leaf_index),
         "lane_id": (r.lane_id.as_u32()),
         "dataspace_id": (r.dataspace_id.as_u64()),
@@ -199,6 +226,7 @@ fn export_with_finish_hook(
         input_bytes = check_supplied(
             height.height,
             &height.finality,
+            &height.contexts,
             &height.queries,
             binding,
             input_bytes,
@@ -224,71 +252,33 @@ fn export_with_finish_hook(
     );
     let mut reader = CanonicalKuraEvidenceReader::open(block_store, merge_log, reader_limits)?;
     let mut heights = Vec::with_capacity(supplied.len());
-    let mut requests = Vec::new();
-    let mut reference_bytes = 0u64;
     for input in supplied {
         let wire = reader.read_carrier(input.height)?;
         input_bytes = charged(input_bytes, wire.len(), limits.input_bytes)?;
         let block = norito::with_decode_limits_scope(decode_limits(wire.len()), || {
             decode_versioned_signed_block(&wire)
         })?;
-        if let Some(reference) = block
-            .execution_context()
-            .and_then(|c| c.merge_entry.as_ref())
-        {
-            reference_bytes = charged(
-                reference_bytes,
-                norito::canonical_frame_len(reference)?,
-                limits.output_bytes,
-            )?;
-            requests.push(CanonicalKuraMergeRequest {
-                carrier_height: input.height,
-                reference: reference.clone(),
-            });
-        }
+        ensure!(
+            block
+                .execution_context()
+                .is_none_or(|context| context.merge_entry.is_none()),
+            "retired merge Network source is not Native evidence"
+        );
         heights.push(HeightProofV1 {
             height: input.height,
             finality: input.finality,
             carrier: wire,
-            merge_entry: None,
+            contexts: input.contexts,
             queries: input.queries,
         });
     }
-    reader.scan_merge_entries(&requests, |height, _entry, bytes| {
-        let index = height
-            .checked_sub(first)
-            .and_then(|n| usize::try_from(n).ok())
-            .ok_or(CanonicalKuraEvidenceError::Invalid("adapter merge height"))?;
-        let slot = heights
-            .get_mut(index)
-            .ok_or(CanonicalKuraEvidenceError::Invalid(
-                "adapter merge interval",
-            ))?;
-        if slot.height != height || slot.merge_entry.is_some() {
-            return Err(CanonicalKuraEvidenceError::Invalid(
-                "adapter duplicate merge",
-            ));
-        }
-        // Reserve both the retained bytes and this callback's live source copy
-        // before allocating the one retained full entry. No per-transaction copy.
-        input_bytes = input_bytes
-            .checked_add(bytes.len() as u64)
-            .filter(|n| *n <= limits.input_bytes)
-            .ok_or(CanonicalKuraEvidenceError::Invalid(
-                "adapter merge input budget",
-            ))?;
-        if reference_bytes
-            .checked_add(bytes.len() as u64)
-            .is_none_or(|n| n > limits.output_bytes)
-        {
-            return Err(CanonicalKuraEvidenceError::Invalid(
-                "adapter merge copy budget",
-            ));
-        }
-        slot.merge_entry = Some(bytes.to_vec());
-        Ok(())
+    // Complete the same bounded whole-log integrity scan. Current Native carriers
+    // never request a retired merge transcript, including when the log is empty.
+    reader.scan_merge_entries(&[], |_, _, _| {
+        Err(CanonicalKuraEvidenceError::Invalid(
+            "unexpected Native merge selection",
+        ))
     })?;
-    drop(requests);
     let authenticated = authenticate(verifier, &heights)?;
     before_disk_finish();
     let completed = reader.finish()?;
@@ -372,6 +362,7 @@ pub fn replay_export(
         input_bytes = check_supplied(
             height.height,
             &height.finality,
+            &height.contexts,
             &height.queries,
             binding,
             input_bytes,
@@ -380,10 +371,6 @@ pub fn replay_export(
         )?;
         bounded(&height.carrier, MAX_CARRIER_BYTES)?;
         input_bytes = charged(input_bytes, height.carrier.len(), limits.input_bytes)?;
-        if let Some(entry) = &height.merge_entry {
-            bounded(entry, MAX_MERGE_LEDGER_ENTRY_BYTES)?;
-            input_bytes = charged(input_bytes, entry.len(), limits.input_bytes)?;
-        }
     }
     let authenticated = authenticate(verifier, &envelope.heights)?;
     let AuthenticatedRun {
@@ -452,6 +439,7 @@ fn admit(
 fn check_supplied(
     height: u64,
     finality: &[u8],
+    contexts: &[u8],
     queries: &[Vec<u8>],
     binding: &HeightInputBinding,
     mut input_bytes: u64,
@@ -464,6 +452,8 @@ fn check_supplied(
     );
     bounded(finality, MAX_FINALITY_BYTES)?;
     input_bytes = charged(input_bytes, finality.len(), limits.input_bytes)?;
+    bounded(contexts, MAX_FINALITY_BYTES)?;
+    input_bytes = charged(input_bytes, contexts.len(), limits.input_bytes)?;
     *query_count = query_count
         .checked_add(queries.len())
         .ok_or_else(|| eyre!("query count overflow"))?;
@@ -477,8 +467,9 @@ fn check_supplied(
         input_bytes = charged(input_bytes, query.len(), limits.input_bytes)?;
     }
     ensure!(
-        Hash::new(finality) == binding.finality_hash,
-        "finality input digest mismatch"
+        Hash::new(finality) == binding.finality_hash
+            && Hash::new(contexts) == binding.contexts_hash,
+        "finality/context input digest mismatch"
     );
     for (query, digest) in queries.iter().zip(&binding.query_hashes) {
         ensure!(Hash::new(query) == *digest, "query input digest mismatch");
@@ -495,7 +486,7 @@ fn authenticate(
         verifier.push_height(
             &height.finality,
             &height.carrier,
-            height.merge_entry.as_deref(),
+            &height.contexts,
             &queries,
         )?;
     }
@@ -533,8 +524,9 @@ fn same_rows(left: &[ExportRowV1], right: &[ExportRowV1]) -> bool {
                 && a.entrypoint_hash == b.entrypoint_hash
                 && a.carrier_height == b.carrier_height
                 && a.carrier_hash == b.carrier_hash
-                && a.merge_entry_hash == b.merge_entry_hash
-                && a.merge_epoch == b.merge_epoch
+                && a.admission_carrier_hash == b.admission_carrier_hash
+                && a.input_descriptor_hash == b.input_descriptor_hash
+                && a.instance_id == b.instance_id
                 && a.leaf_index == b.leaf_index
                 && a.lane_id == b.lane_id
                 && a.dataspace_id == b.dataspace_id
@@ -557,7 +549,7 @@ fn seal(
     for height in &heights {
         for bytes in std::iter::once(&height.finality)
             .chain(std::iter::once(&height.carrier))
-            .chain(height.merge_entry.iter())
+            .chain(std::iter::once(&height.contexts))
             .chain(height.queries.iter())
         {
             raw_bytes = charged(raw_bytes, bytes.len(), limits.input_bytes)?;
@@ -601,3 +593,11 @@ fn seal(
 #[cfg(test)]
 #[path = "export/tests.rs"]
 mod tests;
+
+#[cfg(all(
+    test,
+    unix,
+    any(target_vendor = "apple", target_os = "linux", target_os = "android")
+))]
+#[path = "export/prepare_command_tests.rs"]
+mod prepare_command_tests;

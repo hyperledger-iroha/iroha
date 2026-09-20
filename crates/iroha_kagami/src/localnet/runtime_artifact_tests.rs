@@ -10,7 +10,9 @@ fn localnet_uses_a_durable_fsync_policy() {
 #[test]
 fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
     let temp = tempfile::tempdir().expect("make private writer temp dir");
-    let path = temp.path().join("peer0.toml");
+    let path = crate::secure_fs::prepare_empty_private_directory(temp.path())
+        .expect("prepare private writer directory")
+        .join("peer0.toml");
     write_owner_only_localnet_file(&path, b"private_key = 'secret'\n")
         .expect("write owner-only config");
     let mode = fs::metadata(&path)

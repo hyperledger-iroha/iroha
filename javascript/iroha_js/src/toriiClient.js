@@ -5998,7 +5998,7 @@ export class ToriiClient {
    * Throws ToriiDataModelMismatchError when the node data model version mismatches.
    * @param {ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>} payloads
    * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<{acceptedCount: number, route?: object}>}
+   * @returns {Promise<{acceptedCount: number, route?: object, outcomes?: Array<{signed_transaction_hash: string, status: number, reject_code: string | null}>}>}
    */
   async submitTransactionBatch(payloads, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "submitTransactionBatch");
@@ -6045,7 +6045,7 @@ export class ToriiClient {
         cause,
       );
     }
-    await this._expectStatus(response, [202], { signal });
+    await this._expectStatus(response, [202, 207], { signal });
     const acceptedHeader = this._getHeader(response, "x-iroha-transactions-accepted");
     const acceptedText = acceptedHeader == null ? "" : String(acceptedHeader);
     let acceptedCount = null;
@@ -6068,6 +6068,42 @@ export class ToriiClient {
         versionedPayloads.length,
         null,
         cause,
+      );
+    }
+    if (response.status === 207) {
+      try {
+        const native = resolveNativeRuntimeBinding(this._nativeRuntime);
+        if (typeof native.hashSignedTransaction !== "function") {
+          throw new TypeError("native transaction identity computation is unavailable");
+        }
+        const hashes = versionedPayloads.map((payload) => Buffer.from(native.hashSignedTransaction(payload)).toString("hex"));
+        const outcomes = await this._maybeBoundedJson(
+          response, 1024 * 1024, "transaction batch outcomes", { signal },
+        );
+        if (!Array.isArray(outcomes) || outcomes.length !== versionedPayloads.length ||
+            outcomes.some((entry, index) => !entry || typeof entry.signed_transaction_hash !== "string" ||
+              entry.signed_transaction_hash.toLowerCase() !== hashes[index] ||
+              !/^[a-fA-F0-9]{64}$/u.test(entry.signed_transaction_hash) ||
+              !Number.isInteger(entry.status) ||
+              !(entry.status === 202 || (entry.status >= 400 && entry.status <= 599)) ||
+              !(entry.reject_code === null || typeof entry.reject_code === "string")) ||
+            outcomes.filter((entry) => entry.status === 202).length !== acceptedCount ||
+            acceptedCount === versionedPayloads.length) {
+          throw new TypeError("transaction batch outcome identities/statuses/count are malformed");
+        }
+        return { acceptedCount, outcomes };
+      } catch (cause) {
+        throw new TransactionBatchAdmissionAmbiguousError(
+          "Torii returned invalid transaction batch outcomes; reconcile every submitted hash before retrying.",
+          versionedPayloads.length, null, cause,
+        );
+      }
+    }
+    if (acceptedCount !== versionedPayloads.length) {
+      cancelResponseBodyBestEffort(response, "discarding contradictory all-accepted batch response");
+      throw new TransactionBatchAdmissionAmbiguousError(
+        "Torii returned 202 without accepting the complete batch; reconcile every submitted hash.",
+        versionedPayloads.length, acceptedCount,
       );
     }
     const route = this._extractSubmissionRoute(response);

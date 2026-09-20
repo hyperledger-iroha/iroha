@@ -579,6 +579,7 @@ pub mod isi {
         preauthorized_manifest_contract_subject: Option<&AccountId>,
     ) -> Result<(), Error> {
         let mut new_trigger = trigger;
+        state_transaction.validate_execution_output_registration(&new_trigger)?;
         if new_trigger.action().repeats().is_depleted() {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -2084,7 +2085,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero block height"),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -2157,7 +2157,6 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -2208,7 +2207,6 @@ mod tests {
             NonZeroU64::new(2).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -2226,7 +2224,6 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).expect("nonzero"),
-            None,
             None,
             None,
             0,
@@ -2318,7 +2315,6 @@ mod tests {
         // Prepare a block and state transaction
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
-            None,
             None,
             None,
             0,
@@ -2415,7 +2411,6 @@ mod tests {
         );
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
-            None,
             None,
             None,
             0,
@@ -2572,7 +2567,6 @@ mod tests {
             NonZeroU64::new(2).expect("nonzero"),
             None,
             None,
-            None,
             50,
             0,
         ));
@@ -2702,7 +2696,6 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -2742,7 +2735,6 @@ mod tests {
             NonZeroU64::new(2).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -2765,7 +2757,6 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
-            None,
             None,
             None,
             0,
@@ -2818,7 +2809,6 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -2869,7 +2859,6 @@ mod tests {
             NonZeroU64::new(1).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -2912,7 +2901,6 @@ mod tests {
             NonZeroU64::new(2).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -2935,7 +2923,6 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
-            None,
             None,
             None,
             0,
@@ -2980,7 +2967,6 @@ mod tests {
             NonZeroU64::new(2).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -3003,7 +2989,6 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
-            None,
             None,
             None,
             0,
@@ -3045,7 +3030,6 @@ mod tests {
             NonZeroU64::new(2).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -3068,7 +3052,6 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
-            None,
             None,
             None,
             0,
@@ -3113,7 +3096,6 @@ mod tests {
             NonZeroU64::new(2).unwrap(),
             None,
             None,
-            None,
             0,
             0,
         ));
@@ -3130,7 +3112,6 @@ mod tests {
         );
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(3).unwrap(),
-            None,
             None,
             None,
             0,
@@ -3159,7 +3140,6 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
-            None,
             None,
             None,
             0,
@@ -3252,7 +3232,6 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
         let mut state_block = state.block(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
-            None,
             None,
             None,
             0,

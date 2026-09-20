@@ -45,7 +45,7 @@ async fn time_trigger_precommit_executes_and_emits_time_event() -> Result<()> {
         h.creation_time_ms = 1;
     });
     let mut state_block2 = state.block(block2.as_ref().header());
-    let mut events = state_block2.apply(&block2, Vec::new());
+    let mut events = state_block2.apply_fixture_block(&block2, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     // Exactly one Time event and a single TriggerCompleted notification
     let time_count = events
         .iter()
@@ -227,7 +227,7 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
         header.creation_time_ms = 2;
     });
     let mut state_block2 = state.block(block2.as_ref().header());
-    let _ = state_block2.apply(&block2, Vec::new());
+    let _ = state_block2.apply_fixture_block(&block2, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     state_block2.commit().unwrap();
 
     {
@@ -251,7 +251,7 @@ fn time_trigger_revalidates_a_sibling_replaced_after_matching() {
         header.creation_time_ms = 3;
     });
     let mut state_block3 = state.block(block3.as_ref().header());
-    let _ = state_block3.apply(&block3, Vec::new());
+    let _ = state_block3.apply_fixture_block(&block3, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     state_block3.commit().unwrap();
 
     let view = state.view();
@@ -278,17 +278,20 @@ fn result_bearing_time_trigger_block(
     )]);
     let valid = ValidBlock::new_dummy_and_modify_header(signer.private_key(), update_header);
     let mut signed: SignedBlock = valid.into();
-    let snapshot = state.block(signed.header()).axt_policy_snapshot();
-    signed
-        .set_transaction_results_with_transcripts(
-            Vec::new(),
-            &[],
-            Vec::new(),
-            BTreeMap::new(),
-            Vec::new(),
-            snapshot,
-        )
-        .expect("attach the required time-trigger fixture AXT policy snapshot");
+    if signed.header().is_genesis() {
+        let snapshot = state.block(signed.header()).axt_policy_snapshot();
+        signed.set_execution_outputs(
+            Vec::new(), 0, BTreeMap::new(), Vec::new(), snapshot, Default::default(), Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        ).expect("empty World setup metadata is structurally complete");
+    } else {
+        signed = signed.canonical_resultless_proposal();
+        let mut trial = state.block(signed.header());
+        ValidBlock::execute_block_outputs_for_test(&mut signed, &mut trial, None)
+            .expect("construct Time replay fixture from the actual complete owner");
+        // The preview overlay is discarded. Replay below must reproduce every
+        // output and its metadata on the unchanged predecessor.
+    }
     let signature =
         iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), signed.header().hash())
             .expect("sign the result-bearing time-trigger fixture block");
@@ -367,7 +370,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         );
     }
     let mut state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2.apply(&block2, Vec::new());
+    let events2 = state_block2.apply_fixture_block(&block2, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -428,7 +431,7 @@ fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() 
         header.creation_time_ms = 12;
     });
     let mut state_block4 = state.block(block4.as_ref().header());
-    let events4 = state_block4.apply(&block4, Vec::new());
+    let events4 = state_block4.apply_fixture_block(&block4, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     let completions4: Vec<_> = events4
         .iter()
         .filter_map(|event| match event {
@@ -517,7 +520,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         );
     }
     let mut state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2.apply(&block2, Vec::new());
+    let events2 = state_block2.apply_fixture_block(&block2, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -558,7 +561,7 @@ fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
         header.creation_time_ms = 12;
     });
     let mut state_block3 = state.block(block3.as_ref().header());
-    let events3 = state_block3.apply(&block3, Vec::new());
+    let events3 = state_block3.apply_fixture_block(&block3, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     let completions3: Vec<_> = events3
         .iter()
         .filter_map(|event| match event {
@@ -652,7 +655,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         );
     }
     let mut state_block2 = state.block(block2.as_ref().header());
-    let events2 = state_block2.apply(&block2, Vec::new());
+    let events2 = state_block2.apply_fixture_block(&block2, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     let completions2: Vec<_> = events2
         .iter()
         .filter_map(|event| match event {
@@ -705,7 +708,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         .unwrap();
         stx.apply();
     }
-    let events3 = state_block3.apply(&block3, Vec::new());
+    let events3 = state_block3.apply_fixture_block(&block3, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     let completions3: Vec<_> = events3
         .iter()
         .filter_map(|event| match event {
@@ -741,7 +744,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         header.creation_time_ms = 8;
     });
     let mut state_block4 = state.block(block4.as_ref().header());
-    let events4 = state_block4.apply(&block4, Vec::new());
+    let events4 = state_block4.apply_fixture_block(&block4, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     let completions4: Vec<_> = events4
         .iter()
         .filter_map(|event| match event {
@@ -777,7 +780,7 @@ fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
         header.creation_time_ms = 10;
     });
     let mut state_block5 = state.block(block5.as_ref().header());
-    let events5 = state_block5.apply(&block5, Vec::new());
+    let events5 = state_block5.apply_fixture_block(&block5, Vec::new(), None).expect("replay the complete actual typed Time outputs");
     let completions5: Vec<_> = events5
         .iter()
         .filter_map(|event| match event {
@@ -929,25 +932,26 @@ fn ivm_time_trigger_reuses_cache_across_blocks() {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
     stx.apply();
-    let _ = state_block.apply_without_execution(&block1, Vec::new());
-    state_block.commit().unwrap();
+    state_block.commit_world_overlay_for_testing().unwrap();
     let block2 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(2).unwrap());
         h.creation_time_ms = 2;
     });
     let mut state_block2 = state.block(block2.as_ref().header());
-    state_block2.execute_time_triggers(&block2.as_ref().header());
-    let _ = state_block2.apply_without_execution(&block2, Vec::new());
-    state_block2.commit().unwrap();
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block2);
+    assert_eq!(outputs.len(), 1);
+    assert!(matches!(&outputs[0], iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) if row.result.is_ok()));
+    state_block2.commit_world_overlay_for_testing().unwrap();
     let after_first = state.trigger_ivm_cache.lock().stats();
     let block3 = new_dummy_block_with_payload(|h| {
         h.set_height(NonZeroU64::new(3).unwrap());
         h.creation_time_ms = 3;
     });
     let mut state_block3 = state.block(block3.as_ref().header());
-    state_block3.execute_time_triggers(&block3.as_ref().header());
-    let _ = state_block3.apply_without_execution(&block3, Vec::new());
-    state_block3.commit().unwrap();
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block3);
+    assert_eq!(outputs.len(), 1);
+    assert!(matches!(&outputs[0], iroha_data_model::block::execution_output::ExecutionOutputV1::Time(row) if row.result.is_ok()));
+    state_block3.commit_world_overlay_for_testing().unwrap();
     let after_second = state.trigger_ivm_cache.lock().stats();
     assert!(
         after_second.metadata_hits > after_first.metadata_hits,
@@ -1105,7 +1109,7 @@ let _marker = marker;
         .expect("prewarm authenticated trigger artifact");
     let bytecode = IvmBytecode::from_compiled(program);
     let blob_hash = HashOf::new(&bytecode);
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1144,7 +1148,7 @@ let _marker = marker;
             .is_some(),
         "adversarial fixture must retain a warm prepared artifact"
     );
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     let event = ExecuteTriggerEvent {
@@ -1182,7 +1186,7 @@ fn execute_trigger_isi_rejects_depleted_entry_and_prunes_trigger() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
     let trigger_id: TriggerId = "depleted_by_call".parse().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1232,7 +1236,7 @@ fn execute_trigger_isi_rejects_depleted_entry_and_prunes_trigger() {
         trigger_tx.apply();
         trigger_block.commit();
     }
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     assert!(
@@ -1272,7 +1276,7 @@ fn execute_called_trigger_rejects_disabled_trigger() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
     let trigger_id: TriggerId = "disabled_by_call".parse().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1307,7 +1311,7 @@ fn execute_called_trigger_rejects_disabled_trigger() {
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     let event = ExecuteTriggerEvent {
@@ -1341,7 +1345,7 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
     let trigger_id: TriggerId = "numeric_zero_by_call".parse().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1376,7 +1380,7 @@ fn execute_called_trigger_rejects_numeric_zero_enabled_trigger() {
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     let event = ExecuteTriggerEvent {
@@ -1421,7 +1425,7 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
     let trigger_id: TriggerId = "malformed_enabled_by_call".parse().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1456,7 +1460,7 @@ fn execute_called_trigger_rejects_malformed_enabled_trigger() {
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     let event = ExecuteTriggerEvent {
@@ -1500,7 +1504,7 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
     let state = State::new(World::default(), kura, query_handle);
     let trigger_id: TriggerId = "disabled_data_trigger".parse().unwrap();
     let flag_key: Name = "flag".parse().expect("valid name");
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1544,7 +1548,7 @@ fn execute_data_triggers_dfs_skips_disabled_trigger() {
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     let event = data_pre::DomainEvent::Created(
@@ -1585,7 +1589,7 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
     let enabled_key = crate::smartcontracts::isi::triggers::TRIGGER_ENABLED_METADATA_KEY
         .parse::<Name>()
         .expect("valid metadata key");
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1637,7 +1641,7 @@ fn execute_data_triggers_dfs_skips_numeric_zero_and_malformed_enabled_triggers()
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     let event = data_pre::DomainEvent::Created(
@@ -1691,7 +1695,7 @@ fn depleted_data_trigger_is_pruned_before_event_scan_without_mutating_state() {
     let state = State::new(World::default(), kura, query_handle);
     let trigger_id: TriggerId = "depleted_data_trigger".parse().unwrap();
     let flag_key: Name = "depleted_data_flag".parse().expect("valid name");
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1727,7 +1731,7 @@ fn depleted_data_trigger_is_pruned_before_event_scan_without_mutating_state() {
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     stx.decrease_trigger_repeats_and_cleanup(&trigger_id);
@@ -1768,7 +1772,7 @@ fn execute_data_triggers_dfs_clears_events_without_triggers() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query_handle);
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     Register::domain(Domain::new(
@@ -1817,7 +1821,7 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let flag_key: Name = "trigger_authority".parse().unwrap();
     let trigger_id: TriggerId = "data_trigger_registered_authority".parse().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1869,7 +1873,7 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
         stx.apply();
     }
     state_block.commit_world_overlay_for_testing().unwrap();
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1910,7 +1914,7 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
     raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
     let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
     let blob_hash = HashOf::new(&bytecode);
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     {
         let mut stx = state_block.transaction();
@@ -1946,7 +1950,7 @@ fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         state.world.triggers.remove_contract_for_test(blob_hash),
         "contract entry should be removed for test setup"
     );
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     let alpha_domain: DomainId = DomainId::try_new("alpha", "universal").unwrap();

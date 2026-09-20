@@ -467,7 +467,7 @@ fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias
         &state.nexus_snapshot().dataspace_catalog,
     )
     .expect("valid account alias");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let world = tx.world_mut_for_testing();
@@ -509,7 +509,7 @@ fn seed_typed_proposal_fingerprint_for_ballot_test(
         created_height: 1,
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
     };
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction
@@ -750,7 +750,7 @@ seiyaku GovernedReadFixture {
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("governed contract address");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = harness.state.block(header);
     let mut transaction = block.transaction();
     let code_hash = register_code_bytes(&harness.authority, artifact, &mut transaction)
@@ -936,7 +936,10 @@ fn apply_queued_block_allow_errors(
         .external_transactions()
         .enumerate()
         .map(|(idx, _)| {
-            let error = block_ref.error(idx);
+            let (_, output) = block_ref
+                .network_output_at(u32::try_from(idx).expect("governance input index fits u32"))
+                .expect("each governance input has its explicit Network output");
+            let error = output.result.as_ref().err();
             if let Some(error) = error {
                 eprintln!("governance fixture transaction {idx} failed: {error:?}");
             }
@@ -1101,7 +1104,7 @@ async fn protected_namespaces_get_rejects_a_present_malformed_policy() {
         id,
         iroha_primitives::json::Json::new("apps"),
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction
@@ -1886,14 +1889,7 @@ async fn gov_get_tally_applies_conviction_factor() {
     state.set_gov(cfg);
     let custody = generic_lock_custody(&state);
     let rid = "rid-tally-conviction".to_string();
-    let header = BlockHeader::new(
-        core::num::NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(core::num::NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     {
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
@@ -1947,7 +1943,7 @@ async fn gov_get_tally_uses_referendum_end_for_closed_plain_view() {
     cfg.max_conviction = 1;
     state.set_gov(cfg);
     let rid = "rid-tally-closed-lock".to_string();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block_hash = iroha_crypto::HashOf::new(&header);
     let custody = generic_lock_custody(&state);
     {
@@ -1996,7 +1992,7 @@ async fn gov_get_tally_projects_zk_abstentions() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query);
     let rid = "rid-tally-zk-abstain".to_string();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -2054,7 +2050,7 @@ async fn gov_get_tally_rejects_invalid_plain_direction() {
     let state = State::new_for_testing(World::default(), kura, query);
     let custody = generic_lock_custody(&state);
     let rid = "rid-tally-invalid-direction".to_string();
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -2124,7 +2120,7 @@ async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
     );
     let proposal_id = kind.fingerprint();
     let rid = hex::encode(proposal_id);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -2181,7 +2177,7 @@ async fn gov_get_tally_rejects_accumulator_overflow() {
     let custody = generic_lock_custody(&state);
     let rid = "rid-tally-overflow".to_string();
     let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT).expect("alternate account id");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -2292,7 +2288,7 @@ async fn governed_contract_read_retains_inactive_lifecycle_projection() {
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("inactive contract address");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = harness.state.block(header);
     let mut transaction = block.transaction();
     transaction
@@ -2427,7 +2423,7 @@ async fn governed_contract_read_rejects_incomplete_active_state() {
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     )
     .expect("incomplete contract address");
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = harness.state.block(header);
     let mut transaction = block.transaction();
     transaction
@@ -2461,7 +2457,7 @@ async fn governed_contract_read_rejects_removed_manifest_provenance() {
         .cloned()
         .expect("registered manifest");
     manifest.provenance = None;
-    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = harness.state.block(header);
     let mut transaction = block.transaction();
     transaction

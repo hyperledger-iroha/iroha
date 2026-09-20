@@ -1462,7 +1462,7 @@ struct ArbitrationNode {
 async fn arbitration_node(key: KeyPair, peer: &Peer, chain: NetworkId) -> ArbitrationNode {
     let mut supervisor = iroha_futures::supervisor::Supervisor::new();
     let shutdown = supervisor.shutdown_signal();
-    let (mut network, child) = NetworkHandle::start(
+    let (network, child) = NetworkHandle::start(
         super::p2p_identity_keys(key),
         trust_config(
             peer.address().clone(),

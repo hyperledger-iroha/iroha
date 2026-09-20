@@ -3715,8 +3715,8 @@ struct LaneBlockArtifactWriteBatch<'a> {
     kura: &'a Kura,
     // Fields drop in declaration order, so the inner sidecar gate is released
     // before the outer geometry gate.
-    _sidecar_guard: parking_lot::MutexGuard<'a, ()>,
-    _geometry_guard: parking_lot::MutexGuard<'a, ()>,
+    _sidecar_guard: PublicationGuard<'a>,
+    _geometry_guard: PublicationGuard<'a>,
     checkpoints: Vec<LaneBlockArtifactWriteCheckpoint>,
     finished: bool,
 }
@@ -3787,7 +3787,10 @@ impl SidecarIndexLayout {
             .copy_from_slice(&(base_height ^ INDEXED_SIDECAR_BASE_CHECK_MASK).to_le_bytes());
         header
     }
-    fn read_from(index: &mut std::fs::File, index_len: u64) -> Result<Self, &'static str> {
+    fn read_from(
+        index: &mut (impl std::io::Read + std::io::Seek),
+        index_len: u64,
+    ) -> Result<Self, &'static str> {
         if index_len < INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 {
             return Err("sidecar V1 base-height header is truncated");
         }
@@ -4312,10 +4315,7 @@ impl<'a> LaneBlockArtifactWriteBatch<'a> {
         let geometry_guard = kura.lane_geometry_lock.lock();
         Self::with_geometry_guard(kura, geometry_guard)
     }
-    fn with_geometry_guard(
-        kura: &'a Kura,
-        geometry_guard: parking_lot::MutexGuard<'a, ()>,
-    ) -> Self {
+    fn with_geometry_guard(kura: &'a Kura, geometry_guard: PublicationGuard<'a>) -> Self {
         let sidecar_guard = kura.sidecar_lock.lock();
         Self {
             kura,

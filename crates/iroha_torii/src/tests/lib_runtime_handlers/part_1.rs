@@ -60,10 +60,10 @@ use iroha_data_model::{
         error::TransactionRejectionReason,
         signed::{
             SealedTransactionReveal, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
-            TransactionResultInner, TransactionSignature, compute_sealed_transaction_commitment,
+            TransactionSignature, compute_sealed_transaction_commitment,
         },
     },
-    trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint, TriggerId},
+    trigger::{DataTriggerSequence, DataTriggerStep, TriggerId},
 };
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
@@ -187,6 +187,30 @@ async fn api_version_negotiates_text_success_and_typed_unavailable() {
     );
 }
 #[tokio::test]
+async fn readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress() {
+    let ingress = iroha_core::sumeragi::SumeragiIngressTestHarness::new(4);
+    let handle = ingress.handle();
+    assert!(handle.admission_ready());
+    let mut app = Arc::try_unwrap(mk_app_state_for_tests())
+        .unwrap_or_else(|_| panic!("unique readiness app"));
+    app.sumeragi = Some(handle.clone());
+    let response = handler_readyz(State(Arc::new(app))).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .expect("readiness body");
+    assert_eq!(
+        body.as_ref(),
+        b"Global beacon readiness is not initialized for the active height"
+    );
+    assert!(
+        handle.admission_ready(),
+        "readiness must not close setup ingress"
+    );
+    assert!(handle.notify_pending_queue_plan_admission());
+}
+
+#[tokio::test]
 async fn readiness_rejects_closed_consensus_ingress() {
     let mut app = Arc::try_unwrap(mk_app_state_for_tests())
         .unwrap_or_else(|_| panic!("unique readiness app"));
@@ -291,6 +315,21 @@ pub fn mk_app_state_for_tests_with_options(
 }
 pub fn mk_app_state_for_tests_with_world(world: World) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(world, None, None, None, None)
+}
+pub(crate) fn mk_app_state_for_tests_with_world_and_nexus(
+    world: World,
+    nexus: iroha_config::parameters::actual::Nexus,
+) -> SharedAppState {
+    mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+        world,
+        None,
+        None,
+        None,
+        None,
+        "chain".parse().expect("test chain id"),
+        crate::signed_query_test_network_id(),
+        Some(nexus),
+    )
 }
 #[cfg(feature = "push")]
 pub fn mk_app_state_for_tests_with_world_and_push(
@@ -400,7 +439,6 @@ fn grant_account_permission_for_test(
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -429,7 +467,6 @@ fn seed_asset_definition_for_test(
         .map_or(1, |header| header.height().get().saturating_add(1));
     let header = BlockHeader::new(
         NonZeroU64::new(next_height).expect("non-zero height"),
-        None,
         None,
         None,
         0,
@@ -501,7 +538,7 @@ fn configure_nexus_fee_admission_for_test(
     let state_view = app_state.state.view();
     app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
 }
-pub(crate) fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
+pub(crate) fn multiple_dataspace_nexus_for_test() -> iroha_config::parameters::actual::Nexus {
     let secondary_dataspace = DataSpaceId::new(1);
     let secondary_lane = LaneId::new(1);
     let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
@@ -527,43 +564,20 @@ pub(crate) fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppSt
         },
     ])
     .expect("dataspace catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
+    iroha_config::parameters::actual::Nexus {
+        lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
-    };
-    let app_state = Arc::get_mut(app).expect("unique app state");
-    let state = Arc::get_mut(&mut app_state.state).expect("unique state");
-    state.set_nexus(nexus.clone()).expect("apply nexus config");
-    let state_view = app_state.state.view();
-    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    }
 }
-pub(crate) fn configure_private_ingress_routes_for_test(
-    app: &mut SharedAppState,
-) -> (LaneId, DataSpaceId) {
-    let nexus_lane = LaneId::new(0);
-    let local_validator_keypair = checked_torii_test_ed25519_keypair(
-        0xb6,
-        "derive private-ingress local validator fixture key",
-    );
-    let local_peer_keypair =
-        checked_torii_test_bls_keypair(0xb7, "derive private-ingress local peer fixture key");
-    let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
-    let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+pub(crate) fn private_ingress_nexus_for_test() -> iroha_config::parameters::actual::Nexus {
     let governance_dataspace = DataSpaceId::new(1);
     let governance_lane = LaneId::new(1);
     let restricted_dataspace = DataSpaceId::new(10);
     let restricted_lane = LaneId::new(2);
-    let app_mut = Arc::get_mut(app).expect("unique app state");
-    let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
-    online_tx
-        .send(std::collections::HashSet::from([Peer::new(
-            "127.0.0.1:12001".parse().expect("valid local address"),
-            local_peer_keypair.public_key().clone(),
-        )]))
-        .expect("online peers update should succeed");
-    app_mut.online_peers = OnlinePeersProvider::new(online_rx);
-    app_mut.local_peer_id = Some(local_peer_id.clone());
     let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
         NonZeroU32::new(3).expect("nonzero lane count"),
         vec![
@@ -601,13 +615,209 @@ pub(crate) fn configure_private_ingress_routes_for_test(
         },
     ])
     .expect("dataspace catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
+    iroha_config::parameters::actual::Nexus {
+        lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
-    };
+    }
+}
+pub(crate) fn private_ingress_with_offline_foreign_nexus_for_test()
+-> iroha_config::parameters::actual::Nexus {
+    let local_dataspace = DataSpaceId::new(10);
+    let local_lane = LaneId::new(1);
+    let foreign_dataspace = DataSpaceId::new(12);
+    let foreign_lane = LaneId::new(2);
+    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+        NonZeroU32::new(3).expect("nonzero lane count"),
+        vec![
+            iroha_data_model::nexus::LaneConfig::default(),
+            iroha_data_model::nexus::LaneConfig {
+                id: local_lane,
+                dataspace_id: local_dataspace,
+                alias: "local-restricted".to_owned(),
+                visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                ..iroha_data_model::nexus::LaneConfig::default()
+            },
+            iroha_data_model::nexus::LaneConfig {
+                id: foreign_lane,
+                dataspace_id: foreign_dataspace,
+                alias: "foreign-restricted".to_owned(),
+                visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                ..iroha_data_model::nexus::LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: local_dataspace,
+            alias: "local-restricted".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: foreign_dataspace,
+            alias: "foreign-restricted".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    iroha_config::parameters::actual::Nexus {
+        lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
+        lane_catalog,
+        dataspace_catalog,
+        ..iroha_config::parameters::actual::Nexus::default()
+    }
+}
+pub(crate) fn assert_initial_nexus_catalog_for_test(
+    state: &IrohaState,
+    expected: &iroha_config::parameters::actual::Nexus,
+) {
+    let installed = state.nexus_snapshot();
+    assert_eq!(installed.lane_config, expected.lane_config);
+    assert_eq!(installed.lane_catalog, expected.lane_catalog);
+    assert_eq!(installed.dataspace_catalog, expected.dataspace_catalog);
+    assert_eq!(
+        installed.configured_lane_catalog,
+        expected.configured_lane_catalog
+    );
+    assert_eq!(
+        installed.configured_dataspace_catalog,
+        expected.configured_dataspace_catalog
+    );
+}
+#[tokio::test]
+async fn configured_catalog_fixture_binds_initial_geometry_and_explicit_network() {
+    let nexus = private_ingress_nexus_for_test();
+    let chain_id: ChainId = "configured-route-fixture".parse().expect("test chain id");
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"configured-route-fixture-network"),
+    ));
+    let (state, kura) = IrohaState::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        World::default(),
+        nexus.clone(),
+        LiveQueryStore::start_test(),
+        chain_id.clone(),
+        network_id,
+    );
+    assert_initial_nexus_catalog_for_test(&state, &nexus);
+    assert_eq!(state.chain_id_ref(), &chain_id);
+    assert_eq!(state.network_id_ref(), &network_id);
+    assert_eq!(
+        state.nexus_snapshot().fees.per_instruction_fee,
+        Quantity::zero()
+    );
+    assert_eq!(
+        state.nexus_snapshot().fees.per_gas_unit_fee,
+        Quantity::zero()
+    );
+    let view = state.view();
+    assert!(std::ptr::eq(view.kura(), kura.as_ref()));
+    assert_eq!(view.height(), 0);
+    assert_eq!(
+        kura.exact_durable_blocks_count()
+            .expect("empty durable ledger"),
+        0
+    );
+    IrohaState::preflight_configured_primary_geometry_replay(
+        &kura,
+        &network_id,
+        &nexus.configured_lane_catalog,
+    )
+    .expect("configured catalog is the authenticated original baseline");
+    assert!(matches!(
+        IrohaState::preflight_configured_primary_geometry_replay(
+            &kura,
+            &network_id,
+            &iroha_data_model::nexus::LaneCatalog::default(),
+        ),
+        Err(iroha_core::state::LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    drop(view);
+    drop(state);
+    drop(kura);
+
+    let app = mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+        World::default(),
+        None,
+        None,
+        None,
+        None,
+        chain_id.clone(),
+        network_id,
+        Some(nexus.clone()),
+    );
+    assert_initial_nexus_catalog_for_test(&app.state, &nexus);
+    assert_eq!(app.chain_id.as_ref(), &chain_id);
+    assert_eq!(app.state.network_id_ref(), &network_id);
+    let view = app.state.view();
+    assert!(std::ptr::eq(view.kura(), app.kura.as_ref()));
+    assert_eq!(view.height(), 0);
+    assert_eq!(
+        app.kura
+            .exact_durable_blocks_count()
+            .expect("empty durable ledger"),
+        0
+    );
+    IrohaState::preflight_configured_primary_geometry_replay(
+        &app.kura,
+        &network_id,
+        &nexus.configured_lane_catalog,
+    )
+    .expect("Torii retains the exact configured Kura baseline");
+    let pipeline = app.state.pipeline_snapshot();
+    assert!(pipeline.dynamic_prepass);
+    assert!(!pipeline.parallel_overlay);
+    assert!(!pipeline.parallel_apply);
+    assert!(!pipeline.ready_queue_heap);
+    assert_eq!(pipeline.workers, 1);
+    let fees = app.state.nexus_snapshot().fees;
+    assert_eq!(fees.per_instruction_fee, nexus.fees.per_instruction_fee);
+    assert_eq!(fees.per_gas_unit_fee, nexus.fees.per_gas_unit_fee);
+}
+pub(crate) fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
+    let nexus = multiple_dataspace_nexus_for_test();
+    let app_state = Arc::get_mut(app).expect("unique app state");
+    let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+    assert_initial_nexus_catalog_for_test(state, &nexus);
+    let state_view = app_state.state.view();
+    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+}
+pub(crate) fn configure_private_ingress_routes_for_test(
+    app: &mut SharedAppState,
+) -> (LaneId, DataSpaceId) {
+    let nexus_lane = LaneId::new(0);
+    let local_validator_keypair = checked_torii_test_ed25519_keypair(
+        0xb6,
+        "derive private-ingress local validator fixture key",
+    );
+    let local_peer_keypair =
+        checked_torii_test_bls_keypair(0xb7, "derive private-ingress local peer fixture key");
+    let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
+    let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+    let governance_lane = LaneId::new(1);
+    let restricted_dataspace = DataSpaceId::new(10);
+    let restricted_lane = LaneId::new(2);
+    let app_mut = Arc::get_mut(app).expect("unique app state");
+    let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
+    online_tx
+        .send(std::collections::HashSet::from([Peer::new(
+            "127.0.0.1:12001".parse().expect("valid local address"),
+            local_peer_keypair.public_key().clone(),
+        )]))
+        .expect("online peers update should succeed");
+    app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+    app_mut.local_peer_id = Some(local_peer_id.clone());
+    let nexus = private_ingress_nexus_for_test();
     let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-    state.set_nexus(nexus.clone()).expect("apply nexus config");
+    assert_initial_nexus_catalog_for_test(state, &nexus);
     ensure_runtime_peer_binding_for_test(state, &local_validator, &local_peer_keypair, "local");
     {
         let mut topology = state.commit_topology.block();
@@ -682,50 +892,9 @@ pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
         .expect("online peers update should succeed");
     app_mut.online_peers = OnlinePeersProvider::new(online_rx);
     app_mut.local_peer_id = Some(local_peer_id.clone());
-    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
-        NonZeroU32::new(3).expect("nonzero lane count"),
-        vec![
-            iroha_data_model::nexus::LaneConfig::default(),
-            iroha_data_model::nexus::LaneConfig {
-                id: local_lane,
-                dataspace_id: local_dataspace,
-                alias: "local-restricted".to_owned(),
-                visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
-                ..iroha_data_model::nexus::LaneConfig::default()
-            },
-            iroha_data_model::nexus::LaneConfig {
-                id: foreign_lane,
-                dataspace_id: foreign_dataspace,
-                alias: "foreign-restricted".to_owned(),
-                visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
-                ..iroha_data_model::nexus::LaneConfig::default()
-            },
-        ],
-    )
-    .expect("lane catalog");
-    let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
-        iroha_data_model::nexus::DataSpaceMetadata::default(),
-        iroha_data_model::nexus::DataSpaceMetadata {
-            id: local_dataspace,
-            alias: "local-restricted".to_owned(),
-            description: None,
-            fault_tolerance: 1,
-        },
-        iroha_data_model::nexus::DataSpaceMetadata {
-            id: foreign_dataspace,
-            alias: "foreign-restricted".to_owned(),
-            description: None,
-            fault_tolerance: 1,
-        },
-    ])
-    .expect("dataspace catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        dataspace_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
+    let nexus = private_ingress_with_offline_foreign_nexus_for_test();
     let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-    state.set_nexus(nexus.clone()).expect("apply nexus config");
+    assert_initial_nexus_catalog_for_test(state, &nexus);
     for (index, (validator, peer_key)) in local_members.iter().chain(&foreign_members).enumerate() {
         ensure_runtime_peer_binding_for_test(
             state,
@@ -974,7 +1143,6 @@ fn ensure_runtime_peer_binding_for_test(
         .map_or(1, |header| header.height().get().saturating_add(1));
     let header = BlockHeader::new(
         NonZeroU64::new(next_height).expect("non-zero height"),
-        None,
         None,
         None,
         0,
@@ -1334,7 +1502,6 @@ pub(crate) fn bind_account_alias_for_test(
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1447,7 +1614,6 @@ pub(crate) fn bind_dynamic_account_alias_for_test(
         NonZeroU64::new(next_height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1494,7 +1660,6 @@ pub(crate) fn bind_contract_alias_for_test(
         NonZeroU64::new(1).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1530,7 +1695,6 @@ pub(crate) fn bind_domain_name_for_test_with_status(
         .map_or(1, |header| header.height().get().saturating_add(1));
     let header = BlockHeader::new(
         NonZeroU64::new(next_height).expect("non-zero height"),
-        None,
         None,
         None,
         0,
@@ -1740,7 +1904,6 @@ fn checked_torii_test_block_signature_verifies_and_rejects_wrong_key() {
         NonZeroU64::new(9).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1801,17 +1964,57 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     chain_id: ChainId,
     network_id: NetworkId,
 ) -> SharedAppState {
+    mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+        world,
+        iso,
+        deploy_limit,
+        norito_rpc,
+        push,
+        chain_id,
+        network_id,
+        None,
+    )
+}
+fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+    world: World,
+    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    deploy_limit: Option<(u32, u32)>,
+    norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+    push: Option<iroha_config::parameters::actual::Push>,
+    chain_id: ChainId,
+    network_id: NetworkId,
+    intended_nexus: Option<iroha_config::parameters::actual::Nexus>,
+) -> SharedAppState {
     // Minimal core state
     let _ = &push;
-    let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state_inner = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura.clone(),
-        query_handle.clone(),
-        chain_id.clone(),
-        network_id,
-    );
+    let has_configured_catalog = intended_nexus.is_some();
+    let (state_inner, kura) = if let Some(nexus) = intended_nexus {
+        let (mut state, kura) =
+            IrohaState::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+                world,
+                nexus.clone(),
+                query_handle.clone(),
+                chain_id.clone(),
+                network_id,
+            );
+        // Retain the route fixture's intended runtime settings after ordinary
+        // test defaults. The physical catalog was authenticated at construction.
+        state
+            .set_nexus(nexus)
+            .expect("apply fixture runtime Nexus settings");
+        (state, kura)
+    } else {
+        let kura = Kura::blank_kura_for_testing();
+        let state = IrohaState::new_with_chain_and_network_id_for_testing(
+            world,
+            kura.clone(),
+            query_handle.clone(),
+            chain_id.clone(),
+            network_id,
+        );
+        (state, kura)
+    };
     {
         let mut topo_block = state_inner.commit_topology.block();
         topo_block.clear();
@@ -1826,6 +2029,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     let events: EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events.clone()));
+    if has_configured_catalog {
+        let state_view = state.view();
+        queue.reconfigure_nexus(&state.nexus_snapshot(), &state_view, None);
+    }
     let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
     // Minimal Kiso and peers provider (mocked to avoid spawning the full actor in tests)
     let cfg = crate::test_utils::mk_minimal_root_cfg();
@@ -2800,6 +3007,7 @@ async fn torii_json_body(response: Response) -> norito::json::Value {
 }
 struct CountingRouteRouter {
     route_calls: Arc<AtomicUsize>,
+    route_after_capture: Option<RoutingDecision>,
 }
 impl LaneRouter for CountingRouteRouter {
     fn try_route(
@@ -2814,27 +3022,28 @@ impl LaneRouter for CountingRouteRouter {
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
         Ok(None)
     }
-    fn try_route_with_state(
+    fn try_route_with_view(
         &self,
         tx: &dyn TransactionRoutingView,
-        _state: &IrohaState,
+        _state_view: &iroha_core::state::StateView<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
-        self.route_calls.fetch_add(1, Ordering::Relaxed);
+        let prior_calls = self.route_calls.fetch_add(1, Ordering::Relaxed);
+        if prior_calls != 0
+            && let Some(route) = self.route_after_capture
+        {
+            return Ok(route);
+        }
         self.try_route(tx)
     }
-    fn try_route_plan_with_state(
-        &self,
-        tx: &dyn TransactionRoutingView,
-        state: &IrohaState,
-    ) -> Result<RoutingPlan, RoutingResolveError> {
-        self.try_route_with_state(tx, state)
-            .map(RoutingPlan::single)
-    }
 }
-fn install_counting_route_queue(app: &mut SharedAppState) -> Arc<AtomicUsize> {
+fn install_counting_route_queue(
+    app: &mut SharedAppState,
+    route_after_capture: Option<RoutingDecision>,
+) -> Arc<AtomicUsize> {
     let route_calls = Arc::new(AtomicUsize::new(0));
     let router: Arc<dyn LaneRouter> = Arc::new(CountingRouteRouter {
         route_calls: Arc::clone(&route_calls),
+        route_after_capture,
     });
     let app_mut = Arc::get_mut(app).expect("unique app state");
     app_mut.queue = Arc::new(Queue::from_config_with_router(
@@ -2863,13 +3072,16 @@ fn transaction_with_invalid_signature_for_test(mut tx: SignedTransaction) -> Sig
     )));
     tx
 }
-#[tokio::test]
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_uses_tx_rate_limiter() {
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.tx_rate_limiter = limits::RateLimiter::new_without_refill_for_tests(
+            std::num::NonZeroU32::new(1).expect("positive admission test burst"),
+        );
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     let keypair =
@@ -2877,14 +3089,16 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
     let tx1 =
-        signed_log_transaction_for_test(network_id, authority.clone(), "rate-limit-1", &keypair);
-    let tx2 = signed_log_transaction_for_test(network_id, authority, "rate-limit-2", &keypair);
+        signed_queue_plan_log_for_test(network_id, authority.clone(), "rate-limit-1", &keypair);
+    let tx2 = signed_queue_plan_log_for_test(network_id, authority, "rate-limit-2", &keypair);
     let headers = HeaderMap::new();
     let submitted_hash = tx1.hash().to_string();
+    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&tx1, &tx2]).await;
     let ok_response = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
         .await
         .expect("accepted");
     assert_eq!(ok_response.status(), StatusCode::ACCEPTED);
+    fixture.assert_durable(&app, &tx1);
     let hash_header = torii_response_header(&ok_response, "x-iroha-entrypoint-hash")
         .expect("entrypoint hash header must be present");
     assert_eq!(hash_header, submitted_hash);
@@ -2896,12 +3110,13 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
         .expect("routed-by header must be present");
     assert!(!lane_header.trim().is_empty());
     assert!(!dataspace_header.trim().is_empty());
-    assert_eq!(routed_by, "local");
-    let err = match post_signed_transaction_for_test(app, headers, &tx2).await {
+    assert_eq!(routed_by, "proxy");
+    let err = match post_signed_transaction_for_test(app.clone(), headers, &tx2).await {
         Ok(_) => panic!("expected rate limit"),
         Err(err) => err,
     };
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    fixture.finish().await;
 }
 
 #[tokio::test]
@@ -2910,7 +3125,9 @@ async fn invalid_transaction_signature_does_not_charge_claimed_authority_bucket(
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.tx_rate_limiter = limits::RateLimiter::new_without_refill_for_tests(
+            std::num::NonZeroU32::new(1).expect("positive admission test burst"),
+        );
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     let keypair = checked_torii_test_ed25519_keypair(
@@ -2939,12 +3156,15 @@ async fn invalid_transaction_signature_does_not_charge_claimed_authority_bucket(
         "an unverified claimed authority must not select or consume the authority limiter"
     );
 }
-#[tokio::test]
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.tx_rate_limiter = limits::RateLimiter::new_without_refill_for_tests(
+            std::num::NonZeroU32::new(1).expect("positive admission test burst"),
+        );
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     install_single_slot_transaction_queue(&mut app);
@@ -2952,20 +3172,22 @@ async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
         checked_torii_test_ed25519_keypair(0xce, "derive queue-before-rate-limit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(
+    let tx1 = signed_queue_plan_log_for_test(
         network_id,
         authority.clone(),
         "queue-before-rate-1",
         &keypair,
     );
     let tx2 =
-        signed_log_transaction_for_test(network_id, authority, "queue-before-rate-2", &keypair);
+        signed_queue_plan_log_for_test(network_id, authority, "queue-before-rate-2", &keypair);
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("queue-before-rate"));
+    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&tx1, &tx2]).await;
     let first = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
         .await
         .expect("first transaction should fill the queue");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
+    fixture.assert_durable(&app, &tx1);
     let err = match post_signed_transaction_for_test(app.clone(), headers, &tx2).await {
         Ok(_) => panic!("expected queue full before token rate limit"),
         Err(err) => err,
@@ -2976,14 +3198,18 @@ async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
         torii_response_header(&response, "x-iroha-reject-code"),
         Some("PRTRY:QUEUE_FULL")
     );
+    fixture.finish().await;
 }
-#[tokio::test]
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() {
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         app_mut.high_load_tx_threshold = usize::MAX;
-        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+        app_mut.tx_preauth_rate_limiter = limits::RateLimiter::new_without_refill_for_tests(
+            std::num::NonZeroU32::new(1).expect("positive token identity test burst"),
+        );
         app_mut.fee_policy = FeePolicy::Disabled;
         app_mut.require_api_token = true;
         app_mut.api_token_digests =
@@ -2998,13 +3224,13 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
         "derive second post-transaction API-token fixture key",
     );
     let network_id = *app.state.network_id_ref();
-    let tx1 = signed_log_transaction_for_test(
+    let tx1 = signed_queue_plan_log_for_test(
         network_id,
         AccountId::new(first_keypair.public_key().clone()),
         "token-rate-limit-1",
         &first_keypair,
     );
-    let tx2 = signed_log_transaction_for_test(
+    let tx2 = signed_queue_plan_log_for_test(
         network_id,
         AccountId::new(second_keypair.public_key().clone()),
         "token-rate-limit-2",
@@ -3012,41 +3238,63 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
     );
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("shared-token"));
+    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&tx1, &tx2]).await;
     let first = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
         .await
         .expect("first token-keyed transaction accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-    let err = match post_signed_transaction_for_test(app, headers, &tx2).await {
+    fixture.assert_durable(&app, &tx1);
+    let err = match post_signed_transaction_for_test(app.clone(), headers, &tx2).await {
         Ok(_) => panic!("expected shared token rate limit"),
         Err(err) => err,
     };
     assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    fixture.finish().await;
 }
-#[tokio::test]
-async fn handler_post_transaction_reuses_resolved_route_for_enqueue() {
-    let mut app = mk_app_state_for_tests();
-    let route_calls = install_counting_route_queue(&mut app);
-    let keypair =
-        checked_torii_test_ed25519_keypair(0xc4, "derive post-transaction route-cache fixture key");
-    let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = signed_log_transaction_for_test(
-        *app.state.network_id_ref(),
-        authority,
-        "route-cache-submit",
-        &keypair,
-    );
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handler_post_transaction_revalidates_resolved_route_before_enqueue() {
+    // Capture one plan, then revalidate that same plan against the current view
+    // before the journal append. A raw RoutingPlan is not a frozen policy proof.
+    let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+    let route_calls = install_counting_route_queue(&mut app, None);
+    app.queue
+        .install_plan_journal(
+            &journal.path().join("route-cache.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("install actual lifecycle admission journal on counting queue");
+    let transaction = lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
+    let entrypoint_hash = transaction.hash_as_entrypoint();
     let response = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
         .await
         .expect("accepted");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
     assert_eq!(
+        app.queue.routing_plan_hint(&entrypoint_hash),
+        Some(RoutingPlan::single(RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ))),
+    );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-route-lane-id"),
+        Some("0")
+    );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-route-dataspace-id"),
+        Some("0")
+    );
+    assert_eq!(
         route_calls.load(Ordering::Relaxed),
-        1,
-        "handler should route once and pass the resolved decision into queue push"
+        2,
+        "capture and current-view validation must both retain the same full plan"
     );
 }
-#[tokio::test]
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
@@ -3055,17 +3303,22 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
     let keypair =
         checked_torii_test_ed25519_keypair(0xc5, "derive entrypoint external fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = signed_log_transaction_for_test(
+    let transaction = signed_queue_plan_log_for_test(
         *app.state.network_id_ref(),
         authority,
         "entrypoint-submit",
         &keypair,
     );
-    let response =
-        post_external_transaction_entrypoint_for_test(app.clone(), HeaderMap::new(), transaction)
-            .await
-            .expect("accepted");
+    let fixture = fresh_queue_plan_ingress_for_test(&mut app, &[&transaction]).await;
+    let response = post_external_transaction_entrypoint_for_test(
+        app.clone(),
+        HeaderMap::new(),
+        transaction.clone(),
+    )
+    .await
+    .expect("accepted");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+    fixture.assert_durable(&app, &transaction);
     let entrypoint_hash = torii_response_header(&response, "x-iroha-entrypoint-hash")
         .expect("entrypoint hash header must be present");
     let signed_transaction_hash =
@@ -3073,20 +3326,24 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
             .expect("signed transaction hash header must be present");
     assert_eq!(signed_transaction_hash, entrypoint_hash);
     assert_eq!(app.queue.active_len(), 1);
+    fixture.finish().await;
 }
-#[tokio::test]
-async fn handler_post_transaction_entrypoint_reuses_resolved_route_for_enqueue() {
-    let mut app = mk_app_state_for_tests();
-    let route_calls = install_counting_route_queue(&mut app);
-    let keypair =
-        checked_torii_test_ed25519_keypair(0xc6, "derive entrypoint route-cache fixture key");
-    let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = signed_log_transaction_for_test(
-        *app.state.network_id_ref(),
-        authority,
-        "entrypoint-route-cache-submit",
-        &keypair,
-    );
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handler_post_transaction_entrypoint_revalidates_resolved_route_before_enqueue() {
+    // Capture one plan, then revalidate that same plan against the current view
+    // before the journal append. A raw RoutingPlan is not a frozen policy proof.
+    let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+    let route_calls = install_counting_route_queue(&mut app, None);
+    app.queue
+        .install_plan_journal(
+            &journal.path().join("route-cache.norito"),
+            1024 * 1024,
+            true,
+        )
+        .expect("install actual lifecycle admission journal on counting queue");
+    let transaction = lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
+    let entrypoint_hash = transaction.hash_as_entrypoint();
     let response =
         post_external_transaction_entrypoint_for_test(app.clone(), HeaderMap::new(), transaction)
             .await
@@ -3094,8 +3351,73 @@ async fn handler_post_transaction_entrypoint_reuses_resolved_route_for_enqueue()
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
     assert_eq!(
-        route_calls.load(Ordering::Relaxed),
-        1,
-        "entrypoint handler should route once and pass the resolved decision into queue push"
+        app.queue.routing_plan_hint(&entrypoint_hash),
+        Some(RoutingPlan::single(RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ))),
     );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-route-lane-id"),
+        Some("0")
+    );
+    assert_eq!(
+        torii_response_header(&response, "x-iroha-route-dataspace-id"),
+        Some("0")
+    );
+    assert_eq!(
+        route_calls.load(Ordering::Relaxed),
+        2,
+        "entrypoint capture and current-view validation must retain the same full plan"
+    );
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handler_transaction_ingress_rejects_changed_route_before_durable_enqueue() {
+    for entrypoint_handler in [false, true] {
+        let (mut app, keypair, _, certificate, journal) = lifecycle_ordinary_fixture(true);
+        // Capture the real global route, then simulate a policy/router change to
+        // a route without current catalog authority before the actual queue check.
+        let route_calls = install_counting_route_queue(
+            &mut app,
+            Some(RoutingDecision::new(
+                LaneId::new(999),
+                DataSpaceId::UNIVERSAL,
+            )),
+        );
+        let journal_path = journal.path().join("route-drift.norito");
+        app.queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install actual drift-test journal");
+        let before = std::fs::read(&journal_path).expect("read initial journal bytes");
+        let transaction =
+            lifecycle_transaction_with_nonce_for_test(&app, &keypair, &certificate, 1);
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let response = if entrypoint_handler {
+            post_external_transaction_entrypoint_for_test(
+                app.clone(),
+                HeaderMap::new(),
+                transaction,
+            )
+            .await
+        } else {
+            post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction).await
+        }
+        .unwrap_or_else(IntoResponse::into_response);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            torii_response_header(&response, "x-iroha-reject-code"),
+            Some("PRTRY:ROUTE_UNRESOLVED"),
+        );
+        assert_eq!(route_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(app.queue.active_len(), 0);
+        assert!(app.queue.routing_plan_hint(&entrypoint_hash).is_none());
+        assert!(!app.state.has_committed_entrypoint(entrypoint_hash));
+        assert_eq!(
+            std::fs::read(&journal_path).expect("read journal after route refusal"),
+            before,
+            "a precomputed plan cannot bypass current route validation or append custody",
+        );
+    }
 }

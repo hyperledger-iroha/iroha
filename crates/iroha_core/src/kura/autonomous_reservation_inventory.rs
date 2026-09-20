@@ -11,7 +11,7 @@ macro_rules! kura_autonomous_reservation_inventory_methods {
     #[allow(clippy::too_many_lines)]
     fn autonomous_reservation_lane_inventory_locked(
         &self,
-        entry: &LaneConfigEntry,
+        entry: &LaneStorageEntry,
         scanned_entries: &mut usize,
     ) -> std::result::Result<
         AutonomousReservationLaneInventory,

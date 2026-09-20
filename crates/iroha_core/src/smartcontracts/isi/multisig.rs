@@ -3251,7 +3251,6 @@ mod tests {
                 nonzero!($height),
                 None,
                 None,
-                None,
                 $creation_time_ms,
                 0,
             ));
@@ -3333,7 +3332,7 @@ mod tests {
         ])
         .expect("sbp dataspace catalog");
         state.nexus.write().fees.fee_asset_id = payment_asset_definition_id.to_string();
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction();
         let spec = spec(
@@ -4785,7 +4784,7 @@ mod tests {
             LiveQueryStore::start_test(),
             ChainId::from("multisig-rekey-unbound-alias-leases"),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 10, 0));
         let mut tx = block.transaction();
         let domain_id = DomainId::try_new("unbound", "universal").expect("domain id");
         let old_account = new_account_id(&checked_keypair());
@@ -4860,7 +4859,7 @@ mod tests {
             LiveQueryStore::start_test(),
             ChainId::from("multisig-governance-lock-index-rekey"),
         );
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut tx = block.transaction();
         let old_account = new_account_id(&checked_keypair());
         let new_account = new_account_id(&checked_keypair());
@@ -5134,8 +5133,7 @@ mod tests {
                     LiveQueryStore::start_test(),
                     ChainId::from("immutable-settlement-rekey"),
                 );
-                let mut block =
-                    state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+                let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
                 let mut tx = block.transaction();
                 Register::account(Account::new(old_account.clone()))
                     .execute(&old_account, &mut tx)
@@ -5807,7 +5805,7 @@ mod tests {
             query_handle,
             ChainId::from("multisig-repair-from-controller"),
         );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction();
         domain!(tx, signer1_id, domain_id, "domain registration");
@@ -6363,7 +6361,7 @@ seiyaku TriggerDispatch {
             query_handle,
             ChainId::from("recovery-invalidates-multisig-proposals"),
         );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 1_000, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction();
         domain!(tx, owner_id, domain_id, "domain registration");
@@ -6710,7 +6708,7 @@ seiyaku TriggerDispatch {
             transaction_ttl_ms: NonZeroU64::new(1).unwrap(),
         };
         let multisig_id = {
-            let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+            let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 1, 0);
             let mut block = state.block(block_header);
             let mut tx = block.transaction();
             domain!(tx, signer1_id, domain_id, "domain registration");
@@ -6730,7 +6728,7 @@ seiyaku TriggerDispatch {
                 .expect("commit first block");
             multisig_id
         };
-        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 3, 0);
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 3, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction();
         let instructions = Vec::<InstructionBox>::new();
@@ -7370,7 +7368,7 @@ seiyaku TriggerDispatch {
             query_handle,
             ChainId::from("replace-single-to-multisig"),
         );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction();
         domain!(tx, owner_id, domain_id, "domain registration");
@@ -7436,7 +7434,7 @@ seiyaku TriggerDispatch {
             query_handle,
             ChainId::from("replace-multisig-to-single"),
         );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction();
         Register::domain(Domain::new(domain_id.clone()))
@@ -7502,7 +7500,7 @@ seiyaku TriggerDispatch {
             query_handle,
             ChainId::from("replace-multisig-to-multisig"),
         );
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut tx = block.transaction();
         Register::domain(Domain::new(domain_id.clone()))

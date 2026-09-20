@@ -4,10 +4,46 @@ Run the native CLI checks, build the four AArch64 Linux executables, and capture
 read-only copies through one maintained command. This replaces per-release local
 build and capture scripts. Python 3.11+, Git, the repository Rust toolchain,
 cargo-zigbuild, Zig and an existing warm Cargo target directory are required.
+Native checks also require executable `lsof` at `/usr/sbin/lsof` on macOS or
+`/usr/bin/lsof` on Linux. Both full and focused gates reject a missing or
+nonexecutable inspector before compilation; install this prerequisite first.
+
+The compiled `iroha taira doctor` checks `GET /v1/accounts/faucet/policy` in
+both basic and full scopes without a client configuration or authentication.
+A successful response must contain the exact canonical V1 policy. Missing
+routes, malformed policies, unrelated forbidden responses and upstream failures
+fail the check. The explicit disabled-faucet response produces a warning that
+funding is unavailable; public-reset qualification still requires an enabled
+HTTP 200 policy. Discovery does not establish signing trust: funding operations
+continue to require independently trusted issuer and issuance inputs.
 
 Run only the early native gate:
 
     python3 scripts/taira_release.py check
+
+Linux development checks default to the installed LLVM 18 compiler and linker;
+macOS keeps the system Apple linker. Linux requires executable
+`/usr/bin/clang-18` and `/usr/bin/ld.lld-18`. Missing or nonexecutable tools fail
+before compilation, with their exact paths in the diagnostic. Install `clang-18`
+and `lld-18` with the platform package manager first; there is no automatic
+fallback. To diagnose with the system linker explicitly:
+
+    python3 scripts/taira_release.py check \
+      --target-dir /absolute/existing/development-lane \
+      --native-linker system
+
+The runner verifies `/usr/bin/clang-18` and `/usr/bin/ld.lld-18` against their
+fixed canonical installation paths, checks executable custody, and reports
+their paths and SHA256 digests. The standalone `scripts/taira_release_check.py`
+entry point accepts the same option. Switching from `system` to `llvm`
+invalidates Cargo fingerprints and can rebuild dependencies once in the
+existing warm lane; keeping the same selection reuses that cache. Switching
+back invalidates it again. Linker timing alone does not establish end-to-end
+build or release qualification time.
+`llvm` is rejected on macOS. Authenticated `prepare` accepts the same
+`--native-linker` selection and binds the resolved compiler/linker paths, bytes
+and native environment into its request. Resume revalidates those identities.
+The native selection is independent of the explicitly pinned Zig shipping tools.
 
 Before signing an immutable release, use an exact focused diagnostic in the same
 warm development lane:
@@ -16,13 +52,33 @@ warm development lane:
       --focus-regression core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay
 
 Repeat `--focus-regression HARNESS=EXACT_TEST` for more selected regressions. The
-diagnostic compiles the complete shared native harness graph, runs mandatory
-configuration checks first, then only the named tests. Names must already belong
+diagnostic compiles configuration and the requested native harnesses together,
+runs mandatory configuration checks first, then only the named tests. Names must already belong
 to the chosen `--native-check-scope`; unknown or repeated selections fail before
 Cargo starts. Independent failures are aggregated; dependent network tests run
 only after those checks pass. This mutable-source diagnostic writes no release
 qualification checkpoint. `prepare` has no focus option and still requires its
 complete immutable gate. Omit the option to run the normal development gate.
+
+The CLI regression selection runs as one serial native test process, using exact
+test names. This reuses immutable genesis fixtures instead of rebuilding them in
+a new process for every test. The gate requires every selected result exactly
+once and reconciles the complete result count with the process outcome; ignored,
+missing, unexpected or malformed results fail qualification. A failed or aborted
+batch reports unsuccessful and unexecuted tests without replaying successful
+ones. Long batches emit progress updates. Configuration and mandatory startup
+checks still run first, and node compilation and network fixtures remain later
+steps. Both focused diagnostics and the complete gate use this CLI execution
+path; other native harnesses retain their existing isolation.
+
+Network observation tests run before shipping binary compilation. Selecting only
+these tests requires no node binaries, four-validator workspace, or eight-GiB
+runtime storage reserve. A failed observation stops before shipping compilation.
+Selecting the beacon workload checks its private external workspace before
+source audits or compilation: the directory must be owner-only mode 0700, outside
+Git, with direct directory ancestors that reject group and world writes. Runtime
+network tests also require eight GiB free before compilation and recheck capacity
+before starting peers. The beacon workspace is revalidated at execution.
 
 Prepare binaries from an explicitly selected signed commit in the optimizations repository:
 
@@ -63,7 +119,10 @@ target for native fixture output; source inventories verify this binding without
 traversing generated files. Native fixture processes also run from that external
 target directory. The snapshot covers signed Git entries; the output binding is
 recorded separately as `source_output_target`. Every signed source path remains
-read-only. Subsequent
+read-only. Private Kagami signing fixtures use a canonical native temporary
+directory with mode 0700 and key files with mode 0600; both scopes exercise
+their round-trip and rejection controls without writing to the source capture.
+Subsequent
 checkout edits, merges or HEAD changes cannot mix source versions into
 the build. Native test selection is loaded from the captured gate helper, including
 a resumed check after the checkout has changed. Resume additionally authenticates
@@ -118,15 +177,21 @@ The native gate receives the same source, toolchain and explicit target director
 Both scopes also verify that idle governance sweeps create no execution fragment,
 while successful and failed due sweeps retain their effects and audit records.
 
+Both scopes first verify that fresh catalog fixtures authenticate their intended
+geometry during construction and retain their explicit network identity. A later
+runtime update cannot replace the original storage catalog.
+
 Both native qualification scopes require certified catalog and bootstrap parameter
 commit and recovery tests, plus rejection of changed parameters or mismatched
 runtime effects after staging. The four-validator catalog test separately proves
 the committed topology and transaction history survive restart and full replay.
 
 Both scopes also require the generated validator configuration projection and
-occupied-runtime recovery tests. Prior daemon, CLI, SoraFS, configuration, genesis,
-genesis hash and service unit each have an explicit source revision, path, digest,
-size and mode. The configuration selector and exact process argv are bound
+occupied-runtime recovery tests. The predecessor requires exactly five ordered
+runtime roles: `iroha3d`, `config`, `genesis`, `genesis_hash`, and `validator_unit`.
+Each has an explicit source revision, path, digest, size and mode. CLI, Kagami and
+SoraFS are not predecessor validator dependencies; an eight-role predecessor
+record is rejected. The configuration selector and exact process argv are bound
 separately. An initialized installation may therefore retain artifacts from
 different releases without treating its configuration revision as its executable
 revision. Candidate artifacts still use one canonical release directory.
@@ -137,8 +202,8 @@ before checking copy capacity. Retirement runs under Cargo's locks after exact
 inode checks and an OS open-file check; a later copy failure leaves the current
 verified Cargo outputs intact.
 The first run only records current outputs; unrecorded files, production binaries,
-libraries, object files and warm compiler caches are retained. Busy files or an
-unavailable/inconclusive `lsof` check cause retention. A private quarantine closes
+libraries, object files and warm compiler caches are retained. Busy files and
+inconclusive or failed runtime `lsof` checks cause retention. A private quarantine closes
 the old pathname before the final open-file check; interrupted retirement remains
 recorded. Retries recover both rename windows using the recorded inode and stable
 metadata, recheck open-file status, and never adopt an unrelated replacement. A
@@ -154,6 +219,11 @@ verified copies are cleanup-owned, including an unpublished CLI; incomplete or
 unrecorded files are retained. Observations and fixture logs remain. Cargo producers
 and Linux release artifacts are outside temporary-copy cleanup.
 
+Before publication, the shared artifact reader rechecks the pinned source bytes
+against their captured SHA256 using bounded reads that preserve the stream offset.
+This catches same-size edits even when filesystem timestamps coincide. Existing
+metadata, path, copied-content and archive-content checks remain mandatory.
+
 Before Cargo, the gate compiles the dependency-free consensus reducers and the
 shared lifecycle source assertions directly with the pinned Rust compiler. Both
 must execute every listed test without skips. Lifecycle mutation controls check
@@ -165,6 +235,14 @@ resolving the union of their existing default features. Configuration runs first
 and fails immediately, including when an independent-test checkpoint can be reused.
 Core, Torii and daemon startup recovery checks run next; failures are collected
 across those startup groups before stopping, without running CLI or network tests.
+After these prerequisites pass, a separate `cargo check` selects only the four
+authoritative shipping binaries with their default features. It uses the same warm
+target, tool environment and locks, without a test profile or dev-feature injection.
+Cargo library artifact events must also exclude Core's `iroha-core-tests` and
+Torii's `test-fixtures`, including accidental default or normal-dependency opt-ins.
+Production metadata errors stop before CLI and long independent tests. This check
+reruns even when the independent-test checkpoint is reused and supplies no test or
+artifact qualification; the later shipping build and network checks remain required.
 These include bounded regressions for failure reporting and worker teardown under
 a held lifecycle operation, plus retained-output recovery through real actor admission.
 Live Decision cleanup also exercises the shared runner reconciliation after an idle
@@ -239,6 +317,16 @@ Validate the local orchestration without Cargo or network:
 The gate's existing selection and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
 
+## Transferring a prepared release
+
+Use [the maintained transfer command](taira_release_transfer.md) to import a
+completed preparation's four binaries and exact signed source into the approved
+MacStadium guest. It validates the preparation and checks both physical backing
+and guest capacity before payload writes. Completed transfers are revalidated on
+retry; an SSH or storage failure does not require rebuilding unchanged artifacts.
+The command publishes verified binary/source receipts and leaves activation to
+the native deployment workflow below.
+
 ## Preparing validator configuration for a public reset
 
 Generate the fresh four-validator Taira bundle with the qualified native Kagami
@@ -254,6 +342,7 @@ descriptor:
       --network-id REVIEWED_CHECKED_NETWORK_ID \
       --genesis-file /srv/taira/taira-validator-1/releases/COMMIT/genesis/genesis.json \
       --operator-public-key REVIEWED_CANONICAL_OPERATOR_PUBLIC_KEY \
+      --torii-bind-address 0.0.0.0:8080 \
       --output /absolute/private/taira-validator-1.toml
 
 Descriptor 198 must already identify the corresponding generated peer config;
@@ -262,7 +351,12 @@ public genesis identity, maps all eleven mutable paths into the validator's
 reset-managed state directories, sets explicit snapshot storage, and binds the
 installed signed genesis and operator-authentication key. It rejects inherited
 configuration, changed source paths and preexisting output. It emits no private
-configuration to stdout. The generated onboarding key, faucet key, public rANS
+configuration to stdout. The required `--torii-bind-address` selects a canonical
+IP and nonzero port; the port must equal the generated Torii port. For the
+MacStadium deployment, generate with `--bind-host 127.0.0.1` and project Torii to
+`0.0.0.0:8080` through `0.0.0.0:8083` for the four corresponding validators.
+P2P listeners and advertised peer addresses remain unchanged. The generated
+onboarding key, faucet key, public rANS
 table and `nexus.registry.manifest_directory` paths remain in the configuration,
 so their original directory must remain available on that host. The manifest
 directory must be exactly `lane-manifests` under the generator directory; a
@@ -271,23 +365,81 @@ policy digest to signed genesis. Retain and revalidate the generated public
 manifest receipt for exact byte custody; the reset inventory does not declare a
 separate manifest artifact.
 
+Assembly, authorization and forward preflight require every candidate faucet to
+be enabled, with authority, canonical asset and quantity exactly matching the
+independently signed intent. This policy check reads the pinned configuration
+without opening faucet signer files.
+
 Derive the complete public identity bundle using the maintained CLI:
 
     iroha taira public-reset prepare-public-inputs \
       --localnet-dir /absolute/private/generated-network \
-      --canary-public-key /absolute/private/canary/public.key \
+      --intent /absolute/private/topology-intent.json \
       --output-dir /absolute/private/public-inputs
 
-The command uses native signed-genesis validation and the shared canary request
-constructor. It atomically writes `genesis.signed.nrt`, `genesis.hash`,
-`canary-onboarding-request.json` and `public-inputs.json` as 0644 public artifacts
-inside a 0700 directory. The hash file contains the native consensus genesis
-hash, not a SHA256 of the wire file; the typed record names both values explicitly.
-Repeating an identical request verifies the retained bundle; conflicting output
-is never replaced. It reads only the public generator files and canary public key.
-`public-reset assemble` and `authorize` require `--public-inputs DIR` and derive
-the next genesis hash and canary request from that validated bundle. The existing
-full execution, source, config and authorization checks remain required.
+The closed `iroha.taira.public-reset.topology-intent.v1` contains topology, paths
+and explicit authority only. Computed release/config/artifact pins and generated
+beacon or supervisor plans are not fields. Native validation extracts the
+canary public identity from its exact onboarding request and validates the signed
+genesis against the generated raw manifest. The command atomically writes five
+public artifacts: `genesis.json`, `genesis.signed.nrt`, `genesis.hash`,
+`canary-onboarding-request.json` and `public-inputs.json`, with mode0644 inside a
+mode0700 directory. The typed record binds `raw_manifest_sha256` and distinguishes
+the native consensus genesis hash from the signed wire's SHA256. An incomplete
+four-file bundle is rejected; prepare a fresh complete output. Repeating an
+identical complete request verifies the retained bundle without replacing it.
+The explicit `--canary-public-key PATH` alternative is mutually exclusive with
+`--intent` and reads only that public key.
+
+Derive the fresh beacon request and exact per-validator credential paths from the
+same topology intent and public bundle:
+
+    iroha taira public-reset prepare-beacon-inputs \
+      --intent /absolute/private/topology-intent.json \
+      --public-inputs /absolute/private/public-inputs \
+      --output /absolute/private/beacon-inputs.json
+
+Use the authenticated same-revision unit renderer for each returned final-unit
+entry, preserving its initial runtime-key and mint-finality-seed paths and using
+the exact native `credential_path` with `--global-beacon-credential` and
+`--config-file beacon.toml`. The [maintained retry caller](taira_retry.md) verifies
+the pinned renderer and initial units before rendering these four final mode0644
+units. The native request is not hand-authored JSON.
+
+Next run `iroha taira public-reset prepare-epoch-supervisor-plan --intent
+/absolute/private/topology-intent.json` with the same public bundle and actual
+`--runtime-client-config`, `--maintenance-admin-config`, four
+`--validator-client-config`, `--validator-operator-key`, `--onboarding-token`,
+four `--validator-unit`, `--edge-unit` and `--known-hosts` paths; full scope also
+supplies `--inrou-stage-dir`. Supply explicit `--host-slug`,
+`--authorization until-stopped`, `--payment-asset`, `--transaction-fee-maximum`,
+`--first-epoch`, `--batch-epochs`, `--operation-timeout-ms`,
+`--provision-timeout-ms`, `--timeout-ms`, and four original paths through singular
+`--epoch-seed-source`. Choose `--prior-state absent` only for admitted absence;
+`running` or `stopped` also requires the exact `--prior-plan PATH`. Publish to a
+fresh `--output-dir`. The native producer derives trust and the entire supervisor
+plan from held actual inputs; it accepts no computed credential hashes or manual
+observation-trust file. The output is the public `supervisor-plan.json`,
+`supervisor-binding.json` and `observation-trust.json` bundle.
+
+`public-reset assemble --intent PATH` and `authorize` require the same
+`--public-inputs DIR`, `--maintenance-admin-config PATH`,
+`--epoch-supervisor-plan PATH`, plural `--epoch-seed-sources` with four original
+paths, `--beacon-inputs PATH` and four ordered `--beacon-validator-unit` paths,
+along with their other local inputs. Native assembly independently rederives the
+context, credential joins, request, seat map and required signed plans. Apply
+uses the runtime administrator path and singular `--epoch-seed-source` flag.
+The same-release artifact closure includes Kagami. The existing execution,
+source, config and authorization checks remain required; the reset's finite
+lease does not imply ongoing maintenance authorization. See the
+[maintained retry caller](taira_retry.md) for the exact current path records and
+preparation order.
+The signed genesis must leave room for onboarding, funding, the canary's real
+QueuePlan admission and execution carriers, and certificate installation before
+the first mandatory pulse. Finalization uses the authenticated observed height.
+The sole threshold-key certificate uses signed Ordinary admission, retaining its
+exact next-height and current-roster quorum checks; other public transactions
+continue to use QueuePlanSynced admission.
 
 Public validator client settings can reference the native-generated
 `runtime/taira-runtime-signers/peerN.private_key` sidecar through
@@ -299,14 +451,32 @@ This representation requires a single-signatory account and rejects multisig
 controllers. No private configuration parsing is needed to construct these
 public fields and file references; native loading validates the key pair.
 
-Each candidate validator includes a seventh `validator_unit` artifact at
+Each candidate validator includes eight exact artifact roles, including same-release
+Kagami and the `validator_unit` artifact at
 `systemd/<systemd_unit>` with exact mode 0644. Assembly requires its bytes to
 match the explicit validator unit input and digest. Reset execution durably
 retains the prior unit, records publication intent, atomically installs the
 candidate unit and records the exact service-manager reload. Interrupted forward
-and rollback publication resume only from that durable evidence. Rollback
-restores the old unit, selector and retained state before proving the old process
-again; cleanup protects every admitted prior artifact root.
+and rollback publication resume only from that durable evidence. An occupied
+validator additionally signs its required prior `service_state`: `running`, or
+`stopped` with the independently selected state-root device/inode. There is no
+implicit state or fallback from a failed running-process check. Both modes retain
+all exact prior artifact, loaded-unit, selector and custody checks. Stopped mode
+also proves no service job, PID, populated cgroup or escaped state reference.
+
+Reset retains the original state inode at
+`<reset_guard>/rollback/<authorization_nonce>/state` by same-filesystem rename;
+it does not copy old ledger contents into the newly initialized chain or create
+an off-host backup. Approval must identify the old/new genesis and resulting
+active-state loss. Rollback before deployment proof restores the old unit,
+selector and retained state. Running mode proves the restored old process;
+stopped mode stays stopped and proves absence, without claiming recovery or
+health. Cached and conservative rollback use the same signed state. Cleanup
+protects the selected prior configuration release, every admitted runtime artifact
+root, and the independently signed prior supervisor's CLI/Kagami release. Supervisor
+custody remains explicit in its own prior plan; malformed or inconsistent prior
+state cannot authorize cleanup. Proven deployments cannot roll back
+through this workflow, and ambiguous writes require their retained recovery path.
 
 These preparation operations do not authorize replacement of shared network
 state. The reviewed inventory, explicit reset authorization, and independently
@@ -315,18 +485,67 @@ provisioned trusted host dispatcher and reset guard remain prerequisites for
 
 ## Updating an initialized testnet
 
-For a routine update of the existing four-validator Taira installation, use the
-completed basic preparation directly:
+For a routine update of the existing four-validator Taira installation, first use
+`iroha taira public-reset prepare-epoch-update` to produce the typed preparation.
+Supply the actual `--deployment`, `--prepared-result`, `--trust`, an explicit
+fresh `--operation`, `--authorization until-stopped`, `--administrator`,
+`--payment-asset`, `--transaction-fee-maximum`, `--first-epoch`, `--batch-epochs`,
+`--operation-timeout-ms`, `--provision-timeout-ms`, `--worker-timeout-ms`, and four
+original sorted seed paths through `--original-seed-sources`. Select the actual
+`--original-service-state`, desired `--successor-service-state` and separate
+`--installed-state`. An occupied original requires its exact `--before-binding`;
+a present installed state requires its exact `--installed-binding`. Explicit
+absence forbids the corresponding binding. The native command reads public inputs
+only and writes `preparation.json`, `after-binding.json` and `inputs.json` into a
+fresh `--output` directory. It neither fabricates prior state nor materializes
+credentials. Use the same operation in every following phase.
+
+Prepare the exact same-release binaries at that operation's immutable release path:
+
+    python3 scripts/taira_update.py \
+      --prepare-artifacts \
+      --deployment /absolute/owner-private/taira/deployment.json \
+      --prepared-result /absolute/completed-preparation/result.json \
+      --operation update-0123456789abcdef0123456789abcdef \
+      --output /absolute/owner-private/taira/artifact-output
+
+Then invoke that admitted candidate `bin/iroha` to materialize the immutable
+supervisor generation. The preparation wrapper binds the same operation, original
+and desired service states, original and actually installed unit bindings, and
+successor policy/unit/custody. Its required `original_seed_sources` contains four
+exact sorted `{validator, path}` references to the original validator seed files.
+The native helper retains those exact bytes; it never generates replacement
+seeds. Existing generations may select the already retained original files. The
+operator supplies already-open administrator and HTTP private input descriptors;
+Python does not read or hash any credential or seed contents:
+
+    /absolute/runtime/release-COMMIT-update-0123456789abcdef0123456789abcdef/bin/iroha \
+      taira public-reset epoch-supervisor-host materialize \
+      --wrapper /absolute/owner-private/taira/epoch-update-inputs/preparation.json \
+      --administrator-config-fd ADMIN_FD --http-operator-key-fd HTTP_FD \
+      --timeout-ms 90000
+
+After durable receipt publication, native materialization emits the complete
+`taira.epoch-supervisor-update.v1` wrapper on stdout. Preserve those exact public
+bytes as `epoch-supervisor-update.json` using a fresh owner-private output file;
+no JSON merge or hand-authored receipt reference is required. Apply the reviewed
+transition using the same operation:
 
     python3 scripts/taira_update.py \
       --deployment /absolute/owner-private/taira/deployment.json \
       --prepared-result /absolute/completed-preparation/result.json \
+      --operation update-0123456789abcdef0123456789abcdef \
+      --supervisor-plan /absolute/owner-private/taira/epoch-supervisor-update.json \
       --output /absolute/owner-private/taira/update-output
 
 The deployment record contains the approved SSH route and public host-key pins,
 network and directory identities, and the exact completed predecessor receipt.
-Keep it outside Git. The updater transfers the prepared daemon and matching CLI,
-preserves configuration, signer custody and ledger state, and verifies native
+Keep it outside Git. Artifact preparation creates the exact same-release daemon,
+CLI and Kagami from the maintained four-artifact preparation without overwriting
+existing files. Apply requires all three already provisioned files and rechecks
+their exact native digests, size, source and root-owned mode0755 custody; it never
+creates a missing binary as a fallback. It preserves
+configuration, signer custody and ledger state, and verifies native
 Strict snapshot restoration and public basic health. It does not invoke Cargo.
 All four validators must prove the candidate identity and restore their own stopped
 retained tips. Every overlapping stopped prefix is checked before startup. Two
@@ -339,6 +558,35 @@ Identity, hash, malformed response, and process failures stop immediately; only
 declared startup transport failures and HTTP 503 are polled. An idle chain does
 not need to create another block to pass.
 `--plan-only` writes the concrete plan locally without contacting the host.
+The operation is explicit and determines the immutable candidate binary paths;
+there is no random operation fallback. The required public supervisor wrapper
+binds the exact raw policy, current observation trust, custody references, fixed
+unit, same-release CLI/Kagami, and native provisioning receipt. Its original
+`before` binding and `original_service_state` remain immutable across recovery;
+`installed` separately records the unit actually published. The required
+`successor_service_state` preserves an existing running or stopped state and
+explicitly selects the first-install state when the original was absent.
+
+The policy grants explicit ongoing `until_stopped` epoch maintenance; a finite
+reset lease does not grant this authority. The administrator is a separately
+provisioned genesis-authorized client, distinct from canary and HTTP identities.
+Only the native `public-reset epoch-supervisor-host materialize` boundary consumes
+inherited administrator-config and HTTP-operator-key descriptors or seed custody.
+Python handles public bindings and receipts only. Existing original trust and
+once-per-epoch journals remain unchanged.
+
+The updater holds `/var/lib/taira-epoch-supervisor/.deployment.lock` throughout
+the transition and rejects any retained `.reset-owner.json` without clearing it.
+It journals the supervisor pause before stopping any validator and retains a
+native journal-lock child across validator replacement and qualification. An
+ambiguous pause or partial validator stop admits read-only reconciliation only.
+After a confirmed stop, pre-start failure leaves both services paused; after
+candidate start, failure contains the candidate validators and supervisor even
+if evidence publication fails. The native journal guard is released immediately
+before an explicitly authorized supervisor start. A running successor succeeds
+only after native `supervisor-status` authenticates initial and current epoch
+completion for the same policy and unchanged live worker and manager identity;
+a stale receipt or active unit alone is insufficient. Stopped intent stays stopped.
 
 After all four stopped checkpoints are recorded, the matching candidate CLI runs
 `iroha taira stopped-owner-maintenance` once before unit replacement or startup.
