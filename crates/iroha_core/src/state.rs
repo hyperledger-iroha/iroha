@@ -32742,10 +32742,10 @@ impl State {
     ///
     /// # Errors
     /// Returns the exact runtime projection error after the captured generation
-    /// is stable. Recovery can reject malformed state without deriving a partial
-    /// view or substituting configured runtime values.
+    /// is stable. Recovery and read-only API callers can reject malformed state
+    /// without deriving a partial view or substituting configured runtime values.
     #[track_caller]
-    pub(crate) fn try_view(&self) -> Result<StateView<'_>, LaneLifecycleError> {
+    pub fn try_view(&self) -> Result<StateView<'_>, LaneLifecycleError> {
         loop {
             if let Some(view) = self.try_view_once()? {
                 return Ok(view);

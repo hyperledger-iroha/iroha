@@ -101,8 +101,9 @@ pub fn seed_peer(world: &mut World, peer_id: PeerId) {
 /// Execute a nonempty first block through authenticated genesis admission.
 ///
 /// The supplied signer authorizes both the genesis-domain transaction and its
-/// block. Current State commitments and strict validation produce the canonical
-/// execution outputs before the test publishes the committed block.
+/// block. The native genesis producer omits ordinary lane execution contexts.
+/// Current State commitments and strict validation produce canonical execution
+/// outputs before the test publishes the committed block.
 #[allow(dead_code)]
 pub fn commit_genesis_fixture(
     state: &Arc<State>,
@@ -112,12 +113,12 @@ pub fn commit_genesis_fixture(
     time_source: iroha_primitives::time::TimeSource,
 ) {
     use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
-        state::StateReadOnly,
-        sumeragi::network_topology::Topology,
-        tx::AcceptedTransaction,
+        block::ValidBlock, state::StateReadOnly, sumeragi::network_topology::Topology,
     };
-    use iroha_data_model::transaction::{FeePaymentIntent, TransactionBuilder};
+    use iroha_data_model::{
+        block::SignedBlock,
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
 
     assert_eq!(
         state.committed_height(),
@@ -148,26 +149,28 @@ pub fn commit_genesis_fixture(
             (!digest.is_empty()).then_some(digest),
         )
     };
-    let proposal = BlockBuilder::new_with_time_source(
-        vec![AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(
-            transaction,
-        ))],
-        time_source.clone(),
+    let proposal = SignedBlock::try_genesis_with_da_proof_policies(
+        vec![transaction],
+        signer.private_key(),
+        confidential_features,
+        None,
+        Some(proof_policies),
     )
-    .chain(0, None)
-    .with_da_proof_policies(Some(proof_policies))
-    .with_confidential_features(confidential_features)
-    .sign(signer.private_key())
-    .unpack(|_| {});
+    .expect("sign native fixture genesis");
+    assert!(
+        proposal.execution_context().is_none(),
+        "genesis must not inherit ordinary lane execution context"
+    );
     let mut state_block = state.block(proposal.header());
     let valid = ValidBlock::validate_sumeragi_v2_fixture(
-        proposal.into(),
+        proposal,
         &Topology::new([PeerId::new(signer.public_key().clone())]),
         authority,
         &time_source,
         &mut state_block,
     )
     .unpack(|_| {})
+    .map_err(|(_, error)| error)
     .expect("authenticate and execute fixture genesis");
     let committed = valid.commit_unchecked().unpack(|_| {});
     iroha_torii::test_utils::finalize_committed_block(state, state_block, committed);
