@@ -1522,14 +1522,26 @@ and deallocation. The [charged cursor/retirement boundary](../docs/history/2026-
 now threads the provider and concrete charge through that same engine, retains
 original fixed buffers through real reader release, and refuses deficient
 bookkeeping before mutation. Shared traversal and clone probes use immutable
-references. Public maps remain explicitly untracked until the closed edit, nested
-payload policy and complete initial/undo ownership are connected. These are still
-required before production activation.
+references. Production MV maps remain explicitly untracked until concrete model
+payload policies and complete initial/undo ownership are connected. These are
+still required before production activation.
 
 The [explicit payload-cloning boundary](../docs/history/2026-09-20/prepaid-payload-cloning.md)
 requires each node payload copy to use the original provider's policy. Node
 credits alone cannot authorize ordinary Clone; complete operation demand and
 concrete MV payload owners remain required before production funded edits.
+The [closed insertion boundary](../docs/history/2026-09-20/closed-admitted-insertion.md)
+now threads a sealed prepaid mode through the existing public map owners and
+plans complete insertion storage/copy demand under the original lock before one
+reservation. It returns only a completed detached successor and releases unused
+admission before handoff. The [retained edit extension](../docs/history/2026-09-20/retained-admitted-edits.md)
+admits subsequent edits against that same original cursor and funds its exact
+initial root allocation. Refusal preserves private work; publication remains
+atomic. Native mutex/runtime storage, real model payloads, MV undo/transaction
+storage and configured aggregate policy remain required before production cutover.
+The next Storage step must jointly admit current edits and first preimages;
+transaction abort must retain an already funded parent state and never reserve
+rollback capacity in Drop. L1–L6 and four/seven-validator qualification stay open.
 
 
 The retained-journal owner now consumes its actual `ValidBlock` through the existing

@@ -1592,7 +1592,6 @@ def test_canonical_queue_plan_retry_literal_bindings_match_actual_owners() -> No
     ('canonical_admission_read_working_set_bytes', 'let proposal_clone = norito::canonical_decode_limits(wire).max_total_allocated_bytes();', 'let proposal_clone = 0usize;'),
     ('canonical_queue_plan_synced_response', 'if tokio::time::Instant::now() >= read_deadline', 'if false'),
     ('canonical_queue_plan_synced_response', 'if tokio::time::Instant::now() >= read_deadline', 'if tokio::time::Instant::now() < read_deadline'),
-    ('execute_incoming_torii_proxy_request_with_admission_inner', 'proxy_memory.as_ref(),\n                execution_deadline,', 'proxy_memory.as_ref(),\n                tokio::time::Instant::now(),'),
     ('execute_incoming_torii_proxy_request_with_admission', '.checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)', '.checked_sub(Duration::ZERO)'),
     ('execute_incoming_torii_proxy_request_with_admission', '            proxy_memory,\n            deadline,', '            proxy_memory,\n            tokio::time::Instant::now(),'),
 ], ids=[
@@ -1620,7 +1619,6 @@ def test_canonical_queue_plan_retry_literal_bindings_match_actual_owners() -> No
     'full-proposal-clone-charged',
     'original-deadline-required',
     'deadline-direction',
-    'original-instant-handoff',
     'egress-budget-retained',
     'outer-timeout-same-instant',
 ])
@@ -1638,10 +1636,58 @@ def test_canonical_queue_plan_retry_rejects_semantic_mutation(symbol: str, old: 
     assert any(symbol in error for error in errors), errors
 
 
+@pytest.mark.parametrize("occurrence", [0, 1], ids=["before-capacity-wait", "after-capacity-wait"])
+def test_canonical_queue_plan_retry_rejects_each_rebased_instant_handoff(occurrence: int) -> None:
+    """An unchanged first or second read cannot cover a rebased sibling read."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = canonical_queue_plan_retry_items().copy()
+    symbol = "execute_incoming_torii_proxy_request_with_admission_inner"
+    key, = [key for key in items if key[2] == symbol]
+    source = items[key]
+    call = contract.QUEUE_PLAN_PROXY_CANONICAL_RESPONSE
+    assert source.count(call) == 2
+    first = source.index(call)
+    begin = first if occurrence == 0 else source.index(call, first + len(call))
+    changed = call.replace("execution_deadline,", "tokio::time::Instant::now(),", 1)
+    items[key] = source[:begin] + changed + source[begin + len(call):]
+    assert items[key].count(call) == 1
+    errors = []
+    contract.validate_canonical_queue_plan_retry(items, errors)
+    assert any(symbol in error and "original deadline handoffs" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("occurrence,anchor", [
+    (0, "            let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint("),
+    (0, "            let accepted_tx = match routing::accept_transaction_for_ingress("),
+    (1, "            if let Some(response) = queue_plan_service_input_capacity_error("),
+    (1, "            let routing_plan = match app\n"),
+], ids=["authentication-before-retry", "first-retry-before-wait", "second-retry-after-wait", "second-retry-before-acceptance"])
+def test_canonical_queue_plan_retry_rejects_reordered_capacity_wait_checks(occurrence: int, anchor: str) -> None:
+    """Move one complete response block inside the function, retaining both reads."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = canonical_queue_plan_retry_items().copy()
+    symbol = "execute_incoming_torii_proxy_request_with_admission_inner"
+    key, = [key for key in items if key[2] == symbol]
+    source = items[key]
+    block = "            " + contract.QUEUE_PLAN_PROXY_CANONICAL_RESPONSE + "\n"
+    assert source.count(block) == 2
+    assert source.count(anchor) == 1
+    first = source.index(block)
+    begin = first if occurrence == 0 else source.index(block, first + len(block))
+    without = source[:begin] + source[begin + len(block):]
+    items[key] = without.replace(anchor, block + anchor, 1)
+    assert items[key].count(block) == 2
+    errors = []
+    contract.validate_canonical_queue_plan_retry(items, errors)
+    assert any(symbol in error and "order" in error for error in errors), errors
+
+
 @pytest.mark.parametrize("symbol,first,last", [
     ("State::canonical_queue_plan_admitted_input", "let Some((record, carrier_hash)) = observe()?", "let result = (|| {"),
-    ("execute_incoming_torii_proxy_request_with_admission_inner", "AuthenticatedQueuePlanRetry::from_entrypoint(", "if let Some(response) = canonical_queue_plan_synced_response("),
-    ("execute_incoming_torii_proxy_request_with_admission_inner", "if let Some(response) = canonical_queue_plan_synced_response(", "let accepted_tx = match routing::accept_transaction_for_ingress("),
     ("submit_signed_transaction_for_ingress_queue_plan_certified", "canonical_queue_plan_submission_response(", "let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress("),
     ("handler_post_transaction_entrypoint", "canonical_queue_plan_submission_response(", "routing::accept_transaction_for_ingress(state, transaction, &telemetry)"),
     ("canonical_queue_plan_synced_response", "let reservation = match proxy_memory", "let read = match tokio::runtime::Handle::try_current()"),

@@ -23,7 +23,9 @@ mod mode;
 pub use crate::internals::bptree::allocation::{NodeCloning, NodeFunding};
 pub use crate::internals::bptree::tracking::{FixedTrackingBuffer, TrackingBuffer};
 pub use crate::internals::lincowcell::Untracked;
-pub use admission::{AllocationDemand, ClonePlanning, InsertAdmissionError, PlanningError};
+pub use admission::{
+    AllocationDemand, BptreeMapCheckpoint, ClonePlanning, InsertAdmissionError, PlanningError,
+};
 pub use mode::{MapMode, Prepaid};
 
 type MapCell<K, V, M> = LinCowCell<
@@ -133,6 +135,9 @@ where
     ///
     /// To abort (unstage changes), just do not call this function.
     pub fn commit(self) {
+        // Reject a caught admitted-edit panic before consuming the cursor shell
+        // or transferring any ownership into the published reader generation.
+        self.inner.as_ref().assert_operable();
         self.inner.commit();
     }
 
@@ -141,6 +146,7 @@ where
     /// This moves the original cursor and preallocated publication shell. It
     /// neither publishes changes nor clones keys or values.
     pub fn detach(self) -> BptreeMapOwned<K, V, M> {
+        self.inner.as_ref().assert_operable();
         BptreeMapOwned {
             inner: self.inner.detach(),
         }

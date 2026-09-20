@@ -19485,9 +19485,14 @@
           "kind": "fn",
           "symbol": "execute_incoming_torii_proxy_request_with_admission",
           "required_tokens": [
-            "let budget_observed_at = tokio::time::Instant::now()",
-            "queue_plan_capacity_wait::deadline_response(&proxy_request.request, error)",
-            "let deadline = budget_observed_at + remaining_budget"
+            "let budget_observed_at = tokio::time::Instant::now();",
+            "validate_torii_proxy_deadline(proxy_request.deadline_unix_ms)",
+            ".checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)",
+            ".filter(|budget| !budget.is_zero())",
+            "return queue_plan_capacity_wait::deadline_response(&proxy_request.request, error);",
+            "let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);",
+            "let deadline = budget_observed_at + remaining_budget;",
+            "match tokio::time::timeout_at(\n        deadline,\n        execute_incoming_torii_proxy_request_with_admission_inner(\n            app,\n            proxy_request,\n            immediate_sender_peer_id,\n            pre_admitted_fanout,\n            proxy_memory,\n            deadline,\n        ),\n    )"
           ]
         },
         {
