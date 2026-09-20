@@ -1,10 +1,59 @@
 """Focused coverage for source-isolated release component retention."""
 
+import importlib.util
 from pathlib import Path
+import sys
+from types import ModuleType
 
 import pytest
 
 from pytests.scripts import sumeragi_v2_release_receipt_test as receipt
+
+
+@pytest.fixture
+def receipt_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """Load the actual writer and its authenticated component sources."""
+    spec = importlib.util.spec_from_file_location(
+        "release_receipt_component_inventory_test", receipt.SCRIPT
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    "validator_name",
+    ("_prebuilt_directory_inventory", "_require_g12_directory_inventory"),
+)
+def test_evidence_directory_inventory_accepts_current_artifact_names(
+    tmp_path: Path, receipt_module: ModuleType, validator_name: str
+) -> None:
+    """Both evidence paths use the writer-owned safe component policy."""
+    directory = tmp_path.resolve()
+    names = {"iroha3d", "proof-v1.0.json", "g12_result.log"}
+    for name in names:
+        (directory / name).write_bytes(b"evidence\n")
+    validator = getattr(receipt_module, validator_name)
+    validator(directory, names, "release evidence")
+    with pytest.raises(receipt_module.ReceiptError, match="inventory"):
+        validator(directory, names | {"missing.json"}, "release evidence")
+
+
+@pytest.mark.parametrize(
+    "validator_name",
+    ("_prebuilt_directory_inventory", "_require_g12_directory_inventory"),
+)
+@pytest.mark.parametrize("name", ("-option", ".hidden", "with space", "caf\u00e9"))
+def test_evidence_directory_inventory_rejects_unsafe_artifact_names(
+    tmp_path: Path, receipt_module: ModuleType, validator_name: str, name: str
+) -> None:
+    """An exact expected set never authorizes unsafe directory entry names."""
+    directory = tmp_path.resolve()
+    (directory / name).write_bytes(b"evidence\n")
+    with pytest.raises(receipt_module.ReceiptError):
+        getattr(receipt_module, validator_name)(directory, {name}, "release evidence")
 
 
 def test_run_writer_copies_declared_components_and_fails_closed(

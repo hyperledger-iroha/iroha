@@ -3,12 +3,9 @@ use crate::{
     ReleaseNotification, Value,
     publication::{CapturedPublication, NextPublication, Publication},
 };
-use concread::{
-    bptree::{
-        BptreeMap, BptreeMapOwned, BptreeMapReadSnapshot, BptreeMapReadTxn, BptreeMapWriteTxn,
-        OwnedWriteError,
-    },
-    ebrcell::{EbrCell, EbrCellOwned, EbrCellWriteTxn},
+use concread::bptree::{
+    BptreeMap, BptreeMapOwned, BptreeMapReadSnapshot, BptreeMapReadTxn, BptreeMapWriteTxn,
+    OwnedWriteError,
 };
 use std::{borrow::Borrow, collections::BTreeMap, ops::RangeBounds};
 /// Multi-version key value storage
@@ -18,7 +15,7 @@ pub struct Storage<K: Key, V: Value> {
     pub(crate) revert_released: ReleaseNotification,
     pub(crate) blocks_released: ReleaseNotification,
     /// Previous version of values in the `blocks` map, required to perform revert of the latest changes
-    pub(crate) revert: EbrCell<BTreeMap<K, Option<V>>>,
+    pub(crate) revert: BptreeMap<K, Option<V>>,
     /// Map which represent aggregated changes of multiple blocks
     pub(crate) blocks: BptreeMap<K, V>,
 }
@@ -29,7 +26,7 @@ impl<K: Key, V: Value> Storage<K, V> {
             publication: Publication::new(),
             revert_released: ReleaseNotification::default(),
             blocks_released: ReleaseNotification::default(),
-            revert: EbrCell::new(BTreeMap::new()),
+            revert: BptreeMap::new(),
             blocks: BptreeMap::new(),
         }
     }
@@ -50,7 +47,7 @@ impl<K: Key, V: Value> Storage<K, V> {
         );
         let predecessor = self.publication.capture();
         // Clear revert
-        revert.get_mut().clear();
+        revert.clear();
         Block::new(
             revert,
             blocks,
@@ -82,15 +79,16 @@ impl<K: Key, V: Value> Storage<K, V> {
                 .with_acquisition_unwind_notification(|| self.blocks.write()),
         );
         let predecessor = self.publication.capture();
-        {
-            let revert = core::mem::take(revert.get_mut());
-            for (key, value) in revert {
-                match value {
-                    None => blocks.remove(&key),
-                    Some(value) => blocks.insert(key, value),
-                };
-            }
+        // The committed undo tree may still be retained by snapshots. Copy its
+        // preimages into the new current generation before clearing this writer;
+        // never move values from nodes shared with an original reader.
+        for (key, value) in revert.iter() {
+            match value {
+                None => blocks.remove(key),
+                Some(value) => blocks.insert(key.clone(), value.clone()),
+            };
         }
+        revert.clear();
         Block::new(
             revert,
             blocks,
@@ -112,7 +110,7 @@ impl<K: Key, V: Value> FromIterator<(K, V)> for Storage<K, V> {
             publication: Publication::new(),
             revert_released: ReleaseNotification::default(),
             blocks_released: ReleaseNotification::default(),
-            revert: EbrCell::new(BTreeMap::new()),
+            revert: BptreeMap::new(),
             blocks: iter.into_iter().collect(),
         }
     }
@@ -254,7 +252,7 @@ pub struct TouchedEntry<'a, K: Key, V: Value> {
 /// Replacement semantics are already staged by the original block. Publication
 /// reacquires and authenticates that same current/undo pair without rebuilding it.
 pub struct Detached<K: Key, V: Value, Admission> {
-    revert: EbrCellOwned<BTreeMap<K, Option<V>>>,
+    revert: BptreeMapOwned<K, Option<V>>,
     blocks: BptreeMapOwned<K, V>,
     // Release metadata admission after the original successors and their pins.
     metadata: DetachedMetadata<Admission>,
@@ -346,11 +344,13 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
         let wait = target.revert_released.observe();
         let revert = match target.revert.try_write_owned(revert) {
             Ok(writer) => target.revert_released.poisoning_guard(writer),
-            Err(revert) => {
-                let error = if target.revert.is_poisoned() {
-                    PublicationPreparationError::Poisoned
-                } else {
-                    PublicationPreparationError::after_failed_acquisition(wait)
+            Err((revert, error)) => {
+                let error = match error {
+                    OwnedWriteError::Busy => {
+                        PublicationPreparationError::after_failed_acquisition(wait)
+                    }
+                    OwnedWriteError::Poisoned => PublicationPreparationError::Poisoned,
+                    OwnedWriteError::Changed => PublicationPreparationError::Changed,
                 };
                 return Err((
                     Self {
@@ -406,7 +406,7 @@ impl<K: Key, V: Value, Admission> Detached<K, V, Admission> {
 /// Drop abandons them without publication; abort returns the original owners.
 #[must_use = "preparation must be published or aborted by its aggregate owner"]
 pub struct PreparedPublication<'target, K: Key, V: Value, Admission, Installation> {
-    revert: ReleaseGuard<'target, EbrCellWriteTxn<'target, BTreeMap<K, Option<V>>>>,
+    revert: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, Option<V>>>,
     blocks: ReleaseGuard<'target, BptreeMapWriteTxn<'target, K, V>>,
     publication: &'target Publication,
     metadata: DetachedMetadata<Admission>,
@@ -476,7 +476,7 @@ mod block {
     use super::*;
     /// Batched update to the storage that can be reverted later
     pub struct Block<'store, K: Key, V: Value> {
-        pub(crate) revert: ReleaseGuard<'store, EbrCellWriteTxn<'store, BTreeMap<K, Option<V>>>>,
+        pub(crate) revert: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, Option<V>>>,
         pub(crate) blocks: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, V>>,
         pub(super) dirty: bool,
         pub(super) publication: &'store Publication,
@@ -497,7 +497,7 @@ mod block {
         }
 
         pub(super) fn new(
-            revert: ReleaseGuard<'store, EbrCellWriteTxn<'store, BTreeMap<K, Option<V>>>>,
+            revert: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, Option<V>>>,
             blocks: ReleaseGuard<'store, BptreeMapWriteTxn<'store, K, V>>,
             dirty: bool,
             publication: &'store Publication,
@@ -583,7 +583,7 @@ mod block {
             })
         }
         /// Read-only access to the block revert map (keys touched in this block).
-        pub fn revert_map(&self) -> &BTreeMap<K, Option<V>> {
+        pub fn revert_map(&self) -> &BptreeMapWriteTxn<'store, K, Option<V>> {
             &self.revert
         }
         /// Read the value that existed before this block's first mutation of `key`.
@@ -632,22 +632,26 @@ mod block {
             let revert = &mut self.revert;
             self.blocks.get_mut(key).inspect(|value| {
                 *dirty = true;
-                revert
-                    .entry(key.clone())
-                    .or_insert_with(|| Some((*value).clone()));
+                if !revert.contains_key(key) {
+                    revert.insert(key.clone(), Some((*value).clone()));
+                }
             })
         }
         /// Insert key value into the storage
         pub fn insert(&mut self, key: K, value: V) -> Option<V> {
             let prev_value = self.blocks.insert(key.clone(), value);
-            self.revert.entry(key).or_insert_with(|| prev_value.clone());
+            if !self.revert.contains_key(&key) {
+                self.revert.insert(key, prev_value.clone());
+            }
             self.dirty = true;
             prev_value
         }
         /// Remove key value from storage
         pub fn remove(&mut self, key: K) -> Option<V> {
             let prev_value = self.blocks.remove(&key);
-            self.revert.entry(key).or_insert_with(|| prev_value.clone());
+            if !self.revert.contains_key(&key) {
+                self.revert.insert(key, prev_value.clone());
+            }
             if prev_value.is_some() {
                 self.dirty = true;
             }
@@ -744,7 +748,9 @@ mod block {
         /// Apply aggregated changes of [`Transaction`] to the [`Block`]
         pub fn apply(mut self) {
             for (key, value) in core::mem::take(&mut self.revert) {
-                self.block.revert.entry(key).or_insert(value);
+                if !self.block.revert.contains_key(&key) {
+                    self.block.revert.insert(key, value);
+                }
             }
             self.applied = true;
         }

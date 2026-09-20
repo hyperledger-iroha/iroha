@@ -416,7 +416,7 @@ fn acquisition_unwind_notifies_after_raw_lock_release_without_a_published_guard(
 }
 
 #[test]
-fn storage_first_undo_clone_panic_wakes_an_already_registered_retry() {
+fn storage_revert_preimage_clone_panic_wakes_an_already_registered_retry() {
     use std::sync::{Barrier, atomic::AtomicBool};
 
     #[derive(Debug)]
@@ -431,7 +431,7 @@ fn storage_first_undo_clone_panic_wakes_an_already_registered_retry() {
             if self.armed.swap(false, Ordering::SeqCst) {
                 self.entered.wait();
                 self.finish.wait();
-                panic!("first undo clone failed while a retry was waiting");
+                panic!("revert preimage clone failed while a retry was waiting");
             }
             Self {
                 value: self.value,
@@ -460,13 +460,15 @@ fn storage_first_undo_clone_panic_wakes_an_already_registered_retry() {
     armed.store(true, Ordering::SeqCst);
     std::thread::scope(|scope| {
         let failing = scope.spawn(|| {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(target.block())))
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                drop(target.block_and_revert())
+            }))
         });
         entered.wait();
         let (journal, error) = original
             .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
             .err()
-            .expect("raw undo writer remains held during its clone");
+            .expect("original undo writer remains held during revert preimage cloning");
         let mut wait = busy(error);
         let wake = Arc::new(WakeCount::default());
         assert!(poll(&mut wait, &wake).is_pending());

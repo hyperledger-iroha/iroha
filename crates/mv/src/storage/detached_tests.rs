@@ -95,7 +95,10 @@ fn replacement_mode_retains_discarded_tip_only_changes_and_real_undo() {
     );
     writers_are_free(&storage);
     assert_eq!(storage.view().get(&1), Some(&11));
-    assert_eq!(storage.snapshot().revert_map(), before.revert_map());
+    assert_eq!(
+        storage.snapshot().revert_map().iter().collect::<Vec<_>>(),
+        before.revert_map().iter().collect::<Vec<_>>()
+    );
     assert!(!journal.matches_block_predecessor(&storage.block()));
     let mut actual_replacement = storage.block_and_revert();
     assert!(journal.matches_block_predecessor(&actual_replacement));
@@ -118,8 +121,13 @@ fn replacement_mode_retains_discarded_tip_only_changes_and_real_undo() {
     assert_eq!(storage.view().get(&2), Some(&20));
     assert_eq!(storage.view().get(&3), None);
     assert_eq!(
-        storage.snapshot().revert_map(),
-        &BTreeMap::from([(1, Some(10))])
+        storage
+            .snapshot()
+            .revert_map()
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([(1, Some(10))])
     );
     assert_eq!(before.current().get(&1), Some(&11));
     assert_eq!(before.current().get(&2), None);
@@ -161,8 +169,13 @@ fn direct_insert_and_reverted_predecessor_cannot_reuse_original_identity() {
     assert!(!journal.matches_current(&storage));
     storage.insert(1, 11);
     assert_eq!(
-        storage.snapshot().revert_map(),
-        &BTreeMap::from([(1, Some(10))])
+        storage
+            .snapshot()
+            .revert_map()
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([(1, Some(10))])
     );
     assert!(
         !journal.matches_current(&storage),
@@ -311,7 +324,11 @@ fn snapshot_json_and_history_projection_create_new_owners_with_exact_images() {
             .iter()
             .map(|(key, value)| (*key, *value))
             .collect(),
-        snapshot.revert_map().clone(),
+        snapshot
+            .revert_map()
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect(),
     );
     drop(snapshot);
     let projected = storage.history().project(|value| Some(*value));

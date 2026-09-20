@@ -4,12 +4,6 @@ use iroha_data_model::NetworkId;
 use iroha_model_base::peer::PeerId;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
-/// Stable HTTP 409 code for a requested, applied, or reducer tip height mismatch.
-pub const BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE: &str =
-    "bridge_finality_attestation_tip_mismatch";
-/// Maximum complete encoded tip-mismatch envelope accepted by native clients.
-pub const BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES: usize = 4096;
-
 /// Exact request and observed heights for retrying one finality attestation snapshot.
 ///
 /// This unsigned progress observation is not proof of finality. Clients must retain
@@ -137,10 +131,12 @@ mod tests {
             .unwrap(),
             value
         );
-        let details = crate::ErrorDetails {
-            bridge_finality_attestation_tip_mismatch: Some(value),
-            ..crate::ErrorDetails::default()
+        let failure = crate::bridge_attestation::FinalityAttestationFailure {
+            challenge: value.challenge,
+            height: value.requested_height,
+            reason: crate::bridge_attestation::FinalityAttestationFailureReason::TipChanged,
+            tip_mismatch: Some(value),
         };
-        assert!(!details.is_empty());
+        assert!(failure.matches(10, [7; 32], &node_id, network_id));
     }
 }

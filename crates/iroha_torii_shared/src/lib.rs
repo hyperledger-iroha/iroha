@@ -13,6 +13,8 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 pub mod account_capabilities;
 /// Typed account-alias absence selectors and planning error codes.
 pub mod aliases;
+/// Typed non-success observations for challenge-bound bridge finality.
+pub mod bridge_attestation;
 /// Exact progress bindings for challenge-bound finality attestation reads.
 pub mod bridge_finality;
 /// Canonical bounded signing preimage shared by request-witness signers and verifiers.
@@ -706,11 +708,10 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub pipeline_transaction_status_not_found: Option<PipelineTransactionStatusNotFoundV1>,
-    /// Exact height snapshot mismatch for a challenge-bound finality attestation.
+    /// Closed request-bound failure from the finality attestation endpoint.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub bridge_finality_attestation_tip_mismatch:
-        Option<bridge_finality::BridgeFinalityAttestationTipMismatchV1>,
+    pub finality_attestation_failure: Option<bridge_attestation::FinalityAttestationFailure>,
     /// Last observed transaction status when a finality wait failed.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -761,7 +762,7 @@ impl ErrorDetails {
             && self.entrypoint_hash.is_none()
             && self.tx_hash.is_none()
             && self.pipeline_transaction_status_not_found.is_none()
-            && self.bridge_finality_attestation_tip_mismatch.is_none()
+            && self.finality_attestation_failure.is_none()
             && self.last_status.is_none()
             && self.hint.is_none()
             && self.axt.is_none()

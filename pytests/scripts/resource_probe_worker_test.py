@@ -21,24 +21,11 @@ import resource_process as process
 import kura_resource_metrics as metrics
 from resource_evidence_budget import (
     CaptureGeometry, CapturePolicy, FileBudget, RunBudget, StaticFile, admit_experiment,
-    run_budget_inputs, select_run_budget, run_budget_sha256, canonical_run_budget_bytes,
+    run_budget_inputs, select_run_budget, run_budget_sha256, canonical_run_budget_bytes, RUN_FILE_FIELDS,
 )
 
-POLICY = CapturePolicy(status_body_bytes=4096, metrics_body_bytes=16 * 1024)
+from resource_probe_worker_fixture import POLICY, allocation, configured, observation
 
-
-def allocation(count=4, policy=POLICY):
-    geometry = CaptureGeometry(count, 2_000_000, 40_000_000, 2_000_000)
-    runs = tuple(RunBudget(pair, variant, geometry,
-                           *(FileBudget(f'pair{pair}.{variant}.{role}', 4096)
-                             for role in ('journal', 'trace', 'proof', 'log', 'raw')),
-                           support=())
-                 for pair in range(1, 6) for variant in ('one_lane', 'four_lane'))
-    experiment = admit_experiment(policy=policy, runs=runs,
-                                 static_files=(StaticFile('worker_fixture', Path(__file__).stat().st_size),),
-                                 manifest=FileBudget('manifest', 4096), report=FileBudget('report', 4096),
-                                 other_control=())
-    return select_run_budget(experiment, 1, 'one_lane')
 
 
 def admission_reply(admitted):
@@ -51,35 +38,6 @@ def admission_reply(admitted):
                 'trace': asdict(admitted.run.transaction_trace)}}
 
 
-def configured(result=None, collect=None):
-    result = result or observation()
-    return worker.ConfiguredProbe(SimpleNamespace(collect=collect or (lambda _: result)),
-                                  allocation(len(result.peers), result.capture_policy))
-
-
-def observation(count=4, available=True):
-    rows = ['iroha_kura_resource_available 1', 'iroha_kura_resource_status{reason="available"} 1',
-            'iroha_kura_resource_generation 1', 'iroha_kura_resource_fault_count 0']
-    fields = ('resident_associations', 'persisted_entries', 'index_bytes', 'temporary_index_bytes', 'storage_bytes')
-    for family in metrics.FAMILIES:
-        rows.extend(f'iroha_kura_resource_{field}{{family="{family}"}} 0' for field in fields)
-    rows.extend(f'iroha_kura_resource_{field}_sum 0' for field in fields)
-    rows.append('iroha_kura_resource_represented_entries 0')
-    raw = ('\n'.join(rows) + '\n').encode() if available else (
-        b'iroha_kura_resource_available 0\niroha_kura_resource_status{reason="busy"} 1\n')
-    kura = metrics.parse_kura_resource_metrics(raw)
-    status = b'{"queue_size":5,"other":"public diagnostics"}'
-    def body(route, raw, content_type):
-        return probe.HttpProvenance(route, hashlib.sha256(raw).hexdigest(), len(raw), content_type, raw)
-    peers = []
-    for index in range(count):
-        sample = process.ProcessSample(process.ProcessIdentity(100 + index, 501, 1, 0, 1,
-                                       '01' * 16, 'a' * 64), 1024)
-        peers.append(probe.PeerObservation(f'peer{index}', 5, body('/status', status, 'application/json'),
-                                          body('/metrics', raw, 'text/plain'), kura, sample, sample))
-    return probe.ProbeObservation(tuple(peers), 1000000, count * (len(raw) + len(status) + 100),
-                                  count * 1024, count * 1024, count * 5, 5,
-                                  probe.InventoryAggregate(0, 0) if available else None, POLICY)
 
 
 def request(kind, sequence, **extra):
@@ -436,12 +394,14 @@ def test_actual_persistent_python_pipe_uses_same_worker_state_machine(tmp_path):
     path = capture_dir(tmp_path)
     harness = tmp_path / 'synthetic_worker.py'
     harness.write_text('import sys\nfrom pathlib import Path\n'
-                      f'sys.path.insert(0, {str(Path(__file__).parent)!r})\n'
-                      'from resource_probe_worker_test import worker, configured\n'
+                      f'sys.path[:0] = {[str(ROOT / "scripts/nexus"), str(Path(__file__).parent)]!r}\n'
+                      'from resource_probe_worker_fixture import worker, configured\n'
+                      'assert sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode\n'
+                      'assert "pytest" not in sys.modules and "site" not in sys.modules\n'
                       f'raise SystemExit(worker.run_worker(Path("/unused"), Path({str(path)!r}), '
                       'sys.stdin.buffer, sys.stdout.buffer, '
                       'probe_builder=lambda *_: configured()))\n')
-    result = subprocess.run([sys.executable, str(harness)],
+    result = subprocess.run([sys.executable, '-I', '-B', '-S', str(harness)],
                             input=encoded(request('admit', 0))+encoded(request('preflight', 0))+encoded(request('sample', 1))+encoded(request('finish', 2)),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, check=False)
     assert result.returncode == 0
@@ -957,3 +917,39 @@ def test_receipt_encoding_failure_poisoned_admission_still_permits_only_finish(t
     assert rows[0] == {'schema': worker.RESPONSE_SCHEMA, 'kind': 'admit', 'sequence': 0, 'outcome': 'failed', 'admission': None}
     assert rows[1]['outcome'] == 'complete' and rows[1]['manifest'] is None
     assert b'secret' not in output.getvalue() and not path.exists()
+
+
+def test_actual_rust_owned_fixture_is_full_fixed_budget_with_exact_worker_projection():
+    fixture_root = ROOT / 'crates/iroha_cli/src/transaction_load/allocation/fixtures'
+    public = (fixture_root / 'public-run-budget.json').read_bytes()
+    terminal = (fixture_root / 'admission.jsonl').read_bytes()
+    from resource_evidence_budget import parse_run_budget
+    admitted = parse_run_budget(json.loads(public))
+    assert public == canonical_run_budget_bytes(admitted)
+    assert len(admitted.experiment.runs) == 10
+    assert sum(len(run.files) for run in admitted.experiment.runs) == 150
+    configured_probe = worker.ConfiguredProbe(SimpleNamespace(collect=lambda _: None), admitted)
+    with ExitStack() as owners:
+        bound = worker._admit(Path('/unused'), owners, 1000, lambda *_: configured_probe)
+        actual = worker._admission_response(bound)
+    assert actual == terminal
+    reply = json.loads(actual)
+    assert reply == admission_reply(admitted)
+    assert set(reply['admission']) == {'schema', 'budget_sha256', 'pair_index', 'variant',
+                                       'geometry', 'journal', 'trace'}
+    assert reply['admission']['budget_sha256'] == hashlib.sha256(public).hexdigest()
+    assert reply['admission']['journal'] == {'label': 'pair1.one_lane.journal', 'max_bytes': 4096}
+    assert reply['admission']['trace'] == {'label': 'pair1.one_lane.trace', 'max_bytes': 8192}
+
+
+@pytest.mark.parametrize('field', RUN_FILE_FIELDS[5:])
+def test_worker_rechecks_non_writer_allocations_after_reply(field):
+    admitted = allocation()
+    configured_probe = worker.ConfiguredProbe(SimpleNamespace(collect=lambda _: None), admitted)
+    with ExitStack() as owners:
+        bound = worker._admit(Path('/unused'), owners, 1000, lambda *_: configured_probe)
+        assert worker._admission_response(bound) == worker._encoded(admission_reply(admitted), worker.MAX_FRAME_BYTES - 1) + b'\n'
+        file = getattr(admitted.run, field)
+        object.__setattr__(file, 'max_bytes', file.max_bytes + 1)
+        with pytest.raises(probe.ProbeError, match='resource_budget_invalid|resource_budget_changed'):
+            worker._admission_response(bound)

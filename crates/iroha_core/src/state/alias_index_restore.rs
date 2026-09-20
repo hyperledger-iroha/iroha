@@ -31,7 +31,7 @@ fn inverse<K: mv::Key, V: mv::Value, A: mv::Key + std::fmt::Display>(
         }
     }
     let mut touched = BTreeSet::new();
-    for (key, prior) in history.revert_map() {
+    for (key, prior) in history.revert_map().iter() {
         for value in [prior.as_ref(), history.current().get(key)]
             .into_iter()
             .flatten()

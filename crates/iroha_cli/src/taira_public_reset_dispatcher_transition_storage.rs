@@ -346,7 +346,7 @@ fn copy_exact(source: &Path, target: &Path, pin: &Pin) -> Result<()> {
         .write(true)
         .create(true)
         .mode(pin.mode)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
         .open(&staged)?;
     let meta = output.metadata()?;
     need(
@@ -406,7 +406,7 @@ fn bytes_exact(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
         need(bytes.starts_with(&prefix), "partial record prefix differs")?;
         let mut output = OpenOptions::new()
             .append(true)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
             .open(&temporary)?;
         need(
             output.metadata()?.ino() == snapshot.ino && output.metadata()?.dev() == snapshot.dev,
@@ -419,7 +419,7 @@ fn bytes_exact(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
             .write(true)
             .create_new(true)
             .mode(mode)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits())
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
             .open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -564,7 +564,7 @@ fn operation_stage(root: &Path) -> Result<PathBuf> {
 }
 fn ownership_intent(root: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(json::to_vec(
-        &norito::json!({"schema":"iroha.taira.dispatcher-transition-ownership.v1","operation_root":root.to_string_lossy().as_ref(),"staging_root":operation_stage(root)?.to_string_lossy().as_ref(),"plan_sha256":sha256_hex(bytes)}),
+        &norito::json!({"schema": ("iroha.taira.dispatcher-transition-ownership.v1"), "operation_root": (root.to_string_lossy().as_ref()), "staging_root": (operation_stage(root)?.to_string_lossy().as_ref()), "plan_sha256": (sha256_hex(bytes))}),
     )?)
 }
 fn verify_ownership(root: &Path, bytes: &[u8]) -> Result<()> {

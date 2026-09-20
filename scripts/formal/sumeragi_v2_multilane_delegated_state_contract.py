@@ -235,6 +235,17 @@ DELEGATED_STATE_SOURCE_RELATIVES = (
 )
 
 
+# Shared wrappers and helpers use the same complete semantic inventory as the
+# State merge contract; each validator retains its own operation-order checks.
+from sumeragi_v2_multilane_state_merge_contract import STATE_MERGE_BINDINGS
+
+_STATE_MERGE_TOKENS = {symbol: tokens for _, _, _, symbol, tokens in STATE_MERGE_BINDINGS}
+DELEGATED_STATE_BINDINGS = tuple(
+    (symbol, _STATE_MERGE_TOKENS.get(symbol, tokens))
+    for symbol, tokens in DELEGATED_STATE_BINDINGS
+)
+
+
 def validate_delegated_state_contract(
     root: Path, models: Any, errors: list[str], rust_binding_item: Callable,
 ) -> None:
@@ -259,7 +270,7 @@ def validate_delegated_state_contract(
                 if token in DELEGATED_STATE_DIAGNOSTIC_TOKENS:
                     if token not in item:
                         errors.append(f"delegated State {symbol} missing reviewed diagnostic {token!r}")
-                elif _code(token) not in items[symbol]:
+                elif _code(token).rstrip(",") not in items[symbol]:
                     errors.append(f"delegated State {symbol} missing executable relation {token!r}")
 
     def require(symbol: str, *relations: str) -> None:

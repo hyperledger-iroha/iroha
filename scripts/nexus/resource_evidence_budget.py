@@ -30,6 +30,11 @@ MAX_FILE_BYTES = 256 * MIB
 MAX_TOTAL_BYTES = 2 * 1024 * MIB
 _VARIANTS = ("one_lane", "four_lane")
 _LABEL = re.compile(r"[a-z][a-z0-9_.-]{0,127}")
+RUN_FILE_FIELDS = (
+    "collector_journal", "transaction_trace", "canonical_proof", "run_receipt", "raw_run",
+    "native_finality", "native_queries", "native_facts", "native_request", "native_bundle",
+    "genesis_manifest", "signed_genesis", "genesis_context", "genesis_network_record", "genesis_anchors",
+)
 
 
 class BudgetError(ValueError):
@@ -172,10 +177,11 @@ class FileBudget:
 
 @dataclass(frozen=True, slots=True)
 class RunBudget:
-    """One mandatory sampled run with all dynamic artifact allocations explicit.
+    """One mandatory sampled run with exactly fifteen public file allocations.
 
-    Additional support files must be individually listed, never hidden in a
-    multi-file allocation. Empty support is an explicit declaration of none.
+    The canonical proof is one of six native outputs and is counted once. Five
+    public genesis copies are separately charged from their private originals;
+    this evidence ledger does not admit the private runtime or mutable stores.
     """
 
     pair_index: int
@@ -184,24 +190,30 @@ class RunBudget:
     collector_journal: FileBudget
     transaction_trace: FileBudget
     canonical_proof: FileBudget
-    trial_log: FileBudget
+    run_receipt: FileBudget
     raw_run: FileBudget
-    support: tuple[FileBudget, ...]
+    native_finality: FileBudget
+    native_queries: FileBudget
+    native_facts: FileBudget
+    native_request: FileBudget
+    native_bundle: FileBudget
+    genesis_manifest: FileBudget
+    signed_genesis: FileBudget
+    genesis_context: FileBudget
+    genesis_network_record: FileBudget
+    genesis_anchors: FileBudget
 
     def __post_init__(self) -> None:
         _integer(self.pair_index, 1, PAIR_COUNT)
         _require(type(self.variant) is str and self.variant in _VARIANTS, "variant_invalid")
         _require(type(self.geometry) is CaptureGeometry, "geometry_type_invalid")
-        for item in (self.collector_journal, self.transaction_trace, self.canonical_proof,
-                     self.trial_log, self.raw_run):
-            _require(type(item) is FileBudget, "artifact_budget_required")
-        _tuple(self.support, FileBudget, MAX_CONTROL_FILES)
+        for name in RUN_FILE_FIELDS:
+            _require(type(getattr(self, name)) is FileBudget, "artifact_budget_required")
 
     @property
     def files(self) -> tuple[FileBudget, ...]:
         """Complete individually bounded dynamic control files for this run."""
-        return (self.collector_journal, self.transaction_trace, self.canonical_proof,
-                self.trial_log, self.raw_run, *self.support)
+        return tuple(getattr(self, name) for name in RUN_FILE_FIELDS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,14 +428,11 @@ def parse_run_budget(value: dict) -> PerRunResourceBudget:
                                     ("status_body_bytes", "metrics_body_bytes")))
     runs = []
     for row in _array(experiment["runs"], RUN_COUNT):
-        _object(row, ("pair_index", "variant", "geometry", "collector_journal", "transaction_trace",
-                      "canonical_proof", "trial_log", "raw_run", "support"))
+        _object(row, ("pair_index", "variant", "geometry", *RUN_FILE_FIELDS))
         geometry = CaptureGeometry(**_object(row["geometry"],
                                              ("peers", "interval_ns", "measurement_ns", "drain_ns")))
         runs.append(RunBudget(row["pair_index"], row["variant"], geometry,
-            *(_file_input(row[name]) for name in ("collector_journal", "transaction_trace", "canonical_proof",
-                                                 "trial_log", "raw_run")),
-            tuple(_file_input(item) for item in _array(row["support"], MAX_CONTROL_FILES))))
+            *(_file_input(row[name]) for name in RUN_FILE_FIELDS)))
     static = tuple(StaticFile(**_object(item, ("label", "size_bytes")))
                    for item in _array(experiment["static_files"], MAX_CONTROL_FILES))
     admitted = admit_experiment(policy=policy, runs=tuple(runs), static_files=static,
@@ -441,8 +450,7 @@ def run_budget_inputs(allocation: PerRunResourceBudget) -> dict:
     selected = validate_run_budget(allocation)
     experiment = selected.experiment
     return {"experiment": {"capture_policy": asdict(selected.policy),
-            "runs": [asdict(run) | {"support": [asdict(item) for item in run.support]}
-                     for run in experiment.runs],
+            "runs": [asdict(run) for run in experiment.runs],
             "static_files": [asdict(item) for item in experiment.static_files],
             "manifest": asdict(experiment.control_budgets[0]),
             "report": asdict(experiment.control_budgets[1]),

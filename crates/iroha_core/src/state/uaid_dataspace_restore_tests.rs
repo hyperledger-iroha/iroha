@@ -68,7 +68,11 @@ fn cuts(
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect(),
-        snapshot.revert_map().clone(),
+        snapshot
+            .revert_map()
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect(),
     )
 }
 

@@ -22,6 +22,18 @@ def command(index, plan, tx_hash, raw):
     return rows
 
 
+def observation_events(index, final):
+    """Independent success diagnostics for an explicitly declared synthetic final."""
+    tx_hash = final['hash']
+    return [dict(event='accepted', index=index, hash=tx_hash, offset_ns=final['acknowledgment_offset_ns']),
+            dict(event='status', index=index, offset_ns=final['applied_offset_ns'], expected_hash=tx_hash,
+                 hash_matches=True, global_scope_matches=True, resolved_from='state', status='Applied',
+                 block_height=final['block_height']),
+            dict(event='local_status', index=index, offset_ns=final['local_applied_offset_ns'], expected_hash=tx_hash,
+                 hash_matches=True, local_scope_matches=True, resolved_from='state', status='Applied',
+                 block_height=final['local_block_height'])]
+
+
 def add_retention(events):
     """Construct truthful ordering once, never repair a mutation at save/replay."""
     events = copy.deepcopy(events)
@@ -48,4 +60,6 @@ def add_retention(events):
         timed.append((prepared, len(events) + 2 * index, group))
         timed.append((offer, len(events) + 2 * index + 1,
                       [dict(event='offer', index=index, hash=tx_hash, offset_ns=offer)]))
+        for event_index, event in enumerate(observation_events(index, row)):
+            timed.append((event['offset_ns'], 2 * len(events) + 3 * index + event_index, [event]))
     return prefix + [row for _, _, group in sorted(timed) for row in group] + tail

@@ -1651,7 +1651,7 @@ def probe_framework_python_runtime(
     expected_dynload = expected_stdlib / "lib-dynload"
     result = _macho_run(
         [
-            str(executable), "-I", "-S", "-c", probe_code,
+            str(executable), "-I", "-B", "-S", "-c", probe_code,
             str(executable), str(runtime_root), str(expected_zip),
             str(expected_stdlib), str(expected_dynload),
         ],
@@ -2783,12 +2783,9 @@ def run(
     parser.add_argument("--bootstrap-evidence", type=Path)
     parser.add_argument("--source-manifest-sha256")
     parser.add_argument("--candidate-root", type=Path)
-    parser.add_argument("--scaling-evidence-manifest", type=Path)
+    parser.add_argument("--scaling-execution-record", type=Path)
     parser.add_argument("--expected-signer-fingerprint")
-    parser.add_argument("--expected-scaling-trial-harness-sha256")
-    parser.add_argument("--expected-scaling-configuration-sha256")
-    parser.add_argument("--expected-scaling-irohad-sha256")
-    parser.add_argument("--expected-scaling-iroha-cli-sha256")
+    parser.add_argument("--expected-scaling-execution-sha256")
     parser.add_argument("--validator-exit-status", type=int)
     parser.add_argument("--cleanup-base", type=Path)
     parser.add_argument("--cleanup-prefix")
@@ -2819,12 +2816,9 @@ def run(
                     args.sdk_dependency_inventory,
                     args.sdk_work_final_inventory, args.invocation_root,
                     args.bootstrap_evidence, args.source_manifest_sha256,
-                    args.candidate_root, args.scaling_evidence_manifest,
+                    args.candidate_root, args.scaling_execution_record,
                     args.expected_signer_fingerprint,
-                    args.expected_scaling_trial_harness_sha256,
-                    args.expected_scaling_configuration_sha256,
-                    args.expected_scaling_irohad_sha256,
-                    args.expected_scaling_iroha_cli_sha256,
+                    args.expected_scaling_execution_sha256,
                     args.validator_exit_status, args.cleanup_base,
                     args.cleanup_prefix,
                 ))
@@ -2862,12 +2856,9 @@ def run(
                     args.bundle_source, args.bundle_root,
                     args.invocation_root, args.bootstrap_evidence,
                     args.source_manifest_sha256, args.candidate_root,
-                    args.scaling_evidence_manifest,
+                    args.scaling_execution_record,
                     args.expected_signer_fingerprint,
-                    args.expected_scaling_trial_harness_sha256,
-                    args.expected_scaling_configuration_sha256,
-                    args.expected_scaling_irohad_sha256,
-                    args.expected_scaling_iroha_cli_sha256,
+                    args.expected_scaling_execution_sha256,
                     args.validator_exit_status, args.cleanup_base,
                     args.cleanup_prefix,
                 ))
@@ -2963,12 +2954,9 @@ def run(
                 args.bootstrap_evidence,
                 args.source_manifest_sha256,
                 args.candidate_root,
-                args.scaling_evidence_manifest,
+                args.scaling_execution_record,
                 args.expected_signer_fingerprint,
-                args.expected_scaling_trial_harness_sha256,
-                args.expected_scaling_configuration_sha256,
-                args.expected_scaling_irohad_sha256,
-                args.expected_scaling_iroha_cli_sha256,
+                args.expected_scaling_execution_sha256,
             )):
                 raise error_type("retained release publication lacks required inputs")
             seal_release_result(
@@ -2976,12 +2964,9 @@ def run(
                 args.bootstrap_evidence,
                 args.source_manifest_sha256,
                 args.candidate_root,
-                args.scaling_evidence_manifest,
+                args.scaling_execution_record,
                 args.expected_signer_fingerprint,
-                args.expected_scaling_trial_harness_sha256,
-                args.expected_scaling_configuration_sha256,
-                args.expected_scaling_irohad_sha256,
-                args.expected_scaling_iroha_cli_sha256,
+                args.expected_scaling_execution_sha256,
             )
         elif args.final:
             if args.cargo_home is None or args.inventory is None:

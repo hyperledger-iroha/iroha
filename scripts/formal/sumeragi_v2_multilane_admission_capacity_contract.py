@@ -260,6 +260,19 @@ BINDINGS += (
     )),
 )
 
+# Capacity admission and canonical retry share this exact production owner.
+from sumeragi_v2_multilane_queue_plan_contract import QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS
+
+_QUEUE_RETRY_OWNER = "execute_incoming_torii_proxy_request_with_admission"
+_QUEUE_RETRY_TOKENS = next(
+    tokens for path, kind, symbol, tokens in QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS
+    if (path, kind, symbol) == (TORII, "fn", _QUEUE_RETRY_OWNER)
+)
+BINDINGS = tuple(
+    (path, kind, symbol, _QUEUE_RETRY_TOKENS if symbol == _QUEUE_RETRY_OWNER else tokens)
+    for path, kind, symbol, tokens in BINDINGS
+)
+
 # Existing registry bindings retain this owner's full persistence obligations.
 EXTRA_ITEMS = ((TORII, "fn", PERSIST), (TORII, "fn", AGGREGATOR), (RUNNER, "fn", "candidate_attachments"))
 SOURCE_RELATIVES = (

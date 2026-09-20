@@ -45,6 +45,28 @@ returns the original successor and input unchanged. Unrestricted mutation stays
 unavailable. Unused prepaid remainder returns before each handoff while allocated
 charges remain in their owners.
 
+An attached prepaid writer can lend an exclusive transaction checkpoint. A new
+private generation tag forces edits to copy parent nodes; nested guards resolve
+in LIFO order. The checkpoint retains the parent's original tracking allocations
+when they grow. Abort restores the exact root, length, generation and buffers,
+then frees only child allocations, without allocating or reserving rollback
+credit. Apply transfers saved buffer ownership to its parent and keeps the edits
+private until the original writer commits. Caught mutation or cleanup panic
+makes that cursor unusable, including for reading, detaching and publishing.
+Borrowed values and snapshots cannot outlive or mutate their checkpoint.
+This engine operation still needs integration with Storage's transaction owner.
+
+Production Storage now retains both current and block-undo maps in this same
+B+tree engine. Block opening clears a private undo root without deep-cloning the
+previous undo values. Snapshots retain their original reader generation; detached
+publication retains both original cursors and authenticates both bases on retry.
+Replacing the previous block copies its required preimages from the retained
+undo reader before clearing the new undo writer. Snapshot/history/JSON consumers
+borrow native entries directly instead of constructing a compatibility image.
+The transaction-local standard map and its inverse-edit abort remain separate
+unfinished allocation boundaries; replacing the block-undo owner does not fund
+the current/undo edit pair or permit production prepaid mutation.
+
 Current production MV Storage still instantiates Untracked maps. Initial root
 and reader control blocks now carry exact original charges; native mutex/runtime
 storage remains explicitly outside constructor admission. Real model payload

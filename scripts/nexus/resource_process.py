@@ -18,8 +18,12 @@ import sys
 
 MAX_EXECUTABLE_BYTES = 4 * 1024**3
 MAX_LOAD_COMMAND_BYTES = 16 * 1024**2
+MAX_EXECUTABLE_PATH_BYTES = 4096
+MAX_EXECUTABLE_PATH_COMPONENTS = 64
 MAX_EXACT_INTEGER = 1 << 53
 MAX_PEERS = 64
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+_FILE_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
 class ProcessObservationError(ValueError):
@@ -32,8 +36,14 @@ def _require(condition: bool, message: str) -> None:
 
 
 def _file_identity(info: os.stat_result) -> tuple[int, ...]:
-    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size,
             info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _directory_identity(info: os.stat_result) -> tuple[int, ...]:
+    """Pin directory ownership and identity while allowing unrelated children."""
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
 
 
 def _pread(fd: int, size: int, offset: int, limit: int) -> bytes:
@@ -51,6 +61,7 @@ def _thin_uuid(fd: int, offset: int, length: int, limit: int) -> bytes:
     byte_order = {b"\xcf\xfa\xed\xfe": "<", b"\xfe\xed\xfa\xcf": ">"}.get(header[:4])
     _require(byte_order is not None, "expected a 64-bit Mach-O image")
     fields = struct.unpack(byte_order + "8I", header)
+    _require(fields[3] == 2, "Mach-O slice must be MH_EXECUTE")
     count, size = fields[4], fields[5]
     _require(0 < count <= 65536 and count * 8 <= size <= MAX_LOAD_COMMAND_BYTES
              and size <= length - 32, "Mach-O load commands exceed their bound")
@@ -98,18 +109,49 @@ def _image_uuids(fd: int, length: int) -> frozenset[bytes]:
 
 
 class ExecutableImage:
-    """Retain a descriptor for an exact hashed image throughout the trial."""
+    """Retain an owned executable and its original lexical namespace.
+
+    This admits the on-disk main image, not the complete loaded runtime. Dynamic
+    libraries, shader files and their search namespaces need their own retained
+    runtime closure; neither an LC_UUID nor this file hash proves that closure.
+    """
+
+    __slots__ = ("_path", "_fd", "_chain", "_identity", "_sha256", "_uuids")
 
     def __init__(self, path: Path, expected_sha256: str):
-        _require(re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is not None,
+        _require(not hasattr(self, "_path"), "executable owner cannot be readmitted")
+        _require(type(expected_sha256) is str
+                 and re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is not None,
                  "executable digest must be canonical SHA-256")
-        self.path = path.resolve(strict=True)
-        self.fd = os.open(self.path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+        _require(type(path) is type(Path('/')) and path.anchor == '/'
+                 and str(path) == os.path.abspath(path)
+                 and 1 <= len(path.parts) - 1 <= MAX_EXECUTABLE_PATH_COMPONENTS
+                 and len(os.fsencode(path)) <= MAX_EXECUTABLE_PATH_BYTES,
+                 "executable path must be bounded absolute lexical form")
+        self._path = path
+        self._fd = -1
+        self._chain = []
         try:
+            # Like the physical bundle owner, retain each directory edge. Its
+            # semantic allocation is unrelated, so do not import that owner.
+            for part in path.parts[:-1]:
+                parent = self._chain[-1][0] if self._chain else None
+                descriptor = os.open(part, _DIRECTORY_FLAGS, dir_fd=parent)
+                try:
+                    directory = os.fstat(descriptor)
+                    _require(stat.S_ISDIR(directory.st_mode), "executable ancestor is not a directory")
+                    self._chain.append((descriptor, part, _directory_identity(directory)))
+                except BaseException:
+                    os.close(descriptor)
+                    raise
+            self._fd = os.open(path.name, _FILE_FLAGS, dir_fd=self._chain[-1][0])
             info = os.fstat(self.fd)
-            _require(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= MAX_EXECUTABLE_BYTES,
-                     "executable is not a bounded regular file")
-            self.identity = _file_identity(info)
+            _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                     and info.st_nlink == 1 and info.st_mode & stat.S_IXUSR
+                     and info.st_mode & 0o7022 == 0
+                     and 0 < info.st_size <= MAX_EXECUTABLE_BYTES,
+                     "executable is not a bounded owned single-link executable file")
+            self._identity = _file_identity(info)
             digest = hashlib.sha256()
             offset = 0
             while offset < info.st_size:
@@ -117,26 +159,64 @@ class ExecutableImage:
                 digest.update(chunk)
                 offset += len(chunk)
             _require(digest.hexdigest() == expected_sha256, "executable differs from the pinned digest")
-            self.sha256 = expected_sha256
-            self.uuids = _image_uuids(self.fd, info.st_size)
+            self._sha256 = expected_sha256
+            self._uuids = _image_uuids(self.fd, info.st_size)
             self.validate()
         except BaseException:
-            os.close(self.fd)
-            self.fd = -1
+            self.close()
             raise
+
+    @property
+    def path(self) -> Path:
+        """The original admitted lexical path; callers cannot retarget it."""
+        return self._path
+
+    @property
+    def fd(self) -> int:
+        """The retained descriptor, or minus one after controlled close."""
+        return self._fd
+
+    @property
+    def identity(self) -> tuple[int, ...]:
+        """The immutable admitted file identity; validation never refreshes it."""
+        return self._identity
+
+    @property
+    def sha256(self) -> str:
+        """The independently supplied digest matched against the original file."""
+        return self._sha256
+
+    @property
+    def uuids(self) -> frozenset[bytes]:
+        """The UUID set parsed from the same original admitted image."""
+        return self._uuids
+
+    def _validate_ancestors(self) -> None:
+        """Recheck every retained original directory and named parent edge."""
+        for index, (descriptor, name, identity) in enumerate(self._chain):
+            parent = self._chain[index - 1][0] if index else None
+            _require(_directory_identity(os.fstat(descriptor)) == identity
+                     and _directory_identity(os.stat(name, dir_fd=parent,
+                                                      follow_symlinks=False)) == identity,
+                     "pinned executable ancestor changed")
 
     def validate(self) -> None:
         """Reject replacement or mutation of the hashed file and its named entry."""
-        _require(self.fd >= 0, "executable descriptor is closed")
+        _require(self.fd >= 0 and bool(self._chain), "executable descriptor is closed")
+        self._validate_ancestors()
         _require(_file_identity(os.fstat(self.fd)) == self.identity
-                 and _file_identity(os.stat(self.path, follow_symlinks=False)) == self.identity,
+                 and _file_identity(os.stat(self.path.name, dir_fd=self._chain[-1][0],
+                                            follow_symlinks=False)) == self.identity,
                  "pinned executable file changed")
+        self._validate_ancestors()
 
     def close(self) -> None:
         """Release the retained descriptor once collection and checks finish."""
         if self.fd >= 0:
             os.close(self.fd)
-            self.fd = -1
+            self._fd = -1
+        while self._chain:
+            os.close(self._chain.pop()[0])
 
     def __enter__(self) -> ExecutableImage:
         return self

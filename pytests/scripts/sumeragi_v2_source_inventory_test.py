@@ -126,9 +126,10 @@ def test_inventory_matches_live_reviewed_rust_closure(
     assert errors == []
     assert closure is not None
     if owner == "crates/iroha_core/src/block.rs":
-        assert module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner][:3] == (
+        assert module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner][:4] == (
             "block/carrier_preparation.rs",
             "block/post_execution_tail.rs",
+            "block/parallel_account_profile_tests.rs",
             "block/post_execution_tail_tests.rs",
         )
         assert "block/output_event_tests.rs" in module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]

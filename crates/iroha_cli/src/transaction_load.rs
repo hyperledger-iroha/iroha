@@ -2,7 +2,8 @@
 //!
 //! This command writes account metadata and verifies every planned effect; deployment, routing,
 //! and the five-pair statistical gate retain their existing owners. Failed collection never
-//! publishes a passing trace or replays an ambiguous submission.
+//! publishes a passing trace or replays an ambiguous submission. Every request must also reach
+//! StateApplied on the required local observer, at the global height, within the same drain clock.
 
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -34,9 +35,11 @@ use tokio::time::Instant;
 use crate::{Run, RunContext};
 
 mod allocation;
+pub(crate) mod collect_inputs;
 mod output;
 mod resource;
 mod signed_request;
+mod terminal_receipt;
 mod workload;
 
 const NS: i64 = 1_000_000_000;
@@ -49,6 +52,26 @@ const LOGICAL_DERIVATION: &str = "sha256(seed + ':' + cohort + ':' + decimal_seq
 
 type TransactionHash = HashOf<SignedTransaction>;
 type Work<T> = FuturesUnordered<BoxFuture<'static, (usize, T)>>;
+type Polls = BinaryHeap<Reverse<(i64, usize, ObservationScope)>>;
+type ObservationResult = (
+    ObservationScope,
+    i64,
+    Result<Option<PipelineTransactionStatusResponse>>,
+);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ObservationScope {
+    Global,
+    Local,
+}
+impl ObservationScope {
+    fn text(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Local => "local",
+        }
+    }
+}
 
 /// Collect a complete scheduled transaction cohort with persistent SDK clients.
 #[derive(clap::Args, Debug)]
@@ -56,6 +79,9 @@ pub struct Args {
     /// Required resource capture process and fixed sampling geometry.
     #[command(flatten)]
     resource: resource::Args,
+    /// Fresh nonzero lowercase SHA-256-shaped identity for this exact native invocation.
+    #[arg(long)]
+    invocation_id: String,
     /// Pair index in the fixed five-pair experiment.
     #[arg(long)]
     pair_index: u8,
@@ -84,6 +110,10 @@ pub struct Args {
     /// Each nonzero cohort must contain complete pool rounds, with at most 1024 total writes per account.
     #[arg(long = "account-config", value_name = "PATH")]
     account_configs: Vec<PathBuf>,
+    /// Required client configuration for the exact peer whose stopped Kura is inspected.
+    /// Every request must be StateApplied on this peer before the original drain deadline.
+    #[arg(long, value_name = "PATH")]
+    local_observer_config: PathBuf,
     /// New strict trace path, published only after successful collection.
     #[arg(long, value_name = "PATH")]
     trace_out: PathBuf,
@@ -102,10 +132,10 @@ pub struct Args {
     /// Maximum concurrent submission requests; saturation invalidates the trial.
     #[arg(long, default_value_t = 256)]
     max_submissions: usize,
-    /// Maximum offered requests awaiting acknowledgment or Applied.
+    /// Maximum offered requests awaiting acknowledgment, global Applied, or local Applied.
     #[arg(long, default_value_t = 4096)]
     max_in_flight: usize,
-    /// Maximum concurrent canonical global status reads.
+    /// Maximum concurrent canonical global and peer-local status reads combined.
     #[arg(long, default_value_t = 64)]
     max_status_requests: usize,
     /// Fixed delay between completed nonterminal observations of one hash.
@@ -170,8 +200,10 @@ struct Record {
     acknowledgment_ns: Option<i64>,
     submission_finished: bool,
     applied: Option<(i64, u64)>,
+    local_applied: Option<(i64, u64)>,
     failure: Option<String>,
     attempts: usize,
+    local_attempts: usize,
 }
 impl Record {
     fn new(plan: Planned) -> Self {
@@ -182,16 +214,23 @@ impl Record {
             acknowledgment_ns: None,
             submission_finished: false,
             applied: None,
+            local_applied: None,
             failure: None,
             attempts: 0,
+            local_attempts: 0,
         }
     }
     fn settled(&self) -> bool {
-        self.submission_finished && self.applied.is_some()
+        self.submission_finished
+            && matches!((self.applied, self.local_applied),
+                (Some((_, global_height)), Some((_, local_height))) if global_height == local_height)
     }
     fn trace_value(&self) -> Result<Value> {
         if self.failure.is_some() {
             bail!("failed request cannot become a strict trace row");
+        }
+        if !self.settled() {
+            bail!("strict trace requires matching global and peer-local StateApplied");
         }
         let hash = self
             .hash
@@ -222,6 +261,9 @@ impl Record {
             "acknowledgment_offset_ns": (self.acknowledgment_ns),
             "applied_offset_ns": (self.applied.map(|value| value.0)),
             "block_height": (self.applied.map(|value| value.1)), "status_attempts": (self.attempts),
+            "local_applied_offset_ns": (self.local_applied.map(|value| value.0)),
+            "local_block_height": (self.local_applied.map(|value| value.1)),
+            "local_status_attempts": (self.local_attempts),
             "submission_finished": (self.submission_finished), "failure": (self.failure)})
     }
 }
@@ -502,10 +544,81 @@ trait Backend: Send + Sync + 'static {
         self: Arc<Self>,
         account_index: usize,
         hash: TransactionHash,
+        scope: ObservationScope,
     ) -> BoxFuture<'static, Result<Option<PipelineTransactionStatusResponse>>>;
 }
+#[derive(Clone, Copy)]
+struct ObservationRequest {
+    index: usize,
+    account_index: usize,
+    hash: TransactionHash,
+    scope: ObservationScope,
+    deadline: i64,
+}
+#[derive(Clone, Copy, Debug)]
+struct ObservationStarted {
+    index: usize,
+    scope: ObservationScope,
+}
+
+fn dispatch_observation<B: Backend, C: Clock>(
+    backend: Arc<B>,
+    clock: Arc<C>,
+    started: tokio::sync::mpsc::Sender<ObservationStarted>,
+    request: ObservationRequest,
+) -> BoxFuture<'static, (usize, ObservationResult)> {
+    async move {
+        let result = async {
+            // Reserve the bounded counter notification before dispatch. A queued
+            // future is not an issued read and must not increment either counter.
+            let permit = started
+                .try_reserve()
+                .map_err(|_| eyre!("bounded observation-start notification unavailable"))?;
+            // This guard runs on first poll, immediately before the backend call,
+            // including a backend whose future construction itself starts work.
+            if clock.now() >= request.deadline {
+                bail!("observation dispatch reached the fixed phase deadline");
+            }
+            let future = backend.observe(request.account_index, request.hash, request.scope);
+            permit.send(ObservationStarted {
+                index: request.index,
+                scope: request.scope,
+            });
+            future.await
+        }
+        .await;
+        (request.index, (request.scope, clock.now(), result))
+    }
+    .boxed()
+}
+
+fn record_observation_start(records: &mut [Record], started: ObservationStarted) -> Result<()> {
+    let record = records
+        .get_mut(started.index)
+        .ok_or_else(|| eyre!("observation start has no scheduled request"))?;
+    let attempts = match started.scope {
+        ObservationScope::Global => &mut record.attempts,
+        ObservationScope::Local => &mut record.local_attempts,
+    };
+    *attempts = attempts
+        .checked_add(1)
+        .ok_or_else(|| eyre!("observation issue counter overflow"))?;
+    Ok(())
+}
+
+fn drain_observation_starts(
+    records: &mut [Record],
+    started: &mut tokio::sync::mpsc::Receiver<ObservationStarted>,
+) -> Result<()> {
+    while let Ok(event) = started.try_recv() {
+        record_observation_start(records, event)?;
+    }
+    Ok(())
+}
+
 struct SdkBackend {
     clients: Vec<Client>,
+    local_observer: Client,
     accounts: Vec<AccountClient>,
     metadata: Metadata,
     fee: FeePaymentIntent,
@@ -577,11 +690,21 @@ impl Backend for SdkBackend {
         self: Arc<Self>,
         account_index: usize,
         hash: TransactionHash,
+        scope: ObservationScope,
     ) -> BoxFuture<'static, Result<Option<PipelineTransactionStatusResponse>>> {
         async move {
-            self.clients[account_index]
-                .fetch_transaction_status_response_global(hash)
-                .await
+            match scope {
+                ObservationScope::Global => {
+                    self.clients[account_index]
+                        .fetch_transaction_status_response_global(hash)
+                        .await
+                }
+                ObservationScope::Local => {
+                    self.local_observer
+                        .fetch_transaction_status_response_local(hash)
+                        .await
+                }
+            }
         }
         .boxed()
     }
@@ -627,10 +750,7 @@ impl Recorder for JournalSender {
 }
 struct Journal {
     sender: Arc<JournalSender>,
-    worker: std::thread::JoinHandle<Result<()>>,
-}
-fn new_owned_file(path: &Path) -> Result<File> {
-    output::new_owned_file(path)
+    worker: std::thread::JoinHandle<Result<output::RetainedLoadFile>>,
 }
 
 fn bounded_write(
@@ -680,10 +800,11 @@ impl Journal {
         #[cfg(test)] mut post_sync_hook: Option<Box<dyn FnMut(usize) + Send>>,
     ) -> Result<Self> {
         let limit = allocation.max_bytes;
-        let file = new_owned_file(path)?;
+        let original = output::JournalOutput::create(path, limit)?;
+        let file = original.writer_file()?;
         let (sender, receiver) = mpsc::sync_channel::<JournalCommand>(capacity);
         let worker = std::thread::spawn(move || {
-            let mut writer = BufWriter::new(file);
+            let mut writer = terminal_receipt::DigestWriter::new(BufWriter::new(file));
             let mut written = 0;
             let mut retained_requests = BTreeSet::new();
             for command in receiver {
@@ -723,7 +844,9 @@ impl Journal {
             }
             writer.flush()?;
             writer.get_ref().sync_all()?;
-            Ok(())
+            let (writer, identity) = writer.finish()?;
+            drop(writer);
+            original.seal(identity)
         });
         Ok(Self {
             sender: Arc::new(JournalSender(sender)),
@@ -746,7 +869,7 @@ impl Journal {
             .recv()
             .map_err(|_| eyre!("scheduled request journal did not reach durable storage"))
     }
-    fn finish(self) -> Result<()> {
+    fn finish(self) -> Result<output::RetainedLoadFile> {
         drop(self.sender);
         self.worker
             .join()
@@ -757,9 +880,10 @@ impl Journal {
 fn classify_observation(
     expected: TransactionHash,
     response: &PipelineTransactionStatusResponse,
+    scope: ObservationScope,
 ) -> Result<Option<u64>> {
-    if response.hash != expected.to_string() || response.scope != "global" {
-        bail!("status response does not bind exact requested hash/global scope");
+    if response.hash != expected.to_string() || response.scope != scope.text() {
+        bail!("status response does not bind exact requested hash/scope");
     }
     match (
         response.status.kind.as_str(),
@@ -804,7 +928,7 @@ fn accept_offer(
     record: &mut Record,
     offered: Offered,
     active: &mut BTreeSet<usize>,
-    polls: &mut BinaryHeap<Reverse<(i64, usize)>>,
+    polls: &mut Polls,
 ) -> Result<()> {
     if let Some(previous) = record.offer_ns {
         if previous != offered.offset {
@@ -814,7 +938,11 @@ fn accept_offer(
     }
     record.offer_ns = Some(offered.offset);
     active.insert(offered.index);
-    polls.push(Reverse((offered.offset, offered.index)));
+    // Both observations start at the original offer. In particular, local proof
+    // may already be ready when global Applied or admission finishes at T+D.
+    for scope in [ObservationScope::Global, ObservationScope::Local] {
+        polls.push(Reverse((offered.offset, offered.index, scope)));
+    }
     Ok(())
 }
 
@@ -862,7 +990,7 @@ fn complete_submission<R: Recorder>(
     recorder: &R,
     active: &mut BTreeSet<usize>,
     outstanding: &mut BTreeSet<usize>,
-    polls: &mut BinaryHeap<Reverse<(i64, usize)>>,
+    polls: &mut Polls,
     failure: &mut Option<String>,
 ) -> Result<()> {
     if let Some(offset) = completed.offer_ns {
@@ -915,6 +1043,7 @@ fn status_diagnostic(
     offset: i64,
     expected: TransactionHash,
     response: &PipelineTransactionStatusResponse,
+    scope: ObservationScope,
 ) -> Value {
     // Even a failed decoder or hostile test transport must not put arbitrary
     // remote text into durable evidence. Keep exact identity-match observations
@@ -934,14 +1063,25 @@ fn status_diagnostic(
         "Expired" => "Expired",
         _ => "unknown",
     };
-    norito::json!({"event": "status", "index": index, "offset_ns": offset,
-        "expected_hash": (expected.to_string()), "hash_matches": (response.hash == expected.to_string()),
-        "global_scope_matches": (response.scope == "global"), "resolved_from": source,
-        "status": status, "block_height": (response.status.block_height)})
+    match scope {
+        ObservationScope::Global => {
+            norito::json!({"event": "status", "index": index, "offset_ns": offset,
+            "expected_hash": (expected.to_string()), "hash_matches": (response.hash == expected.to_string()),
+            "global_scope_matches": (response.scope == "global"), "resolved_from": source,
+            "status": status, "block_height": (response.status.block_height)})
+        }
+        ObservationScope::Local => {
+            norito::json!({"event": "local_status", "index": index, "offset_ns": offset,
+            "expected_hash": (expected.to_string()), "hash_matches": (response.hash == expected.to_string()),
+            "local_scope_matches": (response.scope == "local"), "resolved_from": source,
+            "status": status, "block_height": (response.status.block_height)})
+        }
+    }
 }
 
 fn complete_observation<R: Recorder>(
     index: usize,
+    scope: ObservationScope,
     offset: i64,
     result: Result<Option<PipelineTransactionStatusResponse>>,
     records: &mut [Record],
@@ -950,7 +1090,7 @@ fn complete_observation<R: Recorder>(
     recorder: &R,
     active: &mut BTreeSet<usize>,
     outstanding: &mut BTreeSet<usize>,
-    polls: &mut BinaryHeap<Reverse<(i64, usize)>>,
+    polls: &mut Polls,
     poll_ns: i64,
     failure: &mut Option<String>,
 ) -> Result<()> {
@@ -959,11 +1099,11 @@ fn complete_observation<R: Recorder>(
         .ok_or_else(|| eyre!("observation lost its exact hash"))?;
     let outcome = result.and_then(|response| {
         if let Some(response) = response {
-            recorder.record(status_diagnostic(index, offset, hash, &response))?;
-            classify_observation(hash, &response)
+            recorder.record(status_diagnostic(index, offset, hash, &response, scope))?;
+            classify_observation(hash, &response, scope)
         } else {
             recorder.record(
-                norito::json!({"event": "status_missing", "index": index, "offset_ns": offset,
+                norito::json!({"event": (match scope { ObservationScope::Global => "status_missing", ObservationScope::Local => "local_status_missing" }), "index": index, "offset_ns": offset,
                             "hash": (hash.to_string())}),
             )?;
             Ok(None)
@@ -974,7 +1114,20 @@ fn complete_observation<R: Recorder>(
             if records[index].offer_ns.is_some_and(|offer| offset > offer)
                 && schedule.within_deadline(cohort, offset) =>
         {
-            records[index].applied = Some((offset, height));
+            match scope {
+                ObservationScope::Global => records[index].applied = Some((offset, height)),
+                ObservationScope::Local => records[index].local_applied = Some((offset, height)),
+            }
+            if let (Some((_, global_height)), Some((_, local_height))) =
+                (records[index].applied, records[index].local_applied)
+                && global_height != local_height
+            {
+                retain_failure(
+                    &mut records[index],
+                    failure,
+                    "global and peer-local StateApplied disagree on the exact block height",
+                );
+            }
             if records[index].settled() {
                 active.remove(&index);
                 outstanding.remove(&index);
@@ -985,7 +1138,7 @@ fn complete_observation<R: Recorder>(
             failure,
             "StateApplied observation is outside its exact offer/deadline window",
         ),
-        Ok(None) => polls.push(Reverse((offset.saturating_add(poll_ns), index))),
+        Ok(None) => polls.push(Reverse((offset.saturating_add(poll_ns), index, scope))),
         Err(_) => retain_failure(
             &mut records[index],
             failure,
@@ -1009,18 +1162,22 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
     let deadline = schedule.deadline(cohort);
     let mut preparations: Work<Result<Prepared<B::Payload>>> = Work::new();
     let mut submissions: Work<Submission> = Work::new();
-    let mut observations: Work<(i64, Result<Option<PipelineTransactionStatusResponse>>)> =
-        Work::new();
+    let mut observations: Work<ObservationResult> = Work::new();
     let mut prepared = BTreeMap::new();
     let mut active = BTreeSet::new();
     let mut outstanding = BTreeSet::new();
     let mut polls = BinaryHeap::new();
     let (offer_tx, mut offer_rx) = tokio::sync::mpsc::channel::<Offered>(bounds.submissions * 2);
+    // At most one start can be pending for each slot in the original combined
+    // observation pool. These internal notifications are not new journal rows.
+    let (observation_start_tx, mut observation_start_rx) =
+        tokio::sync::mpsc::channel::<ObservationStarted>(bounds.observations);
     let mut next_prepare = range.start;
     let mut next_offer = range.start;
     let mut failure = None;
 
     loop {
+        drain_observation_starts(records, &mut observation_start_rx)?;
         // Completion timestamps are captured inside the futures. Process already
         // ready work before evaluating a fixed-slot capacity or phase boundary.
         while let Ok(offered) = offer_rx.try_recv() {
@@ -1045,9 +1202,13 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
                 &mut failure,
             )?;
         }
-        while let Some(Some((index, (offset, result)))) = observations.next().now_or_never() {
+        while let Some(Some((index, (scope, offset, result)))) = observations.next().now_or_never()
+        {
+            // Polling a future may dispatch and complete a read in one step.
+            drain_observation_starts(records, &mut observation_start_rx)?;
             complete_observation(
                 index,
+                scope,
                 offset,
                 result,
                 records,
@@ -1061,6 +1222,8 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
                 &mut failure,
             )?;
         }
+        // Also drain starts from futures which dispatched but are still pending.
+        drain_observation_starts(records, &mut observation_start_rx)?;
         let now = clock.now();
         let closing = now >= deadline;
         if failure.is_none() && !closing {
@@ -1158,30 +1321,36 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
         }
 
         while !closing && observations.len() < bounds.observations {
-            let Some(Reverse((due, index))) = polls.peek().copied() else {
+            let Some(Reverse((due, index, scope))) = polls.peek().copied() else {
                 break;
             };
             if due > now {
                 break;
             }
             polls.pop();
-            if !active.contains(&index) || records[index].applied.is_some() {
+            let observed = match scope {
+                ObservationScope::Global => records[index].applied,
+                ObservationScope::Local => records[index].local_applied,
+            };
+            if !active.contains(&index) || observed.is_some() {
                 continue;
             }
             let hash = records[index]
                 .hash
                 .ok_or_else(|| eyre!("offered request lost its exact hash"))?;
             let account = records[index].plan.account_index;
-            records[index].attempts += 1;
-            let future = backend.clone().observe(account, hash);
-            let clock = clock.clone();
-            observations.push(
-                async move {
-                    let result = future.await;
-                    (index, (clock.now(), result))
-                }
-                .boxed(),
-            );
+            observations.push(dispatch_observation(
+                backend.clone(),
+                clock.clone(),
+                observation_start_tx.clone(),
+                ObservationRequest {
+                    index,
+                    account_index: account,
+                    hash,
+                    scope,
+                    deadline,
+                },
+            ));
         }
 
         if failure.is_none()
@@ -1225,13 +1394,16 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
             );
         }
         if observations.len() < bounds.observations
-            && let Some(Reverse((due, _))) = polls.peek()
+            && let Some(Reverse((due, _, _))) = polls.peek()
         {
             wake = wake.min(*due);
         }
         let timer = clock.clone().sleep(wake.max(now));
         tokio::select! {
             biased;
+            Some(started) = observation_start_rx.recv() => {
+                record_observation_start(records, started)?;
+            }
             Some(offered) = offer_rx.recv() => {
                 accept_offer(&mut records[offered.index], offered, &mut active, &mut polls)?;
             }
@@ -1244,8 +1416,9 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
                     recorder.as_ref(), clock.now(), &mut failure);
             }
 
-            Some((index, (offset, result))) = observations.next(), if !observations.is_empty() => {
-                complete_observation(index, offset, result, records, schedule, cohort, recorder.as_ref(),
+            Some((index, (scope, offset, result))) = observations.next(), if !observations.is_empty() => {
+                drain_observation_starts(records, &mut observation_start_rx)?;
+                complete_observation(index, scope, offset, result, records, schedule, cohort, recorder.as_ref(),
                     &mut active, &mut outstanding, &mut polls, bounds.poll_ns, &mut failure)?;
             }
             reached = timer => {
@@ -1281,12 +1454,12 @@ fn publish_trace(
     args: &Args,
     records: &[Record],
     allocation: allocation::TraceAllocation,
-) -> Result<()> {
+) -> Result<output::RetainedLoadFile> {
     let limit = allocation.max_bytes;
     // Retain the original parent and stage descriptor through no-replace publication.
     // On failure the owned partial file remains diagnostic evidence.
     let mut staged = output::TraceOutput::create(path, limit)?;
-    let mut writer = BufWriter::new(staged.file_mut());
+    let mut writer = terminal_receipt::DigestWriter::new(BufWriter::new(staged.file_mut()));
     let mut written = 0;
     let header = norito::json!({"schema": TRACE_SCHEMA, "pair_index": (args.pair_index),
         "variant": (args.variant.text()), "seed": (args.seed),
@@ -1311,14 +1484,25 @@ fn publish_trace(
         )?;
     }
     bounded_write(&mut writer, &mut written, b"]}\n", limit)?;
-    writer.flush()?;
+    let (writer, expected) = writer.finish()?;
     drop(writer);
-    staged.publish()?;
-    Ok(())
+    let published = staged.publish()?;
+    if published.identity()? != expected {
+        bail!("trace readback differs from written bytes");
+    }
+    Ok(published)
+}
+
+fn local_observer_client(observer: Config, source: &Config) -> Result<Client> {
+    if observer.network_id != source.network_id || observer.chain != source.chain {
+        bail!("local observer changes the selected chain or genesis network");
+    }
+    Ok(Client::builder(observer).build()?)
 }
 
 impl Run for Args {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        terminal_receipt::validate_invocation(&self.invocation_id)?;
         if context.input_instructions() || context.output_instructions() {
             bail!("transaction load does not accept instruction stdin/stdout modes");
         }
@@ -1357,7 +1541,9 @@ impl Run for Args {
         let mut accounts = Vec::new();
         let mut authorities = BTreeSet::new();
         for config in configs {
-            if config.network_id != context.config().network_id {
+            if config.network_id != context.config().network_id
+                || config.chain != context.config().chain
+            {
                 bail!("account pool changes the selected network");
             }
             let client = Client::builder(config).build()?;
@@ -1370,6 +1556,9 @@ impl Run for Args {
             clients.push(client);
             accounts.push(account);
         }
+        let observer_config = Config::load_file(&self.local_observer_config)
+            .map_err(|_| eyre!("required local observer configuration cannot be loaded"))?;
+        let local_observer = local_observer_client(observer_config, context.config())?;
         workload::validate_schedule(&schedule, accounts.len())?;
         let mut records = schedule.plan(&self.seed, accounts.len())?;
         // Deployment evidence owns peer identity. Endpoint paths and transport errors
@@ -1397,6 +1586,7 @@ impl Run for Args {
         let journal = Journal::start(&self.diagnostic_out, self.journal_capacity, writers.journal)?;
         let backend = Arc::new(SdkBackend {
             clients,
+            local_observer,
             accounts,
             metadata,
             fee,
@@ -1406,6 +1596,7 @@ impl Run for Args {
         journal.blocking_record(norito::json!({"event": "plan", "schema": "iroha.sumeragi_v2.multilane_scaling.collector_journal.v1",
             "pair_index": (self.pair_index), "variant": (self.variant.text()), "seed": (self.seed),
             "accounts": public_accounts, "account_selection": (workload::ACCOUNT_SELECTION),
+            "local_applied_required": true,
             "workload": (workload::WORKLOAD_ID), "max_effects_per_account": (workload::MAX_EFFECTS_PER_ACCOUNT),
             "scheduled_requests": (records.len()), "warmup_ns": (schedule.warmup_ns), "measurement_ns": (schedule.measurement_ns),
             "drain_ns": (schedule.drain_ns), "submission_lag_bound_ns": (schedule.lag_ns),
@@ -1421,7 +1612,7 @@ impl Run for Args {
                 journal.blocking_record(norito::json!({"event": "scheduled", "index": index, "plan": (record.plan.value())}))?;
             }
             journal.flush_before_collection()?;
-            for client in &backend.clients {
+            for client in backend.clients.iter().chain(std::iter::once(&backend.local_observer)) {
                 client.refresh_capabilities().await.map_err(|_| {
                     eyre!("capability preflight failed; external error detail is not retained")
                 })?;
@@ -1501,14 +1692,16 @@ impl Run for Args {
         )?;
         // Release the backend's sender before joining the sole journal owner.
         drop(backend);
-        journal.finish()?;
+        let journal = journal.finish()?;
         outcome?;
-        publish_trace(&self.trace_out, &self, &records, writers.trace)?;
-        context.println(format!(
-            "Recorded {} exact scheduled transaction outcomes to {}",
+        let trace = publish_trace(&self.trace_out, &self, &records, writers.trace)?;
+        terminal_receipt::emit(
+            &self,
             records.len(),
-            self.trace_out.display()
-        ))
+            journal,
+            trace,
+            &mut std::io::stdout().lock(),
+        )
     }
 }
 

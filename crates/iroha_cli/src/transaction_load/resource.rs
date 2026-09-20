@@ -23,10 +23,10 @@ const MAX_SAMPLES: u64 = 100_000;
 #[derive(clap::Args, Debug)]
 #[group(id = "TransactionLoadResourceArgs")]
 pub(super) struct Args {
-    /// Absolute interpreter executable; invoked directly, without a shell.
+    /// Absolute admitted Python interpreter; invoked directly with `-B -S`.
     #[arg(long, value_name = "PATH")]
     resource_program: PathBuf,
-    /// Absolute fixed resource_probe_worker.py implementation.
+    /// Absolute fixed resource_probe_worker.py in its admitted five-file source namespace.
     #[arg(long, value_name = "PATH")]
     resource_worker: PathBuf,
     /// Existing owner-only runtime probe configuration; never copied to evidence.

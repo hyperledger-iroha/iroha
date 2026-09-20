@@ -650,7 +650,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "dcd28f4902a450d914140e008d3a4a99067064e91f3dfc80ea73f4351a7b9e9a"
+        "42902589fe5175f22f13a0881684f721c0cfd72fa0cb3048f1b413f3aa6433d2"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (
@@ -2439,6 +2439,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     data_lane_certificate_test = writer_symbols["_DATA_LANE_CERTIFICATE_TEST"]
     cross_sdk_tests = writer_symbols["_CROSS_SDK_TESTS"]
     rust_sdk_diagnostics_tests = writer_symbols["_RUST_SDK_DIAGNOSTICS_TESTS"]
+    rust_async_gate_tests = writer_symbols["_RUST_ASYNC_GATE_TESTS"]
     native_amx_grouped_fixture = writer_symbols["_NATIVE_AMX_GROUPED_FIXTURE"]
     native_amx_grouped_negative_control_count = writer_symbols[
         "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT"
@@ -2585,6 +2586,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 test_lines = [
                     f"test {test} ... ok" for test in rust_sdk_diagnostics_tests
                 ]
+            elif leg_id in rust_async_gate_tests:
+                test_lines = [f"test {test} ... ok" for test in rust_async_gate_tests[leg_id]]
             log_lines = [f"running {required_count} tests", *test_lines, ""]
             log_lines.append(
                 f"test result: ok. {required_count} passed; 0 failed; 0 ignored; "

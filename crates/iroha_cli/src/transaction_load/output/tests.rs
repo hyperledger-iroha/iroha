@@ -540,4 +540,53 @@ mod tests {
         // This is the fixture's exact newly-created unique file, not owner cleanup.
         std::fs::remove_file(&target).unwrap();
     }
+    #[test]
+    fn parent_write_only_default_and_explicit_readback_access_are_distinct() {
+        use std::os::unix::fs::FileExt as _;
+        for readable in [false, true] {
+            let fixture = Fixture::new();
+            let (parent, name) = Parent::capture(&fixture.target, &mut |_| Ok(())).unwrap();
+            let (mut file, _) = if readable {
+                parent
+                    .create_with_access(&name, true, &mut |_| Ok(()))
+                    .unwrap()
+            } else {
+                parent.create(&name, &mut |_| Ok(())).unwrap()
+            };
+            let mode = rustix::fs::fcntl_getfl(&file).unwrap() & OFlags::ACCMODE;
+            assert_eq!(
+                mode,
+                if readable {
+                    OFlags::RDWR
+                } else {
+                    OFlags::WRONLY
+                }
+            );
+            file.write_all(b"owned").unwrap();
+            let mut bytes = [0_u8; 5];
+            if readable {
+                assert_eq!(file.read_at(&mut bytes, 0).unwrap(), 5);
+                assert_eq!(&bytes, b"owned");
+            } else {
+                assert!(file.read_at(&mut bytes, 0).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn retained_published_trace_rejects_replacement_and_stage_reappearance() {
+        for stage in [false, true] {
+            let fixture = Fixture::new();
+            let published = fixture.output().publish().unwrap();
+            let first = published.identity().unwrap();
+            assert!(first.byte_length > 0);
+            if stage {
+                std::fs::write(fixture.stage(), b"foreign stage").unwrap();
+            } else {
+                std::fs::write(&fixture.target, b"changed output").unwrap();
+            }
+            assert!(published.identity().is_err());
+            assert!(published.identity().is_err());
+        }
+    }
 }

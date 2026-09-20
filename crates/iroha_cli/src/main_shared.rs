@@ -1297,6 +1297,50 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
         }
         unreachable!("local SoraFS pack dispatch matched above");
     }
+    if matches!(
+        &args.command,
+        Command::Tx(transaction::Command::CollectScalingInputs(_))
+            | Command::Ledger(ledger::Command::Transaction(
+                transaction::Command::CollectScalingInputs(_)
+            ))
+    ) {
+        let (Some(fd), Some(source)) = (args.config_fd, args.config_source_path.as_deref()) else {
+            return Err(Report::new(MainError::CliArgs(
+                "scaling collection requires --config-fd and --config-source-path".to_owned(),
+            )));
+        };
+        if !args.machine
+            || effective_output_format(&args) != CliOutputFormat::Json
+            || args.config.is_some()
+            || args.operator_private_key_file.is_some()
+            || args.operator_private_key_fd.is_some()
+            || args.verbose
+            || args.metadata.is_some()
+            || args.input
+            || args.output
+            || args.fee_payment.fee_payer.is_some()
+            || args.fee_payment.fee_program.is_some()
+            || args.fee_payment.fee_program_revision.is_some()
+        {
+            return Err(Report::new(MainError::CliArgs(
+                "scaling collection requires machine JSON and only its original inherited client"
+                    .to_owned(),
+            )));
+        }
+        if let Command::Tx(transaction::Command::CollectScalingInputs(command))
+        | Command::Ledger(ledger::Command::Transaction(
+            transaction::Command::CollectScalingInputs(command),
+        )) = args.command
+        {
+            return map_command_result(command.run_with_inherited(
+                fd,
+                source,
+                &mut io::stdout().lock(),
+            ))
+            .map(|()| std::process::ExitCode::SUCCESS);
+        }
+        unreachable!("fixed collection dispatch matched above");
+    }
     let (load_path, config_was_explicit) = args.config.as_ref().map_or_else(
         || {
             (
@@ -4981,6 +5025,8 @@ mod transaction {
         Ping(Ping),
         /// Collect an exact fixed-schedule transaction trace for multilane qualification
         Load(crate::transaction_load::Args),
+        /// Collect complete canonical finality and transaction inputs from an original stopped validator
+        CollectScalingInputs(crate::transaction_load::collect_inputs::Args),
         /// Send a transaction using IVM bytecode
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
@@ -4996,6 +5042,7 @@ mod transaction {
                 Get(cmd) => cmd.run(context),
                 Ping(cmd) => cmd.run(context),
                 Load(cmd) => cmd.run(context),
+                CollectScalingInputs(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
                 SignedSize(cmd) => cmd.run(context),

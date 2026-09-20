@@ -83,8 +83,15 @@ physical free. Further admitted edits retain that same private cursor and
 publication shell, replacing exhausted bookkeeping only after complete admission.
 Refusal returns the original owner and input; intermediate edits stay private.
 Initial root and reader blocks retain their exact charges through reclamation.
+An exclusive prepaid checkpoint can abort child edits back to the original
+parent root and tracking buffers without allocating, including at full capacity.
+Nested apply keeps edits private; only the original writer can publish. A caught
+edit or cleanup panic forbids further use of that cursor.
 Real MV budget regressions exercise this public boundary. Production Storage
-still uses Untracked maps pending native lock/runtime and undo ownership,
+now uses the same B+tree engine for current and block-undo data, retaining both
+original generations through snapshots and publication retries. Ordinary block
+opening no longer deep-clones prior undo values before clearing them. These maps
+remain Untracked pending native lock/runtime, joint edit and transaction admission,
 concrete model payload policies and configured aggregate integration.
 
 TODO: compose these component publications with exact aggregate State predecessor

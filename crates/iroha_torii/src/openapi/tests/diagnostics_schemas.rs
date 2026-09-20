@@ -838,8 +838,11 @@ fn operator_webauthn_openapi_is_closed_bounded_and_capacity_aware() {
 
 #[test]
 fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
-    use iroha_torii_shared::bridge_finality::{
-        BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE, BridgeFinalityAttestationTipMismatchV1,
+    use iroha_torii_shared::{
+        bridge_attestation::{
+            FinalityAttestationFailure, FinalityAttestationFailureReason as Reason,
+        },
+        bridge_finality::BridgeFinalityAttestationTipMismatchV1,
     };
     let document = generate_spec();
     let path = "/v1/bridge/finality/attestation/{height}";
@@ -847,8 +850,8 @@ fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
     let progress_response = &operation["responses"]["409"];
     let description = progress_response["description"].as_str().unwrap();
     for distinction in [
-        BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
-        "details.bridge_finality_attestation_tip_mismatch",
+        "FinalityAttestationFailure",
+        "tip_mismatch",
         "existing deadline",
         "not finality proof",
         "missing/corrupt proofs",
@@ -928,8 +931,97 @@ fn finality_attestation_tip_progress_openapi_matches_native_bindings() {
             component_properties(schemas, "BridgeFinalityAttestationBodyV1")[field]
         );
     }
+    assert!(
+        component_properties(schemas, "ErrorDetails")
+            .get("bridge_finality_attestation_tip_mismatch")
+            .is_none()
+    );
     assert_eq!(
-        component_properties(schemas, "ErrorDetails")["bridge_finality_attestation_tip_mismatch"],
+        component_properties(schemas, "ErrorDetails")["finality_attestation_failure"],
+        schema_ref("FinalityAttestationFailure")
+    );
+    assert_eq!(
+        component_properties(schemas, "FinalityAttestationFailure")["tip_mismatch"]["anyOf"][0],
         schema_ref("BridgeFinalityAttestationTipMismatchV1")
+    );
+    let failure = FinalityAttestationFailure {
+        challenge: payload.challenge,
+        height: payload.requested_height,
+        reason: Reason::TipChanged,
+        tip_mismatch: Some(payload),
+    };
+    let failure_json: Value =
+        norito::json::from_slice(&norito::json::to_vec(&failure).unwrap()).unwrap();
+    assert_eq!(failure_json["reason"].as_str(), Some("TipChanged"));
+    assert_eq!(
+        component_properties(schemas, "FinalityAttestationFailure")["reason"],
+        schema_ref("FinalityAttestationFailureReason")
+    );
+    assert_eq!(
+        schemas["FinalityAttestationFailureReason"]["type"].as_str(),
+        Some("string")
+    );
+    let failure_fields = failure_json
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        component_properties(schemas, "FinalityAttestationFailure")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        failure_fields
+    );
+    assert_eq!(
+        schemas["FinalityAttestationFailure"]["additionalProperties"],
+        Value::Bool(false)
+    );
+    for status in ["409", "503", "500"] {
+        let content = response_content(operation, status, path);
+        for media in ["application/json", "application/x-norito"] {
+            assert_eq!(content[media]["schema"], schema_ref("ErrorEnvelope"));
+        }
+    }
+    assert_eq!(
+        schemas["FinalityAttestationFailureReason"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "ConsensusUninitialized",
+            "GenesisUncommitted",
+            "RestartRequired",
+            "TipChanged",
+            "ConflictingState",
+            "FinalityUnavailable",
+            "InternalFailure"
+        ])
+    );
+    let native_reason_labels = [
+        Reason::ConsensusUninitialized,
+        Reason::GenesisUncommitted,
+        Reason::RestartRequired,
+        Reason::TipChanged,
+        Reason::ConflictingState,
+        Reason::FinalityUnavailable,
+        Reason::InternalFailure,
+    ]
+    .map(|reason| {
+        let json: Value =
+            norito::json::from_slice(&norito::json::to_vec(&reason).unwrap()).unwrap();
+        json.as_str().expect("reason is a scalar string").to_owned()
+    });
+    assert_eq!(
+        schemas["FinalityAttestationFailureReason"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>(),
+        native_reason_labels.into_iter().collect::<BTreeSet<_>>()
     );
 }

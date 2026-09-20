@@ -2,14 +2,8 @@
 
 use super::{Iter, Storage, StorageReadOnly, View};
 use crate::{Key, Value};
-use concread::ebrcell::{EbrCell, EbrCellReadTxn};
-use std::{
-    borrow::Borrow,
-    cmp::Ordering,
-    collections::{BTreeMap, btree_map},
-    iter::Peekable,
-    marker::PhantomData,
-};
+use concread::bptree::BptreeMapReadTxn;
+use std::{borrow::Borrow, cmp::Ordering, iter::Peekable, marker::PhantomData};
 
 /// Read-only guard over a storage's current state and retained undo history.
 ///
@@ -17,7 +11,7 @@ use std::{
 /// and inspected. Reading history does not begin a block or consume the undo log.
 pub struct History<'storage, K: Key, V: Value> {
     current: View<'storage, K, V>,
-    revert: EbrCellReadTxn<BTreeMap<K, Option<V>>>,
+    revert: BptreeMapReadTxn<'storage, K, Option<V>>,
     _exclusive: PhantomData<&'storage mut Storage<K, V>>,
 }
 
@@ -47,7 +41,7 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
     ///
     /// `None` records prior absence; it is not a missing undo entry. Untouched
     /// keys inherit their current values in the prior image.
-    pub fn revert_map(&self) -> &BTreeMap<K, Option<V>> {
+    pub fn revert_map(&self) -> &BptreeMapReadTxn<'storage, K, Option<V>> {
         &self.revert
     }
 
@@ -90,12 +84,12 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
             .revert
             .iter()
             .map(|(key, previous)| (key.clone(), previous.as_ref().and_then(&project)))
-            .collect();
+            .collect::<concread::bptree::BptreeMap<_, _>>();
         Storage {
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
-            revert: EbrCell::new(revert),
+            revert,
             blocks,
         }
     }
@@ -103,7 +97,7 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
 
 struct BeforeBlockIter<'a, K: Key, V: Value> {
     current: Peekable<Iter<'a, K, V>>,
-    revert: Peekable<btree_map::Iter<'a, K, Option<V>>>,
+    revert: Peekable<concread::internals::bptree::iter::Iter<'a, K, Option<V>>>,
 }
 
 impl<'a, K: Key, V: Value> Iterator for BeforeBlockIter<'a, K, V> {

@@ -22,7 +22,9 @@ FORMAL_CHECKER_DIR = Path(__file__).resolve().parent
 if str(FORMAL_CHECKER_DIR) not in sys.path:
     sys.path.insert(0, str(FORMAL_CHECKER_DIR))
 
+import sumeragi_v2_multilane_kura_native_contract as kura_native_contract
 import sumeragi_v2_multilane_authority_recovery_contract as authority_recovery_contract
+import sumeragi_v2_multilane_state_merge_contract as state_merge_contract
 import sumeragi_v2_multilane_admission_capacity_contract as admission_capacity_contract
 import sumeragi_v2_multilane_autonomous_terminal_contract as autonomous_terminal_contract
 import sumeragi_v2_multilane_geometry_evidence_contract as geometry_evidence_contract
@@ -258,24 +260,6 @@ _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
         "V2LaneWorkAdapter::activate_after_lane_drain_queue_install",
     )
 )
-_PRODUCTION_TOKEN_REBINDINGS = {
-    (
-        "crates/iroha_core/src/queue.rs",
-        "release_lane_reservations_in_order_inner",
-        "let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;",
-    ): "self.fifo_with_released_reservations_locked(&released_records)?;",
-}
-
-_RELEASE_SOURCE_TOKEN_REBINDINGS = {
-    (
-        "crates/iroha_core/src/state.rs",
-        "No adapter/session cache is consulted.",
-    ): "No adapter/session\n    /// cache is consulted.",
-    (
-        "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
-        "add `--check`",
-    ): "Pass `--check`",
-}
 
 
 TLA_COUNTEREXAMPLE = "tla_counterexample"
@@ -1113,6 +1097,7 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         ),
     ),
 ) + reviewed_source.NATIVE_PREPUBLICATION_REVIEWED_BINDINGS
+NATIVE_PREPUBLICATION_BINDINGS = kura_native_contract.reconcile_bindings(NATIVE_PREPUBLICATION_BINDINGS)
 NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -1331,6 +1316,7 @@ NATIVE_EXACT_OBJECT_PRUNE_BINDINGS = (
             'entries are not strictly ordered',
             'complete manifest/receipt pairs',
             'if preimage_heights != removal_heights',
+            'height <= highest_removal && !removal_heights.contains(height)',
             'original_links.keys().copied().collect::<BTreeSet<_>>() != original_heights',
             'Self::validate_native_amx_settlement_chain_links(&original_links)',
             'receipt.participant_settlement != *settlement',
@@ -3319,13 +3305,10 @@ def _validate_closure_mutation_ledger(
             if source is None:
                 continue
             for token in tokens:
-                current_token = _RELEASE_SOURCE_TOKEN_REBINDINGS.get(
-                    (relative, token), token
-                )
-                if current_token not in source:
+                if token not in source:
                     errors.append(
                         f"{path}: release invariant {obligation} is missing "
-                        f"source-binding token {current_token!r}"
+                        f"source-binding token {token!r}"
                     )
 
     model_configs: list[str] = []
@@ -3591,6 +3574,8 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         '[[ "$tool_version" != "$APALACHE_VERSION" ]]', '"$RESOLVED_APALACHE_BIN" --out-dir="$out" typecheck "${module}.tla"',
         '"$RESOLVED_APALACHE_BIN" --out-dir="$out" check', "--algo=incremental",
         '--config="$config"', '--length="$length"', "--no-deadlock",
+        "--tuning-options=search.invariant.mode=after",
+        "grep -Ec '^Tuning: (search.outputTraces=false:search.invariant.mode=after|search.invariant.mode=after:search.outputTraces=false)[[:space:]]+I@'",
         'grep -Fc "The outcome is: NoError"',
         'grep -Fc "Checker reports no error up to computation length ${length}"',
         'echo "multilane formal or production sources changed during the Apalache run"',
@@ -3611,6 +3596,13 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
                 f"multilane Apalache runner must contain {token!r} exactly once, "
                 f"found {count}"
             )
+    # The complete argv binds scheduling without allowing filters or bound/invariant overrides.
+    canonical_check_command = '    "$RESOLVED_APALACHE_BIN" --out-dir="$out" check \\\n      --algo=incremental \\\n      --tuning-options=search.invariant.mode=after \\\n      --config="$config" \\\n      --length="$length" \\\n      --no-deadlock \\\n      "${module}.tla"'
+    if source.count(canonical_check_command) != 1 or source.count("--tuning-options") != 1:
+        errors.append("multilane Apalache runner must use only the canonical fixed after-join check command")
+    forbidden_override_guard = 'for forbidden_override in \\\n  APALACHE_JAR \\\n  CONFIG_FILE \\\n  OUT_DIR \\\n  RUN_DIR \\\n  SMT_ENCODING \\\n  TUNING_OPTIONS \\\n  TUNING_OPTIONS_FILE; do\n  if [[ -n "${!forbidden_override:-}" ]]; then\n    echo "${forbidden_override} is not accepted by the pinned multilane Apalache gate" >&2\n    exit 1\n  fi\ndone'
+    if source.count(forbidden_override_guard) != 1:
+        errors.append("multilane Apalache runner must reject every external tuning/encoding override")
     manifest_calls = source.count(
         'python3 -I -S "$CONTRACT_CHECKER" --print-source-manifest-sha256'
     )
@@ -4221,13 +4213,10 @@ def _validate_model(
                 errors.append(f"{path}: cannot extract production item {symbol}")
                 continue
         for token in tokens:
-            current_token = _PRODUCTION_TOKEN_REBINDINGS.get(
-                (relative, symbol, token), token
-            )
-            if current_token not in item:
+            if token not in item:
                 errors.append(
                     f"{path}: production item {symbol} is missing source-binding "
-                    f"token {current_token!r}"
+                    f"token {token!r}"
                 )
         for token in FORBIDDEN_PRODUCTION_TOKENS.get((relative, symbol), ()):
             if token in item:
@@ -4835,11 +4824,15 @@ def _validate_native_prepublication_contract(
                     f"is missing source-bound token {token!r}"
                 )
 
+    kura_native_contract.validate(root, binding_items, errors, _rust_binding_item, _extract_braced_item)
     reviewed_source._validate_native_prepublication_reviewed_kura_checks(binding_items, errors)
     native_merge_manifest.validate_native_merge_manifest_relations(root, binding_items, errors, _rust_binding_item)
     for relative, kind, symbol, tokens in (
         NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS
     ):
+        # Branch-specific ownership and complete phase loops are checked above.
+        if symbol in kura_native_contract.BRANCHED_SYMBOLS:
+            continue
         item = binding_items.get((relative, kind, symbol))
         if item is None:
             item = _rust_binding_item(
@@ -5758,6 +5751,7 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     authority_recovery_contract.validate_authority_recovery_contract(
         root, models, errors, _rust_binding_item
     )
+    state_merge_contract.validate_state_merge_source_contract(root, models, errors, _rust_binding_item)
     _validate_stable_generation_diagnostics_contract(root, models, errors)
     _validate_native_participant_application_classifier_contract(
         root, models, errors

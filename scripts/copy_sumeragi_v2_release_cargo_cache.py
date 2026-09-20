@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -93,16 +94,13 @@ VALIDATOR_OPTION_ORDER = (
     "--g4p-completion",
     "--g12-seed-completion",
     "--g12-fault-soak-completion",
-    "--scaling-evidence-manifest",
+    "--scaling-execution-record",
+    "--expected-scaling-execution-sha256",
     "--sdk-dependency-archive",
     "--sdk-dependency-input-inventory",
     "--sdk-dependency-final-work-inventory",
     "--runtime-tool-probe-manifest",
     "--runtime-tool-probe-result",
-    "--expected-scaling-trial-harness-sha256",
-    "--expected-scaling-configuration-sha256",
-    "--expected-scaling-irohad-sha256",
-    "--expected-scaling-iroha-cli-sha256",
     "--repository-root",
     "--output",
     "--verify-existing",
@@ -138,7 +136,7 @@ VALIDATOR_PATH_OPTIONS = frozenset(
         "--g4p-completion",
         "--g12-seed-completion",
         "--g12-fault-soak-completion",
-        "--scaling-evidence-manifest",
+        "--scaling-execution-record",
         "--sdk-dependency-archive",
         "--sdk-dependency-input-inventory",
         "--sdk-dependency-final-work-inventory",
@@ -164,14 +162,14 @@ VALIDATION_ACK_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_validation_ack.py",
 )
 VALIDATION_ACK_COMPONENT_SHA256 = (
-    "b4a6c0182c84f22b33c0db4953c9b87edd6e7f9e19e2cabbb2ed58944d2fa6d5"
+    "b1c6fe03e3d0e1d7d1dd15fcbfb47cb680fa223e8f744c0849096fb656bbd719"
 )
 VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 CLI_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_cli.py",
 )
 CLI_COMPONENT_SHA256 = (
-    "b7089197ea41d6b809984dae70b60e39536696aeec4b3d4973c53de3c4c0af02"
+    "e821ac8b4f482ad3d4938cd96c28b55d01a9c9093c2dc82096e422a3b5b2a320"
 )
 CLI_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
@@ -734,7 +732,7 @@ def _validate_validator_invocation(
     if (
         value["profile"] != "release"
         or value["operation"] != "verify-existing-and-ack"
-        or value["python_flags"] != ["-I", "-S"]
+        or value["python_flags"] != ["-I", "-B", "-S"]
         or value["validator"] != "protected:validate-receipt.py"
         or not isinstance(options, list)
         or len(options) != len(VALIDATOR_OPTION_ORDER)
@@ -1289,6 +1287,22 @@ def verify_cache_sources(
     _bind_runtime_destinations(records, current, update=False)
 
 
+def _retained_descriptor_pin(descriptor: int) -> tuple[object, int, int]:
+    metadata = os.fstat(descriptor)
+    return ((metadata.st_dev, metadata.st_ino, metadata.st_mode,
+             metadata.st_uid, metadata.st_gid),
+            fcntl.fcntl(descriptor, fcntl.F_GETFL),
+            fcntl.fcntl(descriptor, fcntl.F_GETFD))
+
+
+def _close_retained_descriptor(descriptor: int, pin: tuple[object, int, int]) -> None:
+    try:
+        if _retained_descriptor_pin(descriptor) == pin:
+            os.close(descriptor)
+    except OSError:
+        pass
+
+
 def _hold_regular(
     path: Path,
     label: str,
@@ -1296,11 +1310,15 @@ def _hold_regular(
     maximum_bytes: int = MAXIMUM_FILE_BYTES,
 ) -> dict[str, object]:
     parent_fd, parent_identity = _open_directory(path.parent, f"{label} parent")
+    parent_pin = _retained_descriptor_pin(parent_fd)
+    descriptor: int | None = None
+    descriptor_pin: tuple[object, int, int] | None = None
     try:
         before = _entry_stat(parent_fd, path.name, label)
         if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or before.st_size > maximum_bytes:
             raise CacheCopyError(f"retained {label} metadata is unsafe")
         descriptor = os.open(path.name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+        descriptor_pin = _retained_descriptor_pin(descriptor)
         opened = os.fstat(descriptor)
         if not _unchanged(before, opened):
             raise CacheCopyError(f"retained {label} changed while opened")
@@ -1310,17 +1328,22 @@ def _hold_regular(
             if len(data) > maximum_bytes:
                 raise CacheCopyError(f"retained {label} exceeds its bound")
         after = os.fstat(descriptor)
-        if len(data) != opened.st_size or not _unchanged(opened, after):
+        if (len(data) != opened.st_size or not _unchanged(opened, after)
+                or _retained_descriptor_pin(descriptor) != descriptor_pin
+                or _retained_descriptor_pin(parent_fd) != parent_pin):
             raise CacheCopyError(f"retained {label} changed while read")
         _revalidate_entry(parent_fd, path.name, after, label)
+        held = {"path": path, "label": label, "parent_fd": parent_fd, "parent_identity": parent_identity,
+                "descriptor": descriptor, "metadata": after, "data": bytes(data),
+                "maximum_bytes": maximum_bytes, "descriptor_pin": descriptor_pin, "parent_pin": parent_pin}
+        _revalidate_held_regular(held)
+        return held
     except BaseException:
-        os.close(parent_fd)
-        if "descriptor" in locals():
-            os.close(descriptor)
+        if descriptor is not None and descriptor_pin is not None:
+            _close_retained_descriptor(descriptor, descriptor_pin)
+        _close_retained_descriptor(parent_fd, parent_pin)
         raise
-    held = {"path": path, "label": label, "parent_fd": parent_fd, "parent_identity": parent_identity, "descriptor": descriptor, "metadata": after, "data": bytes(data), "maximum_bytes": maximum_bytes}
-    _revalidate_held_regular(held)
-    return held
+
 
 def _revalidate_held_regular(held: dict[str, object]) -> None:
     path, label = held["path"], held["label"]
@@ -1328,7 +1351,10 @@ def _revalidate_held_regular(held: dict[str, object]) -> None:
     metadata, data = held["metadata"], held["data"]
     maximum_bytes = held["maximum_bytes"]
     assert isinstance(path, Path) and isinstance(label, str) and isinstance(descriptor, int) and isinstance(parent_fd, int) and isinstance(metadata, os.stat_result) and isinstance(data, bytes) and isinstance(maximum_bytes, int)
-    if not _unchanged(metadata, os.fstat(descriptor)) or not _unchanged(metadata, _entry_stat(parent_fd, path.name, label)):
+    if (_retained_descriptor_pin(descriptor) != held["descriptor_pin"]
+            or _retained_descriptor_pin(parent_fd) != held["parent_pin"]
+            or not _unchanged(metadata, os.fstat(descriptor))
+            or not _unchanged(metadata, _entry_stat(parent_fd, path.name, label))):
         raise CacheCopyError(f"retained {label} changed while held")
     os.lseek(descriptor, 0, os.SEEK_SET)
     observed = bytearray()
@@ -1336,14 +1362,25 @@ def _revalidate_held_regular(held: dict[str, object]) -> None:
         observed.extend(block)
         if len(observed) > maximum_bytes:
             raise CacheCopyError(f"retained {label} exceeds its bound")
-    if bytes(observed) != data or not _unchanged(metadata, os.fstat(descriptor)):
+    if (bytes(observed) != data or not _unchanged(metadata, os.fstat(descriptor))
+            or _retained_descriptor_pin(descriptor) != held["descriptor_pin"]
+            or _retained_descriptor_pin(parent_fd) != held["parent_pin"]):
         raise CacheCopyError(f"retained {label} bytes changed while held")
     parent_identity = held["parent_identity"]
     assert isinstance(parent_identity, os.stat_result)
     _revalidate_directory_path(path.parent, parent_identity, f"{label} parent")
+    if (_retained_descriptor_pin(descriptor) != held["descriptor_pin"]
+            or _retained_descriptor_pin(parent_fd) != held["parent_pin"]):
+        raise CacheCopyError(f"retained {label} descriptor changed after revalidation")
+
 
 def _close_held_regular(held: dict[str, object]) -> None:
-    os.close(held["descriptor"]); os.close(held["parent_fd"])
+    descriptor, parent_fd = held["descriptor"], held["parent_fd"]
+    descriptor_pin, parent_pin = held["descriptor_pin"], held["parent_pin"]
+    assert isinstance(descriptor, int) and isinstance(parent_fd, int)
+    assert isinstance(descriptor_pin, tuple) and isinstance(parent_pin, tuple)
+    _close_retained_descriptor(descriptor, descriptor_pin)
+    _close_retained_descriptor(parent_fd, parent_pin)
 
 
 def _read_regular(
@@ -1643,30 +1680,55 @@ def publish_validation_failure(
         source_manifest_sha256, validator_exit_status,
     )
 
-def _validation_ack(ack_held: dict[str, object], receipt_held: dict[str, object], source: Path, bootstrap_evidence: Path, source_manifest_sha256: str, candidate_root: Path, scaling_evidence_manifest: Path, expected_signer_fingerprint: str, expected_scaling_trial_harness_sha256: str, expected_scaling_configuration_sha256: str, expected_scaling_irohad_sha256: str, expected_scaling_iroha_cli_sha256: str) -> tuple[str, int]:
+MAX_SCALING_EXECUTION_RECORD_BYTES = 2 * 1024 * 1024 + 128 * 1024
+
+
+def _scaling_execution_binding(
+    record: Path, expected_sha256: str, bootstrap_evidence: Path,
+) -> dict[str, object]:
+    """Bind the protected parent's original file without claiming its provenance.
+
+    The protected receipt validator owns semantic/native verification. This
+    sealer binds its exact invocation to the original protected record; bootstrap
+    additionally compares that record with its retained process observations.
+    """
+    _normalized_absolute(record, "parent scaling execution record")
+    _normalized_absolute(bootstrap_evidence, "bootstrap evidence root")
+    if (record != bootstrap_evidence / "scaling-execution.json"
+            or not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
+        raise CacheCopyError("parent scaling execution selection is not exact")
+    digest, size, metadata = _digest_regular(record, "parent scaling execution record",
+        maximum_bytes=MAX_SCALING_EXECUTION_RECORD_BYTES)
+    if (digest != expected_sha256 or size == 0
+            or stat.S_IMODE(metadata.st_mode) != 0o400
+            or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1):
+        raise CacheCopyError("parent scaling execution record is not exact")
+    return {"archive_id": "release-scaling.parent-execution.v1", "sha256": digest,
+            "size_bytes": size, "mode": "0400"}
+
+
+def _validation_ack(ack_held: dict[str, object], receipt_held: dict[str, object], source: Path, bootstrap_evidence: Path, source_manifest_sha256: str, candidate_root: Path, scaling_execution_record: Path, expected_signer_fingerprint: str, expected_scaling_execution_sha256: str) -> tuple[str, int]:
     implementation = _validation_component(source).get("_validation_ack")
     if not callable(implementation) or implementation is _validation_ack:
         raise CacheCopyError("validation acknowledgment component entry point is invalid")
-    return implementation(ack_held, receipt_held, source, bootstrap_evidence, source_manifest_sha256, candidate_root, scaling_evidence_manifest, expected_signer_fingerprint, expected_scaling_trial_harness_sha256, expected_scaling_configuration_sha256, expected_scaling_irohad_sha256, expected_scaling_iroha_cli_sha256)
+    return implementation(ack_held, receipt_held, source, bootstrap_evidence, source_manifest_sha256, candidate_root, scaling_execution_record, expected_signer_fingerprint, expected_scaling_execution_sha256)
 
 def seal_release_result(
     invocation_root: Path,
     bootstrap_evidence: Path,
     source_manifest_sha256: str,
     candidate_root: Path,
-    scaling_evidence_manifest: Path,
+    scaling_execution_record: Path,
     expected_signer_fingerprint: str,
-    expected_scaling_trial_harness_sha256: str,
-    expected_scaling_configuration_sha256: str,
-    expected_scaling_irohad_sha256: str,
-    expected_scaling_iroha_cli_sha256: str,
+    expected_scaling_execution_sha256: str,
 ) -> None:
     """Prune build runtime and publish a protected exact retained-evidence binding."""
 
     _normalized_absolute(invocation_root, "release invocation root")
     _normalized_absolute(bootstrap_evidence, "bootstrap evidence root")
     _normalized_absolute(candidate_root, "candidate root")
-    _normalized_absolute(scaling_evidence_manifest, "scaling evidence manifest")
+    _scaling_execution_binding(scaling_execution_record, expected_scaling_execution_sha256, bootstrap_evidence)
     invocation_fd, invocation_identity = _open_directory(invocation_root, "release invocation root")
     bootstrap_fd, bootstrap_identity = _open_directory(bootstrap_evidence, "bootstrap evidence root")
     os.close(invocation_fd)
@@ -1708,6 +1770,11 @@ def seal_release_result(
         held_files.append(ack_held)
         receipt_held = _hold_regular(receipt, "aggregate receipt")
         held_files.append(receipt_held)
+        scaling_held = _hold_regular(scaling_execution_record, "parent scaling execution",
+            maximum_bytes=MAX_SCALING_EXECUTION_RECORD_BYTES)
+        held_files.append(scaling_held)
+        if hashlib.sha256(scaling_held["data"]).hexdigest() != expected_scaling_execution_sha256:
+            raise CacheCopyError("parent scaling execution changed before retention")
         identity_held = _hold_regular(identity, "sealed identity")
         held_files.append(identity_held)
         ack_digest, ack_size = _validation_ack(
@@ -1717,12 +1784,9 @@ def seal_release_result(
             bootstrap_evidence,
             source_manifest_sha256,
             candidate_root,
-            scaling_evidence_manifest,
+            scaling_execution_record,
             expected_signer_fingerprint,
-            expected_scaling_trial_harness_sha256,
-            expected_scaling_configuration_sha256,
-            expected_scaling_irohad_sha256,
-            expected_scaling_iroha_cli_sha256,
+            expected_scaling_execution_sha256,
         )
         invocation_fd, invocation_identity = _open_directory(invocation_root, "release invocation root")
         output_fd, output_identity = _open_directory(output, "release output root")
@@ -1777,7 +1841,7 @@ def seal_release_result(
         inventory_bytes = inventory_held["data"]
         assert isinstance(inventory_bytes, bytes)
         inventory_digest, inventory_size = hashlib.sha256(inventory_bytes).hexdigest(), len(inventory_bytes)
-        for held in (identity_held, receipt_held, ack_held, inventory_held):
+        for held in held_files:
             _revalidate_held_regular(held)
 
         for path, data in (
@@ -1849,7 +1913,7 @@ def seal_release_result(
             },
         }
         published.append((result_path, _publish_inventory(result_path, _canonical_payload(result))))
-        for held in (identity_held, receipt_held, ack_held, inventory_held):
+        for held in held_files:
             _revalidate_held_regular(held)
         if _retained_tree(invocation_root, {source, inventory_path}) != (records, total_bytes):
             raise CacheCopyError("retained release tree changed during protected publication")

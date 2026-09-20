@@ -1186,8 +1186,8 @@ async fn wait_for_bpng_frontier(
         let mut observations = Vec::new();
         for client in clients {
             let client = client.clone();
-            let observed = read(move || {
-                let diagnostics = client.client().get_sumeragi_diagnostics()?;
+            let observed = timeout(READ_TIMEOUT, async {
+                let diagnostics = client.client().get_sumeragi_diagnostics().await?;
                 let ownerships = diagnostics
                     .lane_payload_ownerships
                     .iter()
@@ -1227,9 +1227,11 @@ async fn wait_for_bpng_frontier(
                     }),
                     "BPNG ownership has no matching applied certified-lane status"
                 );
-                Ok(ownership)
+                Ok::<_, eyre::Report>(ownership)
             })
-            .await;
+            .await
+            .wrap_err("bounded fixture read timed out")
+            .and_then(|result| result.wrap_err("fixture read task failed"));
             match observed {
                 Ok(ownership) => {
                     assert_bpng_ownership(

@@ -678,7 +678,7 @@ impl std::ops::Deref for SumeragiObservation {
 fn sumeragi_observation(client: &Client) -> Result<SumeragiObservation> {
     Ok(SumeragiObservation {
         canonical: client.client().get_sumeragi_status()?,
-        diagnostics: client.client().get_sumeragi_diagnostics()?,
+        diagnostics: client.get_sumeragi_diagnostics()?,
     })
 }
 fn wait_for_height(
@@ -1711,7 +1711,7 @@ fn lane_payload_ownership_progress_observations(
                             ));
                 },
             );
-            match client.client().get_sumeragi_diagnostics() {
+            match client.get_sumeragi_diagnostics() {
                 Ok(status) => {
                     latest_lane_payload_ownership_progress(&status, lane_id, dataspace_id)
                 }
@@ -3307,7 +3307,7 @@ fn wait_for_durable_native_participant_evidence_after(
                                 network.peers().len().saturating_sub(peer_index),
                             ));
                 });
-            match client.client().get_sumeragi_diagnostics() {
+            match client.get_sumeragi_diagnostics() {
                 Ok(diagnostics) => match durable_native_participant_row(
                     &diagnostics,
                     lane_id,
@@ -3524,7 +3524,7 @@ fn wait_for_autoscale_baseline(network: &sandbox::SerializedNetwork, context: &s
             let client = peer.client();
             match (
                 client.client().get_sumeragi_status(),
-                client.client().get_sumeragi_diagnostics(),
+                client.get_sumeragi_diagnostics(),
             ) {
                 (Ok(status), Ok(diagnostics)) => {
                     if let Err(err) = status.validate() {
@@ -4002,7 +4002,7 @@ fn wait_for_autoscale_expansion(
             let client = peer.client();
             match (
                 client.client().get_sumeragi_status(),
-                client.client().get_sumeragi_diagnostics(),
+                client.get_sumeragi_diagnostics(),
             ) {
                 (Ok(status), Ok(diagnostics)) => {
                     let governance_rows = diagnostics
@@ -4149,7 +4149,7 @@ fn wait_for_recreated_autoscale_lane_ready(
         for (index, peer) in network.peers().iter().enumerate() {
             match (
                 peer.client().client().get_sumeragi_status(),
-                peer.client().client().get_sumeragi_diagnostics(),
+                peer.client().get_sumeragi_diagnostics(),
             ) {
                 (Ok(status), Ok(diagnostics)) => {
                     let governance = diagnostics
@@ -4341,7 +4341,7 @@ fn wait_for_active_autoscale_diagnostics_convergence(
         let mut identities = BTreeSet::new();
         let mut ready = true;
         for (index, peer) in network.peers().iter().enumerate() {
-            match peer.client().client().get_sumeragi_diagnostics() {
+            match peer.client().get_sumeragi_diagnostics() {
                 Ok(diagnostics) => {
                     let rows = diagnostics
                         .committed_lane_blocks
@@ -4929,7 +4929,7 @@ fn wait_for_autoscale_retirement(
         for (index, peer) in network.peers().iter().enumerate() {
             match (
                 peer.client().client().get_sumeragi_status(),
-                peer.client().client().get_sumeragi_diagnostics(),
+                peer.client().get_sumeragi_diagnostics(),
             ) {
                 (Ok(status), Ok(diagnostics)) => {
                     let lane_blocks = diagnostics

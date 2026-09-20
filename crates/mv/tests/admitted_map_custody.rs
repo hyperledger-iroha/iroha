@@ -1237,6 +1237,15 @@ fn nested_checkpoint_apply_abort_and_sibling_apply_preserve_original_parent_unti
         assert_eq!(writer.get(&0).unwrap().pointer(), parent_pointer);
         assert_eq!(writer.len(), 1);
         assert_eq!(budget.reserved_bytes(), baseline);
+        let (key, value) = input(&budget, 6);
+        assert!(
+            writer
+                .try_insert_admitted(key, value, |demand| {
+                    Policy::admit(&budget, &counters, demand, None)
+                })
+                .unwrap_or_else(|_| panic!("admitted edit under the original writer"))
+                .is_none()
+        );
         let mut sibling = writer.checkpoint().unwrap();
         assert!(checkpoint_insert(&mut sibling, &budget, &counters, 7).is_none());
         without_allocations(|| sibling.apply());
@@ -1245,7 +1254,8 @@ fn nested_checkpoint_apply_abort_and_sibling_apply_preserve_original_parent_unti
         without_allocations(|| writer.commit());
     });
     assert!(old.is_empty());
-    assert_eq!(map.read().len(), 2);
+    assert_eq!(map.read().len(), 3);
+    assert!(map.read().get(&6).is_some());
     assert!(map.read().get(&7).is_some());
     assert!(map.read().get(&1).is_none());
     without_allocations(|| budget.with_deferred_refund_notifications(|| drop(old)));
@@ -1330,8 +1340,7 @@ fn checkpoint_capacity_refusal_keeps_child_state_and_original_input_for_retry() 
                 .try_insert_admitted(key, value, |demand| {
                     Policy::admit(&budget, &counters, demand, None)
                 })
-                .err()
-                .expect("original full budget")
+                .expect_err("original full budget")
         });
         assert!(matches!(
             error,

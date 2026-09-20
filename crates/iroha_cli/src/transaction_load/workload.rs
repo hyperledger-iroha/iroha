@@ -263,7 +263,7 @@ fn verify_accounts(
         .any(|record| !record.settled() || record.failure.is_some())
     {
         bail!(
-            "workload postconditions require every scheduled request to reach global StateApplied"
+            "workload postconditions require matching global and peer-local StateApplied for every request"
         );
     }
     if baselines.0.len() != authorities.len() {

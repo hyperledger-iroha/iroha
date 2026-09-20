@@ -84,6 +84,11 @@ where
         self.inner.as_ref().search(key)
     }
 
+    /// Borrow original entries in key order without reconstructing the successor.
+    pub fn iter(&self) -> Iter<'_, K, V, M::Charge> {
+        self.inner.as_ref().kv_iter()
+    }
+
     /// Borrow an immutable snapshot of the retained successor.
     pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, M> {
         BptreeMapReadSnapshot {

@@ -598,6 +598,90 @@ def _framework_python_marker_record(
         "relocation": relocation,
     }
 
+def _validate_terminal_fixed_scaling(*, receipt_evidence, release_root,
+        receipt_identity, runner_record, scaling_execution, scaling_record_api,
+        capture_archive, capture_directory):
+    """Join the original parent record and complete fixed archive census."""
+    # The original bootstrap passes its retained publication snapshot and the
+    # authenticated canonical decoder. Archived JSON never supplies either owner.
+    _require_unchanged(scaling_execution, 'parent scaling execution record',
+                       maximum_bytes=scaling_record_api.MAX_RECORD_BYTES)
+    if (scaling_execution.path.name != 'scaling-execution.json'
+            or scaling_execution.mode != 0o400 or scaling_execution.nlink != 1
+            or scaling_execution.owner != os.getuid()):
+        raise BootstrapError('parent scaling execution record metadata is not exact')
+    try:
+        scaling_record = scaling_record_api.decode_parent_execution(scaling_execution.data)
+        scaling_projection = scaling_record_api.receipt_projection(scaling_record)
+        if (scaling_record.sha256 != scaling_execution.sha256
+                or receipt_evidence['multilane_scaling'] != scaling_projection):
+            raise BootstrapError('terminal scaling projection differs from original parent publication')
+        if release_root.name != 'source':
+            raise BootstrapError('terminal scaling source is not the retained invocation source')
+        scaling_root = release_root.parent / 'output' / 'scaling'
+        scaling_identity = dict(head_commit=receipt_identity['head_commit'],
+            head_tree=receipt_identity['head_tree'],
+            workspace_source_manifest_sha256=receipt_identity['sealed_source_manifest_sha256'])
+        scaling_record_api.inspect_parent_archive(scaling_root, scaling_record, scaling_identity)
+        scaling_files, scaling_directories = scaling_record_api.capture_public_archive(scaling_root, scaling_record)
+        preflight_root = scaling_execution.path.parent / 'scaling-preflight'
+        preflight_context = dict(source_root=release_root, candidate_identity=scaling_identity,
+            invocation_sha256=runner_record['scaling_handoff']['IROHA_RELEASE_SCALING_INVOCATION_SHA256'],
+            timeout_seconds=runner_record['scaling_preflight_timeout_seconds'])
+        scaling_record_api.inspect_preflight_archive(preflight_root, scaling_record, **preflight_context)
+        preflight_files, preflight_directories = scaling_record_api.capture_preflight_archive(preflight_root, scaling_record, **preflight_context)
+    except ValueError:
+        raise BootstrapError('terminal fixed scaling archive data is invalid') from None
+    capture_archive(scaling_projection['parent_execution'], 'parent scaling execution record',
+        archive_id=scaling_record_api.RECORD_ARCHIVE_ID, expected_path=scaling_execution.path,
+        maximum_bytes=scaling_record_api.MAX_RECORD_BYTES, expected_mode=0o400,
+        containment_root=scaling_execution.path.parent)
+    capture_directory(scaling_root, 'terminal fixed scaling archive root',
+                      containment_root=scaling_root, expected_mode=0o700)
+    for relative in scaling_directories:
+        capture_directory(scaling_root.joinpath(*_terminal_relative_path(relative, 'fixed scaling directory')),
+                          'terminal fixed scaling directory', containment_root=scaling_root, expected_mode=0o700)
+    for row in scaling_files:
+        relative = row['relative_path']
+        capture_archive(dict(archive_id='release-scaling.file.v1:' + relative,
+                **{name: row[name] for name in ('sha256', 'size_bytes', 'mode')}),
+            'terminal fixed scaling file', archive_id='release-scaling.file.v1:' + relative,
+            expected_path=scaling_root.joinpath(*_terminal_relative_path(relative, 'fixed scaling file')),
+            maximum_bytes=row['max_bytes'], expected_mode=int(row['mode'], 8), containment_root=scaling_root)
+    if scaling_record_api.capture_public_archive(scaling_root, scaling_record) != (scaling_files, scaling_directories):
+        raise BootstrapError('terminal fixed scaling archive changed during capture')
+    verifier_root = scaling_execution.path.parent / 'scaling-verifier-python'
+    verifier_files, verifier_directories = scaling_record_api.capture_verifier_archive(verifier_root, scaling_record)
+    for row in verifier_directories:
+        capture_directory(verifier_root / row['relative_path'], 'terminal scaling verifier directory',
+            containment_root=verifier_root, expected_mode=int(row['mode'], 8))
+    for row in verifier_files:
+        relative = row['relative_path']
+        archive_id = 'release-scaling.verifier-file.v1:' + relative
+        capture_archive(dict(archive_id=archive_id,
+                **{name: row[name] for name in ('sha256', 'size_bytes', 'mode')}),
+            'terminal scaling verifier file', archive_id=archive_id,
+            expected_path=verifier_root / relative, maximum_bytes=row['max_bytes'],
+            expected_mode=int(row['mode'], 8), containment_root=verifier_root)
+    if scaling_record_api.capture_verifier_archive(verifier_root, scaling_record) != (verifier_files, verifier_directories):
+        raise BootstrapError('terminal scaling verifier archive changed during capture')
+    for row in preflight_directories:
+        capture_directory(preflight_root / row['relative_path'], 'terminal scaling preflight directory',
+            containment_root=preflight_root, expected_mode=int(row['mode'], 8))
+    for row in preflight_files:
+        relative = row['relative_path']
+        archive_id = 'release-scaling.preflight-file.v1:' + relative
+        capture_archive(dict(archive_id=archive_id,
+                **{name: row[name] for name in ('sha256', 'size_bytes', 'mode')}),
+            'terminal scaling preflight file', archive_id=archive_id,
+            expected_path=preflight_root / relative, maximum_bytes=row['max_bytes'],
+            expected_mode=int(row['mode'], 8), containment_root=preflight_root)
+    if scaling_record_api.capture_preflight_archive(preflight_root, scaling_record, **preflight_context) != (preflight_files, preflight_directories):
+        raise BootstrapError('terminal scaling preflight archive changed during capture')
+
+
+
+
 def _validate_terminal_release_evidence(
     *,
     receipt_evidence: dict[str, Any],
@@ -606,6 +690,8 @@ def _validate_terminal_release_evidence(
     receipt_identity: dict[str, Any],
     runner_record: dict[str, Any],
     authenticated_environment: dict[str, str],
+    scaling_execution: FileSnapshot,
+    scaling_record_api: object,
 ) -> tuple[list[LargeFileSnapshot], list[DirectorySnapshot]]:
     """Validate and freeze every newly protected terminal-evidence input."""
 
@@ -736,7 +822,27 @@ def _validate_terminal_release_evidence(
         )
         if record["archive_id"] != archive_id:
             raise BootstrapError(f"{label} has the wrong archive id")
-        snapshot = _capture_large_file(expected_path, label)
+        if (type(record['size_bytes']) is not int
+                or not 0 <= record['size_bytes'] <= maximum_bytes):
+            raise BootstrapError(f"{label} has an invalid bounded archive size")
+        parent = capture_directory(expected_path.parent, f'{label} parent directory',
+                                   containment_root=containment_root)
+        flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+        parent_fd, parent_pin = _open_capture_descriptor(parent.path, flags,
+            (parent.device, parent.inode, stat.S_IFDIR, parent.owner), label)
+        try:
+            opened = os.fstat(parent_fd)
+            if (opened.st_dev, opened.st_ino, stat.S_IMODE(opened.st_mode), opened.st_uid) != (
+                    parent.device, parent.inode, parent.mode, parent.owner):
+                raise BootstrapError(f'{label} parent directory changed before capture')
+            _require_capture_descriptor(parent_fd, parent_pin, label)
+            snapshot = _capture_large_file_at(parent_fd, expected_path.name, expected_path,
+                label, maximum_bytes=record['size_bytes'])
+            _require_capture_descriptor(parent_fd, parent_pin, label)
+            if _terminal_directory_snapshot(parent.path, label) != parent:
+                raise BootstrapError(f'{label} parent directory changed during capture')
+        finally:
+            _close_capture_descriptor(parent_fd, parent_pin)
         if (
             not _inside(snapshot.path, containment_root)
             or snapshot.size > maximum_bytes
@@ -2215,145 +2321,10 @@ def _validate_terminal_release_evidence(
         expected_mode=_TOOL_MODE,
     )
 
-    scaling = _require_exact_json_fields(
-        receipt_evidence["multilane_scaling_bundle"],
-        {"archive_id", "file_count", "total_size_bytes", "directories", "files"},
-        "terminal scaling bundle",
-    )
-    if scaling["archive_id"] != "release-scaling.bundle.v1":
-        raise BootstrapError("terminal scaling bundle archive id is malformed")
-    manifest_environment = authenticated_environment.get(
-        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
-    )
-    if not isinstance(manifest_environment, str):
-        raise BootstrapError("authenticated runner omits scaling manifest")
-    scaling_manifest_input = _absolute_resolved_existing(
-        Path(manifest_environment), "authenticated scaling manifest"
-    )
-    scaling_root = _absolute_resolved_existing(
-        scaling_manifest_input.parent, "terminal scaling bundle root"
-    )
-    capture_directory(
-        scaling_root,
-        "terminal scaling bundle root",
-        containment_root=scaling_root,
-    )
-    scaling_directories = scaling["directories"]
-    scaling_files = scaling["files"]
-    if (
-        not isinstance(scaling_directories, list)
-        or len(scaling_directories) > _MAX_SCALING_BUNDLE_DIRECTORY_COUNT
-        or not isinstance(scaling_files, list)
-        or len(scaling_files) > _MAX_SCALING_BUNDLE_FILE_COUNT
-        or type(scaling["file_count"]) is not int
-        or scaling["file_count"] != len(scaling_files)
-        or type(scaling["total_size_bytes"]) is not int
-        or not 0 <= scaling["total_size_bytes"] <= _MAX_SCALING_BUNDLE_TOTAL_BYTES
-    ):
-        raise BootstrapError("terminal scaling bundle inventory is malformed")
-    parsed_directories: list[str] = []
-    for index, relative in enumerate(scaling_directories):
-        parts = _terminal_relative_path(relative, f"terminal scaling directory {index}")
-        parsed_directories.append(relative)
-        capture_directory(
-            scaling_root.joinpath(*parts),
-            f"terminal scaling directory {index}",
-            containment_root=scaling_root,
-        )
-    if parsed_directories != sorted(set(parsed_directories)):
-        raise BootstrapError("terminal scaling directories are not sorted and unique")
-    parsed_files: list[str] = []
-    total_size = 0
-    scaling_manifest: Path | None = None
-    for index, record in enumerate(scaling_files):
-        if not isinstance(record, dict):
-            raise BootstrapError(f"terminal scaling file {index} is malformed")
-        relative = record.get("relative_path")
-        parts = _terminal_relative_path(relative, f"terminal scaling file {index}")
-        parsed_files.append(relative)
-        snapshot = capture_archive(
-            record,
-            f"terminal scaling file {index}",
-            archive_id="release-scaling.file.v1:" + relative,
-            expected_path=scaling_root.joinpath(*parts),
-            maximum_bytes=_MAX_SCALING_BUNDLE_FILE_BYTES,
-            containment_root=scaling_root,
-            extra_fields=frozenset({"relative_path"}),
-        )
-        total_size += snapshot.size
-        if relative == "scaling_evidence.json":
-            scaling_manifest = snapshot.path
-    if parsed_files != sorted(set(parsed_files)) or total_size != scaling["total_size_bytes"]:
-        raise BootstrapError("terminal scaling files are not one exact sorted inventory")
-    if scaling_manifest is None:
-        raise BootstrapError("terminal scaling bundle omits scaling_evidence.json")
-    live_files: list[str] = []
-    live_directories: list[str] = []
-    for current, names, filenames in os.walk(scaling_root, followlinks=False):
-        current_path = Path(current)
-        for name in names:
-            path = current_path / name
-            metadata = path.lstat()
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-                raise BootstrapError("terminal scaling bundle contains an unsafe directory")
-            live_directories.append(path.relative_to(scaling_root).as_posix())
-        for name in filenames:
-            path = current_path / name
-            metadata = path.lstat()
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-                raise BootstrapError("terminal scaling bundle contains an unsafe file")
-            live_files.append(path.relative_to(scaling_root).as_posix())
-    if sorted(live_directories) != parsed_directories or sorted(live_files) != parsed_files:
-        raise BootstrapError("terminal scaling bundle live inventory does not match receipt")
-
-    retained_validator = capture_archive(
-        receipt_evidence["multilane_scaling_retained_validator"],
-        "terminal retained scaling validator",
-        archive_id="release-scaling.retained-validator.v1",
-        expected_path=release_root / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py",
-        containment_root=release_root,
-    )
-    trust_anchors = _require_exact_json_fields(
-        receipt_evidence["multilane_scaling_trust_anchors"],
-        {
-            "trial_harness_sha256",
-            "configuration_sha256",
-            "irohad_sha256",
-            "iroha_cli_sha256",
-            "retained_tooling",
-        },
-        "terminal scaling trust anchors",
-    )
-    for field, environment_name in _SCALING_DIGEST_ENVIRONMENT.items():
-        value = authenticated_environment.get(environment_name)
-        if not isinstance(value, str):
-            raise BootstrapError(f"authenticated runner environment omits {environment_name}")
-        _require_digest(value, f"authenticated {environment_name}")
-        if trust_anchors[field] != value:
-            raise BootstrapError(f"terminal scaling trust anchor {field} is not authenticated")
-    if manifest_environment != str(scaling_manifest):
-        raise BootstrapError("terminal scaling manifest is not the authenticated runner input")
-    retained_tooling = trust_anchors["retained_tooling"]
-    if not isinstance(retained_tooling, list) or len(retained_tooling) != len(_SCALING_REQUIRED_TOOLING):
-        raise BootstrapError("terminal scaling retained tooling inventory is incomplete")
-    for index, ((role, source_path), record) in enumerate(
-        zip(_SCALING_REQUIRED_TOOLING, retained_tooling)
-    ):
-        if (
-            not isinstance(record, dict)
-            or record.get("role") != role
-        ):
-            raise BootstrapError(f"terminal retained scaling tool {index} identity is not exact")
-        capture_archive(
-            record,
-            f"terminal retained scaling tool {index}",
-            archive_id=f"release-scaling.retained-tool.{role}.v1",
-            extra_fields=frozenset({"role"}),
-            expected_path=release_root.joinpath(*source_path.split("/")),
-            containment_root=release_root,
-        )
-    if retained_validator.mode & 0o111 == 0:
-        raise BootstrapError("terminal retained scaling validator is not executable")
+    _validate_terminal_fixed_scaling(receipt_evidence=receipt_evidence,
+        release_root=release_root, receipt_identity=receipt_identity, runner_record=runner_record,
+        scaling_execution=scaling_execution, scaling_record_api=scaling_record_api,
+        capture_archive=capture_archive, capture_directory=capture_directory)
 
     g4p = _require_exact_json_fields(
         receipt_evidence["g4p_multilane"],
@@ -2471,6 +2442,7 @@ def _retained_release_layout(
     evidence: Path,
     evidence_fd: int,
     *,
+    scaling_execution: FileSnapshot,
     candidate: Path | None = None,
     authenticated_environment: dict[str, str] | None = None,
     expected_receipt: dict[str, Any] | None = None,
@@ -2935,6 +2907,7 @@ def _retained_release_layout(
         invocation_record,
         expected_values=_terminal_validator_invocation_values(
             expected_receipt,
+            scaling_execution=scaling_execution,
             evidence=evidence,
             candidate=candidate,
             release_runner=release_runner,
@@ -3087,7 +3060,7 @@ def _receipt_validation_failure(
         or not 1 <= validator["exit_status"] <= 255
         or argv != {
             "profile": "release",
-            "python_flags": ["-I", "-S"],
+            "python_flags": ["-I", "-B", "-S"],
             "validator": "protected:validate-receipt.py",
             "operation": "verify-existing-and-ack",
             "invocation_binding": "not-published-validation-failed",
@@ -3249,6 +3222,8 @@ def _validate_terminal_receipt(
     identity_attestation: dict[str, Any],
     expected_signer_fingerprint: str,
     authenticated_environment: dict[str, str],
+    scaling_execution: FileSnapshot,
+    scaling_record_api: object,
     release_runner: Path | None = None,
     receipt_path: Path | None = None,
 ) -> tuple[
@@ -3257,6 +3232,8 @@ def _validate_terminal_receipt(
     list[LargeFileSnapshot],
     list[DirectorySnapshot],
 ]:
+    if scaling_execution.path != evidence / 'scaling-execution.json':
+        raise BootstrapError('original parent scaling publication path is not exact')
     release_runner = release_runner or evidence / "release-runner"
     output = release_runner / "output"
     release = output / "release"
@@ -3373,6 +3350,8 @@ def _validate_terminal_receipt(
             receipt_identity=receipt_identity,
             runner_record=runner_record,
             authenticated_environment=authenticated_environment,
+            scaling_execution=scaling_execution,
+            scaling_record_api=scaling_record_api,
         )
     )
 
@@ -3523,6 +3502,8 @@ def _validate_terminal_receipt(
             "output",
             "tool_directory",
             "tools",
+            "scaling_handoff",
+            "scaling_preflight_timeout_seconds",
             "environment_sha256",
             "self_digest_environment_variables",
         },
@@ -3537,6 +3518,8 @@ def _validate_terminal_receipt(
         "output": runner_record["output"],
         "tool_directory": runner_record["tool_directory"],
         "tools": runner_record["tools"],
+        "scaling_handoff": runner_record["scaling_handoff"],
+        "scaling_preflight_timeout_seconds": runner_record["scaling_preflight_timeout_seconds"],
         "environment_sha256": runner_record["environment_sha256"],
         "self_digest_environment_variables": runner_record[
             "self_digest_environment_variables"
@@ -3725,44 +3708,6 @@ def _receipt_nested_artifact_path(
     return path
 
 
-def _receipt_scaling_manifest_path(
-    receipt: dict[str, Any], authenticated_environment: dict[str, str]
-) -> Path:
-    bundle = receipt.get("evidence", {}).get("multilane_scaling_bundle")
-    if (
-        not isinstance(bundle, dict)
-        or bundle.get("archive_id") != "release-scaling.bundle.v1"
-        or not isinstance(bundle.get("files"), list)
-    ):
-        raise BootstrapError("terminal receipt omits its scaling bundle")
-    matching = [
-        record
-        for record in bundle["files"]
-        if isinstance(record, dict)
-        and record.get("relative_path") == "scaling_evidence.json"
-    ]
-    if len(matching) != 1:
-        raise BootstrapError("terminal receipt scaling manifest inventory is not exact")
-    rendered = authenticated_environment.get(
-        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
-    )
-    if not isinstance(rendered, str):
-        raise BootstrapError("authenticated runner omits its scaling manifest")
-    path = _absolute_resolved_existing(
-        Path(rendered), "authenticated scaling manifest"
-    )
-    snapshot = _capture_large_file(path, "authenticated scaling manifest")
-    record = matching[0]
-    if (
-        record.get("archive_id")
-        != "release-scaling.file.v1:scaling_evidence.json"
-        or record.get("sha256") != snapshot.sha256
-        or record.get("size_bytes") != snapshot.size
-        or _terminal_mode(record.get("mode"), "terminal scaling manifest")
-        != snapshot.mode
-    ):
-        raise BootstrapError("terminal scaling manifest authentication is not exact")
-    return path
 
 
 def _run_protected_receipt_validator(
@@ -3781,6 +3726,7 @@ def _run_protected_receipt_validator(
     expected_signer_fingerprint: str,
     environment: dict[str, str],
     timeout_seconds: int,
+    scaling_execution: FileSnapshot,
 ) -> CommandResult:
     release_output = sealed_root.parent / "output"
     local_receipt_path = release_output / "release" / "RELEASE_COMPLETED.json"
@@ -3873,18 +3819,13 @@ def _run_protected_receipt_validator(
         raise BootstrapError(
             "terminal formal replay validator inputs are not exact"
         )
-    scaling_digests: dict[str, str] = {}
-    for field, environment_name in _SCALING_DIGEST_ENVIRONMENT.items():
-        value = environment.get(environment_name)
-        if not isinstance(value, str):
-            raise BootstrapError(
-                f"protected receipt validation lacks {environment_name}"
-            )
-        scaling_digests[field] = _require_digest(
-            value, f"protected {environment_name}"
-        )
+    if scaling_execution.path != evidence / 'scaling-execution.json':
+        raise BootstrapError('protected receipt replay lacks original scaling publication')
+    _require_unchanged(scaling_execution, 'parent scaling execution record',
+                       maximum_bytes=max(scaling_execution.size, 1))
     arguments = [
         "-I",
+        "-B",
         "-S",
         str(archives["receipt_validator"].path),
         "--candidate-identity",
@@ -3965,8 +3906,10 @@ def _run_protected_receipt_validator(
                 ("g12_cross_dataspace", "fault_soak_completion")
             )
         ),
-        "--scaling-evidence-manifest",
-        str(_receipt_scaling_manifest_path(receipt, environment)),
+        "--scaling-execution-record",
+        str(scaling_execution.path),
+        "--expected-scaling-execution-sha256",
+        scaling_execution.sha256,
         "--sdk-dependency-archive",
         str(sealed_root.parent / "sdk-dependency-bundle.tar"),
         "--sdk-dependency-input-inventory",
@@ -3977,14 +3920,6 @@ def _run_protected_receipt_validator(
         str(sealed_root.parent / "runtime-tool-probe-manifest.json"),
         "--runtime-tool-probe-result",
         str(sealed_root.parent / "runtime-tool-probe-result.json"),
-        "--expected-scaling-trial-harness-sha256",
-        scaling_digests["trial_harness_sha256"],
-        "--expected-scaling-configuration-sha256",
-        scaling_digests["configuration_sha256"],
-        "--expected-scaling-irohad-sha256",
-        scaling_digests["irohad_sha256"],
-        "--expected-scaling-iroha-cli-sha256",
-        scaling_digests["iroha_cli_sha256"],
         "--repository-root",
         str(sealed_root),
         "--output",
@@ -4024,6 +3959,8 @@ def _run_protected_receipt_validator(
         "protected-validator retained terminal receipt",
         maximum_bytes=_MAX_TERMINAL_RECEIPT_BYTES,
     )
+    _require_unchanged(scaling_execution, 'parent scaling execution record after replay',
+                       maximum_bytes=max(scaling_execution.size, 1))
     return result
 
 

@@ -45699,6 +45699,160 @@ state_test! { sync query_recovery_promotion_failures_never_publish_measurable_ph
     }
 }
 
+// These projection-only fixtures do not construct a GenesisMergeAuthority.
+// Actual authenticated capability coverage below reuses StrictReplayFixture.
+fn genesis_merge_projection_state(lane_count: u32) -> (State, Vec<KeyPair>) {
+    let mut state = blank_test_state();
+    let lanes = (0..lane_count)
+        .map(|id| LaneConfig {
+            id: LaneId::new(id),
+            alias: format!("lane-{id}"),
+            ..LaneConfig::default()
+        })
+        .collect();
+    let catalog = LaneCatalog::new(NonZeroU32::new(lane_count).unwrap(), lanes)
+        .expect("bounded one/four lane projection catalog");
+    state
+        .set_nexus(iroha_config::parameters::actual::Nexus {
+            lane_catalog: catalog,
+            ..Default::default()
+        })
+        .expect("install pre-genesis projection geometry");
+    let (_, keys) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &keys);
+    let lane_ids = (0..lane_count).map(LaneId::new).collect::<Vec<_>>();
+    install_lane_manifest_registry_for_keypairs(&state, &lane_ids, &keys);
+    (state, keys)
+}
+
+state_test! { large_stack staged_genesis_merge_projection_matches_view_for_one_and_four_lanes
+    for lane_count in [1, 4] {
+        let (state, _) = genesis_merge_projection_state(lane_count);
+        let view = state.view();
+        let expected = State::merge_active_lane_authority_snapshot_from_view(&view, 1)
+            .expect("ordinary production view projection");
+        drop(view);
+        let staged = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let projected = staged.staged_genesis_merge_authority_snapshot()
+            .expect("same-state staged projection");
+        assert_eq!(projected, expected);
+        assert_eq!(projected.1.len(), lane_count as usize);
+        for (index, binding) in projected.1.iter().enumerate() {
+            assert_eq!(binding.lane_id, LaneId::new(index as u32));
+            assert_eq!(binding.activation_height, 1);
+            assert_eq!(Some(&binding.incarnation), staged.lane_incarnations.get(&binding.lane_id));
+            let committee = staged.resolve_lane_committee_at_height(
+                LaneAuthorityRoute::new(binding.lane_id, binding.dataspace_id), 1,
+            ).expect("exact staged route committee");
+            assert_eq!(committee.validators().len(), 4);
+            assert_eq!(projected.2.roster_for_lane(index).unwrap().validators,
+                committee.validators());
+        }
+    }
+}
+
+state_test! { large_stack staged_genesis_merge_projection_rejects_missing_rebound_and_extra_maps
+    for corruption in 0..8 {
+        let (state, _) = genesis_merge_projection_state(4);
+        let mut staged = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let lane = LaneId::SINGLE;
+        match corruption {
+            0 => { staged.lane_incarnations.remove(&lane); }
+            1 => { staged.lane_incarnation_activation_heights.remove(&lane); }
+            2 => { staged.lane_incarnations.insert(lane, Hash::new(b"rebound-active-map")); }
+            3 => { staged.lane_incarnation_activation_heights.insert(lane, 7); }
+            4 => { staged.lane_incarnations.insert(LaneId::new(100), Hash::new(b"extra-map")); }
+            5 => { staged.lane_incarnation_activation_heights.insert(LaneId::new(100), 0); }
+            6 => { staged.lane_incarnation_lineage.remove(&lane); }
+            7 => { staged.lane_incarnation_activation_heights.insert(lane, u64::MAX); }
+            _ => unreachable!(),
+        }
+        let error = staged.staged_genesis_merge_authority_snapshot()
+            .expect_err("no authority projection after active-map corruption");
+        match corruption {
+            0 | 1 | 7 => assert!(matches!(error, MergeLedgerCommitError::UnknownLane { lane_id } if lane_id == lane)),
+            _ => assert!(matches!(error, MergeLedgerCommitError::IncarnationContext(_))),
+        }
+    }
+}
+
+state_test! { large_stack staged_genesis_merge_projection_preserves_exact_committee_rejection
+    let (state, keys) = genesis_merge_projection_state(4);
+    remove_world_peer_for_test(&state, &PeerId::new(keys[0].public_key().clone()));
+    let staged = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+    let error = staged.staged_genesis_merge_authority_snapshot()
+        .expect_err("three live peers cannot supply a four-validator committee");
+    assert!(matches!(error, MergeLedgerCommitError::ExecutionBatchInvalid(ref reason)
+        if reason.contains("requires 4 validators") && reason.contains("pool has 3")));
+    drop(staged);
+    let ordinary = state.merge_active_lane_authority_snapshot(1)
+        .expect_err("ordinary projection keeps the same typed rejection");
+    assert_eq!(ordinary.to_string(), error.to_string());
+}
+
+state_test! { large_stack ordinary_merge_view_projection_keeps_its_original_map_semantics
+    let (state, _) = genesis_merge_projection_state(1);
+    let mut view = state.view();
+    let rebound = Hash::new(b"view-only-map-behavior");
+    view.lane_incarnations.insert(LaneId::SINGLE, rebound);
+    view.lane_incarnation_activation_heights.insert(LaneId::SINGLE, 8);
+    let projection = State::merge_active_lane_authority_snapshot_from_view(&view, 1)
+        .expect("new capability coherence policy must not change ordinary view behavior");
+    assert_eq!(projection.1[0].incarnation, rebound);
+    assert_eq!(projection.1[0].activation_height, 9);
+}
+
+state_test! { large_stack genesis_merge_authority_owns_exact_signed_stage_and_typed_rejections
+    use crate::sumeragi::{GenesisMergeAuthorityError, V2GenesisBootstrapError,
+        freeze_genesis_merge_authority, freeze_staged_genesis_v2};
+    use iroha_data_model::block::consensus_v2::ConsensusMode;
+    let fixture = super::strict_replay_tests::StrictReplayFixture::new();
+    let state = fixture.replay_state(Kura::blank_kura_for_testing());
+    let topology = crate::sumeragi::network_topology::Topology::new(
+        fixture.context.roster.iter().map(|entry| entry.validator.clone()),
+    );
+    let mut voting_block = None;
+    let (_valid, mut staged) = crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
+        fixture.genesis.0.clone(), &topology, &fixture.genesis_account,
+        &iroha_primitives::time::TimeSource::new_system(), &state, &mut voting_block,
+        ConsensusMode::Permissioned,
+    ).unpack(|_| {}).unwrap_or_else(|(_, error)| panic!("restage exact fixture genesis: {error}"));
+    let ordinary = freeze_staged_genesis_v2(&fixture.genesis, &staged, ConsensusMode::Permissioned)
+        .expect("ordinary authenticated bootstrap");
+    let projected = staged.staged_genesis_merge_authority_snapshot().expect("same overlay projection");
+    let authority = freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned)
+        .expect("new capability consumes the same authenticated bootstrap and overlay");
+    assert_eq!(authority.context(), ordinary.context());
+    assert_eq!(authority.proofs_of_possession(), ordinary.proofs_of_possession());
+    assert_eq!(authority.catalog_hash(), projected.0);
+    assert_eq!(authority.active_lanes(), projected.1);
+    assert_eq!(authority.lane_authority_catalog(), &projected.2);
+    assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Npos),
+        Err(GenesisMergeAuthorityError::Bootstrap(V2GenesisBootstrapError::SignedConsensusModeMismatch))));
+
+    let original_header = staged._curr_block;
+    staged._curr_block = BlockHeader::new(nonzero!(1_u64), None, None, 42, 0);
+    assert!(freeze_staged_genesis_v2(&fixture.genesis, &staged, ConsensusMode::Permissioned).is_ok(),
+        "the new exact-header check is scoped to the new capability");
+    assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned),
+        Err(GenesisMergeAuthorityError::StagedHeaderMismatch)));
+    staged._curr_block = original_header;
+
+    let original_network = staged.network_id;
+    staged.network_id = crate::sumeragi::synthetic_network_id("different-staged-network");
+    assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned),
+        Err(GenesisMergeAuthorityError::Bootstrap(V2GenesisBootstrapError::StagedNetworkIdMismatch))));
+    staged.network_id = original_network;
+    staged.lane_incarnations.insert(LaneId::SINGLE, Hash::new(b"unsigned-active-map"));
+    assert!(freeze_staged_genesis_v2(&fixture.genesis, &staged, ConsensusMode::Permissioned).is_ok(),
+        "the signed commitment retains private lineage, not the mutable active-map alias");
+    assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned),
+        Err(GenesisMergeAuthorityError::Merge(MergeLedgerCommitError::IncarnationContext(_)))));
+    drop(staged);
+    assert_eq!(authority.context(), ordinary.context(), "owned authority survives the overlay drop");
+    assert_eq!(authority.active_lanes(), projected.1);
+}
+
 #[test]
 fn lane_storage_identity_projects_one_exact_canonical_runtime_image() {
     let state = State::new_for_testing(

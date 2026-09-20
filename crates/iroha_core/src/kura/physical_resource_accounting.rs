@@ -581,6 +581,10 @@ impl ResourceChild<'_, '_> {
     }
 }
 
-// TODO: Compose these fields with TotalDiskUsageMutation, remove the superseded
-// index-only guard API, and bind all data, archive, recovery and delegated byte
-// writers before initializing the complete physical-family baseline.
+// TotalDiskUsageMutation owns these physical-resource guards and publishes only
+// a fully classified scope with every declared child completed. Startup re-audit
+// initializes all physical families together after validating the declared
+// Kura-owned trees, root files and bounded process-generation residue. Delegated
+// Sumeragi WAL, body and Certified-Serve stores have independent writers and are
+// intentionally outside that inventory; new Kura writers must bind their exact
+// owned scope before mutation or leave the affected families unavailable.

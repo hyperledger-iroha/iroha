@@ -419,7 +419,7 @@ mod tests {
     fn advanced_subcommands_parse() {
         assert!(parse("kagami advanced codec list-types").is_ok());
         assert!(parse("kagami advanced schema").is_ok());
-        assert!(parse("kagami advanced kura ./store print").is_ok());
+        assert!(parse("kagami advanced kura print ./store").is_ok());
         assert!(parse("kagami advanced markdown-help").is_ok());
         assert!(
             parse("kagami advanced client-configs --base-config ./client.toml --names alice")
@@ -440,6 +440,9 @@ mod tests {
     }
     #[test]
     fn removed_top_level_commands_fail() {
+        assert!(parse("kagami advanced kura ./store print").is_err());
+        assert!(parse("kagami advanced kura -f 1 ./store print").is_err());
+        assert!(parse("kagami advanced kura ./store sidecar -H 1").is_err());
         assert!(parse("kagami crypto --algorithm ed25519").is_err());
         assert!(parse("kagami swarm -p 1 -c ./cfg -i hyperledger/iroha -o docker.yml").is_err());
         assert!(parse("kagami codec list-types").is_err());

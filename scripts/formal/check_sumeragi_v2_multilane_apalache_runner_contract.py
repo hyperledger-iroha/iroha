@@ -167,12 +167,24 @@ def main() -> int:
         '"$final_multilane_source_manifest_sha256" != "$final_multilane_source_manifest_sha256"',
         "multilane source-manifest drift self-comparison",
     )
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '', 'scheduling option omission')
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '      --tuning-options=search.invariant.mode=before \\\n', 'before-join scheduling substitution')
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '      --tuning-options=search.invariant.mode=${APALACHE_INVARIANT_MODE:-after} \\\n', 'environment scheduling authority')
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '      --tuning-options=search.invariant.mode=after:search.invariantFilter=18->.* \\\n', 'invariant filter addition')
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '      --tuning-options=search.invariant.mode=after:search.transitionFilter=0->0 \\\n', 'transition filter addition')
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '      --tuning-options=search.invariant.mode=after \\\n      --length=1 \\\n', 'second length argument')
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '      --tuning-options=search.invariant.mode=after \\\n      --inv=FirstReleaseTypeInvariant \\\n', 'selected invariant override')
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '      --tuning-options=search.invariant.mode=after \\\n      --tuning-options-file=unreviewed.properties \\\n', 'external tuning file argument')
+    _must_reject(source, '  TUNING_OPTIONS \\\n', '', 'external tuning environment acceptance')
+    _must_reject(source, '  TUNING_OPTIONS_FILE; do', '  TUNING_OPTIONS_FILE_RETIRED; do', 'external tuning file environment acceptance')
+    _must_reject(source, '      --tuning-options=search.invariant.mode=after \\\n', '      --tuning-options=search.invariant.mode=after \\\n      --tuning-options=search.invariant.mode=after \\\n', 'duplicate scheduling argument')
+    _must_reject(source, "grep -Ec '^Tuning: (search.outputTraces=false:search.invariant.mode=after|search.invariant.mode=after:search.outputTraces=false)[[:space:]]+I@'", 'grep -Fc "Tuning:"', 'scheduling result marker weakening')
     override_mutation = source + "\nAPALACHE_LENGTH=${APALACHE_LENGTH:-1}\n"
     if not _apalache_runner_source_errors(override_mutation):
         raise AssertionError("runner contract accepted a length override")
 
     print(
-        "Sumeragi v2 multilane Apalache runner contract passed 22 "
+        "Sumeragi v2 multilane Apalache runner contract passed 35 "
         "fail-closed negative controls"
     )
     return 0

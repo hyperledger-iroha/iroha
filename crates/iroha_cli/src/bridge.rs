@@ -1,5 +1,6 @@
 //! Bridge and exact first-release SCCP commands.
 use crate::{CliOutputFormat, Run, RunContext};
+mod genesis_readiness;
 use base64::Engine as _;
 use clap::Subcommand;
 use eyre::{Result, WrapErr as _, eyre};
@@ -18,6 +19,8 @@ use std::{
 };
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Probe the original node and genesis once with authenticated readiness evidence.
+    GenesisReadiness(genesis_readiness::Args),
     /// Emit a bridge receipt as a typed event.
     EmitReceipt(EmitReceiptArgs),
     /// Inspect the exact transfer-only SCCP registry and proof inputs.
@@ -139,6 +142,7 @@ impl RecentArgs {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            Self::GenesisReadiness(args) => genesis_readiness::run(context, args),
             Self::EmitReceipt(args) => emit_receipt(context, args),
             Self::Sccp(command) => match command {
                 SccpCommand::Capabilities => sccp_capabilities(context),

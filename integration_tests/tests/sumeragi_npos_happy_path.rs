@@ -95,7 +95,7 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
         v2.last_committed_height >= BLOCK_TARGET && v2.last_committed_subject.is_some(),
         "NPoS happy path must expose the committed v2 subject at or above height {BLOCK_TARGET}"
     );
-    let diagnostics = client.client().get_sumeragi_diagnostics()?;
+    let diagnostics = client.client().get_sumeragi_diagnostics().await?;
     ensure!(
         diagnostics.npos.is_some(),
         "NPoS happy path must expose NPoS diagnostics"
@@ -139,7 +139,8 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
         ensure!(
             peer.client()
                 .client()
-                .get_sumeragi_diagnostics()?
+                .get_sumeragi_diagnostics()
+                .await?
                 .npos
                 .is_some(),
             "{} did not activate the NPoS consensus diagnostics",

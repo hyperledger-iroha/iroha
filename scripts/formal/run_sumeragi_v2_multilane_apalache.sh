@@ -4,6 +4,8 @@ set -euo pipefail
 # Fail-closed bounded Apalache gate for the five Sumeragi v2 multilane
 # refinement kernels plus the layout-only in-flight carrier kernel. The fixed
 # bounds are part of the reviewed contract and are not configurable.
+# Check every invariant after joining all enabled transitions at each step;
+# this changes query scheduling while preserving the exact state relation.
 
 if (($#)); then
   if (($# == 1)) && [[ "$1" == "--help" ]]; then
@@ -182,6 +184,7 @@ run_positive() {
     cd "$FORMAL_DIR"
     "$RESOLVED_APALACHE_BIN" --out-dir="$out" check \
       --algo=incremental \
+      --tuning-options=search.invariant.mode=after \
       --config="$config" \
       --length="$length" \
       --no-deadlock \
@@ -194,6 +197,7 @@ run_positive() {
   if [[ "$status" -ne 0 ]] ||
     [[ "$(grep -Fc "# APALACHE version: ${APALACHE_VERSION} |" "$log" || true)" != 1 ]] ||
     [[ "$(grep -Fc "Using inv predicate(s) ${invariants} from the TLC config" "$log" || true)" != 1 ]] ||
+    [[ "$(grep -Ec '^Tuning: (search.outputTraces=false:search.invariant.mode=after|search.invariant.mode=after:search.outputTraces=false)[[:space:]]+I@' "$log" || true)" != 1 ]] ||
     [[ "$(grep -Fc "The outcome is: NoError" "$log" || true)" != 1 ]] ||
     [[ "$(grep -Fc "Checker reports no error up to computation length ${length}" "$log" || true)" != 1 ]] ||
     [[ "$(grep -Fxc "EXITCODE: OK" "$log" || true)" != 1 ]]; then

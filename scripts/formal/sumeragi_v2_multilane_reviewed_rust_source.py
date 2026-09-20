@@ -25,7 +25,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_inventory.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "36a3e4a9cf7a57bd6383935deb440cb146325cc30d143518a38127f8b236eb70"
+    "935f48b523f1c5ab82a8100dbf1ed9182773757f5833df096dc7a3459653028e"
 )
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (
@@ -36,7 +36,7 @@ API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
         "crates/iroha/src/client.rs",
         (
             "pub fn get_sumeragi_status(&self) -> Result<SumeragiV2Status>",
-            "pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus>",
+            "pub async fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus>",
         ),
     ),
     (
@@ -98,7 +98,7 @@ FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
     (
         "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
         (
-            "add `--check`",
+            "Pass `--check`",
             '"--check" if !check_only',
             "native_amx_grouped::write_fixture(",
             "options.check_only",
@@ -154,7 +154,7 @@ FIXTURE_CANONICAL_OWNER_SOURCE_CHECKS = (
         "scripts/write_sumeragi_v2_release_receipt.py",
         (
             '"write_sumeragi_v2_release_receipt_gate_evidence.py": (',
-            "8fe0b1dcdf61ec3a5ff9fb5081e95bfd9726b858b78e1206c4e73fa18370e6eb",
+            "c881a4f0e313b7c00823f62fa2d4e766c04c3b365eeb1847423c7a30cba7a9f6",
             '_SDK_SOURCE_CLOSURE_RESOLVER = "ci/'
             'resolve_sumeragi_v2_sdk_source_closure.py"',
             '_SDK_SOURCE_CLOSURE_MANIFEST = "ci/'

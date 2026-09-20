@@ -1539,9 +1539,16 @@ admits subsequent edits against that same original cursor and funds its exact
 initial root allocation. Refusal preserves private work; publication remains
 atomic. Native mutex/runtime storage, real model payloads, MV undo/transaction
 storage and configured aggregate policy remain required before production cutover.
-The next Storage step must jointly admit current edits and first preimages;
-transaction abort must retain an already funded parent state and never reserve
-rollback capacity in Drop. L1–L6 and four/seven-validator qualification stay open.
+The [borrowed checkpoint](../docs/history/2026-09-20/borrowed-map-checkpoints.md)
+now preserves an already funded parent root and its original tracking buffers
+through nested child edits. Abort needs no rollback allocation or admission;
+caught mutation/cleanup panic makes the original cursor unpublishable. The
+[native Storage undo owner](../docs/history/2026-09-20/native-storage-undo.md)
+replaces the block-undo standard map with that same tree engine, preserving both
+original generations through snapshots and publication retry. The next Storage
+step must jointly admit current edits and first preimages and replace the
+transaction-local standard map and inverse-edit rollback with admitted ownership.
+L1–L6 and four/seven-validator qualification stay open.
 
 
 The retained-journal owner now consumes its actual `ValidBlock` through the existing

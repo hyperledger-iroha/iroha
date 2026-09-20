@@ -186,7 +186,7 @@ def publish_validation_failure(
             },
             "argv": {
                 "profile": "release",
-                "python_flags": ["-I", "-S"],
+                "python_flags": ["-I", "-B", "-S"],
                 "validator": "protected:validate-receipt.py",
                 "operation": "verify-existing-and-ack",
                 "invocation_binding": "not-published-validation-failed",
@@ -225,12 +225,9 @@ def _validation_ack(
     bootstrap_evidence: Path,
     source_manifest_sha256: str,
     candidate_root: Path,
-    scaling_evidence_manifest: Path,
+    scaling_execution_record: Path,
     expected_signer_fingerprint: str,
-    expected_scaling_trial_harness_sha256: str,
-    expected_scaling_configuration_sha256: str,
-    expected_scaling_irohad_sha256: str,
-    expected_scaling_iroha_cli_sha256: str,
+    expected_scaling_execution_sha256: str,
 ) -> tuple[str, int]:
     path, payload, metadata = ack_held["path"], ack_held["data"], ack_held["metadata"]
     receipt, receipt_payload, receipt_metadata = (
@@ -347,21 +344,15 @@ def _validation_ack(
             )
         return value
 
+    scaling_binding = _scaling_execution_binding(
+        scaling_execution_record, expected_scaling_execution_sha256, bootstrap_evidence)
+    scaling_evidence = receipt_evidence.get("multilane_scaling")
+    if (not isinstance(scaling_evidence, dict)
+            or scaling_evidence.get("parent_execution") != scaling_binding):
+        raise CacheCopyError("receipt does not bind the retained parent scaling execution")
     for name, expected_value in (
         ("expected signer fingerprint", expected_signer_fingerprint),
-        (
-            "expected scaling trial-harness digest",
-            expected_scaling_trial_harness_sha256,
-        ),
-        (
-            "expected scaling configuration digest",
-            expected_scaling_configuration_sha256,
-        ),
-        ("expected scaling irohad digest", expected_scaling_irohad_sha256),
-        (
-            "expected scaling iroha CLI digest",
-            expected_scaling_iroha_cli_sha256,
-        ),
+        ("expected scaling execution digest", expected_scaling_execution_sha256),
     ):
         pattern = r"SHA256:[A-Za-z0-9+/]{43}" if name == "expected signer fingerprint" else r"[0-9a-f]{64}"
         if (
@@ -453,7 +444,8 @@ def _validation_ack(
                 "evidence", "g12_cross_dataspace", "fault_soak_completion"
             ),
         ),
-        "--scaling-evidence-manifest": ("path", str(scaling_evidence_manifest)),
+        "--scaling-execution-record": ("path", str(scaling_execution_record)),
+        "--expected-scaling-execution-sha256": ("text", expected_scaling_execution_sha256),
         "--sdk-dependency-archive": (
             "path", str(source.parent / "sdk-dependency-bundle.tar")
         ),
@@ -468,18 +460,6 @@ def _validation_ack(
         ),
         "--runtime-tool-probe-result": (
             "path", str(source.parent / "runtime-tool-probe-result.json")
-        ),
-        "--expected-scaling-trial-harness-sha256": (
-            "text", expected_scaling_trial_harness_sha256
-        ),
-        "--expected-scaling-configuration-sha256": (
-            "text", expected_scaling_configuration_sha256
-        ),
-        "--expected-scaling-irohad-sha256": (
-            "text", expected_scaling_irohad_sha256
-        ),
-        "--expected-scaling-iroha-cli-sha256": (
-            "text", expected_scaling_iroha_cli_sha256
         ),
         "--repository-root": ("path", str(source)),
         "--output": ("path", str(receipt)),

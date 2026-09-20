@@ -41,7 +41,7 @@ const MAX_SIDECARS: usize = 64;
 /// Read-only beacon history options. An exact, unclamped range is mandatory.
 #[derive(Debug, ClapArgs, Clone)]
 pub(super) struct Args {
-    /// Exact number of blocks, from the enclosing --from height (1..=4096).
+    /// Exact number of blocks, from the --from height (1..=4096).
     #[clap(long)]
     pub(super) length: u64,
     /// Exact canonical public merge-entry file; repeat for referenced carriers only.
@@ -1295,10 +1295,10 @@ mod tests {
                 "kagami",
                 "advanced",
                 "kura",
+                "beacon-history",
+                "./public-core",
                 "--from",
                 "1",
-                "./public-core",
-                "beacon-history",
                 "--length",
                 "3598"
             ])
@@ -1309,8 +1309,8 @@ mod tests {
                 "kagami",
                 "advanced",
                 "kura",
-                "./public-core",
-                "beacon-history"
+                "beacon-history",
+                "./public-core"
             ])
             .is_err()
         );

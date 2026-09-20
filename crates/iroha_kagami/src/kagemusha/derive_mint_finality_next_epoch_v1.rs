@@ -7,11 +7,7 @@
 //! per network: Core's provisioning derivation binds the epoch and peer, while the resulting
 //! roster and its identifier additionally bind the explicit genesis-derived network identity.
 
-use std::{
-    fs::File,
-    io::{BufWriter, Read, Write},
-    os::fd::FromRawFd,
-};
+use std::io::{BufWriter, Read, Write};
 
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{bail, eyre};
@@ -29,7 +25,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_primitives::numeric::Quantity;
 use zeroize::Zeroize;
 
-use crate::Outcome;
+use crate::{Outcome, secure_fs::take_seed_pipe};
 
 const VALIDATORS: usize = 4;
 const SEED_BYTES: usize = 32;
@@ -195,38 +191,6 @@ fn validate_public_context(args: &Args) -> color_eyre::Result<(NetworkId, Vec<Pe
     Ok((network_id, validators))
 }
 
-#[allow(
-    unsafe_code,
-    reason = "the CLI explicitly transfers one validated inherited descriptor"
-)]
-fn take_seed_pipe(fd: i32) -> color_eyre::Result<File> {
-    if fd < 3 {
-        bail!("seed-fd must be an inherited descriptor greater than stderr");
-    }
-    // SAFETY: F_GETFD accepts an arbitrary integer and does not dereference memory. Probe before
-    // constructing an owned descriptor; this CLI owns the transferred FD and has no competing
-    // closer. No path is opened and no secret bytes pass through this boundary.
-    if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
-        bail!("seed-fd is not an open inherited descriptor");
-    }
-    // SAFETY: the preceding probe established validity; the caller transfers unique ownership.
-    // File closes it on all subsequent success/error paths. Never duplicate or retain this FD.
-    let input = unsafe { File::from_raw_fd(fd) };
-    let flags = rustix::io::fcntl_getfd(&input)
-        .map_err(|_| eyre!("cannot inspect seed-fd ownership flags"))?;
-    rustix::io::fcntl_setfd(&input, flags | rustix::io::FdFlags::CLOEXEC)
-        .map_err(|_| eyre!("cannot protect seed-fd from inheritance"))?;
-    let stat = rustix::fs::fstat(&input).map_err(|_| eyre!("cannot inspect seed-fd type"))?;
-    let mode =
-        rustix::fs::fcntl_getfl(&input).map_err(|_| eyre!("cannot inspect seed-fd access mode"))?;
-    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Fifo
-        || mode & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
-    {
-        bail!("seed-fd must be the read end of an inherited pipe");
-    }
-    Ok(input)
-}
-
 /// Wipe the original storage on success, rejection, I/O failure and unwinding, without copying it.
 struct SeedWipe<'a>(&'a mut [u8; INPUT_BYTES + 1]);
 
@@ -331,8 +295,9 @@ mod tests {
     use clap::Parser;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use std::{
+        fs::File,
         io::Cursor,
-        os::fd::{AsRawFd, IntoRawFd},
+        os::fd::{AsRawFd, FromRawFd, IntoRawFd},
     };
 
     fn context() -> Args {

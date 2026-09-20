@@ -25,6 +25,18 @@ use crate::{
     torii_proxy::decode_and_validate_lane_admitted_input_v1,
 };
 
+/// One globally finalized carrier and its complete Native context-write evidence.
+/// This transport retains both original inputs; it does not itself authenticate them.
+#[derive(Debug, Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_core::state::FinalizedNativeContextV1")]
+pub struct FinalizedNativeContextV1 {
+    /// Exact independently authenticated global finality proof.
+    pub finality: BridgeFinalityProof,
+    /// Complete post-carrier contexts and their ordinary-write witness.
+    pub contexts: NativeLaneContextsEvidenceV1,
+}
+
 /// Complete post-carrier context values and their fixed-key ordinary-write proof.
 /// Encoding or constructing this value does not authenticate its claimed root.
 #[derive(Debug, Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
