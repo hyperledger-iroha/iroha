@@ -1496,7 +1496,32 @@ reader identity through retry and publication. DPN runs32–35 pass 136 MV contr
 strict Clippy and the charged-API check on the frozen parent source; those results
 do not qualify the subsequently merged tree. Complete actual node/cursor/nested
 payload custody and an explicit configured aggregate policy remain required
-before activating the live handoff.
+before activating the live handoff. The
+[B+tree lifetime correction](../docs/history/2026-09-20/bptree-allocation-lifetimes.md)
+repairs actual partial-clone and separator reclamation before attaching those
+credits. The subsequent
+[linear allocation custody](../docs/history/2026-09-20/linear-allocation-custody.md)
+attaches prepaid opaque charges to exact original cursor/reader control blocks,
+retains them through publication and reader-chain reclamation, and removes heap
+allocation from final-tree teardown and first refund notification. Actual maps
+still use explicit untracked shells pending complete node/vector/nested payload
+funding. Neither these hooks nor a post-execution callback supplies the configured
+aggregate policy or activates the live retained validator.
+
+The subsequent [refund notification custody](../docs/history/2026-09-20/refund-notification-custody.md)
+closes the reproduced loss of remaining waiters after a callback panic and adds
+an allocation-free lexical deferral for the original credit pool. Actual freed
+credits return immediately; same-thread callbacks wait for physical unlock,
+while other-thread refunds remain independent. The next map boundary remains a
+closed, completely prepaid edit with typed nested payload ownership and original
+retirement buffers; unrestricted mutation cannot satisfy that admission contract.
+The [prepaid writer/node boundary](../docs/history/2026-09-20/prepaid-writer-and-node-custody.md)
+now consumes original move-only writer input under locked admission and attaches
+typed charges to each exact padded node allocation through clone, split, unwind
+and deallocation. Current cursors explicitly remain untracked. The closed edit,
+charged fixed-capacity retirement buffers, nested payload policy and complete
+initial/undo ownership are still required before production activation.
+
 
 The retained-journal owner now consumes its actual `ValidBlock` through the existing
 verified-finality transition. It retains the original World/runtime/membership/hash

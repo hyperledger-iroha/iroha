@@ -17,6 +17,8 @@ struct TestStructWrite {
 }
 
 impl LinCowCellCapable<TestStructRead, TestStructWrite> for TestStruct {
+    type WriterInput = ();
+
     fn create_reader(&self) -> TestStructRead {
         // This sets up the first reader.
         TestStructRead {
@@ -25,11 +27,11 @@ impl LinCowCellCapable<TestStructRead, TestStructWrite> for TestStruct {
         }
     }
 
-    fn create_writer(&self) -> TestStructWrite {
+    fn create_writer(&self, (): Self::WriterInput) -> TestStructWrite {
         // This sets up the first writer.
         TestStructWrite {
-            bptree_map_a: self.bptree_map_a.create_writer(),
-            bptree_map_b: self.bptree_map_b.create_writer(),
+            bptree_map_a: self.bptree_map_a.create_writer(()),
+            bptree_map_b: self.bptree_map_b.create_writer(()),
         }
     }
 

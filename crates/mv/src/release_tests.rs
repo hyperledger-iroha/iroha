@@ -43,6 +43,132 @@ fn release_before_registration_is_retained_and_other_sources_do_not_wake() {
 }
 
 #[test]
+fn first_registered_wake_can_reenter_both_initialized_notification_locks() {
+    struct FirstWake {
+        source: Arc<ReleaseNotification>,
+        registration: std::sync::OnceLock<Weak<Mutex<Option<Waker>>>>,
+        calls: AtomicUsize,
+    }
+    impl Wake for FirstWake {
+        fn wake(self: Arc<Self>) {
+            assert!(self.source.state.try_lock().is_ok());
+            let registration = self.registration.get().unwrap().upgrade().unwrap();
+            assert!(registration.try_lock().is_ok());
+            drop(self.source.observe());
+            self.calls.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let source = Arc::new(ReleaseNotification::default());
+    let mut wait = source.observe().wait_for_release();
+    let wake = Arc::new(FirstWake {
+        source: Arc::clone(&source),
+        registration: std::sync::OnceLock::new(),
+        calls: AtomicUsize::new(0),
+    });
+    let waker = Waker::from(Arc::clone(&wake));
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    assert!(
+        wake.registration
+            .set(Arc::downgrade(wait.registration.as_ref().unwrap()))
+            .is_ok()
+    );
+    drop(source.guard(()));
+    assert_eq!(wake.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(&waker))
+            .is_ready()
+    );
+}
+
+#[test]
+fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
+    struct FirstWake {
+        source: Arc<ReleaseNotification>,
+        calls: Arc<AtomicUsize>,
+        drops: Arc<AtomicUsize>,
+        drop_was_unlocked: Arc<AtomicBool>,
+        panic_in_drop: bool,
+    }
+    impl Wake for FirstWake {
+        fn wake(self: Arc<Self>) {
+            assert!(self.source.state.try_lock().is_ok());
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if !self.panic_in_drop {
+                panic!("first wake callback panicked");
+            }
+        }
+    }
+    impl Drop for FirstWake {
+        fn drop(&mut self) {
+            // Never assert during an existing unwind: record lock ordering for
+            // the caller to inspect after catching the original callback panic.
+            self.drop_was_unlocked
+                .store(self.source.state.try_lock().is_ok(), Ordering::SeqCst);
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            if self.panic_in_drop {
+                panic!("first wake destructor panicked");
+            }
+        }
+    }
+
+    for panic_in_drop in [false, true] {
+        let source = Arc::new(ReleaseNotification::default());
+        let observation = source.observe();
+        let mut first = observation.clone().wait_for_release();
+        let mut survivor = observation.wait_for_release();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let drop_was_unlocked = Arc::new(AtomicBool::new(false));
+        let first_waker = Waker::from(Arc::new(FirstWake {
+            source: Arc::clone(&source),
+            calls: Arc::clone(&calls),
+            drops: Arc::clone(&drops),
+            drop_was_unlocked: Arc::clone(&drop_was_unlocked),
+            panic_in_drop,
+        }));
+        assert!(
+            Pin::new(&mut first)
+                .poll(&mut Context::from_waker(&first_waker))
+                .is_pending()
+        );
+        // The registration owns the final strong waker reference. Its consumed
+        // wake must also run the destructor outside notification locks.
+        drop(first_waker);
+        let survivor_wakes = Arc::new(WakeCount::default());
+        assert!(poll(&mut survivor, &survivor_wakes).is_pending());
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drop(source.guard(()));
+        }))
+        .expect_err("the original callback panic must propagate");
+        assert_eq!(
+            panic.downcast_ref::<&str>().copied(),
+            Some(if panic_in_drop {
+                "first wake destructor panicked"
+            } else {
+                "first wake callback panicked"
+            })
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(drop_was_unlocked.load(Ordering::SeqCst));
+        assert_eq!(survivor_wakes.0.load(Ordering::SeqCst), 1);
+        let completed_wakes = Arc::new(WakeCount::default());
+        assert!(poll(&mut first, &completed_wakes).is_ready());
+        assert!(poll(&mut survivor, &survivor_wakes).is_ready());
+        assert!(source.state.lock().unwrap().waiters.is_empty());
+        drop(source.guard(()));
+        assert_eq!(survivor_wakes.0.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
 fn cancellation_and_waker_replacement_do_not_steal_another_wait() {
     let source = ReleaseNotification::default();
     let observation = source.observe();

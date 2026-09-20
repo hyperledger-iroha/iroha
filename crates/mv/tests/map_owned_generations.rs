@@ -20,14 +20,43 @@ use std::{
 
 use concread::bptree::{BptreeMap, BptreeMapOwned, BptreeMapReadSnapshot, OwnedWriteError};
 
-// A scalar-only control activates this counter on its own thread after all
-// fixture/writer allocation. Parallel tests and observer bookkeeping are excluded.
+// Controls activate this counter on their own thread after fixture/writer
+// allocation. Payload observers only update already allocated drop records.
 thread_local! {
     static ALLOCATION_COUNT: Cell<Option<usize>> = const { Cell::new(None) };
     static ALLOCATION_SIZES: Cell<[usize; 16]> = const { Cell::new([0; 16]) };
+    static ALLOCATION_LIFETIME: Cell<Option<AllocationLifetime>> = const { Cell::new(None) };
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+struct AllocationLifetime {
+    allocations: usize,
+    deallocations: usize,
+    allocated_bytes: usize,
+    deallocated_bytes: usize,
 }
 
 struct ObservedAllocator;
+
+fn allocated_layout(size: usize) {
+    let _ = ALLOCATION_LIFETIME.try_with(|lifetime| {
+        if let Some(mut totals) = lifetime.get() {
+            totals.allocations += 1;
+            totals.allocated_bytes += size;
+            lifetime.set(Some(totals));
+        }
+    });
+}
+
+fn deallocated_layout(size: usize) {
+    let _ = ALLOCATION_LIFETIME.try_with(|lifetime| {
+        if let Some(mut totals) = lifetime.get() {
+            totals.deallocations += 1;
+            totals.deallocated_bytes += size;
+            lifetime.set(Some(totals));
+        }
+    });
+}
 
 fn allocated(size: usize) {
     let _ = ALLOCATION_COUNT.try_with(|count| {
@@ -48,29 +77,75 @@ unsafe impl GlobalAlloc for ObservedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         allocated(layout.size());
         // SAFETY: forward the original allocator contract unchanged to System.
-        unsafe { System.alloc(layout) }
+        let pointer = unsafe { System.alloc(layout) };
+        if !pointer.is_null() {
+            allocated_layout(layout.size());
+        }
+        pointer
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         allocated(layout.size());
         // SAFETY: preserve the caller's requested layout and zeroing contract.
-        unsafe { System.alloc_zeroed(layout) }
+        let pointer = unsafe { System.alloc_zeroed(layout) };
+        if !pointer.is_null() {
+            allocated_layout(layout.size());
+        }
+        pointer
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         allocated(size);
         // SAFETY: forward the same live allocation, old layout and new size.
-        unsafe { System.realloc(pointer, layout, size) }
+        let resized = unsafe { System.realloc(pointer, layout, size) };
+        if !resized.is_null() {
+            // The successful resize replaces the requested layout, whether
+            // System grows it in place or moves it. Failure retains the old one.
+            deallocated_layout(layout.size());
+            allocated_layout(size);
+        }
+        resized
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        // SAFETY: forward the same allocation and layout without observing frees.
-        unsafe { System.dealloc(pointer, layout) }
+        // SAFETY: forward the same allocation and layout. Record only after
+        // System has actually freed it, rather than at a payload Drop hook.
+        unsafe { System.dealloc(pointer, layout) };
+        deallocated_layout(layout.size());
     }
 }
 
 #[global_allocator]
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
+
+fn balanced_allocation_lifetime(operation: impl FnOnce()) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ALLOCATION_LIFETIME.with(|lifetime| lifetime.set(None));
+        }
+    }
+    assert!(
+        ALLOCATION_LIFETIME
+            .with(|lifetime| lifetime.replace(Some(AllocationLifetime::default())))
+            .is_none()
+    );
+    let reset = Reset;
+    operation();
+    let totals = ALLOCATION_LIFETIME
+        .with(|lifetime| lifetime.replace(None))
+        .unwrap();
+    drop(reset);
+    assert!(
+        totals.allocations > 0,
+        "fixture must allocate its actual tree"
+    );
+    assert_eq!(totals.allocations, totals.deallocations, "{totals:?}");
+    assert_eq!(
+        totals.allocated_bytes, totals.deallocated_bytes,
+        "{totals:?}"
+    );
+}
 
 fn without_allocations<T>(phase: &'static str, operation: impl FnOnce() -> T) -> T {
     struct Reset;
@@ -461,6 +536,135 @@ fn old_reader_chain_retains_removed_payloads_across_splits_abort_and_later_commi
     drop(third);
     drop(map);
     observations.assert_released();
+}
+
+#[test]
+fn final_map_destruction_allocates_nothing_and_frees_every_original_layout() {
+    for entries in [0, 1, 7, 128, 4096] {
+        // Include the observer itself so zero final balance witnesses actual
+        // node/control/payload deallocation, not just payload Drop callbacks.
+        balanced_allocation_lifetime(|| {
+            let observations = Arc::new(Observations::default());
+            let map = map(&observations, entries);
+            without_allocations("final committed tree destruction", || drop(map));
+            if entries != 0 {
+                observations.assert_released();
+            }
+            drop(observations);
+        });
+    }
+}
+
+#[test]
+fn retained_reader_chain_and_final_tree_reclamation_do_not_allocate() {
+    balanced_allocation_lifetime(|| {
+        let observations = Arc::new(Observations::default());
+        let map = map(&observations, 512);
+        let first = map.read();
+        let first_id = first.get(&0_u64).unwrap().id;
+        let mut writer = map.write();
+        for n in 0..256 {
+            drop(writer.insert(
+                Key::new(n, &observations),
+                Value::new(n + 1000, &observations),
+            ));
+        }
+        writer.commit();
+        let second = map.read();
+        let second_id = second.get(&0_u64).unwrap().id;
+        let mut writer = map.write();
+        for n in 0..128 {
+            drop(writer.remove(&Key::new(n, &observations)));
+        }
+        writer.commit();
+        assert!(map.read().get(&0_u64).is_none());
+
+        without_allocations("intermediate reader release", || drop(second));
+        assert_eq!(observations.dropped(first_id), 0);
+        assert_eq!(observations.dropped(second_id), 0);
+        without_allocations("oldest reader and retired generation reclamation", || {
+            drop(first)
+        });
+        assert_eq!(observations.dropped(first_id), 1);
+        assert_eq!(observations.dropped(second_id), 1);
+        without_allocations("remaining committed tree destruction", || drop(map));
+        observations.assert_released();
+        drop(observations);
+    });
+}
+
+#[test]
+fn final_detached_owner_reclaims_unpublished_nodes_and_retained_root_without_allocation() {
+    balanced_allocation_lifetime(|| {
+        let observations = Arc::new(Observations::default());
+        let map = map(&observations, 1024);
+        let shared_id = map.read().get(&1023_u64).unwrap().id;
+        let mut writer = map.write();
+        drop(writer.insert(Key::new(0, &observations), Value::new(9000, &observations)));
+        drop(writer.remove(&Key::new(1, &observations)));
+        drop(writer.insert(
+            Key::new(4096, &observations),
+            Value::new(9001, &observations),
+        ));
+        let unpublished_id = writer.get(&4096_u64).unwrap().id;
+        let owner = writer.detach();
+        without_allocations("source map release while original root is retained", || {
+            drop(map)
+        });
+        assert_eq!(observations.dropped(shared_id), 0);
+        assert_eq!(observations.dropped(unpublished_id), 0);
+        assert_eq!(*owner.get(&1023_u64).unwrap().data, 10230);
+        assert_eq!(*owner.get(&4096_u64).unwrap().data, 9001);
+
+        // Existing owner field order aborts unpublished nodes before releasing
+        // its exact base reader and finally the original shared SuperBlock.
+        without_allocations("last detached owner and final root destruction", || {
+            drop(owner)
+        });
+        assert_eq!(observations.dropped(shared_id), 1);
+        assert_eq!(observations.dropped(unpublished_id), 1);
+        observations.assert_released();
+        drop(observations);
+    });
+}
+
+#[test]
+fn stale_detached_owner_reclaims_its_old_base_and_newer_committed_root_without_allocation() {
+    balanced_allocation_lifetime(|| {
+        let observations = Arc::new(Observations::default());
+        let map = map(&observations, 512);
+        let original_last = map.read().get(&511_u64).unwrap().id;
+        let mut abandoned = map.write();
+        drop(abandoned.insert(Key::new(0, &observations), Value::new(111, &observations)));
+        let unpublished_id = abandoned.get(&0_u64).unwrap().id;
+        let abandoned = abandoned.detach();
+
+        let mut committed = map.write();
+        drop(committed.insert(Key::new(511, &observations), Value::new(222, &observations)));
+        let current_last = committed.get(&511_u64).unwrap().id;
+        committed.commit();
+        assert_ne!(original_last, current_last);
+        assert_eq!(*map.read().get(&511_u64).unwrap().data, 222);
+        assert_eq!(*abandoned.get(&511_u64).unwrap().data, 5110);
+        without_allocations("map release with an older detached predecessor", || {
+            drop(map)
+        });
+        assert_eq!(observations.dropped(original_last), 0);
+        assert_eq!(observations.dropped(current_last), 0);
+        assert_eq!(observations.dropped(unpublished_id), 0);
+
+        without_allocations(
+            "old detached predecessor and newer final root destruction",
+            || {
+                drop(abandoned);
+            },
+        );
+        assert_eq!(observations.dropped(original_last), 1);
+        assert_eq!(observations.dropped(current_last), 1);
+        assert_eq!(observations.dropped(unpublished_id), 1);
+        observations.assert_released();
+        drop(observations);
+    });
 }
 
 #[test]
