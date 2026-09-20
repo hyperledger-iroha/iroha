@@ -273,6 +273,34 @@ def validate_git_index(raw, proof):
     need(position == len(raw) - 20, "Git index has trailing payload")
 
 
+def validate_retained_pack(fd, proof):
+    """Authenticate existing pack bytes without imposing a new-import encoding.
+
+    This is an envelope check for an exact receipt-pinned retained artifact.
+    The caller must also validate its indexes and complete canonical Git object
+    inventory. It does not decode objects or authorize a shipping source import.
+    """
+    size = proof["pack"]["size"]
+    count = len(proof["objects"])
+    need(type(size) is int and 32 <= size <= MAX_TOTAL and 0 < count <= MAX_ENTRIES,
+         "retained Git pack envelope exceeds its bound")
+    need(os.fstat(fd).st_size == size and os.pread(fd, 12, 0) == b"PACK" + struct.pack(">II", 2, count),
+         "retained Git pack header/object census differs")
+    transport, checksum = hashlib.sha256(), hashlib.sha1()
+    offset = 0
+    while offset < size - 20:
+        raw = os.pread(fd, min(common.CHUNK, size - 20 - offset), offset)
+        need(raw, "retained Git pack is truncated")
+        transport.update(raw)
+        checksum.update(raw)
+        offset += len(raw)
+    trailer = os.pread(fd, 20, offset)
+    need(len(trailer) == 20 and not os.pread(fd, 1, size), "retained Git pack size changed")
+    transport.update(trailer)
+    need(transport.hexdigest() == proof["pack"]["sha256"], "retained Git pack transport digest differs")
+    need(trailer == checksum.digest(), "retained Git pack trailer checksum differs")
+
+
 def validate_pack_indexes(index, reverse, proof, pack_trailer):
     """Reject extra bytes/objects in the exact index and reverse-index namespaces."""
     count = len(proof["objects"])
@@ -412,7 +440,7 @@ def inspect(plan, deployment, proof, *, own_fds=()):
     pack = next(row for row in records if row["path"].endswith(".pack"))
     need(pack["sha256"] == proof["pack"]["sha256"] and pack["size"] == proof["pack"]["size"], "source pack differs from receipt")
     with common.held(root / pack["path"], digest=pack["sha256"], size=pack["size"], mode=0o444) as (fd, _, _):
-        source._validate_pack(fd, proof)
+        validate_retained_pack(fd, proof)
     git_metadata(root, records, proof)
     source._verify_objects(root, proof)
     source._git(root, "verify-pack", str(root / pack["path"].removesuffix(".pack")) + ".idx")

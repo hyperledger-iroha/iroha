@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,7 +20,9 @@ import taira_retained_release as common
 import taira_source_capture as source
 
 
-class RetainedSourceTests(unittest.TestCase):
+class RetainedSourceFixture:
+    delta_fixture = False
+
     @classmethod
     def setUpClass(cls):
         fixture_module.SignedSourceCaptureTests.setUpClass()
@@ -32,6 +35,16 @@ class RetainedSourceTests(unittest.TestCase):
         self.fixture = fixture_module.SignedSourceCaptureTests(methodName="runTest")
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        if self.delta_fixture:
+            # Real Git needs sufficiently similar, nontrivial blobs to choose
+            # delta storage. Both versions remain in the one signed tree.
+            data = b"".join(hashlib.sha256(str(index).encode()).digest() for index in range(2048))
+            (self.fixture.repo / "similar-a").write_bytes(data)
+            (self.fixture.repo / "similar-b").write_bytes(data[:32000] + b"x" * 64 + data[32064:])
+            self.fixture.git("add", "similar-a", "similar-b")
+            self.fixture.git("commit", "-m", "signed similar public blobs")
+            self.fixture.commit = self.fixture.git("rev-parse", "HEAD").decode().strip()
+            self.fixture.tree = self.fixture.git("rev-parse", "HEAD^{tree}").decode().strip()
         self.fixture.export()
         self.fixture.import_capture()
         self.root = self.fixture.imported
@@ -81,6 +94,8 @@ class RetainedSourceTests(unittest.TestCase):
     def quarantine(self):
         return Path(self.intent["quarantine"])
 
+
+class RetainedSourceTests(RetainedSourceFixture, unittest.TestCase):
     def test_exact_signed_source_census_covers_empty_link_gitlink_and_git(self):
         owner.validate_admission(self.plan, self.proof, self.admission)
         rows = {row["path"]: row for row in self.admission["records"]}
@@ -371,11 +386,122 @@ class RetainedSourceTests(unittest.TestCase):
             owner.validate_pack_indexes(index, reverse + b"private payload", self.proof, trailer)
 
     def test_git_index_unadmitted_extension_is_rejected(self):
-        import hashlib
         raw = (self.root / ".git/index").read_bytes()
         body = raw[:-20] + b"PRIV" + (7).to_bytes(4, "big") + b"private"
         with self.assertRaisesRegex(ValueError, "unadmitted extension"):
             owner.validate_git_index(body + hashlib.sha1(body).digest(), self.proof)
+
+
+class RetainedDeltaPackTests(RetainedSourceFixture, unittest.TestCase):
+    delta_fixture = True
+
+    def setUp(self):
+        super().setUp()
+        self.install_pack([row["object"] for row in self.proof["objects"]])
+        rows = source._git(self.root, "verify-pack", "-v", str(self.pack.with_suffix(".idx"))).splitlines()
+        self.assertTrue(any(len(row.split()) == 7 and len(row.split()[0]) == 40 for row in rows),
+                        "fixture must contain a real Git delta object")
+
+    def install_pack(self, identifiers):
+        payload = self.fixture.git("pack-objects", "--stdout", "--no-reuse-delta", "--no-reuse-object",
+                                   "--window=50", "--depth=50", "--delta-base-offset",
+                                   payload="".join(oid + "\n" for oid in identifiers).encode())
+        directory = self.root / ".git/objects/pack"
+        for path in directory.iterdir():
+            path.unlink()
+        source._git(self.root, "index-pack", "--stdin", "--rev-index", payload=payload)
+        source._freeze_new_pack(self.root)
+        self.pack = next(directory.glob("*.pack"))
+        self.proof["pack"] = dict(size=len(payload), sha256=owner.sha(payload))
+        self.plan["source"]["pack"] = dict(self.proof["pack"])
+
+    def mutate_pack(self, payload, *, repin=False):
+        self.pack.chmod(0o600)
+        self.pack.write_bytes(payload)
+        self.pack.chmod(0o444)
+        if repin:
+            self.proof["pack"] = dict(size=len(payload), sha256=owner.sha(payload))
+            self.plan["source"]["pack"] = dict(self.proof["pack"])
+
+    def inspect(self):
+        return owner.inspect(self.plan, self.deployment, self.proof)
+
+    def test_exact_delta_closure_archives_and_retires_but_shipping_still_refuses(self):
+        with common.held(self.pack, digest=self.proof["pack"]["sha256"], mode=0o444) as (fd, _, _):
+            with self.assertRaisesRegex(source.SourceCaptureError, "without deltas"):
+                source._validate_pack(fd, self.proof)
+            owner.validate_retained_pack(fd, self.proof)
+        self.admission = self.inspect()
+        self.intent = owner.retirement_intent(self.admission, "a" * 64)
+        archive, _ = RetainedSourceTests.archive_fixture(self)
+        with patch.object(owner, "validate_plan", side_effect=lambda value: value):
+            _, proof, admission, _ = owner.verify_archive(archive)
+        self.assertEqual(proof, self.proof)
+        self.assertEqual(admission, self.admission)
+        self.assertTrue(self.retire()["retired"])
+        self.assertFalse(self.root.exists())
+        self.assertTrue((archive / "payload.bin").exists())
+
+    def test_changed_transport_bytes_refused_before_archive(self):
+        payload = bytearray(self.pack.read_bytes())
+        payload[20] ^= 1
+        self.mutate_pack(bytes(payload))
+        with self.assertRaisesRegex(ValueError, "pack differs from receipt"):
+            self.inspect()
+
+    def test_bad_trailer_refused_even_with_recomputed_transport_pin(self):
+        payload = self.pack.read_bytes()
+        self.mutate_pack(payload[:-1] + bytes([payload[-1] ^ 1]), repin=True)
+        with self.assertRaisesRegex(ValueError, "trailer checksum"):
+            self.inspect()
+
+    def test_header_object_count_refused_even_with_valid_checksums(self):
+        payload = self.pack.read_bytes()
+        body = payload[:8] + (len(self.proof["objects"]) + 1).to_bytes(4, "big") + payload[12:-20]
+        self.mutate_pack(body + hashlib.sha1(body).digest(), repin=True)
+        with self.assertRaisesRegex(ValueError, "header/object census"):
+            self.inspect()
+
+    def test_foreign_object_replacement_with_same_count_refused(self):
+        foreign = self.fixture.git("hash-object", "-w", "--stdin", payload=b"foreign unsigned payload").decode().strip()
+        # Keep the header count and valid Git pack/index checksums, but replace
+        # one authorized object. The closed index census must still reject it.
+        identifiers = [row["object"] for row in self.proof["objects"]]
+        victim = next(row["object"] for row in self.proof["objects"] if row["type"] == "blob" and row["size"] == 0)
+        identifiers[identifiers.index(victim)] = foreign
+        self.install_pack(identifiers)
+        with self.assertRaisesRegex(ValueError, "pack index object census"):
+            self.inspect()
+
+    def test_canonical_object_metadata_mismatch_refused(self):
+        next(row for row in self.proof["objects"] if row["type"] == "commit")["sha256"] = "0" * 64
+        with self.assertRaisesRegex(source.SourceCaptureError, "complete signed object/tree inventory"):
+            self.inspect()
+
+    def test_pack_index_checksum_change_refused(self):
+        index = self.pack.with_suffix(".idx")
+        raw = index.read_bytes()
+        index.chmod(0o600)
+        index.write_bytes(raw[:-1] + bytes([raw[-1] ^ 1]))
+        index.chmod(0o444)
+        with self.assertRaisesRegex(ValueError, "pack index checksum"):
+            self.inspect()
+
+    def test_envelope_rejects_wrong_digest_size_version_and_truncation(self):
+        with common.held(self.pack, mode=0o444) as (fd, _, _):
+            wrong = copy.deepcopy(self.proof)
+            wrong["pack"]["sha256"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "transport digest"):
+                owner.validate_retained_pack(fd, wrong)
+            wrong["pack"]["size"] -= 1
+            with self.assertRaisesRegex(ValueError, "header/object census"):
+                owner.validate_retained_pack(fd, wrong)
+        payload = self.pack.read_bytes()
+        for replacement in (b"PACK" + (3).to_bytes(4, "big") + payload[8:], payload[:20]):
+            with self.subTest(size=len(replacement)):
+                self.mutate_pack(replacement, repin=True)
+                with self.assertRaisesRegex(ValueError, "envelope|header/object census"):
+                    self.inspect()
 
 
 class ClosedPlanTests(unittest.TestCase):

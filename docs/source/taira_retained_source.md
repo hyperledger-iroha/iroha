@@ -29,6 +29,14 @@ control bytes are explicitly pinned and restricted to inert settings and closed
 import reflogs. Extra files, objects, index extensions or payload bytes fail.
 This archive grammar does not change new source-import or deployment admission.
 
+An existing pack is authenticated as the exact receipt-pinned byte sequence: its
+bounded size, SHA256, PACK v2 object count and SHA1 trailer must match. Its strict
+index/reverse-index census, Git verification and complete canonical signed object
+inventory must also match, including every object type, size and SHA256. Git may
+represent that same retained object closure using deltas. Retirement does not
+decode those deltas itself or require the current shipping producer's encoding;
+new source capture and import still require their canonical delta-free packs.
+
 ```sh
 python3 -B scripts/taira_retained_source.py archive \
   --plan /absolute/private/source-plan.json \
