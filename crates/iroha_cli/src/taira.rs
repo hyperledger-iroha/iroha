@@ -9766,7 +9766,19 @@ mod tests {
                             .lock()
                             .expect("requests")
                             .push(request.clone());
-                        write_mock_response(&mut stream, response);
+                        if let Err(error) = write_mock_response(&mut stream, response) {
+                            // Deadline-bound probes may close a connection before the mock
+                            // finishes replying. Keep recording requests and serving retries.
+                            assert!(
+                                matches!(
+                                    error.kind(),
+                                    std::io::ErrorKind::BrokenPipe
+                                        | std::io::ErrorKind::ConnectionReset
+                                        | std::io::ErrorKind::ConnectionAborted
+                                ),
+                                "write mock response: {error}"
+                            );
+                        }
                         accepted += 1;
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -9836,7 +9848,7 @@ mod tests {
     fn find_header_end(raw: &[u8]) -> Option<usize> {
         raw.windows(4).position(|window| window == b"\r\n\r\n")
     }
-    fn write_mock_response(stream: &mut TcpStream, response: MockResponse) {
+    fn write_mock_response(stream: &mut TcpStream, response: MockResponse) -> std::io::Result<()> {
         let reason = match response.status {
             200 => "OK",
             202 => "Accepted",
@@ -9856,13 +9868,12 @@ mod tests {
             reason,
             response.content_type,
             body.len()
-        )
-        .expect("write mock response headers");
+        )?;
         for (name, value) in response.headers {
-            write!(stream, "{name}: {value}\r\n").expect("write mock response header");
+            write!(stream, "{name}: {value}\r\n")?;
         }
-        write!(stream, "\r\n").expect("finish mock response headers");
-        stream.write_all(body).expect("write mock response body");
+        write!(stream, "\r\n")?;
+        stream.write_all(body)
     }
     fn finish_mock(server: MockHttpServer) -> Vec<MockRequest> {
         server.stop.store(true, Ordering::Release);
@@ -9872,6 +9883,65 @@ mod tests {
             .into_inner()
             .expect("requests")
     }
+
+    #[test]
+    fn mock_http_server_continues_after_client_disconnect() {
+        let (received_tx, received_rx) = std::sync::mpsc::channel();
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        let closed_rx = Mutex::new(closed_rx);
+        let server = spawn_mock_http(2, move |request| {
+            if request.path == "/cancelled" {
+                received_tx.send(()).expect("notify request received");
+                closed_rx
+                    .lock()
+                    .expect("client closure receiver")
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("client closes before the response");
+                // Use a large response so the mock observes the client disconnect
+                // while writing, even if the initial headers fit in the socket buffer.
+                MockResponse::text(200, "x".repeat(4 * 1024 * 1024))
+            } else {
+                assert_eq!(request.path, "/retry");
+                MockResponse::text(200, "ok")
+            }
+        });
+        let address = server.base_url.strip_prefix("http://").unwrap();
+        let mut cancelled = TcpStream::connect(address).expect("connect cancelled request");
+        cancelled
+            .write_all(b"GET /cancelled HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .expect("send cancelled request");
+        received_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("server received complete request");
+        cancelled
+            .shutdown(std::net::Shutdown::Both)
+            .expect("close client before response");
+        drop(cancelled);
+        closed_tx.send(()).expect("notify client closed");
+
+        let mut retry = TcpStream::connect(address).expect("connect retry");
+        retry
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bound retry read");
+        retry
+            .write_all(b"GET /retry HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .expect("send retry");
+        let mut response = String::new();
+        retry
+            .read_to_string(&mut response)
+            .expect("read retry response");
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with("\r\n\r\nok"));
+        let requests = finish_mock(server);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/cancelled", "/retry"]
+        );
+    }
+
     fn path_only(path: &str) -> &str {
         path.split_once('?').map_or(path, |(path, _)| path)
     }
