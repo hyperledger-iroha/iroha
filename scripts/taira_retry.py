@@ -1110,6 +1110,7 @@ def _retire_live_references(roots, *, file_identities=(), own_fds=None, proc_roo
     admitted_fds = set(own_fds or ())
     examined = fds_examined = 0
     namespaces, views, references = set(), set(), []
+    full_namespaces, empty_views = set(), []
 
     def match(target):
         target = target.removesuffix(" (deleted)")
@@ -1131,6 +1132,8 @@ def _retire_live_references(roots, *, file_identities=(), own_fds=None, proc_roo
         return raw
 
     local_mounts = _retire_mount_rows(read_bounded(proc_root / "self/mountinfo"))
+    if os.readlink(proc_root / "self/root") == "/":
+        full_namespaces.add(os.readlink(proc_root / "self/ns/mnt"))
     scopes = []
     for path, device in devices.items():
         candidates = [row for row in local_mounts if row[0] == device and path.is_relative_to(row[2])]
@@ -1205,12 +1208,25 @@ def _retire_live_references(roots, *, file_identities=(), own_fds=None, proc_roo
             view = (namespace, process_root)
             if view in views:
                 continue
-            rows = _retire_mount_rows(read_bounded(proc / "mountinfo"))
+            raw_mounts = read_bounded(proc / "mountinfo")
+            if not raw_mounts:
+                # A chroot with no mountpoints below its root has an empty
+                # view. Require the same namespace's full-root view elsewhere;
+                # kernel threads or tasks that exited retain no such view.
+                if process_root is not None and os.path.lexists(proc / "root"):
+                    empty_views.append((namespace, proc))
+                continue
+            rows = _retire_mount_rows(raw_mounts)
+            if process_root == "/":
+                full_namespaces.add(namespace)
         except FileNotFoundError:
             continue
         observe_mounts(pid, rows)
         namespaces.add(namespace)
         views.add(view)
+    _retire_need(all(namespace in full_namespaces or not os.path.lexists(proc / "root")
+                     for namespace, proc in empty_views),
+                 "empty chroot mount view has no observed full namespace")
     return {"passed": not references, "processes_examined": examined,
             "descriptors_examined": fds_examined, "mount_namespaces_examined": len(namespaces),
             "mount_views_examined": len(views), "references": references,

@@ -143,14 +143,43 @@ def fresh_directory(path):
 
 def write_new(path, raw):
     need(len(raw) <= MAX_RECORD, "record exceeds its bound")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    try:
-        write_all(fd, raw)
-        os.fchmod(fd, 0o400)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    sync(path.parent)
+    private_directory(path.parent)
+    temporary = path.with_name("." + path.name + ".pending")
+    need(not os.path.lexists(path), "record final name already exists")
+    with anchored_directory(path.parent) as directory:
+        flags = os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+        try:
+            fd = os.open(temporary.name, os.O_RDWR | os.O_CREAT | os.O_EXCL | flags, 0o600, dir_fd=directory)
+            os.fchmod(fd, 0o600)
+        except FileExistsError:
+            fd = os.open(temporary.name, os.O_RDONLY | flags, dir_fd=directory)
+        try:
+            before = os.fstat(fd)
+            need(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid() and before.st_nlink == 1
+                 and stat.S_IMODE(before.st_mode) in (0o600, 0o400) and before.st_size <= len(raw),
+                 "unsafe pending record custody")
+            prefix = os.pread(fd, before.st_size + 1, 0)
+            need(prefix == raw[:before.st_size] and len(prefix) == before.st_size,
+                 "pending record differs from exact intended bytes")
+            if before.st_size < len(raw):
+                need(stat.S_IMODE(before.st_mode) == 0o600, "incomplete pending record was sealed")
+                writable = os.open(temporary.name, os.O_RDWR | flags, dir_fd=directory)
+                try:
+                    need(identity(os.fstat(writable)) == identity(before), "pending record replaced before continuation")
+                except BaseException:
+                    os.close(writable)
+                    raise
+                os.close(fd)
+                fd = writable
+                os.lseek(fd, before.st_size, os.SEEK_SET)
+                write_all(fd, raw[before.st_size:])
+            need(os.fstat(fd).st_size == len(raw) and hash_fd(fd, len(raw)) == sha(raw), "pending record bytes changed")
+            os.fsync(fd)
+            os.fchmod(fd, 0o400)
+            os.fsync(fd)
+            rename_exclusive(temporary, path, fd, identity(os.fstat(directory))[:2])
+        finally:
+            os.close(fd)
 
 
 def write_all(fd, raw):
@@ -518,7 +547,9 @@ def marker(work, name, value):
     raw = canonical(value)
     need(len(raw) <= 4096, "progress marker exceeds its bound")
     if path.exists():
+        need(not os.path.lexists(path.with_name("." + path.name + ".pending")), "published record gained pending sibling")
         need(read(path, mode=0o400) == raw, "retirement progress differs")
+        sync(path.parent)
     else:
         write_new(path, raw)
 
@@ -575,13 +606,21 @@ def retire_locked(plan, deployment, admission, intent, parent):
     work = parent / intent["token"]
     if work.exists():
         private_directory(work)
-        need(read(work / "intent.json", mode=0o400) == canonical(intent), "retirement intent changed")
+        if (work / "intent.json").exists():
+            need(not os.path.lexists(work / ".intent.json.pending"), "published intent gained pending sibling")
+            need(read(work / "intent.json", mode=0o400) == canonical(intent), "retirement intent changed")
+            sync(work)
+        else:
+            need(set(os.listdir(work)) <= {".intent.json.pending"}, "unpublished intent has foreign progress")
+            need(inspect(plan, deployment) == admission, "source changed before recovering retirement intent")
+            write_new(work / "intent.json", canonical(intent))
     else:
         need(inspect(plan, deployment) == admission, "source changed before retirement intent")
         fresh_directory(work)
         write_new(work / "intent.json", canonical(intent))
     allowed_work = {"intent.json", "quarantine-complete.json", "completed.json"}
     allowed_work.update(f"{i:04d}.{stage}.json" for i in range(len(intent["rows"])) for stage in ("quarantined", "delete-intent", "deleted"))
+    allowed_work.update("." + name + ".pending" for name in tuple(allowed_work))
     need(set(os.listdir(work)) <= allowed_work, "retirement directory has unexpected entries")
     paths = [row[key] for row in intent["rows"] for key in ("path", "quarantine")]
     # Every sibling was classified before reading payloads. During resume only

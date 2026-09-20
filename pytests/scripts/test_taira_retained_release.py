@@ -87,7 +87,8 @@ class RetainedReleaseTests(unittest.TestCase):
         rename = owner.rename_exclusive
         def change(*args):
             rename(*args)
-            self.bindings.side_effect = owner.RetainedReleaseError("supervisor authority appeared")
+            if args[0].parent == self.bins:
+                self.bindings.side_effect = owner.RetainedReleaseError("supervisor authority appeared")
         with patch.object(owner, "rename_exclusive", side_effect=change), patch.object(os, "unlink") as unlink:
             with self.assertRaisesRegex(ValueError, "supervisor"):
                 self.retire()
@@ -98,7 +99,8 @@ class RetainedReleaseTests(unittest.TestCase):
         rename = owner.rename_exclusive
         def change(*args):
             rename(*args)
-            self.references.side_effect = owner.RetainedReleaseError("live descriptor")
+            if args[0].parent == self.bins:
+                self.references.side_effect = owner.RetainedReleaseError("live descriptor")
         with patch.object(owner, "rename_exclusive", side_effect=change), patch.object(os, "unlink") as unlink:
             with self.assertRaisesRegex(ValueError, "live descriptor"):
                 self.retire()
@@ -108,8 +110,9 @@ class RetainedReleaseTests(unittest.TestCase):
         rename = owner.rename_exclusive
         def change(source, *args):
             rename(source, *args)
-            source.write_bytes(b"replacement")
-            source.chmod(0o755)
+            if source.parent == self.bins:
+                source.write_bytes(b"replacement")
+                source.chmod(0o755)
         with patch.object(owner, "rename_exclusive", side_effect=change), patch.object(os, "unlink") as unlink:
             with self.assertRaisesRegex(ValueError, "reappeared"):
                 self.retire()
@@ -396,6 +399,69 @@ class RetainedReleaseTests(unittest.TestCase):
         result = send.call_args.args[1]
         self.assertTrue(result["passed"])
         self.assertEqual(result["filesystems"][0]["required_bytes"], owner.RESERVE * 2 + 1024)
+
+    def test_partial_record_write_resumes_exact_prefix(self):
+        target = self.root / "progress.json"
+        raw = owner.canonical({"step": "durable exact intent"})
+        def partial(fd, data):
+            os.write(fd, data[:7])
+            raise OSError("interrupted partial write")
+        with patch.object(owner, "write_all", side_effect=partial):
+            with self.assertRaisesRegex(OSError, "partial write"):
+                owner.write_new(target, raw)
+        self.assertFalse(target.exists())
+        self.assertEqual((self.root / ".progress.json.pending").read_bytes(), raw[:7])
+        owner.write_new(target, raw)
+        self.assertEqual(owner.read(target, mode=0o400), raw)
+        self.assertFalse((self.root / ".progress.json.pending").exists())
+
+    def test_fsync_before_record_publication_resumes(self):
+        target = self.root / "progress.json"
+        raw = owner.canonical({"step": "sealed but unpublished"})
+        with patch.object(owner, "rename_exclusive", side_effect=OSError("publication interrupted")):
+            with self.assertRaisesRegex(OSError, "publication interrupted"):
+                owner.write_new(target, raw)
+        pending = self.root / ".progress.json.pending"
+        self.assertEqual(stat.S_IMODE(pending.stat().st_mode), 0o400)
+        self.assertFalse(target.exists())
+        owner.write_new(target, raw)
+        self.assertEqual(owner.read(target, mode=0o400), raw)
+
+    def test_publication_before_parent_fsync_revalidates_and_syncs(self):
+        value = {"step": "published before parent sync"}
+        target = self.root / "progress.json"
+        fsync = os.fsync
+        def fail_parent(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError("parent synchronization interrupted")
+            return fsync(fd)
+        with patch.object(os, "fsync", side_effect=fail_parent):
+            with self.assertRaisesRegex(OSError, "parent synchronization"):
+                owner.marker(self.root, "progress.json", value)
+        self.assertEqual(owner.read(target, mode=0o400), owner.canonical(value))
+        with patch.object(owner, "sync", wraps=owner.sync) as sync:
+            owner.marker(self.root, "progress.json", value)
+        sync.assert_called_once_with(self.root)
+
+    def test_foreign_pending_record_is_preserved_and_refused(self):
+        pending = self.root / ".progress.json.pending"
+        pending.write_bytes(b"foreign bytes")
+        pending.chmod(0o600)
+        with self.assertRaisesRegex(ValueError, "pending record differs"):
+            owner.write_new(self.root / "progress.json", b"intended longer bytes")
+        self.assertEqual(pending.read_bytes(), b"foreign bytes")
+        self.assertFalse((self.root / "progress.json").exists())
+
+    def test_partial_initial_intent_recovers_without_touching_binaries(self):
+        def partial(fd, data):
+            os.write(fd, data[:19])
+            raise OSError("partial initial intent")
+        with patch.object(owner, "write_all", side_effect=partial):
+            with self.assertRaisesRegex(OSError, "partial initial intent"):
+                self.retire()
+        self.assertTrue(all(Path(row["path"]).exists() for row in self.rows))
+        self.assertFalse(any(path.exists() for path in self.quarantines()))
+        self.assertTrue(self.retire()["retired"])
 
     def test_plan_rejects_unknown_fields_duplicates_and_traversal(self):
         owner.validate_plan(self.plan)

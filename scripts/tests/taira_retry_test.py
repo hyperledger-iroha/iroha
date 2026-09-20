@@ -3059,7 +3059,9 @@ class RetireLiveReferenceTests(unittest.TestCase):
         self.stamp = list(retry.identity(self.binary.stat()))
         self.device = self.stamp[0]
         self.proc = self.root / "proc"
-        (self.proc / "self").mkdir(parents=True)
+        (self.proc / "self/ns").mkdir(parents=True)
+        (self.proc / "self/root").symlink_to("/")
+        (self.proc / "self/ns/mnt").symlink_to("mnt:[123]")
         self.mounts = self.mount("/", "/")
         (self.proc / "self/mountinfo").write_text(self.mounts)
 
@@ -3170,6 +3172,35 @@ class RetireLiveReferenceTests(unittest.TestCase):
                 (process / "mountinfo").write_bytes(raw)
                 with self.assertRaises(retry._retire_RebindError):
                     self.observe()
+
+    def test_kernel_thread_without_filesystem_root_has_no_mount_view(self):
+        process = self.process(mounts="")
+        (process / "root").unlink()
+        self.assertTrue(self.observe()["passed"])
+
+    def test_chroot_without_visible_mounts_uses_full_namespace_view(self):
+        process = self.process(mounts="")
+        (process / "root").unlink()
+        (process / "root").symlink_to(self.root)
+        self.assertTrue(self.observe()["passed"])
+
+    def test_unobserved_chroot_namespace_with_empty_view_fails_closed(self):
+        process = self.process(mounts="")
+        (process / "ns/mnt").unlink()
+        (process / "ns/mnt").symlink_to("mnt:[456]")
+        with self.assertRaisesRegex(retry._retire_RebindError, "empty chroot mount view"):
+            self.observe()
+
+    def test_later_full_namespace_view_covers_earlier_empty_chroot(self):
+        process = self.process(987654320, mounts="")
+        (process / "root").unlink()
+        (process / "root").symlink_to(self.root)
+        (process / "ns/mnt").unlink()
+        (process / "ns/mnt").symlink_to("mnt:[456]")
+        later = self.process(987654321)
+        (later / "ns/mnt").unlink()
+        (later / "ns/mnt").symlink_to("mnt:[456]")
+        self.assertTrue(self.observe()["passed"])
 
     def test_identity_outside_selected_scope_is_rejected(self):
         with self.assertRaisesRegex(retry._retire_RebindError, "escaped"):

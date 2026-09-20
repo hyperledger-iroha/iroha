@@ -85,7 +85,11 @@ unlink. Only the owner's admitted custody descriptors are exempted. Original
 names reappearing, changed bytes/inodes/parents, added links, live references,
 or new supervisor authority stop the operation and preserve unresolved
 quarantine files. Each unlink has a durable exact intent and a synchronized
-parent; completion records cannot authorize deployment.
+parent. Records publish through exclusive same-directory pending files and a
+no-clobber rename; an interrupted pending write can resume only when its
+single-link, owned bytes are an exact prefix of the expected record. Changed
+or foreign pending records are retained and rejected. Completion records
+cannot authorize deployment.
 
 ## Capacity and interruptions
 
