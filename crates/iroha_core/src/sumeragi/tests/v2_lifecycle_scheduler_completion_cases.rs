@@ -2610,6 +2610,16 @@ impl ProductionLifecycleOwnerV1 {
                 crate::sumeragi::v2_effects::EffectQueueConfig::default(),
             )
             .expect("open the clean lifecycle Completion executor");
+        for (tag, manifest, durable_receipt) in self
+            .registry
+            .registry()
+            .recovered_certified_fetch_body_owners()
+            .expect("project every authenticated cold Ready Fetch body guard")
+        {
+            executor
+                .install_recovered_certified_fetch_body_owner(tag, manifest, durable_receipt)
+                .expect("restore the exact cold Ready Fetch body guard before clocks");
+        }
         for (effect, pending, durable_receipt) in self
             .registry
             .registry()
@@ -2994,6 +3004,10 @@ impl ProductionLifecycleOwnerV1 {
             self.coordinator.active_lease.is_some(),
         )
     }
+    pub(in crate::sumeragi) fn assert_cold_ready_fetch_bad_carrier_rejected_for_test(&mut self) {
+        self.registry.registry_mut().assert_cold_fetch_guard_rejects_bad_carrier_for_test();
+    }
+
     /// Opaque byte-stable view of the exact concrete registry for mutation checks.
     pub(in crate::sumeragi) fn fetch_registry_snapshot_for_test(&self) -> String {
         format!("{:?}", self.registry.registry_for_test())

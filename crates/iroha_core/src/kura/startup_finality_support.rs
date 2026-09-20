@@ -51,7 +51,7 @@ const V2_FINALITY_VERIFICATION_CACHE_CAPACITY: usize = 64;
 /// maximum-size validator roster. Keeping the batch fixed bounds aggregate
 /// transient memory independently of the host's Rayon worker count.
 const V2_FINALITY_STARTUP_VERIFICATION_BATCH_SIZE: usize = 8;
-const CERTIFIED_FRONTIER_ATTESTATION_CACHE_CAPACITY: usize = 64;
+const CERTIFIED_ARTIFACT_ATTESTATION_CACHE_CAPACITY: usize = 64;
 const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
 const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
 const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
@@ -325,21 +325,43 @@ pub(crate) struct EmergencyFastStartupReplayBinding {
 pub(crate) enum V2StartupReplayStorageBinding {
     /// Complete Strict-startup finality and sidecar inventory.
     Strict(Arc<V2StartupFinalityVerificationInventory>),
+    /// Same finality audit with a private, exactly checked replay-geometry publication.
+    StrictAfterGeometryPublication {
+        inventory: Arc<V2StartupFinalityVerificationInventory>,
+        publication: Arc<lane_geometry::StartupReplayGeometryPublication>,
+    },
     /// Bounded emergency binding containing only the durable count and tip.
     EmergencyFast(Arc<EmergencyFastStartupReplayBinding>),
 }
 impl V2StartupReplayStorageBinding {
+    fn strict_parts(
+        &self,
+    ) -> Option<(
+        &Arc<V2StartupFinalityVerificationInventory>,
+        &BTreeMap<PathBuf, StableSidecarDirectoryInventory>,
+    )> {
+        match self {
+            Self::Strict(inventory) => Some((inventory, &inventory.auxiliary_sidecars)),
+            Self::StrictAfterGeometryPublication {
+                inventory,
+                publication,
+            } => Some((inventory, publication.active_auxiliary())),
+            Self::EmergencyFast(_) => None,
+        }
+    }
     /// Return the complete Strict replay boundary, when Strict startup produced this binding.
     pub(crate) fn strict_replay_boundary(&self) -> Option<&ExactReplayBoundary> {
         match self {
-            Self::Strict(inventory) => Some(&inventory.boundary),
+            Self::Strict(inventory) | Self::StrictAfterGeometryPublication { inventory, .. } => {
+                Some(&inventory.boundary)
+            }
             Self::EmergencyFast(_) => None,
         }
     }
     /// Return the bounded durable count and tip trusted by emergency Fast startup.
     pub(crate) fn emergency_fast_boundary(&self) -> Option<(u64, Option<HashOf<BlockHeader>>)> {
         match self {
-            Self::Strict(_) => None,
+            Self::Strict(_) | Self::StrictAfterGeometryPublication { .. } => None,
             Self::EmergencyFast(binding) => Some((binding.count, binding.tip_hash)),
         }
     }
@@ -355,6 +377,7 @@ pub(crate) struct V2StartupFinalityVerificationSession<'a> {
     _prune_guard: parking_lot::MutexGuard<'a, ()>,
     _canonical_chain_guard: parking_lot::MutexGuard<'a, ()>,
     inventory: Arc<V2StartupFinalityVerificationInventory>,
+    binding: V2StartupReplayStorageBinding,
 }
 #[derive(Debug, Clone)]
 struct StableSidecarMetadata {
@@ -369,10 +392,20 @@ struct StableSidecarRead {
     metadata: StableSidecarMetadata,
 }
 #[derive(Debug, Clone)]
-struct CertifiedFrontierPairDurabilityAttestation {
+struct CertifiedPairDurabilityAttestation {
     artifact_hash: HashOf<CertifiedLaneBlockArtifact>,
     data_metadata: StableSidecarMetadata,
     index_metadata: StableSidecarMetadata,
+    /// Pre-barrier snapshots of every bound directory, immediate parent through Kura root.
+    directories: Vec<ProgressDirectoryDurabilityMetadata>,
+}
+/// Exact directory generation covered by a completed progress-pair durability barrier.
+#[derive(Debug, Clone)]
+struct ProgressDirectoryDurabilityMetadata {
+    expected_path: PathBuf,
+    canonical_path: PathBuf,
+    entry_name: Option<std::ffi::OsString>,
+    metadata: SecureMetadata,
 }
 #[derive(Debug, Clone)]
 struct CertifiedFrontierArtifactValidationAttestation {

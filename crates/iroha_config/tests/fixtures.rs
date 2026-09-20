@@ -827,6 +827,10 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .expect("Nexus profile config should parse");
     assert_eq!(config.nexus.lane_catalog.lane_count().get(), 3);
     assert_eq!(
+        config.nexus.configured_dataspace_catalog, config.nexus.dataspace_catalog,
+        "parsing initializes the immutable dataspace baseline from the exact configured entries"
+    );
+    assert_eq!(
         config.nexus.dataspace_catalog.entries().len(),
         1,
         "logical lanes sharing one validator topology must not become dataspaces"

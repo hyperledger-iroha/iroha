@@ -364,6 +364,9 @@ impl Kura {
         }
         if self.auxiliary_history_deferred
             || !self
+                .native_amx_resident_recovery_complete
+                .load(Ordering::Acquire)
+            || !self
                 .post_wsv_resident_recovery_complete
                 .load(Ordering::Acquire)
             || !self

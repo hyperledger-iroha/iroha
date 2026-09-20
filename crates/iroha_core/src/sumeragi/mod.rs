@@ -6735,6 +6735,10 @@ pub(crate) fn fair_v2_ingress_admit_with_roster_for_test(
         .try_recv()
         .expect("test fair ingress returns its admitted owner")
 }
+mod startup_recovery;
+pub use startup_recovery::StartupRecovery;
+use startup_recovery::StartupRecoveryPublisher;
+
 /// Bounded ingress handle for the serialized Sumeragi v2 runner.
 ///
 /// Fixed-small live auxiliary messages share the exact fair-ingress ownership
@@ -6752,6 +6756,7 @@ pub struct SumeragiHandle {
     pending_queue_plan_admission_dirty: Arc<AtomicBool>,
     output_guard: Arc<ConsensusOutputGuard>,
     emergency_fast_disabled: bool,
+    startup_recovery: StartupRecovery,
 }
 impl SumeragiHandle {
     fn new(
@@ -6761,6 +6766,7 @@ impl SumeragiHandle {
         ingress_ready: Arc<AtomicBool>,
         pending_queue_plan_admission_dirty: Arc<AtomicBool>,
         output_guard: Arc<ConsensusOutputGuard>,
+        startup_recovery: StartupRecovery,
     ) -> Self {
         Self {
             block,
@@ -6770,6 +6776,7 @@ impl SumeragiHandle {
             pending_queue_plan_admission_dirty,
             output_guard,
             emergency_fast_disabled: false,
+            startup_recovery,
         }
     }
     /// Construct a permanently closed consensus ingress without launching an
@@ -6798,6 +6805,7 @@ impl SumeragiHandle {
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
             ConsensusOutputGuard::isolated(),
+            StartupRecovery::unavailable(),
         );
         handle.emergency_fast_disabled = true;
         handle
@@ -7072,6 +7080,11 @@ impl SumeragiHandle {
         })
         .accepted_or_coalesced()
     }
+    /// Observe success-only startup recovery for supervised storage maintenance.
+    #[must_use]
+    pub fn startup_recovery(&self) -> StartupRecovery {
+        self.startup_recovery.clone()
+    }
     /// Return whether a fatal consensus failure requires process restart.
     #[must_use]
     pub fn restart_required(&self) -> bool {
@@ -7152,6 +7165,7 @@ fn test_sumeragi_handle_with_source_geometry(
         Arc::new(AtomicBool::new(true)),
         Arc::new(AtomicBool::new(false)),
         ConsensusOutputGuard::isolated(),
+        StartupRecovery::unavailable(),
     );
     (handle, block, lane_relay_rx)
 }
@@ -7358,6 +7372,7 @@ impl SumeragiStartArgs {
         let queue_wake_tx = wake_tx.clone();
         let ingress_ready = Arc::new(AtomicBool::new(false));
         let pending_queue_plan_admission_dirty = Arc::new(AtomicBool::new(true));
+        let (startup_recovery_owner, startup_recovery) = startup_recovery::channel();
         let handle = SumeragiHandle::new(
             Arc::clone(&block),
             lane_relay_tx,
@@ -7365,6 +7380,7 @@ impl SumeragiStartArgs {
             Arc::clone(&ingress_ready),
             Arc::clone(&pending_queue_plan_admission_dirty),
             Arc::clone(&output_guard),
+            startup_recovery,
         );
         let worker = SumeragiWorker {
             build_identity,
@@ -7394,7 +7410,7 @@ impl SumeragiStartArgs {
         };
         let child = launch_sumeragi_thread(
             output_guard.as_ref(),
-            Box::new(move || worker.run()),
+            Box::new(move || worker.run(startup_recovery_owner)),
             move || queue_wake.set_sumeragi_wake(queue_wake_tx),
             spawn_sumeragi_thread,
         )?;
@@ -9574,7 +9590,7 @@ mod authoritative_runtime_gate_tests {
     }
 }
 impl SumeragiWorker {
-    fn run(self) {
-        v2_runner::run(self);
+    fn run(self, startup_recovery: StartupRecoveryPublisher) {
+        v2_runner::run(self, startup_recovery);
     }
 }

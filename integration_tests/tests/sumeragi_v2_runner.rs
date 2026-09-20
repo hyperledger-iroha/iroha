@@ -5,10 +5,9 @@ use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    client::QueryError,
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
-        Identifiable, Level, NetworkId, ValidationFail,
+        Identifiable, Level, NetworkId,
         account::{Account, AccountId},
         block::{
             BlockHeader,
@@ -24,12 +23,8 @@ use iroha::{
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
-        prelude::FindAccountById,
-        query::{
-            block::prelude::FindBlocks,
-            error::{FindError, QueryExecutionFail},
-            prelude::QueryBuilderExt,
-        },
+        prelude::FindAccounts,
+        query::{block::prelude::FindBlocks, dsl::IntoPredicate as _, prelude::QueryBuilderExt},
         transaction::Executable,
     },
 };
@@ -3869,17 +3864,18 @@ async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -
             let expected_label = expected.to_string();
             let peer_name = peer.mnemonic().to_owned();
             let found = task::spawn_blocking(move || -> Result<bool> {
-                match client.client().query_single(FindAccountById::new(account)) {
-                    Ok(stored) if stored.id() == &expected => Ok(true),
-                    Ok(stored) => Err(eyre!(
+                let stored = client
+                    .client()
+                    .query(FindAccounts)
+                    .filter_with(|item| item.equals("id", account).into_predicate())
+                    .execute_single_opt()?;
+                match stored {
+                    Some(stored) if stored.id() == &expected => Ok(true),
+                    Some(stored) => Err(eyre!(
                         "account query for {expected} returned unexpected account {}",
                         stored.id()
                     )),
-                    Err(QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::Find(FindError::Account(_))
-                        | QueryExecutionFail::NotFound,
-                    ))) => Ok(false),
-                    Err(error) => Err(eyre!(error)),
+                    None => Ok(false),
                 }
             })
             .await
@@ -3912,17 +3908,18 @@ async fn wait_for_accounts_visible(
                 let expected_label = expected.to_string();
                 let peer_name = peer.mnemonic().to_owned();
                 let visible = task::spawn_blocking(move || -> Result<bool> {
-                    match client.client().query_single(FindAccountById::new(account)) {
-                        Ok(stored) if stored.id() == &expected => Ok(true),
-                        Ok(stored) => Err(eyre!(
+                    let stored = client
+                        .client()
+                        .query(FindAccounts)
+                        .filter_with(|item| item.equals("id", account).into_predicate())
+                        .execute_single_opt()?;
+                    match stored {
+                        Some(stored) if stored.id() == &expected => Ok(true),
+                        Some(stored) => Err(eyre!(
                             "account query for {expected} returned unexpected account {}",
                             stored.id()
                         )),
-                        Err(QueryError::Validation(ValidationFail::QueryFailed(
-                            QueryExecutionFail::Find(FindError::Account(_))
-                            | QueryExecutionFail::NotFound,
-                        ))) => Ok(false),
-                        Err(error) => Err(eyre!(error)),
+                        None => Ok(false),
                     }
                 })
                 .await

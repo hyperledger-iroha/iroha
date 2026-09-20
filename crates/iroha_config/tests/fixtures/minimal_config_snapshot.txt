@@ -1025,6 +1025,18 @@ Root {
                 },
             ],
         },
+        configured_dataspace_catalog: DataSpaceCatalog {
+            entries: [
+                DataSpaceMetadata {
+                    id: DataSpaceId(
+                        0,
+                    ),
+                    alias: "universal",
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ],
+        },
         dataspace_fee_sponsor_program_ids: {},
         routing_policy: LaneRoutingPolicy {
             default_lane: LaneId(

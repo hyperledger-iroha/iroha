@@ -34,6 +34,7 @@ mod manifest;
 mod privacy;
 mod private_settlement;
 mod relay;
+mod runtime_catalog;
 pub use axt::*;
 pub use compliance::*;
 pub use endorsement::*;
@@ -47,6 +48,7 @@ pub mod portfolio;
 pub use portfolio::*;
 pub mod staking;
 pub use relay::*;
+pub use runtime_catalog::*;
 pub use staking::*;
 /// Consensus-wide maximum number of simultaneously active execution lanes.
 ///
@@ -107,20 +109,28 @@ pub struct LaneLifecycleStatusV1 {
     pub incarnations: Vec<LaneLifecycleIncarnationEntry>,
     /// Domain-separated commitment to `incarnations`.
     pub incarnation_root: Hash,
+    /// Native commitment to the complete committed runtime catalog overlay.
+    ///
+    /// `None` means the protected overlay parameter is absent before its first transition.
+    /// Copy this exact value into [`NexusCatalogTransitionV1::expected_runtime_catalog_hash`].
+    /// The lane-only snapshot cannot independently reconstruct this overlay commitment.
+    pub runtime_catalog_hash: Option<Hash>,
 }
 impl LaneLifecycleStatusV1 {
     /// Supported status layout version.
     pub const VERSION: u8 = 1;
-    /// Construct a status snapshot from the exact current catalog.
+    /// Construct a snapshot from one committed catalog, incarnation map, and runtime overlay hash.
     ///
     /// # Errors
     ///
     /// Returns [`LaneLifecycleStatusError`] when the incarnation map does not
-    /// exactly and canonically cover the active catalog.
+    /// exactly and canonically cover the active catalog, or a present runtime hash is empty.
     pub fn new(
         catalog: &LaneCatalog,
         incarnations: &BTreeMap<LaneId, Hash>,
+        runtime_catalog_hash: Option<Hash>,
     ) -> Result<Self, LaneLifecycleStatusError> {
+        Self::validate_runtime_catalog_hash(runtime_catalog_hash)?;
         let incarnations = LaneLifecycleParameterV1::canonical_incarnations(catalog, incarnations)?;
         Ok(Self {
             version: Self::VERSION,
@@ -129,9 +139,24 @@ impl LaneLifecycleStatusV1 {
             catalog_hash: LaneLifecycleParameterV1::catalog_hash(catalog),
             incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnations),
             incarnations,
+            runtime_catalog_hash,
         })
     }
-    /// Validate the version, catalog structure, canonical order, and commitment.
+    fn validate_runtime_catalog_hash(
+        runtime_catalog_hash: Option<Hash>,
+    ) -> Result<(), LaneLifecycleStatusError> {
+        if runtime_catalog_hash.is_some_and(|hash| {
+            hash == Hash::prehashed([0; Hash::LENGTH])
+                || hash.as_ref().iter().all(|byte| *byte == 0)
+        }) {
+            return Err(LaneLifecycleStatusError::ZeroRuntimeCatalogHash);
+        }
+        Ok(())
+    }
+    /// Validate the version, catalog structure, canonical order, and commitments.
+    ///
+    /// The runtime catalog hash is checked for a non-empty value when present; reconstructing
+    /// that commitment requires the complete protected overlay, which this status does not carry.
     ///
     /// # Errors
     /// Returns [`LaneLifecycleStatusError`] when the snapshot is unsupported,
@@ -143,6 +168,7 @@ impl LaneLifecycleStatusV1 {
                 expected: Self::VERSION,
             });
         }
+        Self::validate_runtime_catalog_hash(self.runtime_catalog_hash)?;
         let lane_count =
             NonZeroU32::new(self.lane_count).ok_or(LaneLifecycleStatusError::ZeroLaneCount)?;
         let catalog = LaneCatalog::new(lane_count, self.lanes.clone())?;
@@ -170,6 +196,9 @@ impl LaneLifecycleStatusV1 {
 /// Validation failures for a read-only lane lifecycle status snapshot.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum LaneLifecycleStatusError {
+    /// A present runtime catalog commitment used the empty hash sentinel.
+    #[error("Nexus lane lifecycle status advertised an empty runtime catalog hash")]
+    ZeroRuntimeCatalogHash,
     /// The server advertised an unsupported status layout version.
     #[error("unsupported Nexus lane lifecycle status version {actual}; expected {expected}")]
     UnsupportedVersion {
@@ -1448,6 +1477,10 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         norito::json::write_json_string("incarnation_root", out);
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.incarnation_root, out);
+        out.push(',');
+        norito::json::write_json_string("runtime_catalog_hash", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.runtime_catalog_hash, out);
         out.push('}');
     }
     fn write_json_to(
@@ -1467,6 +1500,8 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         norito::json::JsonSerialize::json_serialize_to(&self.incarnations, out)?;
         out.push_str(",\"incarnation_root\":")?;
         norito::json::JsonSerialize::json_serialize_to(&self.incarnation_root, out)?;
+        out.push_str(",\"runtime_catalog_hash\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.runtime_catalog_hash, out)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -1485,6 +1520,7 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
         let mut catalog_hash = None;
         let mut incarnations = None;
         let mut incarnation_root = None;
+        let mut runtime_catalog_hash: Option<Option<Hash>> = None;
         while let Some(key) = visitor.next_key()? {
             let duplicate = |field: &str| {
                 norito::json::Error::Message(format!(
@@ -1528,6 +1564,12 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
                     }
                     incarnation_root = Some(visitor.parse_value()?);
                 }
+                "runtime_catalog_hash" => {
+                    if runtime_catalog_hash.is_some() {
+                        return Err(duplicate("runtime_catalog_hash"));
+                    }
+                    runtime_catalog_hash = Some(visitor.parse_value()?);
+                }
                 other => {
                     return Err(norito::json::Error::Message(format!(
                         "unknown field `{other}` in Nexus lane lifecycle status"
@@ -1548,6 +1590,8 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
             catalog_hash: catalog_hash.ok_or_else(|| missing("catalog_hash"))?,
             incarnations: incarnations.ok_or_else(|| missing("incarnations"))?,
             incarnation_root: incarnation_root.ok_or_else(|| missing("incarnation_root"))?,
+            runtime_catalog_hash: runtime_catalog_hash
+                .ok_or_else(|| missing("runtime_catalog_hash"))?,
         })
     }
 }
@@ -1753,7 +1797,20 @@ pub enum LaneCatalogError {
     },
 }
 /// Metadata describing a configured physical data space.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::nexus::DataSpaceMetadata")]
 pub struct DataSpaceMetadata {
     /// Identifier assigned to the data space.
     pub id: DataSpaceId,
@@ -1888,7 +1945,7 @@ mod tests {
             .collect()
     }
     fn lifecycle_status(catalog: &LaneCatalog) -> LaneLifecycleStatusV1 {
-        LaneLifecycleStatusV1::new(catalog, &incarnation_map(catalog))
+        LaneLifecycleStatusV1::new(catalog, &incarnation_map(catalog), None)
             .expect("valid lifecycle status")
     }
     #[test]
@@ -2589,16 +2646,86 @@ mod tests {
             ],
         )
         .expect("valid lifecycle status catalog");
-        let status = lifecycle_status(&catalog);
-        assert_eq!(status.validate().expect("validate status"), catalog);
-        let json = norito::json::to_string(&status).expect("serialize lifecycle status JSON");
-        let from_json = norito::json::from_str::<LaneLifecycleStatusV1>(&json)
-            .expect("decode lifecycle status JSON");
-        assert_eq!(from_json, status);
-        let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
-        let from_norito = norito::decode_from_bytes::<LaneLifecycleStatusV1>(&bytes)
-            .expect("decode lifecycle status Norito");
-        assert_eq!(from_norito, status);
+        for runtime_catalog_hash in [None, Some(Hash::new(b"committed runtime overlay"))] {
+            let status = LaneLifecycleStatusV1::new(
+                &catalog,
+                &incarnation_map(&catalog),
+                runtime_catalog_hash,
+            )
+            .expect("valid lifecycle status");
+            assert_eq!(status.validate().expect("validate status"), catalog);
+            let json = norito::json::to_string(&status).expect("serialize lifecycle status JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(&status, json.len()).expect("bounded status JSON"),
+                json
+            );
+            assert!(norito::json::to_json_bounded(&status, json.len() - 1).is_err());
+            if runtime_catalog_hash.is_none() {
+                assert!(json.contains("\"runtime_catalog_hash\":null"));
+            }
+            let from_json = norito::json::from_str::<LaneLifecycleStatusV1>(&json)
+                .expect("decode lifecycle status JSON");
+            assert_eq!(from_json, status);
+            let bytes = norito::to_bytes(&status).expect("encode lifecycle status Norito");
+            let from_norito = norito::decode_from_bytes::<LaneLifecycleStatusV1>(&bytes)
+                .expect("decode lifecycle status Norito");
+            assert_eq!(from_norito, status);
+        }
+    }
+    #[test]
+    fn lane_lifecycle_status_rejects_empty_runtime_catalog_hash() {
+        let catalog = LaneCatalog::default();
+        let empty = Hash::prehashed([0; Hash::LENGTH]);
+        assert_eq!(
+            LaneLifecycleStatusV1::new(&catalog, &incarnation_map(&catalog), Some(empty)),
+            Err(LaneLifecycleStatusError::ZeroRuntimeCatalogHash)
+        );
+        let mut status = lifecycle_status(&catalog);
+        status.runtime_catalog_hash = Some(empty);
+        assert_eq!(
+            status.validate(),
+            Err(LaneLifecycleStatusError::ZeroRuntimeCatalogHash)
+        );
+    }
+    #[test]
+    fn lane_lifecycle_status_requires_explicit_unique_nullable_runtime_catalog_hash() {
+        for runtime_catalog_hash in [None, Some(Hash::new(b"committed runtime overlay"))] {
+            let mut status = lifecycle_status(&LaneCatalog::default());
+            status.runtime_catalog_hash = runtime_catalog_hash;
+            let mut encoded = norito::json::to_string(&status).unwrap();
+            assert_eq!(encoded.pop(), Some('}'));
+            encoded.push_str(",\"runtime_catalog_hash\":null}");
+            let error = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
+                .expect_err("duplicate runtime hash, including null, must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("duplicate field `runtime_catalog_hash`")
+            );
+            let mut value = norito::json::to_value(&status).unwrap();
+            let fields = value.as_object_mut().unwrap();
+            fields.remove("runtime_catalog_hash").unwrap();
+            let error = norito::json::from_str::<LaneLifecycleStatusV1>(
+                &norito::json::to_string(&value).unwrap(),
+            )
+            .expect_err("missing runtime hash must not become absence");
+            assert!(error.to_string().contains("runtime_catalog_hash"));
+            for malformed in [
+                norito::json::Value::Bool(false),
+                norito::json::Value::String("".into()),
+            ] {
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("runtime_catalog_hash".into(), malformed);
+                assert!(
+                    norito::json::from_str::<LaneLifecycleStatusV1>(
+                        &norito::json::to_string(&value).unwrap(),
+                    )
+                    .is_err()
+                );
+            }
+        }
     }
     #[test]
     fn lane_lifecycle_status_rejects_forged_hash_version_and_order() {
@@ -2663,8 +2790,8 @@ mod tests {
             Hash::new(b"lane-incarnation-after-replacement"),
         )]);
         let first_status =
-            LaneLifecycleStatusV1::new(&catalog, &first).expect("first lifecycle status");
-        let replacement_status = LaneLifecycleStatusV1::new(&catalog, &replacement)
+            LaneLifecycleStatusV1::new(&catalog, &first, None).expect("first lifecycle status");
+        let replacement_status = LaneLifecycleStatusV1::new(&catalog, &replacement, None)
             .expect("replacement lifecycle status");
         assert_eq!(first_status.catalog_hash, replacement_status.catalog_hash);
         assert_ne!(

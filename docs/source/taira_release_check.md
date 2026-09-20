@@ -2,13 +2,13 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **387 native regressions on macOS**: startup
+`--native-check-scope basic` runs **483 native regressions on macOS**: startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **570-case** native census,
+Use `--native-check-scope full` to execute the full **664-case** native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux adds one OpenSSH descriptor-custody case to each scope.
 `prepare` accepts the same explicit scope and binds it into its request/result;
@@ -46,7 +46,19 @@ observers, and prevent protected views from losing authentication through an
 unsigned HTTP upstream. These checks run in the early startup preflight and
 reuse the existing Torii unit harness.
 
-Both scopes compile the identical configuration, crypto, P2P, CLI, daemon, Core,
+Both scopes execute the additive catalog data-model, immutable policy, manifest,
+transaction staging and startup reconstruction regressions. The four-validator
+catalog test adds a dataspace and lane through one committed transition, then
+checks retained history and replay. The data-model library joins the same native
+Cargo graph; its selected tests execute before any network or Linux release build.
+
+Canonical lane recovery also restores an orphaned certificate handoff only after
+proving its canonical application is missing and no downstream owner remains.
+Query failures decode the node's bounded error envelope; a missing asset, unknown
+route or malformed response cannot be reported as an expired or missing cursor
+solely from its HTTP status. Both scopes include these focused regressions.
+
+Both scopes compile the identical configuration, data-model, crypto, P2P, CLI, daemon, Core,
 proof, Torii and consensus harness graph plus native shipping binaries with six
 Cargo jobs. This preserves the warm target and dependency feature union. Deferred
 harnesses have compile coverage only; their cases never appear as test passes.

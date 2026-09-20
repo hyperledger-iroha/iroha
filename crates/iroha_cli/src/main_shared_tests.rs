@@ -492,7 +492,7 @@ fn fallback_config_derives_checked_signing_key() {
         .expect("fallback signature should verify");
 }
 #[test]
-fn fallback_config_is_limited_to_kagemusha_commands() {
+fn fallback_config_is_limited_to_local_commands() {
     let args = Args::try_parse_from([
         "iroha",
         "app",
@@ -640,11 +640,6 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
     )
     .to_string();
     for command in [
-        vec!["iroha", "--machine", "contract", "app", "build"],
-        vec!["iroha", "--machine", "contract", "dev", "check"],
-        vec!["iroha", "--machine", "contract", "dev", "build"],
-        vec!["iroha", "--machine", "contract", "dev", "test"],
-        vec!["iroha", "--machine", "contract", "dev", "schema"],
         vec![
             "iroha",
             "--machine",
@@ -698,9 +693,6 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
         assert!(args.command.allows_fallback_config());
         assert!(args.command.allows_fallback_config_in_machine_mode());
     }
-    let args = Args::try_parse_from(["iroha", "contract", "dev", "doctor"])
-        .expect("parse network-aware contract doctor");
-    assert!(!args.command.allows_fallback_config());
     let args = Args::try_parse_from([
         "iroha",
         "contract",
@@ -711,6 +703,7 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
     ])
     .expect("parse on-chain contract manifest query");
     assert!(!args.command.allows_fallback_config());
+    assert!(!args.command.allows_fallback_config_in_machine_mode());
 }
 #[test]
 fn vk_register_and_update_help_documents_namespace() {
@@ -1076,6 +1069,7 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
                 "3",
             ]);
         }
+        argv.extend(["--public-inputs", "/private/runtime/public-inputs"]);
         argv.extend(local);
         let error = Args::try_parse_from(&argv).expect_err("explicit operator credential required");
         assert_eq!(
@@ -2892,7 +2886,6 @@ fn account_permission_list_reads_complete_effective_fanout_before_global_paginat
             effective_permission_page(&["CanC", "CanA", "CanB"]),
             effective_permission_page(&["CanC", "CanD"]),
             effective_permission_page(&["CanE"]),
-            effective_permission_page(&[]),
         ]);
         let account = context.config.account.to_string();
         let mut argv = vec![
@@ -2927,7 +2920,11 @@ fn account_permission_list_reads_complete_effective_fanout_before_global_paginat
         let mut expected_url = context.config.torii_api_url.clone();
         expected_url.set_path(&format!("/v1/accounts/{account}/permissions"));
         let requests = transport.requests.lock().unwrap();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests.len(),
+            3,
+            "oversized and saturated union pages must continue; the final short page must stop"
+        );
         for (index, request) in requests.iter().enumerate() {
             assert_eq!(request.method, iroha::http::Method::GET);
             assert_eq!(request.url.path(), expected_url.path());
@@ -2945,6 +2942,40 @@ fn account_permission_list_reads_complete_effective_fanout_before_global_paginat
             }
         }
     }
+
+    // The default 500-row request already uses the native fetch budget. A
+    // complete short page must retain its rows without probing offset 500.
+    let (mut context, transport) =
+        canonical_read_context(vec![effective_permission_page(&["CanA"])]);
+    let account = context.config.account.to_string();
+    Args::try_parse_from([
+        "iroha",
+        "account",
+        "permission",
+        "list",
+        "--id",
+        account.as_str(),
+    ])
+    .unwrap()
+    .command
+    .run(&mut context)
+    .expect("a complete nonempty short page must succeed without an empty probe");
+    let permissions: Vec<Permission> =
+        norito::json::from_json(context.output.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        permissions.iter().map(Permission::name).collect::<Vec<_>>(),
+        vec!["CanA"]
+    );
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(
+        requests.len(),
+        1,
+        "the default short page must not trigger another HTTP request"
+    );
+    let params: std::collections::BTreeMap<_, _> = requests[0].url.query_pairs().collect();
+    assert_eq!(params.get("limit").map(|v| v.as_ref()), Some("500"));
+    assert_eq!(params.get("offset").map(|v| v.as_ref()), Some("0"));
+    assert_eq!(params.get("count_mode").map(|v| v.as_ref()), Some("exact"));
 }
 #[test]
 fn account_permission_list_rejects_partial_or_non_effective_pages_without_output() {
@@ -3058,7 +3089,7 @@ fn account_permission_list_propagates_server_page_cap_rejection() {
     assert_eq!(params.get("offset").map(|value| value.as_ref()), Some("0"));
 }
 #[test]
-fn ledger_asset_get_uses_exact_singular_query_and_preserves_not_found() {
+fn ledger_asset_get_uses_exact_singular_query_and_preserves_missing_asset_diagnostic() {
     use iroha::data_model::asset::AssetBalanceScope;
     use iroha::data_model::query::{
         QueryRequest, QueryResponse, SignedQuery, SingularQueryBox, SingularQueryOutputBox,
@@ -3089,9 +3120,17 @@ fn ledger_asset_get_uses_exact_singular_query_and_preserves_not_found() {
                 )
                 .unwrap();
             let response = if missing {
+                let failure = iroha::data_model::query::error::QueryExecutionFail::Find(
+                    iroha::data_model::query::error::FindError::Asset(Box::new(id.clone())),
+                );
+                let envelope = iroha_torii_shared::ErrorEnvelope::new(
+                    "query_validation_failed",
+                    failure.to_string(),
+                );
                 iroha::http::Response::builder()
                     .status(404)
-                    .body(Vec::new())
+                    .header("content-type", "application/x-norito")
+                    .body(norito::to_bytes(&envelope).unwrap())
                     .unwrap()
             } else {
                 iroha::http::Response::builder()
@@ -3147,12 +3186,17 @@ fn ledger_asset_get_uses_exact_singular_query_and_preserves_not_found() {
                 let error = result.expect_err("singular missing asset must remain an error");
                 assert!(matches!(
                     error.downcast_ref::<iroha::query::QueryError>(),
-                    Some(iroha::query::QueryError::Validation(
-                        ValidationFail::QueryFailed(
-                            iroha::data_model::query::error::QueryExecutionFail::NotFound
-                        )
-                    ))
+                    Some(iroha::query::QueryError::Other(_))
                 ));
+                let rendered = format!("{error:#}");
+                assert!(rendered.contains("HTTP 404"));
+                assert!(rendered.contains("query_validation_failed"));
+                let expected = iroha::data_model::query::error::QueryExecutionFail::Find(
+                    iroha::data_model::query::error::FindError::Asset(Box::new(id.clone())),
+                )
+                .to_string();
+                assert!(rendered.contains(&expected));
+                assert!(!rendered.contains("live query store"));
                 assert!(context.output.is_none());
             } else {
                 result.unwrap();

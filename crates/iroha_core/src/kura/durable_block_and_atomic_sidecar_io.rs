@@ -368,6 +368,19 @@ impl Kura {
                 let chain_len = block_data.len();
                 drop(block_data);
                 self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
+                let mut native_capacity = self
+                    .begin_native_amx_store_capacity_under_prune_and_canonical_guards(
+                        block,
+                        merge_entry,
+                        None,
+                    )?;
+                if let Some(owner) = &mut native_capacity {
+                    owner.durable_write_started();
+                }
+                self.check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards()?;
+                if let Some(owner) = &mut native_capacity {
+                    owner.publish_pending_index()?;
+                }
                 if let Some(entry) = merge_entry {
                     self.preflight_committed_merge_entry_for_block(block, entry)?;
                     let associated = self.associated_merge_entry_for_block(block)?;
@@ -396,6 +409,9 @@ impl Kura {
                         None,
                     );
                 }
+                if let Some(owner) = &native_capacity {
+                    owner.finish_exact_replacement_retirement(block)?;
+                }
                 debug!(
                     height = actual_height,
                     ?block_hash,
@@ -407,7 +423,16 @@ impl Kura {
         if let Some(entry) = merge_entry {
             self.preflight_committed_merge_entry_for_block(block, entry)?;
         }
+        let mut native_capacity = self
+            .begin_native_amx_store_capacity_under_prune_and_canonical_guards(
+                block,
+                merge_entry,
+                None,
+            )?;
         self.check_storage_budget(block, merge_entry)?;
+        if let Some(owner) = &mut native_capacity {
+            owner.publish_pending_index()?;
+        }
         if let Some(entry) = merge_entry {
             // The exact full entry is the recovery source for every crash after
             // the canonical block commit point, including direct callers that
@@ -441,6 +466,9 @@ impl Kura {
             let chain_len = block_data.len();
             drop(block_data);
             self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
+            if let Some(owner) = &mut native_capacity {
+                owner.durable_write_started();
+            }
             if let Some(entry) = merge_entry {
                 self.preflight_committed_merge_entry_for_block(block, entry)?;
             }
@@ -471,6 +499,9 @@ impl Kura {
                     None,
                 );
             }
+            if let Some(owner) = &native_capacity {
+                owner.finish_exact_replacement_retirement(block)?;
+            }
             debug!(
                 height = actual_height,
                 ?block_hash,
@@ -485,6 +516,9 @@ impl Kura {
             self.preflight_committed_merge_entry_for_block(block, entry)?;
         }
         self.write_canonical_association_stage(block, merge_entry)?;
+        if let Some(owner) = &mut native_capacity {
+            owner.durable_write_started();
+        }
         if let Err(err) =
             self.persist_block_at_height_while_locked(block, actual_height, &write_guard)
         {
@@ -498,6 +532,9 @@ impl Kura {
                 // association stage against the selected canonical block hash.
                 return Err(err);
             }
+            if let Some(owner) = &mut native_capacity {
+                owner.canonical_write_proven_uncommitted();
+            }
             if let Some(mut batch) = lane_artifacts.take()
                 && let Err(rollback_err) = batch.rollback()
             {
@@ -506,8 +543,19 @@ impl Kura {
                     ?block_hash,
                     "Failed to rollback lane artifacts after block write failure"
                 );
+                // Keep the exact pending owner until every rollback side effect
+                // is proven complete; its guard closes later canonical admission.
+                return Err(rollback_err);
             }
             self.remove_canonical_association_stage()?;
+            // The pending-index remover acquires sidecar ownership. Drop physical
+            // block/data writers first, preserving sidecar-before-store ordering.
+            drop(block_data);
+            drop(write_guard);
+            drop(lane_artifacts);
+            if let Some(owner) = &mut native_capacity {
+                owner.rollback_after_proven_uncommitted_write()?;
+            }
             return Err(err);
         }
         if let Some(batch) = lane_artifacts.take() {

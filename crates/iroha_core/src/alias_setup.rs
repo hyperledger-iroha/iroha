@@ -95,7 +95,8 @@ fn sns_error(error: crate::sns::SnsError) -> AliasSetupError {
         crate::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE
     } else {
         match error {
-            crate::sns::SnsError::NotFound(_) => "alias.mapping.unknown",
+            crate::sns::SnsError::NotFound(_)
+            | crate::sns::SnsError::RegistrationNotFound { .. } => "alias.mapping.unknown",
             crate::sns::SnsError::BadRequest(_) => "alias.name.invalid",
             crate::sns::SnsError::Conflict(_) => "alias.state.conflict",
             crate::sns::SnsError::Internal(_) => "alias.state.invalid",
@@ -606,7 +607,7 @@ fn existing_record(
 ) -> Result<Option<NameRecordV1>, AliasSetupError> {
     match crate::sns::get_name_record_by_selector(world, selector, now_ms) {
         Ok(record) => Ok(Some(record)),
-        Err(crate::sns::SnsError::NotFound(_)) => Ok(None),
+        Err(crate::sns::SnsError::RegistrationNotFound { .. }) => Ok(None),
         Err(error) => Err(sns_error(error)),
     }
 }

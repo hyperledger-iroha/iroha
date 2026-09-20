@@ -1219,7 +1219,7 @@ fn persisted_tc_starts_certified_fetch_for_a_missing_selected_lock() {
             .any(|effect| matches!(effect, Effect::EnterView { .. }))
     );
     assert_certified_fetch(&reducer, &entered, &high, None);
-    assert!(reducer.outbound_messages().any(|message| matches!(
+    assert!(reducer.retained_control_messages().any(|message| matches!(
         message,
         ConsensusMessageV2::QuorumCertificate(certificate)
             if certificate == &high
@@ -1456,7 +1456,7 @@ fn tc_omitting_the_local_high_keeps_its_exact_prepare_qc_retransmittable() {
             .map(QuorumCertificate::reference),
         Some(prepare.reference())
     );
-    assert!(reducer.outbound_messages().any(|message| matches!(
+    assert!(reducer.retained_control_messages().any(|message| matches!(
         message,
         ConsensusMessageV2::QuorumCertificate(certificate)
             if certificate == &prepare
@@ -1645,7 +1645,7 @@ fn same_round_timeout_upgrade_rebinds_lock_and_retains_current_timeout_vote() {
     )));
     assert_eq!(
         reducer
-            .outbound_messages()
+            .retained_control_messages()
             .filter_map(|message| match message {
                 ConsensusMessageV2::TimeoutCertificate(certificate) => Some(certificate),
                 _ => None,
@@ -2168,7 +2168,7 @@ fn prior_view_commit_votes_rebuild_the_exact_locked_round_quorum() {
             && signers == &[id(1)]
             && *signed_power == VotingPower::new(1)
     ));
-    assert!(reducer.outbound_messages().any(
+    assert!(reducer.retained_control_messages().any(
         |message| matches!(message, ConsensusMessageV2::Vote(vote) if vote.vote() == local_commit)
     ));
     for signer in [2, 3] {
@@ -2266,7 +2266,7 @@ fn higher_tc_lock_prunes_superseded_commit_retransmission() {
             signature: signature(1),
         })
         .expect("sign and retain the old active-lock Commit vote");
-    assert!(reducer.outbound_messages().any(|message| {
+    assert!(reducer.retained_control_messages().any(|message| {
         matches!(message, ConsensusMessageV2::Vote(vote) if vote.vote() == old_commit)
     }));
     let higher_prepare = qc(&context, 1, Phase::Prepare, higher_subject, &[1, 2, 3]);
@@ -2325,7 +2325,7 @@ fn higher_tc_lock_prunes_superseded_commit_retransmission() {
             } if *vote == old_commit
         )
     }));
-    assert!(reducer.outbound_messages().all(|message| {
+    assert!(reducer.retained_control_messages().all(|message| {
         !matches!(message, ConsensusMessageV2::Vote(vote) if vote.vote() == old_commit)
     }));
     let retransmit = reducer
@@ -5641,7 +5641,7 @@ fn replay_resigns_prepare_but_timeout_fence_suppresses_old_votes() {
             signature: signature(1),
         })
         .expect("publish the still-open Prepare intent");
-    assert!(prepared.outbound_messages().any(|message| {
+    assert!(prepared.retained_control_messages().any(|message| {
         matches!(
             message,
             ConsensusMessageV2::Vote(vote) if vote.vote() == prepare_vote
@@ -5666,7 +5666,7 @@ fn replay_resigns_prepare_but_timeout_fence_suppresses_old_votes() {
             ..
         }]
     ));
-    assert!(prepared.outbound_messages().all(|message| {
+    assert!(prepared.retained_control_messages().all(|message| {
         !matches!(
             message,
             ConsensusMessageV2::Vote(vote) if vote.vote() == prepare_vote
@@ -5678,7 +5678,7 @@ fn replay_resigns_prepare_but_timeout_fence_suppresses_old_votes() {
             signature: signature(2),
         })
         .expect("publish the durable timeout vote");
-    assert!(prepared.outbound_messages().any(|message| {
+    assert!(prepared.retained_control_messages().any(|message| {
         matches!(
             message,
             ConsensusMessageV2::TimeoutVote(vote) if vote.vote() == expected_timeout

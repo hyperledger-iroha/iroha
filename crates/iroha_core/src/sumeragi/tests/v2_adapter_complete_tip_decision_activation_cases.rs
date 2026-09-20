@@ -75,10 +75,19 @@ fn production_complete_tip_activates_recovered_unapplied_decision_body() {
         persistence_id: 1,
         record: WalRecordV2::Decision(decision.clone()),
     };
-    adapter
+    let payload = envelope.encode();
+    let receipt = adapter
         .wal
-        .append(&envelope.encode())
+        .append(&payload)
         .expect("fsync the sole successor Decision before restart");
+    assert_eq!(
+        receipt.sequence().checked_add(1),
+        Some(envelope.persistence_id)
+    );
+    let records = adapter.wal.recovered_records();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].exactly_matches_receipt(receipt));
+    assert_eq!(records[0].payload(), payload.as_slice());
     drop(adapter);
     crate::sumeragi::status::clear_v2_status();
     let authenticated = SumeragiV2Adapter::open_recovered_startup_with_aggregator(

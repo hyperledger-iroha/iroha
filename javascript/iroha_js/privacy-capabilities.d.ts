@@ -14,7 +14,7 @@ export type PrivacyProtocolIdV1 =
   | "iroha-ivm-private-note-stark-v1"
   | "pq-masp-stark-v1";
 export type PrivacyProofSystemIdV1 =
-  | "stark-fri-poseidon-x7-goldilocks-6x64-v1"
+  | "stark-fri-sha3-384-goldilocks-v1"
   | "anonymous-pgc-p256"
   | "iroha-verange-p256"
   | "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512"
@@ -24,7 +24,7 @@ export type PrivacyProofSystemIdV1 =
   | "halo2-ipa-pasta"
   | "fcmp-plus-plus-curve-tree-bulletproofs";
 export type PrivacyEngineIdV1 =
-  | "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"
+  | "native-goldilocks-sha3-384-stark-fri-v1"
   | "native-anonymous-pgc-p256"
   | "native-verange-p256"
   | "native-zk-ams-masked-relaxed-spartan-t256-ristretto255"
@@ -117,7 +117,6 @@ export type PrivacyProtocolLifecycleV1 =
       state: "proposed";
       record: Readonly<{
         proposed_at_height: PrivacyU64V1;
-        activate_at_height: PrivacyU64V1;
       }>;
     }>
   | Readonly<{

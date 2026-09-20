@@ -3346,6 +3346,29 @@ impl LaneBlockSessionCache {
             })
             .collect()
     }
+    /// Restore a lost handoff for an exact canonical proposal whose application
+    /// is still missing. The caller must first establish that no downstream
+    /// committed-session owner remains. Certificates and signer locks are kept
+    /// unchanged; this does not authorize a vote or a different lane identity.
+    pub(crate) fn restore_missing_committed_handoff(
+        &mut self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        let Some(session) = self.sessions.get_mut(&key) else {
+            return false;
+        };
+        if session.proposal.as_ref() != Some(proposal)
+            || !session.committed_session_drained
+            || session.prepare_qc.is_none()
+            || session.commit_qc.is_none()
+        {
+            return false;
+        }
+        session.committed_session_drained = false;
+        refresh_committed_session_ready(session);
+        true
+    }
     /// Drain up to `limit` sessions whose proposal, prepare QC, and commit QC are all cached.
     ///
     /// This is intentionally separate from [`Self::drain_newly_sealed_qcs_matching`]:
@@ -8261,6 +8284,37 @@ mod tests {
             cache.drain_committed_sessions().is_empty(),
             "committed sessions must be drained once"
         );
+    }
+    #[test]
+    fn canonical_recovery_restores_only_an_exact_complete_drained_handoff() {
+        let (keys, validators) = lane_block_validator_fixture(4);
+        let proposal = lane_block_proposal(&validators);
+        let mut cache = LaneBlockSessionCache::new(4);
+        assert_proposal_insert(&mut cache, proposal.clone(), Inserted);
+        assert!(!cache.restore_missing_committed_handoff(&proposal));
+        for phase in [CertPhase::Prepare, CertPhase::Commit] {
+            for key in &keys[..3] {
+                assert_vote_insert(
+                    &mut cache,
+                    &signed_vote(&proposal.vote_body(phase), key),
+                    Inserted,
+                );
+            }
+        }
+        let first = cache.drain_committed_sessions();
+        assert_eq!(first.len(), 1);
+        let other_hint = proposal.clone().with_payload_block_hint(
+            iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1 {
+                proposal_height: proposal.descriptor.proposal_height,
+                proposal_view: 1,
+                proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"other-carrier")),
+            },
+        );
+        assert!(!cache.restore_missing_committed_handoff(&other_hint));
+        assert!(cache.restore_missing_committed_handoff(&proposal));
+        assert!(!cache.restore_missing_committed_handoff(&proposal));
+        assert_eq!(cache.drain_committed_sessions(), first);
+        assert!(cache.drain_committed_sessions().is_empty());
     }
     #[test]
     fn lane_block_session_cache_rejects_conflicting_commit_vote_after_view_change() {

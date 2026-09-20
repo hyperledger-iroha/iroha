@@ -1112,7 +1112,7 @@ async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending()
 async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
     let app = mk_app_state_for_tests();
     let network = iroha_core::IrohaNetwork::actor_backpressured_for_tests();
-    let busy_peer_key = checked_torii_test_ed25519_keypair(
+    let busy_peer_key = checked_torii_test_bls_keypair(
         0xc5,
         "derive backpressured busy-rejection peer fixture key",
     );
@@ -1120,11 +1120,52 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         "127.0.0.1:23001".parse().expect("valid busy peer address"),
         busy_peer_key.public_key().clone(),
     );
+    let busy_request_id = Hash::new(b"backpressured-busy-rejection");
+    let reject_code = "proxy_capacity_exceeded";
+    let mut body = Vec::new();
+    norito::core::to_bytes_in(
+        &ErrorEnvelope::new(
+            reject_code,
+            "Torii proxy memory capacity is exhausted".to_owned(),
+        ),
+        &mut body,
+    )
+    .expect("fixed capacity-response fixture must encode");
+    let busy_post = iroha_p2p::Post {
+        peer_id: busy_peer.id().clone(),
+        priority: iroha_p2p::Priority::High,
+        data: iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id: busy_request_id,
+            response: ToriiProxyHttpResponseV1 {
+                status_code: StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                headers: vec![
+                    iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                        name: "content-type".to_owned(),
+                        value: crate::utils::NORITO_MIME_TYPE.as_bytes().to_vec(),
+                    },
+                    iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                        name: "x-iroha-reject-code".to_owned(),
+                        value: reject_code.as_bytes().to_vec(),
+                    },
+                ],
+                body,
+            },
+        })),
+    };
+    match network.post_best_effort_recoverable(busy_post) {
+        Err(iroha_p2p::network::NetworkPostAdmissionError::Backpressured { message }) => {
+            assert_eq!(message.peer_id, *busy_peer.id());
+        }
+        other => {
+            panic!("valid BLS capacity response must reach exact actor backpressure: {other:?}")
+        }
+    }
     let capacity_rejection_completed_inline: () =
         super::reject_incoming_torii_proxy_request_capacity(
             &network,
             &busy_peer,
-            Hash::new(b"backpressured-busy-rejection"),
+            busy_request_id,
             super::torii_proxy_test_deadline_unix_ms(),
         );
     let () = capacity_rejection_completed_inline;
@@ -1169,41 +1210,86 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
 #[tokio::test]
 async fn backpressured_response_admission_obeys_local_egress_deadline() {
     let network = iroha_core::IrohaNetwork::actor_backpressured_for_tests();
-    let target =
-        checked_torii_test_peer_id(0xc7, "derive local egress-deadline target fixture key");
+    let target_key =
+        checked_torii_test_bls_keypair(0xc7, "derive local egress-deadline target fixture key");
+    let target = PeerId::from(target_key.public_key().clone());
     let request_id = Hash::new(b"backpressured-response-local-egress-deadline");
+    let post = iroha_p2p::Post {
+        peer_id: target,
+        priority: iroha_p2p::Priority::High,
+        data: iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id,
+            response: ToriiProxyHttpResponseV1 {
+                status_code: StatusCode::OK.as_u16(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        })),
+    };
+    let post = match network.post_best_effort_recoverable(post) {
+        Err(iroha_p2p::network::NetworkPostAdmissionError::Backpressured { message }) => message,
+        other => {
+            panic!("valid BLS response fixture must reach exact actor backpressure: {other:?}")
+        }
+    };
     let local_deadline = tokio::time::Instant::now() + Duration::from_millis(20);
     let result = tokio::time::timeout(
         Duration::from_secs(1),
         super::post_torii_proxy_control_until_deadline(
             &network,
-            iroha_p2p::Post {
-                peer_id: target,
-                priority: iroha_p2p::Priority::High,
-                data: iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(
-                    ToriiProxyResponseV1 {
-                        schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
-                        request_id,
-                        response: ToriiProxyHttpResponseV1 {
-                            status_code: StatusCode::OK.as_u16(),
-                            headers: Vec::new(),
-                            body: Vec::new(),
-                        },
-                    },
-                )),
-            },
+            post,
             super::torii_proxy_test_deadline_unix_ms(),
             local_deadline,
         ),
     )
     .await
     .expect("local egress deadline must stop backpressured response admission");
+    let error = result.expect_err("a permanently backpressured actor cannot accept the response");
     assert!(
-        result
-            .expect_err("a permanently backpressured actor cannot accept the response")
-            .contains("local admission deadline"),
-        "the local monotonic owner, not the wider skew-tolerant wire horizon, must terminate admission"
+        error.contains("local admission deadline"),
+        "the local monotonic owner, not the wider skew-tolerant wire horizon, must terminate admission: {error}"
     );
+}
+#[cfg(feature = "connect")]
+#[test]
+fn proxy_response_admission_rejects_non_bls_target_before_actor_backpressure() {
+    let network = iroha_core::IrohaNetwork::actor_backpressured_for_tests();
+    let target_key =
+        checked_torii_test_ed25519_keypair(0xc7, "derive invalid relay target fixture key");
+    let target = PeerId::from(target_key.public_key().clone());
+    let request_id = Hash::new(b"proxy-response-invalid-relay-target");
+    let post = iroha_p2p::Post {
+        peer_id: target.clone(),
+        priority: iroha_p2p::Priority::High,
+        data: iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id,
+            response: ToriiProxyHttpResponseV1 {
+                status_code: StatusCode::OK.as_u16(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        })),
+    };
+    let message = match network.post_best_effort_recoverable(post) {
+        Err(iroha_p2p::network::NetworkPostAdmissionError::Rejected { message, reason }) => {
+            assert_eq!(
+                reason,
+                iroha_p2p::network::NetworkActorAdmissionRejection::WireLength
+            );
+            message
+        }
+        other => {
+            panic!("non-BLS relay target must fail exact wire admission before capacity: {other:?}")
+        }
+    };
+    assert_eq!(message.peer_id, target);
+    assert_eq!(message.priority, iroha_p2p::Priority::High);
+    let iroha_core::NetworkMessage::ToriiProxyResponse(response) = message.data else {
+        panic!("wire rejection must return the original proxy response");
+    };
+    assert_eq!(response.request_id, request_id);
 }
 #[cfg(feature = "connect")]
 #[tokio::test]

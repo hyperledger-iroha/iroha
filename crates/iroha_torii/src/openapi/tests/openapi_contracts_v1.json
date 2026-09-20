@@ -459,7 +459,8 @@
         "lanes",
         "catalog_hash",
         "incarnations",
-        "incarnation_root"
+        "incarnation_root",
+        "runtime_catalog_hash"
       ]
     },
     {

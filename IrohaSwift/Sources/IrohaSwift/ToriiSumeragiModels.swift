@@ -592,7 +592,7 @@ private enum ToriiSumeragiV2OutboundIntentStageSchema:
 {
     static let tag = "stage"
     static let values: Set<String> = [
-        "pending_persistence", "pending_signature", "queued", "sent",
+        "pending_persistence", "pending_signature", "queued", "retained",
     ]
 }
 

@@ -8915,6 +8915,11 @@
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
           },
+          "query_asset_not_found": {
+            "description": "Canonical AssetId literal for a completed authoritative asset lookup. It denotes absence only with HTTP 404 and code query_asset_not_found, and must equal the exact requested asset ID.",
+            "minLength": 1,
+            "type": "string"
+          },
           "queue": {
             "$ref": "#/components/schemas/QueueErrorSnapshot"
           },
@@ -8929,6 +8934,9 @@
             "description": "Suggested retry delay in seconds for transient errors.",
             "minimum": 0,
             "type": "integer"
+          },
+          "sns_registration_not_found": {
+            "$ref": "#/components/schemas/SnsRegistrationNotFoundV1"
           },
           "tx_hash": {
             "description": "Signed transaction hash involved in finality/status failures.",
@@ -24685,6 +24693,13 @@
             "minItems": 1,
             "type": "array"
           },
+          "runtime_catalog_hash": {
+            "description": "Canonical native commitment to the complete committed runtime catalog overlay. Explicit null only before the protected overlay exists. Copy this value into expected_runtime_catalog_hash of nexus_catalog_transition_v1; the lane-only response cannot reconstruct this commitment.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "version": {
             "description": "Lifecycle status layout version.",
             "enum": [
@@ -24700,7 +24715,8 @@
           "lanes",
           "catalog_hash",
           "incarnations",
-          "incarnation_root"
+          "incarnation_root",
+          "runtime_catalog_hash"
         ],
         "type": "object"
       },
@@ -26344,7 +26360,7 @@
         "properties": {
           "engine": {
             "enum": [
-              "native-goldilocks-poseidon-x7-stark-fri-6x64-v1",
+              "native-goldilocks-sha3-384-stark-fri-v1",
               "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
               "native-anonymous-pgc-p256",
               "native-verange-p256",
@@ -27447,7 +27463,7 @@
         "properties": {
           "proof_system": {
             "enum": [
-              "stark-fri-poseidon-x7-goldilocks-6x64-v1",
+              "stark-fri-sha3-384-goldilocks-v1",
               "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
               "anonymous-pgc-p256",
               "iroha-verange-p256",
@@ -27912,11 +27928,6 @@
               "record": {
                 "additionalProperties": false,
                 "properties": {
-                  "activate_at_height": {
-                    "format": "uint64",
-                    "minimum": 1,
-                    "type": "integer"
-                  },
                   "proposed_at_height": {
                     "format": "uint64",
                     "minimum": 1,
@@ -27924,8 +27935,7 @@
                   }
                 },
                 "required": [
-                  "proposed_at_height",
-                  "activate_at_height"
+                  "proposed_at_height"
                 ],
                 "type": "object"
               },
@@ -28438,7 +28448,7 @@
         }
       },
       "PrivateSettlementBundleReceiptResponseV1": {
-        "description": "Public compact receipt, opaque abort, or pending lifecycle; no plaintext contents.",
+        "description": "Public compact receipt, opaque abort, or absence of public terminal state at this node; no plaintext contents.",
         "oneOf": [
           {
             "additionalProperties": false,
@@ -28452,14 +28462,10 @@
                 "properties": {
                   "bundle_id": {
                     "$ref": "#/components/schemas/Hash"
-                  },
-                  "lifecycle": {
-                    "$ref": "#/components/schemas/PrivateSettlementLifecycleDtoV1"
                   }
                 },
                 "required": [
-                  "bundle_id",
-                  "lifecycle"
+                  "bundle_id"
                 ],
                 "type": "object"
               }
@@ -35711,6 +35717,27 @@
           "payload",
           "bundle_provenance",
           "finalize_provenance"
+        ],
+        "type": "object"
+      },
+      "SnsRegistrationNotFoundV1": {
+        "additionalProperties": false,
+        "description": "Typed selector detail in ErrorEnvelope.details.sns_registration_not_found when the sole outer error code is sns_registration_not_found. The canonical suffix_id and label must match the exact requested selector. This response is not a cryptographic proof of ledger state.",
+        "properties": {
+          "label": {
+            "description": "Exact canonical label of the requested registration.",
+            "type": "string"
+          },
+          "suffix_id": {
+            "description": "Fixed namespace identifier from the canonical requested selector.",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "suffix_id",
+          "label"
         ],
         "type": "object"
       },
@@ -82096,6 +82123,21 @@
             },
             "description": "Bad request"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Only code query_asset_not_found with details.query_asset_not_found equal to the exact requested AssetId denotes asset absence. Every selected dataspace route must report that same typed absence; unavailable routes remain errors. HTTP 404 alone does not establish absence. This response is not a cryptographic proof of ledger state."
+          },
           "406": {
             "content": {
               "application/json": {
@@ -84508,6 +84550,21 @@
               }
             },
             "description": "Successful response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Only the ErrorEnvelope code sns_registration_not_found with details.sns_registration_not_found containing the exact requested suffix_id and canonical label denotes an absent registration. JSON and Norito responses use the same ErrorEnvelope. Other errors remain errors; HTTP 404 alone does not establish registration absence. This unsigned response is not a cryptographic proof of ledger state."
           }
         },
         "security": [

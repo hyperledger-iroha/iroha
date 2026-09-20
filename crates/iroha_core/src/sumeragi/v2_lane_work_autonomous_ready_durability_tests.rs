@@ -2405,10 +2405,12 @@ fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() 
     let wrong_context_error = adapter
         .prepare_certified_execution_carrier(&wrong_context, 0, &[])
         .expect_err("a certified execution carrier must reject another height context");
-    assert!(wrong_context_error.indices().is_empty());
     assert_eq!(
-        wrong_context_error.reason(),
-        "certified execution carrier requires its exact height and an empty ordinary batch"
+        wrong_context_error,
+        CandidateWorkError::Failed(
+            "certified execution carrier requires its exact height and an empty ordinary batch"
+                .to_owned()
+        )
     );
     assert!(
         !adapter.output_guard.restart_required() && adapter.output_guard.acquire().is_some(),
@@ -2432,10 +2434,12 @@ fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() 
     let nonempty_error = adapter
         .prepare_certified_execution_carrier(&context, 0, &[ordinary_candidate])
         .expect_err("a certified execution carrier must reject ordinary candidates");
-    assert_eq!(nonempty_error.indices(), &BTreeSet::from([0]));
     assert_eq!(
-        nonempty_error.reason(),
-        "certified execution carrier requires its exact height and an empty ordinary batch"
+        nonempty_error,
+        CandidateWorkError::Failed(
+            "certified execution carrier requires its exact height and an empty ordinary batch"
+                .to_owned()
+        )
     );
     assert!(
         !adapter.output_guard.restart_required() && adapter.output_guard.acquire().is_some(),
@@ -5923,6 +5927,9 @@ fn repeated_non_empty_retries_never_make_queue_plan_synced_work_ordinary_eligibl
         let unavailable = provider
             .prepare(&context, 0, &[candidate])
             .expect_err("autonomous route must remain unavailable to ordinary execution");
+        let CandidateWorkError::Unavailable(unavailable) = unavailable else {
+            panic!("QueuePlan-synchronized work must have exact positional unavailability");
+        };
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),
@@ -5965,6 +5972,9 @@ fn repeated_non_empty_retries_never_make_queue_plan_synced_work_ordinary_eligibl
         let unavailable = provider
             .prepare(&context, 0, &[candidate])
             .expect_err("single-route QueuePlan work must remain autonomous");
+        let CandidateWorkError::Unavailable(unavailable) = unavailable else {
+            panic!("QueuePlan-synchronized work must have exact positional unavailability");
+        };
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),

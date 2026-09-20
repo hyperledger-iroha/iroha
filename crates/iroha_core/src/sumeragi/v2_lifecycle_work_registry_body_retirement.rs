@@ -11,6 +11,11 @@ pub(in crate::sumeragi) struct CertifiedBodyRetirementMaterialV1 {
 }
 
 impl CertifiedBodyRetirementMaterialV1 {
+    /// Return the installed carrier's immutable reducer incarnation.
+    pub(in crate::sumeragi) const fn tag(&self) -> EventTag {
+        self.tag
+    }
+
     /// Borrow the original durable body, which cancellation must retain.
     pub(in crate::sumeragi) fn durable_receipt(&self) -> &DurableBodyReceipt {
         &self.durable_receipt

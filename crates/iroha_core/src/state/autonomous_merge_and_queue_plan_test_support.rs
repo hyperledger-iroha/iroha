@@ -1,3 +1,221 @@
+#[derive(Clone, Copy)]
+enum AutonomousRuntimeEffectFixture {
+    Catalog,
+    Bootstrap,
+}
+
+const AUTONOMOUS_RUNTIME_DATASPACE: &str = "catalogmerge";
+const AUTONOMOUS_RUNTIME_LANE: LaneId = LaneId::new(1);
+
+fn configured_runtime_effect_queue_plan_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock)
+{
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.staking.restricted_validator_mode =
+        iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
+    state
+        .set_nexus(nexus.clone())
+        .expect("enable native runtime-effect Nexus fixture");
+    let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+    seed_consensus_keys_with_pops(&state, &validator_keypairs);
+    let validators = validator_keypairs
+        .iter()
+        .map(|key| {
+            let validator = AccountId::new(key.public_key().clone()).to_string();
+            let peer_id = PeerId::new(key.public_key().clone()).to_string();
+            norito::json!({ "validator": validator, "peer_id": peer_id })
+        })
+        .collect::<Vec<_>>();
+    let alias = &nexus.lane_catalog.lanes()[0].alias;
+    let manifest = norito::json!({
+        "lane": alias, "version": 1, "validators": validators, "quorum": 3,
+    });
+    let directory = tempfile::tempdir().expect("native startup manifest fixture directory");
+    std::fs::write(
+        directory.path().join(format!("{alias}.manifest.json")),
+        norito::json::to_vec(&manifest).expect("native startup manifest JSON"),
+    )
+    .expect("write public fixture startup manifest");
+    let registry_config = iroha_config::parameters::actual::LaneRegistry {
+        manifest_directory: Some(directory.path().to_path_buf()),
+        ..iroha_config::parameters::actual::LaneRegistry::default()
+    };
+    let registry = Arc::new(LaneManifestRegistry::from_config(
+        &nexus.lane_catalog,
+        &nexus.governance,
+        &registry_config,
+    ));
+    assert!(registry.is_bound_to_catalog(&nexus.lane_catalog));
+    registry
+        .ensure_lane_ready(LaneId::SINGLE)
+        .expect("frozen startup lane must be ready");
+    let rules = registry
+        .lane_rules(LaneId::SINGLE)
+        .expect("frozen startup lane has native governance rules");
+    assert_eq!(
+        rules.validators.iter().cloned().collect::<BTreeSet<_>>(),
+        validator_ids.into_iter().collect::<BTreeSet<_>>(),
+        "frozen baseline must retain the exact four lane validators"
+    );
+    assert_eq!(rules.quorum, Some(3));
+    state.install_lane_manifests(&registry);
+    // The native loader has frozen the source before genesis/checkpoint creation.
+    drop(directory);
+    let commit_keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
+    let parent = empty_global_block_after(None);
+    kura.store_block(Arc::new(parent.clone()))
+        .expect("store runtime-effect fixture parent");
+    commit_block_metadata_with_genesis_checkpoint_to_state(&state, &parent);
+    let parent = advance_queue_plan_fixture_to_beacon_parent(&state, parent);
+    (state, validator_keypairs, commit_keypairs, parent)
+}
+
+fn autonomous_runtime_effect_entrypoint(
+    state: &mut State,
+    validator_keypairs: &[KeyPair],
+    tag: u8,
+    effect: AutonomousRuntimeEffectFixture,
+) -> TransactionEntrypoint {
+    use iroha_data_model::{
+        alias_setup::AliasDataspaceBootstrapGrantV1,
+        nexus::{NexusCatalogTransitionV1, RuntimeDataSpaceAdditionV1, RuntimeLaneManifestV1},
+    };
+    let keypair = KeyPair::try_from_seed(vec![tag.wrapping_add(0x31); 32], Algorithm::Ed25519)
+        .expect("deterministic runtime-effect transaction key");
+    let authority = AccountId::new(keypair.public_key().clone());
+    let grant =
+        AliasDataspaceBootstrapGrantV1::try_new(AUTONOMOUS_RUNTIME_DATASPACE, authority.clone())
+            .expect("native namespace identity for runtime-effect fixture");
+    {
+        let mut world = state.world.block();
+        world.accounts.insert(
+            authority.clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world.account_permissions.insert(
+            authority.clone(),
+            BTreeSet::from([iroha_data_model::permission::Permission::from(
+                iroha_executor_data_model::permission::parameter::CanSetParameters,
+            )]),
+        );
+        for key in validator_keypairs {
+            world.accounts.insert(
+                AccountId::new(key.public_key().clone()),
+                AccountValue::new(AccountDetails::default()),
+            );
+        }
+        world.commit();
+    }
+    let parameter = match effect {
+        AutonomousRuntimeEffectFixture::Bootstrap => grant
+            .into_custom_parameter()
+            .expect("native bootstrap parameter"),
+        AutonomousRuntimeEffectFixture::Catalog => {
+            let nexus = state.nexus_snapshot();
+            let validators = validator_keypairs
+                .iter()
+                .map(|key| {
+                    let validator = AccountId::new(key.public_key().clone()).to_string();
+                    let peer_id = PeerId::new(key.public_key().clone()).to_string();
+                    norito::json!({
+                        "validator": validator,
+                        "peer_id": peer_id,
+                    })
+                })
+                .collect::<Vec<_>>();
+            NexusCatalogTransitionV1 {
+                version: NexusCatalogTransitionV1::VERSION,
+                expected_catalog_hash: LaneLifecycleParameterV1::catalog_hash(&nexus.lane_catalog),
+                expected_incarnation_root: lane_lifecycle_incarnation_root(
+                    &nexus.lane_catalog,
+                    &state.lane_incarnations_snapshot(),
+                )
+                .expect("native fixture incarnation root"),
+                expected_runtime_catalog_hash: state
+                    .view()
+                    .runtime_catalog_hash()
+                    .expect("native pre-transition runtime root"),
+                dataspace_additions: vec![RuntimeDataSpaceAdditionV1 {
+                    descriptor: DataSpaceMetadata {
+                        id: grant.dataspace.dataspace_id,
+                        alias: AUTONOMOUS_RUNTIME_DATASPACE.to_owned(),
+                        description: Some("autonomous native catalog effect".to_owned()),
+                        fault_tolerance: 1,
+                    },
+                    manifest_hash: grant.name_hash,
+                }],
+                lane_additions: vec![LaneConfig {
+                    id: AUTONOMOUS_RUNTIME_LANE,
+                    alias: "catalog-merge".to_owned(),
+                    dataspace_id: grant.dataspace.dataspace_id,
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                }],
+                manifest_additions: vec![RuntimeLaneManifestV1 {
+                    lane_id: AUTONOMOUS_RUNTIME_LANE,
+                    manifest: iroha_primitives::json::Json::new(norito::json!({
+                        "lane": "catalog-merge", "version": 1,
+                        "validators": validators, "quorum": 3,
+                    })),
+                }],
+            }
+            .into_custom_parameter()
+            .expect("native typed catalog parameter")
+        }
+    };
+    let mut transaction = TransactionBuilder::new(
+        *state.network_id_ref(),
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
+    transaction.set_creation_time(Duration::from_millis(u64::from(tag).saturating_add(1)));
+    TransactionEntrypoint::External(
+        transaction
+            .with_instructions([iroha_data_model::isi::SetParameter::new(
+                iroha_data_model::parameter::Parameter::Custom(parameter),
+            )])
+            .with_admission_intent(
+                iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+            )
+            .sign(keypair.private_key()),
+    )
+}
+
+fn autonomous_runtime_effect_fixture(
+    effect: AutonomousRuntimeEffectFixture,
+) -> (State, MergeLedgerEntry, SignedBlock) {
+    let (state, entry, carrier, _) =
+        autonomous_merge_commit_authorization_fixture_with_runtime_effect(
+            false,
+            false,
+            None,
+            false,
+            Some(effect),
+        );
+    assert!(
+        entry
+            .execution_batch
+            .as_ref()
+            .expect("runtime execution batch")
+            .lanes
+            .iter()
+            .all(|lane| lane.results.iter().all(|result| result.0.is_ok())),
+        "runtime-effect fixture must commit successful native parameter execution: {:?}",
+        entry
+            .execution_batch
+            .as_ref()
+            .expect("runtime execution batch")
+            .lanes
+    );
+    (state, entry, carrier)
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the fixture assembles one complete availability-certified autonomous source"
@@ -672,8 +890,32 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     SignedBlock,
     Option<AxtHandleReplayKey>,
 ) {
-    let (state, validator_keypairs, commit_keypairs, parent) =
-        configured_single_lane_queue_plan_state();
+    autonomous_merge_commit_authorization_fixture_with_runtime_effect(
+        seed_expired_axt_replay,
+        seed_due_start_effect,
+        transfer_fixture,
+        wrap_in_sealed_reveal,
+        None,
+    )
+}
+
+fn autonomous_merge_commit_authorization_fixture_with_runtime_effect(
+    seed_expired_axt_replay: bool,
+    seed_due_start_effect: bool,
+    transfer_fixture: Option<QueuePlanTransferFixture>,
+    wrap_in_sealed_reveal: bool,
+    runtime_effect: Option<AutonomousRuntimeEffectFixture>,
+) -> (
+    State,
+    MergeLedgerEntry,
+    SignedBlock,
+    Option<AxtHandleReplayKey>,
+) {
+    let (mut state, validator_keypairs, commit_keypairs, parent) = if runtime_effect.is_some() {
+        configured_runtime_effect_queue_plan_state()
+    } else {
+        configured_single_lane_queue_plan_state()
+    };
     let authority_height = parent.header().height().get();
     let carrier_height = authority_height
         .checked_add(1)
@@ -716,9 +958,13 @@ fn autonomous_merge_commit_authorization_fixture_inner(
         key
     });
     let tag = 0x6A;
-    let entrypoint = match transfer_fixture {
-        Some(fixture) => queue_plan_transfer_entrypoint_for_state_test(&state, tag, fixture),
-        None => queue_plan_entrypoint_for_state_test(&state, tag),
+    let entrypoint = if let Some(effect) = runtime_effect {
+        autonomous_runtime_effect_entrypoint(&mut state, &validator_keypairs, tag, effect)
+    } else {
+        match transfer_fixture {
+            Some(fixture) => queue_plan_transfer_entrypoint_for_state_test(&state, tag, fixture),
+            None => queue_plan_entrypoint_for_state_test(&state, tag),
+        }
     };
     let entrypoint = if wrap_in_sealed_reveal {
         let TransactionEntrypoint::External(signed) = entrypoint else {
@@ -783,6 +1029,16 @@ fn autonomous_merge_commit_authorization_fixture_inner(
     let batch = state
         .build_merge_execution_batch_from_source_prefix(1, application_header, vec![source])
         .expect("fixture source produces a canonical autonomous execution batch");
+    if runtime_effect.is_some() {
+        for lane in &batch.lanes {
+            assert!(
+                lane.results.iter().all(|result| result.0.is_ok()),
+                "native runtime-effect source rejected on lane {}: {:?}",
+                lane.proposal.descriptor.lane_id,
+                lane.results,
+            );
+        }
+    }
     let lifecycle = state.lane_consensus_lifecycle_snapshot();
     let active_lanes = lifecycle
         .nexus
@@ -842,8 +1098,26 @@ fn autonomous_merge_commit_authorization_fixture_inner(
             QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch => 2,
         };
         carrier.set_committed_fragment_count(committed_fragments);
+    } else if runtime_effect.is_some() {
+        // Count the successful source and any actual native block-start work;
+        // do not assume an instruction count or invent an empty fragment.
+        let staged = state
+            .block_with_certified_merge_entry(
+                carrier.header().clone(),
+                &entry,
+                ConsensusMode::Permissioned,
+            )
+            .expect("derive fragments from the exact native runtime-effect carrier and source");
+        let committed_fragments = u64::try_from(staged.committed_fragment_count())
+            .expect("native runtime-effect fragment count fits u64");
+        assert!(
+            committed_fragments > 0,
+            "successful source must commit a fragment"
+        );
+        drop(staged);
+        carrier.set_committed_fragment_count(committed_fragments);
     } else if wrap_in_sealed_reveal {
-        // One applied sealed reveal commits its inner instruction fragment.
+        // One applied sealed reveal commits one instruction fragment.
         carrier.set_committed_fragment_count(1);
     }
     state

@@ -13258,7 +13258,13 @@ impl Queue {
         }
         let previous_missing = guard.missing_aliases();
         if let Some(state) = state {
-            state.install_lane_manifests(manifests);
+            if require_consensus_compatibility {
+                if !state.install_lane_manifests_if_consensus_compatible(manifests) {
+                    return false;
+                }
+            } else {
+                state.install_lane_manifests(manifests);
+            }
         }
         *guard = Arc::clone(manifests);
         drop(guard);
@@ -13283,6 +13289,33 @@ impl Queue {
     pub fn lane_privacy_registry(&self) -> LanePrivacyRegistryHandle {
         self.lane_privacy_registry.read().clone()
     }
+    /// Reconstruct refreshed manifests from the static baseline and committed runtime additions.
+    fn refreshed_lane_manifest_registry(
+        &self,
+        governance: &GovernanceCatalog,
+        registry_cfg: &LaneRegistry,
+        state: Option<&State>,
+    ) -> Result<LaneManifestRegistryHandle, String> {
+        if let Some(state) = state {
+            let nexus = state.nexus_snapshot();
+            let baseline = Arc::new(LaneManifestRegistry::from_config(
+                &nexus.configured_lane_catalog,
+                &nexus.governance,
+                registry_cfg,
+            ));
+            state
+                .lane_manifests_with_committed_catalog(&baseline, &nexus)
+                .map_err(|error| error.to_string())
+        } else {
+            let lane_catalog = self.lane_catalog.read().clone();
+            let source_snapshot = Arc::new(LaneManifestSourceSnapshot::load(registry_cfg));
+            let registry = Arc::new(source_snapshot.bind(&lane_catalog, governance));
+            registry
+                .validate_active_coverage_for_catalog(&lane_catalog)
+                .map_err(|error| error.to_string())?;
+            Ok(registry)
+        }
+    }
     /// Background task that reloads lane manifests on the configured schedule.
     pub async fn watch_lane_manifests_task(
         self: Arc<Self>,
@@ -13291,16 +13324,17 @@ impl Queue {
         registry_cfg: LaneRegistry,
         state: Option<Arc<State>>,
     ) {
-        let lane_catalog = self.lane_catalog.read().clone();
-        let source_snapshot = Arc::new(LaneManifestSourceSnapshot::load(&registry_cfg));
-        let initial = Arc::new(source_snapshot.bind(&lane_catalog, &governance));
-        if let Err(err) = initial.validate_active_coverage_for_catalog(&lane_catalog) {
-            iroha_logger::warn!(
-                reason = %err,
-                "refusing to install incomplete initial lane-manifest snapshot"
-            );
-            return;
-        }
+        let initial = match self.refreshed_lane_manifest_registry(
+            &governance,
+            &registry_cfg,
+            state.as_deref(),
+        ) {
+            Ok(registry) => registry,
+            Err(err) => {
+                iroha_logger::warn!(reason = %err, "refusing to install incomplete initial lane-manifest snapshot");
+                return;
+            }
+        };
         let initial_applied = if let Some(state_handle) = state.as_ref() {
             self.install_lane_manifests_with_state_if_consensus_compatible(&initial, state_handle)
         } else {
@@ -13318,16 +13352,17 @@ impl Queue {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let lane_catalog = self.lane_catalog.read().clone();
-            let source_snapshot = Arc::new(LaneManifestSourceSnapshot::load(&registry_cfg));
-            let registry = Arc::new(source_snapshot.bind(&lane_catalog, &governance));
-            if let Err(err) = registry.validate_active_coverage_for_catalog(&lane_catalog) {
-                iroha_logger::warn!(
-                    reason = %err,
-                    "refusing lane-manifest hot reload without exact active-lane coverage"
-                );
-                continue;
-            }
+            let registry = match self.refreshed_lane_manifest_registry(
+                &governance,
+                &registry_cfg,
+                state.as_deref(),
+            ) {
+                Ok(registry) => registry,
+                Err(err) => {
+                    iroha_logger::warn!(reason = %err, "refusing lane-manifest hot reload without exact active-lane coverage");
+                    continue;
+                }
+            };
             let applied = if let Some(state_handle) = state.as_ref() {
                 self.install_lane_manifests_with_state_if_consensus_compatible(
                     &registry,

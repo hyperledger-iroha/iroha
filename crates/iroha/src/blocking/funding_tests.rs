@@ -57,18 +57,18 @@ impl HttpTransport for BalanceTransport {
         let (name, output) = match signed.request() {
             QueryRequest::Singular(SingularQueryBox::FindAccountById(_)) => (
                 "account",
-                SingularQueryOutputBox::Account(
+                QueryResponse::Singular(SingularQueryOutputBox::Account(
                     Account::new(if self.foreign {
                         iroha_test_samples::BOB_ID.clone()
                     } else {
                         authority.clone()
                     })
                     .build(&authority),
-                ),
+                )),
             ),
             QueryRequest::Singular(SingularQueryBox::FindAssetDefinitionById(_)) => (
                 "definition",
-                SingularQueryOutputBox::AssetDefinition(
+                QueryResponse::Singular(SingularQueryOutputBox::AssetDefinition(
                     AssetDefinition::numeric(
                         XOR_ASSET_DEFINITION.parse()?,
                         "XOR",
@@ -76,12 +76,31 @@ impl HttpTransport for BalanceTransport {
                         None,
                     )
                     .build(&authority),
-                ),
+                )),
             ),
-            QueryRequest::Singular(SingularQueryBox::FindAssetById(query)) => (
-                "holding",
-                SingularQueryOutputBox::Asset(Asset::new(query.asset_id().clone(), 77_u32)),
-            ),
+            QueryRequest::Singular(SingularQueryBox::FindAssetById(query)) => {
+                let id = AssetId::new(XOR_ASSET_DEFINITION.parse()?, authority.clone());
+                assert_eq!(
+                    query.asset_id(),
+                    &id,
+                    "the signed query must bind the exact holding"
+                );
+                let returned_id = if self.missing == Some("foreign-holding") {
+                    AssetId::new(
+                        XOR_ASSET_DEFINITION.parse()?,
+                        iroha_test_samples::BOB_ID.clone(),
+                    )
+                } else {
+                    id
+                };
+                (
+                    "holding",
+                    QueryResponse::Singular(SingularQueryOutputBox::Asset(Asset::new(
+                        returned_id,
+                        77_u32,
+                    ))),
+                )
+            }
             _ => panic!("unexpected wallet query"),
         };
         if self.missing == Some("malformed-holding") && name == "holding" {
@@ -90,19 +109,50 @@ impl HttpTransport for BalanceTransport {
                 .header("Content-Type", "text/html")
                 .body(b"<html>missing ingress route</html>".to_vec())?);
         }
-        if self.missing == Some(name) {
+        if (name != "holding" && self.missing == Some(name))
+            || (name == "holding"
+                && matches!(
+                    self.missing,
+                    Some(
+                        "holding"
+                            | "missing-query"
+                            | "wrong-missing-holding"
+                            | "missing-details-holding"
+                    )
+                ))
+        {
+            let typed_absence = name == "holding" && self.missing != Some("missing-query");
+            let mut envelope = iroha_torii_shared::ErrorEnvelope::new(
+                if typed_absence {
+                    "query_asset_not_found"
+                } else {
+                    "query_validation_failed"
+                },
+                "fixture missing holding",
+            );
+            if typed_absence && self.missing != Some("missing-details-holding") {
+                let missing = AssetId::new(
+                    XOR_ASSET_DEFINITION.parse()?,
+                    if self.missing == Some("wrong-missing-holding") {
+                        iroha_test_samples::BOB_ID.clone()
+                    } else {
+                        authority
+                    },
+                );
+                envelope = envelope.with_details(iroha_torii_shared::ErrorDetails {
+                    query_asset_not_found: Some(missing),
+                    ..iroha_torii_shared::ErrorDetails::default()
+                });
+            }
             return Ok(Response::builder()
                 .status(404)
                 .header("Content-Type", "application/x-norito")
-                .body(norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
-                    "query_validation_failed",
-                    "fixture missing holding",
-                ))?)?);
+                .body(norito::to_bytes(&envelope)?)?);
         }
         Ok(Response::builder()
             .status(200)
             .header("Content-Type", "application/x-norito")
-            .body(norito::to_bytes(&QueryResponse::Singular(output))?)?)
+            .body(norito::to_bytes(&output)?)?)
     }
     fn send(&self, request: TransportRequest) -> TransportFuture<'_> {
         Box::pin(async move { self.send_blocking(request) })
@@ -110,13 +160,17 @@ impl HttpTransport for BalanceTransport {
 }
 
 #[test]
-fn balance_reads_exact_holding_and_only_authenticated_missing_holding_becomes_zero() {
+fn balance_reads_exact_holding_and_only_matching_typed_absence_becomes_zero() {
     for (missing, foreign, expected) in [
         (None, false, Some(77_u32)),
         (Some("holding"), false, Some(0)),
         (Some("account"), false, None),
         (Some("definition"), false, None),
         (Some("malformed-holding"), false, None),
+        (Some("missing-query"), false, None),
+        (Some("foreign-holding"), false, None),
+        (Some("wrong-missing-holding"), false, None),
+        (Some("missing-details-holding"), false, None),
         (None, true, None),
     ] {
         let config = fixture_config();

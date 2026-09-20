@@ -130,6 +130,32 @@ impl AuthenticatedV2SnapshotStartup {
     }
 }
 impl V2StartupReplayPlan {
+    /// Replay the authenticated complete prefix and carry its exact geometry publication
+    /// into subsequent active-height recovery. No identity is adopted after WSV installation.
+    ///
+    /// # Errors
+    /// Returns an error for changed storage, invalid replay, or a mismatched geometry operation.
+    pub fn replay_complete_prefix(
+        &mut self,
+        kura: &std::sync::Arc<Kura>,
+        state: &mut State,
+    ) -> eyre::Result<()> {
+        self.validate_restored_state_height(state.committed_height())?;
+        self.validate_exact_kura_boundary(kura)?;
+        let binding = self.storage_binding.as_ref().ok_or_else(|| {
+            eyre::eyre!("startup replay plan has no authenticated storage binding")
+        })?;
+        let start_height = state.committed_height().saturating_add(1);
+        let next = crate::state::replay_blocks_from_kura_range_with_binding(
+            kura,
+            state,
+            start_height,
+            self.complete_prefix_height,
+            Some(binding),
+        )?;
+        self.storage_binding = next;
+        Ok(())
+    }
     /// Total canonical height durably recorded by Kura.
     #[must_use]
     pub const fn durable_height(&self) -> usize {
@@ -554,7 +580,8 @@ impl V2SnapshotStartupPolicy {
                 ))
             })?;
         Ok(Self {
-            nexus_amx_context_hash: nexus_amx_context_hash_with_runtime_policy(state, Some(nexus)),
+            nexus_amx_context_hash: nexus_amx_context_hash_with_runtime_policy(state, Some(nexus))
+                .map_err(|error| snapshot_bootstrap_error(error.to_string()))?,
             execution_policy_hash,
         })
     }
@@ -2551,7 +2578,7 @@ pub(crate) fn build_verified_successor(
     let expected = build_successor_height_context_from_state(
         parent_artifact,
         &state_view,
-        committed_nexus_amx_context_hash(state),
+        committed_nexus_amx_context_hash(state)?,
     )?;
     if expected.height != target_height {
         return Err(V2RecoveryError::HeightOverflow);
@@ -2692,7 +2719,7 @@ fn verify_persisted_height(
         let expected = build_successor_height_context_from_state(
             &parent_artifact,
             &state_view,
-            committed_nexus_amx_context_hash(state),
+            committed_nexus_amx_context_hash(state)?,
         )?;
         if record.context() != &expected {
             return Err(V2RecoveryError::ConflictingDerivedContext(height));
@@ -2717,13 +2744,13 @@ fn successor_proofs_of_possession(parent: &wire::finality::V2FinalityArtifact) -
             |snapshot| snapshot.validator_set_pops.clone(),
         )
 }
-pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Hash {
+pub(crate) fn committed_nexus_amx_context_hash(state: &State) -> Result<Hash, V2RecoveryError> {
     nexus_amx_context_hash_with_runtime_policy(state, None)
 }
 fn nexus_amx_context_hash_with_runtime_policy(
     state: &State,
     configured: Option<&iroha_config::parameters::actual::Nexus>,
-) -> Hash {
+) -> Result<Hash, V2RecoveryError> {
     let view = state.view();
     // A height context is frozen from its predecessor state, so committed
     // height `h` supplies the exact validator tenure for target height `h + 1`.
@@ -2750,11 +2777,16 @@ fn nexus_amx_context_hash_with_runtime_policy(
             },
         )
         .collect::<Vec<_>>();
-    iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
-        configured.unwrap_or(&view.nexus),
-        &view.pipeline,
-        &eligible_validators,
-        &retained_lane_lineage,
+    let runtime_catalog_root = crate::state::runtime_catalog_root_from_world(view.world())
+        .map_err(|error| V2RecoveryError::ExecutionPolicy(error.to_string()))?;
+    Ok(
+        iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+            configured.unwrap_or(&view.nexus),
+            &view.pipeline,
+            &eligible_validators,
+            &retained_lane_lineage,
+            runtime_catalog_root,
+        ),
     )
 }
 pub(crate) fn committed_execution_policy_hash(state: &State) -> Result<Hash, V2RecoveryError> {
@@ -3020,7 +3052,7 @@ mod tests {
             validators.commit();
         }
 
-        committed_nexus_amx_context_hash(&state)
+        committed_nexus_amx_context_hash(&state).expect("valid committed catalog")
     }
 
     #[test]

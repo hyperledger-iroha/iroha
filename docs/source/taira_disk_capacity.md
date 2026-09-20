@@ -13,8 +13,14 @@ temporary files. Existing copies remain charged by the filesystem observation.
 The helper resolves existing path components without following symlinks; missing
 destination directories use their nearest existing directory's filesystem.
 
-For the current fresh deployment with coordinator and four validators on one
-guest, the complete rollout topology is **3A + 2S + 4P + 4R + explicit headroom**:
+The native inventory requires an explicit `qualification_scope`. For
+`core_testnet`, the fresh topology is **3A + explicit headroom**. All 30 artifact
+roles are included: seven per validator (including its unit), plus two edge
+roles. Core requires the stage/SF1 inputs to be explicit null, stage lists empty,
+and store/runtime path lists empty. It never needs an Inrou preparation.
+
+For `full_inrou` with coordinator and four validators on one guest, the complete
+rollout topology is **3A + 2S + 4P + 4R + explicit headroom**:
 
 - A: all four validator artifact sets plus the edge artifact set. The coordinator
   snapshots each role, uploads it, and installs another copy. Shared input paths
@@ -31,7 +37,7 @@ guest, the complete rollout topology is **3A + 2S + 4P + 4R + explicit headroom*
   have distinct materialization and lease directories even on one physical host.
   The stores remain present while the runtime copies are created.
 
-`cohost_peak_plan()` expresses that topology, while `allocation_bound()` bounds
+`cohost_peak_plan()` expresses the full Inrou topology, while `allocation_bound()` bounds
 per-file block slack from metadata-only byte/file/directory counts. Callers must
 provide four runtime paths and an explicit per-replica runtime footprint; preseed
 capacity alone does not admit a complete rollout. Callers must also supply
@@ -62,13 +68,20 @@ and metadata-only reads.
 maintained build receipt and the public `taira.public-capacity-inputs.v1` and
 `taira.public-runtime-capacity-inputs.v1` observations. The maintained
 [`taira_retry.py` command](taira_retry.md) obtains these observations automatically
-from the preceding native inventory and its current stage. It checks the three
+from the preceding native inventory. Only `full_inrou` needs the runtime
+observation and current stage. It checks the three
 small manifest hashes against native SF1 admission before using the 64 KiB chunk
 minimum; it never decodes Norito in Python or rereads large payloads for hashing.
 
 The derivation charges four daemon, four SoraFS and five CLI role copies; each
-config uses the native 1 MiB output bound. It includes all four guest hydration,
+config uses the native 1 MiB output bound, and all four unit files are charged.
+For `full_inrou`, it includes all four guest hydration,
 writable root/data leases, ephemeral storage and bundle publication footprints.
 Unknown stage or service-artifact layouts reject rather than produce a partial
 budget. The backing plan includes full future guest growth plus 2 GiB beyond the
 guest's own 2 GiB reserve. Both plans still require fresh filesystem evaluation.
+
+The scope is never inferred from absent files. `inrou` is rejected as an old
+spelling, an incomplete `full_inrou` budget fails, and a core budget with supplied
+Inrou inputs fails. Both scopes retain the same source/build identity, complete
+artifact-role, available-inode and physical backing checks.

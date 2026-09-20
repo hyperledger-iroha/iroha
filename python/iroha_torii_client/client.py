@@ -4028,7 +4028,7 @@ class SumeragiV2TimeoutQuorumStatus:
 
 @dataclass(frozen=True)
 class SumeragiV2OutboundIntentStatus:
-    """Durable outbound protocol intent and its delivery stage."""
+    """Durable outbound protocol intent and its lifecycle stage."""
 
     kind: str
     round: SumeragiV2Round
@@ -4796,7 +4796,7 @@ class _SumeragiV2StatusParser:
             stage = cls._tagged(
                 item.get("stage"),
                 tag="stage",
-                allowed={"pending_persistence", "pending_signature", "queued", "sent"},
+                allowed={"pending_persistence", "pending_signature", "queued", "retained"},
                 context=f"{item_context}.stage",
             )
             raw_subject = item.get("subject")

@@ -82,6 +82,8 @@ impl Convert {
 enum OutputFormat {
     I105,
     CanonicalHex,
+    /// Emit the single-signature public key; multisig accounts are rejected.
+    PublicKey,
     Json,
 }
 #[derive(clap::Args, Debug)]
@@ -565,10 +567,19 @@ fn encode_address_literal(
     parsed: &ParsedAddressInput,
     network_prefix: u16,
     format: OutputFormat,
-) -> Result<String, AccountAddressError> {
+) -> Result<String> {
     match format {
-        OutputFormat::I105 => parsed.address.to_i105_for_discriminant(network_prefix),
-        OutputFormat::CanonicalHex => parsed.address.canonical_hex(),
+        OutputFormat::I105 => Ok(parsed.address.to_i105_for_discriminant(network_prefix)?),
+        OutputFormat::CanonicalHex => Ok(parsed.address.canonical_hex()?),
+        OutputFormat::PublicKey => {
+            let account = parsed.address.to_account_id()?;
+            let public_key = account.try_signatory().ok_or_else(|| {
+                eyre::eyre!(
+                    "public-key output requires a single-signatory account; multisig accounts have no single public key"
+                )
+            })?;
+            Ok(public_key.to_string())
+        }
         OutputFormat::Json => unreachable!("JSON encoding handled separately"),
     }
 }
@@ -615,8 +626,9 @@ fn csv_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-    use iroha_data_model::account::AccountId;
+    use iroha_data_model::account::{AccountId, MultisigMember, MultisigPolicy};
     use iroha_i18n::{Bundle, Language, Localizer};
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -628,6 +640,186 @@ mod tests {
     }
     fn test_i18n() -> Localizer {
         Localizer::new(Bundle::Cli, Language::English)
+    }
+    struct TextContext {
+        config: Config,
+        i18n: Localizer,
+        lines: Vec<String>,
+    }
+    impl TextContext {
+        fn new() -> Self {
+            Self {
+                config: crate::fallback_config(),
+                i18n: test_i18n(),
+                lines: Vec::new(),
+            }
+        }
+    }
+    impl RunContext for TextContext {
+        fn config(&self) -> &Config {
+            &self.config
+        }
+        fn transaction_metadata(&self) -> Option<&Metadata> {
+            None
+        }
+        fn input_instructions(&self) -> bool {
+            false
+        }
+        fn output_instructions(&self) -> bool {
+            false
+        }
+        fn i18n(&self) -> &Localizer {
+            &self.i18n
+        }
+        fn print_data<T: JsonSerialize + ?Sized>(&mut self, _data: &T) -> Result<()> {
+            eyre::bail!("public-key output must be plain text")
+        }
+        fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
+            self.lines.push(data.to_string());
+            Ok(())
+        }
+    }
+    fn public_key_convert(input: &str) -> Convert {
+        let args = crate::Args::try_parse_from([
+            "iroha",
+            "tools",
+            "address",
+            "convert",
+            input,
+            "--profile",
+            "taira",
+            "--format",
+            "public-key",
+        ])
+        .expect("public-key conversion arguments");
+        let crate::Command::Tools(crate::tools::Command::Address(Command::Convert(convert))) =
+            args.command
+        else {
+            panic!("expected the address convert command");
+        };
+        assert_eq!(convert.format, OutputFormat::PublicKey);
+        convert
+    }
+    fn public_key_normalize() -> Normalize {
+        Normalize {
+            input: None,
+            output: None,
+            expect_prefix: None,
+            profile: Some("taira".into()),
+            network_prefix: None,
+            format: OutputFormat::PublicKey,
+            allow_errors: false,
+        }
+    }
+    #[test]
+    fn public_key_output_roundtrips_taira_i105_and_cli_format() {
+        let key_pair = fixture_key_pair(0x41);
+        let expected = key_pair.public_key().to_string();
+        let prefix = iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT;
+        let literal =
+            AccountAddress::from_account_id(&AccountId::new(key_pair.public_key().clone()))
+                .expect("single-signature address")
+                .to_i105_for_discriminant(prefix)
+                .expect("Taira I105");
+        let mut context = TextContext::new();
+        public_key_convert(&literal)
+            .run(&mut context)
+            .expect("convert recovers the native public key");
+        assert_eq!(context.lines, vec![expected.clone()]);
+        let reparsed = parse_address_input(&context.lines[0], Some(prefix))
+            .expect("public-key output is valid native input");
+        assert_eq!(
+            encode_address_literal(&reparsed, prefix, OutputFormat::I105)
+                .expect("native account roundtrip"),
+            literal
+        );
+
+        let directory = tempfile::tempdir().expect("public address input directory");
+        let path = directory.path().join("addresses.txt");
+        std::fs::write(&path, format!("{literal}\n{expected}\n"))
+            .expect("write public address inputs");
+        let args = crate::Args::try_parse_from([
+            "iroha",
+            "tools",
+            "address",
+            "normalize",
+            "--input",
+            path.to_str().expect("UTF-8 fixture path"),
+            "--profile",
+            "taira",
+            "--format",
+            "public-key",
+        ])
+        .expect("public-key normalization arguments");
+        let crate::Command::Tools(crate::tools::Command::Address(Command::Normalize(normalize))) =
+            args.command
+        else {
+            panic!("expected the address normalize command");
+        };
+        assert_eq!(normalize.format, OutputFormat::PublicKey);
+        context.lines.clear();
+        normalize
+            .run(&mut context)
+            .expect("normalize native public keys");
+        assert_eq!(context.lines, vec![expected.clone(), expected]);
+    }
+    #[test]
+    fn public_key_output_rejects_multisig() {
+        let prefix = iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT;
+        let members = [0x42, 0x43]
+            .into_iter()
+            .map(|seed| {
+                MultisigMember::new(fixture_key_pair(seed).public_key().clone(), 1)
+                    .expect("multisig member")
+            })
+            .collect();
+        let account = AccountId::new_multisig(
+            MultisigPolicy::new(2, members).expect("two-member multisig policy"),
+        );
+        let literal = AccountAddress::from_account_id(&account)
+            .expect("multisig address")
+            .to_i105_for_discriminant(prefix)
+            .expect("Taira multisig I105");
+        let mut context = TextContext::new();
+        let error = public_key_convert(&literal)
+            .run(&mut context)
+            .expect_err("convert must not choose a multisig member");
+        assert!(format!("{error:#}").contains("multisig accounts have no single public key"));
+        assert!(context.lines.is_empty());
+        let error = public_key_normalize()
+            .process_entries(&[literal], &test_i18n(), prefix, prefix)
+            .expect_err("normalize must not choose a multisig member");
+        assert!(
+            error
+                .to_string()
+                .contains("multisig accounts have no single public key")
+        );
+    }
+    #[test]
+    fn public_key_output_rejects_malformed_and_wrong_prefix() {
+        let prefix = iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT;
+        let wrong_prefix = AccountAddress::from_account_id(&account_id_for_seed(0x44))
+            .expect("single-signature address")
+            .to_i105_for_discriminant(DEFAULT_I105_PREFIX)
+            .expect("Minamoto I105");
+        let mut context = TextContext::new();
+        let error = public_key_convert(&wrong_prefix)
+            .run(&mut context)
+            .expect_err("Taira conversion rejects a Minamoto I105 address");
+        assert!(matches!(
+            error.downcast_ref::<AccountAddressError>(),
+            Some(AccountAddressError::UnexpectedNetworkPrefix { expected, found })
+                if *expected == prefix && *found == DEFAULT_I105_PREFIX
+        ));
+        for input in ["invalid-address", wrong_prefix.as_str()] {
+            public_key_convert(input)
+                .run(&mut context)
+                .expect_err("conversion requires a valid address for the selected profile");
+            public_key_normalize()
+                .process_entries(&[input.to_owned()], &test_i18n(), prefix, prefix)
+                .expect_err("normalization requires a valid address for the selected profile");
+        }
+        assert!(context.lines.is_empty());
     }
     #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {

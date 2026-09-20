@@ -51,13 +51,42 @@ impl State {
     /// routing policy targets cannot resolve, or geometry updates cannot be
     /// applied to the current state. A textual dataspace namespace also cannot
     /// be retired until all asset-definition alias bindings in that namespace
-    /// are explicitly cleared.
+    /// are explicitly cleared. Configured catalog baselines are retained; effective
+    /// dataspaces may change after genesis only through the protected runtime catalog.
     pub fn set_nexus(
         &mut self,
-        nexus: iroha_config::parameters::actual::Nexus,
+        mut nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
         self.ensure_config_catalog_mutation_is_pre_genesis(&nexus.lane_catalog, false)?;
-        let configured_lane_catalog = self.nexus.read().configured_lane_catalog.clone();
+        let installed = self.nexus.read().clone();
+        nexus.configured_dataspace_catalog = installed.configured_dataspace_catalog.clone();
+        let runtime = runtime_catalog_from_world(&self.world.view())?;
+        if let Some(runtime) = runtime.as_ref() {
+            let expected =
+                runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, Some(runtime))?;
+            if nexus.dataspace_catalog != expected {
+                return Err(runtime_catalog_invalid(
+                    "runtime Nexus setter cannot change committed physical dataspaces",
+                ));
+            }
+        } else if nexus.dataspace_catalog != installed.dataspace_catalog {
+            let durable_height = self
+                .kura
+                .exact_durable_blocks_count()
+                .map_err(|error| LaneLifecycleError::Storage(error.to_string()))?;
+            if self.block_hashes.committed_height() != 0 || durable_height != 0 {
+                return Err(runtime_catalog_invalid(
+                    "physical dataspace changes after genesis require a catalog transition",
+                ));
+            }
+        }
+        let configured_lane_catalog = installed.configured_lane_catalog;
         self.set_nexus_with_configured_lane_catalog(nexus, configured_lane_catalog, None)
     }
+}
+
+#[cfg(test)]
+mod runtime_configuration_tests {
+    use super::*;
+    include!("runtime_configuration_tests.rs");
 }

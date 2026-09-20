@@ -1,7 +1,7 @@
 //! Exact DER STARK arithmetic, schedule and boundary regression tests.
 
 use super::*;
-use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
+use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use sha2::{Digest as _, Sha256};
 fn challenges() -> ZkX509DerStarkChallengesV1 {
     ZkX509DerStarkChallengesV1 {
@@ -35,11 +35,16 @@ fn low_degree_aux(
     try_low_degree_aux(base, fixed).expect("low-degree auxiliaries")
 }
 fn transcript_with_base_root(root_word: u64) -> TransparentTranscriptV1 {
-    let profile = GoldilocksDigest384V1::new([0x41; 6]).expect("profile digest");
-    let public = GoldilocksDigest384V1::new([0x83; 6]).expect("public digest");
-    let root = GoldilocksDigest384V1::new([root_word; 6])
-        .expect("base root")
-        .to_le_bytes();
+    let profile = PrivacyOuterDigestV1::from_bytes([0x41; 48]);
+    let public = PrivacyOuterDigestV1::from_bytes([0x83; 48]);
+    let root = PrivacyOuterDigestV1::from_bytes(
+        root_word
+            .to_be_bytes()
+            .repeat(6)
+            .try_into()
+            .expect("48 fixture bytes"),
+    )
+    .to_bytes();
     let mut transcript = TransparentTranscriptV1::new(
         super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
         b"zk-x509-der-challenge-test-suite-v1",
@@ -71,13 +76,15 @@ fn transcript_challenge_schedule_is_lane_major_base_bound_and_pinned() {
         }
         encoding.extend_from_slice(&derived.byte_lookup[lane].0.to_be_bytes());
     }
+    // Independently replayed with byte-framed SHA3-384, big-endian rejection
+    // sampling and all 48 accepted digest bytes absorbed after each challenge.
     let digest: [u8; 32] = Sha256::digest(&encoding).into();
     assert_eq!(
         digest,
         [
-            0x47, 0xe6, 0xe4, 0xae, 0xb0, 0x96, 0x0d, 0x09, 0xaa, 0x2d, 0xfe, 0x4b, 0x37, 0xff,
-            0x2e, 0x59, 0x37, 0x34, 0x79, 0xf2, 0x9f, 0x44, 0xe9, 0x9e, 0xb1, 0xec, 0x64, 0x4b,
-            0xd8, 0x64, 0x6e, 0x6f,
+            0x09, 0xf3, 0x96, 0xaa, 0xd6, 0x59, 0x52, 0xbd, 0x5f, 0x9e, 0xc3, 0x30, 0x19, 0x23,
+            0xbf, 0x5f, 0x0c, 0x97, 0xe6, 0x4b, 0x0b, 0xb3, 0xf1, 0x87, 0x00, 0x6e, 0x9b, 0x2d,
+            0x62, 0x9d, 0x76, 0x58,
         ]
     );
     let mut changed_root = transcript_with_base_root(0x26);

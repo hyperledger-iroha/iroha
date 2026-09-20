@@ -152,6 +152,66 @@ mod handle_update_tests {
             Ok((value, bytes.len() - slice.len()))
         }
     }
+    #[test]
+    fn actor_admission_fixture_uses_exact_semantic_geometry_and_releases_queue_ownership() {
+        let peer = |seed| {
+            PeerId::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("canonical relay node key")
+                    .public_key()
+                    .clone(),
+            )
+        };
+        let self_id = peer(1);
+        let targets = (2..5).map(peer).collect::<HashSet<_>>();
+        let capacity = std::num::NonZeroUsize::new(1).expect("one actor slot");
+        for selected_targets in [HashSet::new(), targets] {
+            let (handle, mut fixture) =
+                NetworkBaseHandle::<RoutedActorDummy, ChaCha20Poly1305>::actor_admission_for_tests(
+                    self_id.clone(),
+                    selected_targets.clone(),
+                    capacity,
+                );
+            let limits = actor_waiter_limits().expect("production waiter geometry");
+            let target_count = selected_targets.len().max(1);
+            let budget = &handle.network_actor_progress_budget;
+            assert_eq!(budget.max_sources_per_class, target_count);
+            assert_eq!(budget.max_waiters_per_source, limits);
+            assert_eq!(
+                budget.max_waiters,
+                target_count * limits.into_iter().sum::<usize>()
+            );
+            for class in ActorProgressClass::ALL {
+                assert_eq!(
+                    budget.max_waiters_per_class[class.index()],
+                    target_count * limits[class.index()]
+                );
+            }
+            for target in &selected_targets {
+                for _ in 0..2 {
+                    handle
+                        .post_recoverable(
+                            Post {
+                                data: RoutedActorDummy::Safety,
+                                peer_id: target.clone(),
+                                priority: Priority::High,
+                            },
+                            None,
+                        )
+                        .expect("admit into the real capacity-one actor queue");
+                    assert_eq!(
+                        fixture.drain_posts(|post| {
+                            assert_eq!(&post.peer_id, target);
+                            assert_eq!(post.data, RoutedActorDummy::Safety);
+                        }),
+                        1
+                    );
+                }
+            }
+            assert_eq!(fixture.drain_posts(|_| panic!("all posts were drained")), 0);
+        }
+    }
+
     fn test_network_actor_byte_budget() -> Arc<NetworkActorByteBudget> {
         NetworkActorByteBudget::new(usize::MAX, 0)
             .expect("zero safety reserve must fit the test actor budget")

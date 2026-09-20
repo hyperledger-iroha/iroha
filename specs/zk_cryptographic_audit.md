@@ -1091,13 +1091,14 @@ no caller-selected parameter record or verifier key. The descriptor commits
 the Goldilocks base and quartic extension, degree-two AIR, 4,096-row trace,
 88 columns, 32,768-row LDE, 512 trace-mask coefficients, an independently
 committed FRI mask, one DEEP point, 136 unique queries, eleven binary FRI
-rounds, terminal size 16 with degree at most two, all six-lane digest domains,
+rounds, terminal size 16 with degree at most two, the SHA3-384 outer domains,
+the six-lane Poseidon identity and nullifier domains,
 and the exact 2,131,222-byte wire.
 
 Its parameter asset checksum is
 `84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6`
 (SHA3-256). The complete profile artifact checksum is
-`8b597ef641d2a7e80a0bc72b29748b5b1871f4898f0a199928a0f87400239060`
+`b3eecf3d57826fbc6fa0dc6811631771629771ee1f30e79757d93009f9e1eb4d`
 (SHA-256). These checksums identify artifacts; they are not STARK hashes or
 independent audit endorsements.
 

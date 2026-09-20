@@ -2496,6 +2496,62 @@ pub(super) struct DurableRecoveredSignedBroadcastChildV1 {
     key: LifecycleKey,
     owner: OwnerId,
 }
+/// A standalone signed timeout output awaiting its exact recovered WAL Sign.
+///
+/// Both an unsent output and one emitted by the prior process must survive a
+/// quorum restart. Only the WAL join may reuse its signature to rebuild the
+/// current reducer transition and durable refanout obligation.
+pub(super) struct DurableStandaloneTimeoutBroadcastV1 {
+    effect: AdapterEffect,
+}
+impl DurableStandaloneTimeoutBroadcastV1 {
+    pub(super) fn consume_for_recovered_wal(
+        self,
+        _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> AdapterEffect {
+        self.effect
+    }
+}
+
+/// Inspect either publication crash cut without changing its actual metadata.
+pub(super) fn project_standalone_timeout_broadcast(
+    context: LifecycleContext,
+    record: &LifecycleLedgerRecordV1,
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<DurableStandaloneTimeoutBroadcastV1> {
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &authority.source else {
+        return None;
+    };
+    let key = record.key()?;
+    let stage = record.stage()?;
+    let effect = AdapterEffect::Broadcast(message.clone());
+    (matches!(
+        &message.payload,
+        wire::ConsensusMessageV2Payload::TimeoutVote(_)
+    ) && record.work_class() == Some(LifecycleWorkClass::Broadcast)
+        && stage
+            == LifecycleStage::new(
+                LifecycleStageKind::BroadcastTimeoutVote,
+                PredecessorScope::Independent,
+            )
+        && matches!(
+            record.terminal(),
+            Some(None | Some(TerminalOutcome::Advanced))
+        )
+        && record.owner().first_admission_ordinal() == record.ordinal()
+        && record.reconstruction_source() == record.owner().causal_root().digest()
+        && record.durable_payload() == Some(DurablePayloadReference::None)
+        && record.continuation() == Some(super::schema::DurableContinuation::None)
+        && authority.structurally_matches_record(
+            context,
+            key,
+            LifecycleWorkClass::Broadcast,
+            stage,
+            DurablePayloadReference::None,
+        )
+        && exact_signed_broadcast_authority(&effect).as_ref() == Some(authority))
+    .then_some(DurableStandaloneTimeoutBroadcastV1 { effect })
+}
 impl DurableRecoveredSignedBroadcastChildV1 {
     /// Release the canonical signed effect only to its recovered-WAL parent.
     pub(super) fn consume_for_recovered_wal(

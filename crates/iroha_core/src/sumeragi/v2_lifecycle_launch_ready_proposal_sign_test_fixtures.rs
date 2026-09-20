@@ -240,11 +240,11 @@ impl LaunchedProductionLifecycleV1 {
 }
 
 impl LaunchedProductionLifecycleV1 {
-    /// Transfer a genuine recovered Proposal owner into synchronous test I/O,
+    /// Transfer a genuine recovered control owner into synchronous test I/O,
     /// retaining the production WAL gate, ordinal pair, and exact body instance.
     /// The enclosing worker test supplies its four-validator service fixture.
     #[inline(never)]
-    pub(in crate::sumeragi) fn recovered_proposal_services_for_restart_test(
+    pub(in crate::sumeragi) fn recovered_control_services_for_restart_test(
         mut owner: Box<ProductionLifecycleOwnerV1>,
         mut services: Box<ProductionV2Services>,
         wal_path: &std::path::Path,
@@ -252,6 +252,7 @@ impl LaunchedProductionLifecycleV1 {
         local_validator: wire::ValidatorIndex,
         output_guard: Arc<ConsensusOutputGuard>,
         ingress: Arc<FairV2Ingress>,
+        expect_local_proposal_attempt: bool,
     ) -> (
         Box<Self>,
         Box<crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture>,
@@ -300,7 +301,12 @@ impl LaunchedProductionLifecycleV1 {
             )
             .expect("consume the genuine recovered adapter into its runtime");
         assert!(pending_kura_apply_replay.is_none());
-        assert!(recovered_local_proposal_attempt.is_some());
+        // Timeout cancels execution of the old Proposal, while its durable
+        // local-attempt evidence remains part of the recovered startup owner.
+        assert_eq!(
+            recovered_local_proposal_attempt.is_some(),
+            expect_local_proposal_attempt,
+        );
         let (executor, planner) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
             &mut services,
             runtime,
@@ -345,6 +351,15 @@ impl LaunchedProductionLifecycleV1 {
         ) -> R,
     ) -> R {
         inspect(&mut self.owner, &mut self.executor, &mut self.services)
+    }
+
+    /// Exercise the actual recovered Broadcast refanout without a signing worker.
+    pub(in crate::sumeragi) fn refanout_recovered_broadcast_for_restart_test(
+        &mut self,
+    ) -> ProductionRecoveredLifecycleSignedBroadcastRefanoutV1 {
+        self.owner
+            .refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(&self.services, 0)
+            .expect("refanout the exact recovered signed Broadcast")
     }
 }
 

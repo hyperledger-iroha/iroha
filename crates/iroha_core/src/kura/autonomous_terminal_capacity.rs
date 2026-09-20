@@ -8,7 +8,7 @@ struct AutonomousReplicaClaimStartupCapacitySnapshot {
     used_bytes: u64,
     stable_terminal_reservations: u64,
     shared_terminal_transient: u64,
-    post_wsv_reservations: u64,
+    lane_publication_reservations: u64,
     certified_bundle_reservations: u64,
 }
 
@@ -485,7 +485,7 @@ impl Kura {
                     )
                 })?
         };
-        let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+        let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;
         let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
         let required = self
             .kura_disk_usage_bytes()?
@@ -493,7 +493,7 @@ impl Kura {
             .and_then(|bytes| bytes.checked_add(additional_unreserved_stable_bytes))
             .and_then(|bytes| bytes.checked_add(physical_and_transient))
             .and_then(|bytes| bytes.checked_add(stable_terminal_reservations))
-            .and_then(|bytes| bytes.checked_add(post_wsv_reservations))
+            .and_then(|bytes| bytes.checked_add(lane_publication_reservations))
             .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
             .and_then(|bytes| {
                 bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
@@ -550,7 +550,7 @@ impl Kura {
                 used_bytes: self.kura_disk_usage_bytes()?,
                 stable_terminal_reservations,
                 shared_terminal_transient,
-                post_wsv_reservations: self.post_wsv_lane_artifact_budget_reserved_bytes()?,
+                lane_publication_reservations: self.lane_publication_budget_reserved_bytes()?,
                 certified_bundle_reservations: self.certified_bundle_capacity_reserved_bytes()?,
             });
         }
@@ -577,7 +577,7 @@ impl Kura {
             .checked_add(snapshot.pending_canonical_bytes)
             .and_then(|bytes| bytes.checked_add(physical_and_transient))
             .and_then(|bytes| bytes.checked_add(snapshot.stable_terminal_reservations))
-            .and_then(|bytes| bytes.checked_add(snapshot.post_wsv_reservations))
+            .and_then(|bytes| bytes.checked_add(snapshot.lane_publication_reservations))
             .and_then(|bytes| bytes.checked_add(snapshot.certified_bundle_reservations))
             .and_then(|bytes| {
                 bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())
@@ -666,13 +666,14 @@ impl Kura {
             {
                 let terminal_reservations =
                     self.autonomous_global_terminal_outcome_reserved_bytes_locked()?;
-                let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
+                let lane_publication_reservations =
+                    self.lane_publication_budget_reserved_bytes()?;
                 let certified_bundle_reservations =
                     self.certified_bundle_capacity_reserved_bytes()?;
                 let required = used
                     .checked_add(pending_canonical_bytes)
                     .and_then(|bytes| bytes.checked_add(terminal_reservations))
-                    .and_then(|bytes| bytes.checked_add(post_wsv_reservations))
+                    .and_then(|bytes| bytes.checked_add(lane_publication_reservations))
                     .and_then(|bytes| bytes.checked_add(certified_bundle_reservations))
                     .and_then(|bytes| {
                         bytes.checked_add(Self::canonical_prune_intent_maintenance_headroom_bytes())

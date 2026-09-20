@@ -219,7 +219,7 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
         proposal_round: None,
         subject: None,
         execution_commitment: None,
-        stage: SumeragiV2OutboundIntentStage::Sent,
+        stage: SumeragiV2OutboundIntentStage::Retained,
     };
     for field in ["proposal_round", "subject", "execution_commitment"] {
         assert_required_nullable_field!(SumeragiV2OutboundIntentStatus, timeout_intent, field);
@@ -313,7 +313,7 @@ fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
             proposal_round: None,
             subject: None,
             execution_commitment: None,
-            stage: SumeragiV2OutboundIntentStage::Sent,
+            stage: SumeragiV2OutboundIntentStage::Retained,
         },
         &[
             "kind",
@@ -512,4 +512,38 @@ fn execution_commitment_json_requires_explicit_finality_and_merge_manifests() {
             .to_string()
             .contains("missing field `lane_finality_manifest`")
     );
+}
+
+#[test]
+fn retained_outbound_stage_json_rejects_sent_alias() {
+    let retained = SumeragiV2OutboundIntentStage::Retained;
+    let value = norito::json::to_value(&retained).expect("serialize retained stage");
+    assert_eq!(
+        value.get("stage").and_then(norito::json::Value::as_str),
+        Some("retained")
+    );
+    assert!(
+        value
+            .get("details")
+            .is_some_and(norito::json::Value::is_null)
+    );
+    assert_eq!(
+        norito::json::from_value::<SumeragiV2OutboundIntentStage>(value.clone())
+            .expect("decode exact retained stage"),
+        retained
+    );
+    for obsolete in ["sent", "Sent"] {
+        let mut invalid = value.clone();
+        invalid
+            .as_object_mut()
+            .expect("tagged stage object")
+            .insert(
+                "stage".to_owned(),
+                norito::json::Value::String(obsolete.to_owned()),
+            );
+        assert!(
+            norito::json::from_value::<SumeragiV2OutboundIntentStage>(invalid).is_err(),
+            "the first-release status vocabulary has no Sent alias"
+        );
+    }
 }

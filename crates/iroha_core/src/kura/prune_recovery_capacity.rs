@@ -89,6 +89,9 @@ impl Kura {
             self.truncate_pipeline_sidecars_for_prune(intent)?;
         }
         self.validate_completed_prune_intent(intent)?;
-        self.finish_prune_intent()
+        self.retire_native_amx_publication_records_for_completed_prune(intent)?;
+        self.finish_prune_intent()?;
+        self.release_native_amx_capacity_after_completed_prune(intent.target_height);
+        Ok(())
     }
 }

@@ -17464,7 +17464,11 @@ class ToriiClient(
         *,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Fetch the exact current lane catalog and optimistic lifecycle hash."""
+        """Fetch the exact current lane catalog and optimistic lifecycle hashes.
+
+        ``runtime_catalog_hash`` is explicitly null before the first committed
+        runtime catalog transition; otherwise it is a canonical nonempty hash.
+        """
 
         response = self._request(
             "GET",
@@ -17473,11 +17477,20 @@ class ToriiClient(
             timeout=timeout,
         )
         self._expect_status(response, {200})
-        payload = self._maybe_json(response)
+        status_context = "Nexus lane lifecycle status"
+
+        def exact_object(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+            decoded: Dict[str, Any] = {}
+            for key, value in pairs:
+                if key in decoded:
+                    raise ValueError(f"{status_context} contains duplicate field `{key}`")
+                decoded[key] = value
+            return decoded
+
+        payload = response.json(object_pairs_hook=exact_object)
         if not isinstance(payload, Mapping):
             raise TypeError("Nexus lane lifecycle status must be a JSON object")
         status = dict(payload)
-        status_context = "Nexus lane lifecycle status"
         _strict_exact_fields(
             status,
             (
@@ -17485,6 +17498,7 @@ class ToriiClient(
                 "lane_count",
                 "lanes",
                 "catalog_hash",
+                "runtime_catalog_hash",
                 "incarnations",
                 "incarnation_root",
             ),
@@ -17521,6 +17535,14 @@ class ToriiClient(
             raise ValueError("Nexus lane lifecycle status lane ids must be unique and sorted")
         status["lanes"] = normalized_lanes
         _strict_hash_literal(status, "catalog_hash", status_context)
+        if status["runtime_catalog_hash"] is not None:
+            runtime_catalog_hash = _strict_hash_literal(
+                status, "runtime_catalog_hash", status_context
+            )
+            if runtime_catalog_hash[5:69] == "0" * 63 + "1":
+                raise ValueError(
+                    f"{status_context} `runtime_catalog_hash` must not be the empty Iroha hash"
+                )
         incarnation_entries = status["incarnations"]
         if not isinstance(incarnation_entries, list):
             raise TypeError("Nexus lane lifecycle status `incarnations` must be a list")

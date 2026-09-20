@@ -9,6 +9,7 @@ use iroha_data_model::{
     query::{
         account::prelude::FindAccountById,
         asset::prelude::{FindAssetById, FindAssetDefinitionById},
+        error::{FindError, QueryExecutionFail},
     },
 };
 use iroha_primitives::numeric::Quantity;
@@ -26,7 +27,7 @@ pub struct BalanceReport {
     pub account_id: AccountId,
     /// Exact asset definition; its existence was checked independently.
     pub asset_definition: AssetDefinitionId,
-    /// Available quantity; an authenticated missing holding is zero.
+    /// Available quantity; typed absence of this exact holding is zero.
     pub amount: Quantity,
 }
 impl BalanceReport {
@@ -77,10 +78,10 @@ impl Client {
             Ok(asset) if asset.id == id => asset.value,
             Ok(_) => eyre::bail!("balance query returned a substituted asset identity"),
             Err(crate::query::QueryError::Validation(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::NotFound,
-                ),
-            )) => Quantity::from(0_u32),
+                iroha_data_model::ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                    FindError::Asset(missing),
+                )),
+            )) if missing.as_ref() == &id => Quantity::zero(),
             Err(error) => return Err(eyre!(error).wrap_err("cannot establish the exact asset holding; unavailable or malformed reads are never a zero balance")),
         };
         Ok(BalanceReport {

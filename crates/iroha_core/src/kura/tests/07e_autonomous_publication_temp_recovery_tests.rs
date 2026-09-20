@@ -744,6 +744,7 @@ fn provisional_catalog_open_never_repairs_merge_tail_or_prune_intent() {
         merge_bytes,
     );
     let intent = seal_prune_intent_fixture(KuraPruneIntentV3 {
+        native_amx_retirement_record_hashes: Vec::new(),
         version: 3,
         source_height: 2,
         source_tip_hash: Some(snapshot_tail_hash),

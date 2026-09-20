@@ -396,9 +396,9 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     ingress.require_leader_wire_lifecycle_gate();
     service.leader_wire_ingress = Arc::clone(&ingress);
     let (mut launched, planner_io) =
-        crate::sumeragi::v2_lifecycle_coordinator::LaunchedProductionLifecycleV1::recovered_proposal_services_for_restart_test(
+        crate::sumeragi::v2_lifecycle_coordinator::LaunchedProductionLifecycleV1::recovered_control_services_for_restart_test(
             lifecycle_owner, service, &wal_path, started_at, local_validator,
-            Arc::clone(&output_guard), ingress,
+            Arc::clone(&output_guard), ingress, true,
         );
     launched.with_proposal_restart_fixture_for_test(|owner, executor, service| {
         assert_eq!(executor.current_tag(), replayed_tag);
@@ -587,6 +587,324 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
         );
     }
     drop(admitted_posts);
+    launched.detach_ready_sign_planner_for_test(*planner_io);
+    drop(launched);
+    assert!(!output_guard.restart_required());
+}
+
+/// Finish a genuine cold TimeoutIntent after its historical rows were authenticated.
+#[cfg(feature = "bls")]
+#[inline(never)]
+pub(in crate::sumeragi) fn publish_recovered_timeout_after_history_for_test(
+    mut lifecycle_owner: Box<crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1>,
+    context: wire::HeightContext,
+    local_validator: wire::ValidatorIndex,
+    local_signer: KeyPair,
+    wal_path: &std::path::Path,
+) {
+    let (mut service, _) = boxed_nonzero_view_worker_service_fixture();
+    service.context = context.clone();
+    service.local_validator = Some(local_validator);
+    service.local_peer = context.roster[local_validator as usize].validator.clone();
+    service.key_pair = local_signer;
+    let (_, timeout_ordinal) = lifecycle_owner
+        .recovered_control_row_summary_for_test()
+        .expect("retained history has one genuine Ready Timeout Sign");
+    assert!(
+        timeout_ordinal > 1,
+        "the Sign must follow retained historical rows"
+    );
+    let output_guard = ConsensusOutputGuard::isolated();
+    let started_at = Instant::now();
+    let source_bytes = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+    let ordinary_bytes = iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES
+        .get()
+        .checked_add(super::super::BODY_ENVELOPE_HEADROOM_BYTES)
+        .expect("default ordinary ingress partition fits usize");
+    let completion_bytes = source_bytes
+        .checked_sub(super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+        .and_then(|bytes| bytes.checked_sub(super::super::TIMEOUT_VOTE_RESERVE_BYTES))
+        .and_then(|bytes| bytes.checked_sub(ordinary_bytes))
+        .expect("default ingress source partitions are disjoint");
+    let global_plaintext = iroha_p2p::frame_plaintext_cap(
+        iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get(),
+    );
+    let ingress = Arc::new(
+        FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            128,
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+            source_bytes,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            super::super::TIMEOUT_VOTE_RESERVE_BYTES,
+            completion_bytes,
+            global_plaintext
+                .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get()),
+            global_plaintext
+                .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get()),
+            global_plaintext
+                .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get()),
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES
+                .get(),
+            None,
+        ),
+    );
+    ingress
+        .configure_roster_for_context(
+            context.roster.iter().map(|entry| entry.validator.clone()),
+            &context.network_id,
+            context.da_layout,
+        )
+        .expect("configure the full four-validator recovered ingress geometry");
+    ingress.require_leader_wire_lifecycle_gate();
+    service.leader_wire_ingress = Arc::clone(&ingress);
+    let (mut launched, planner_io) =
+        crate::sumeragi::v2_lifecycle_coordinator::LaunchedProductionLifecycleV1::recovered_control_services_for_restart_test(
+            lifecycle_owner,
+            service,
+            wal_path,
+            started_at,
+            local_validator,
+            Arc::clone(&output_guard),
+            ingress,
+            true,
+        );
+    let fence_before =
+        launched.with_proposal_restart_fixture_for_test(|owner, executor, service| {
+            let tag = executor.current_tag();
+            assert_eq!(tag.view(), 0);
+            assert_eq!(tag.generation(), Generation::INITIAL);
+            assert_eq!(
+            owner.dispatch_completion_for_test(service, executor, 0)
+                .expect("dispatch the retained Timeout through its exact claimed registry"),
+            crate::sumeragi::v2_lifecycle_coordinator::ProductionCompletionDispatchV1::SignQueued {
+                ordinal: timeout_ordinal,
+            },
+        );
+            let task = match planner_io.command_rx.try_recv() {
+                Ok(V2IoCommand::RecoveredLifecycleSign(task)) => task,
+                _ => panic!("the real recovered Timeout carrier must queue its Sign task"),
+            };
+            assert_eq!(task.tag, tag);
+            assert!(matches!(&task.request, SignRequest::TimeoutVote(vote)
+            if vote.round.view == 0 && vote.round.height == context.height
+                && vote.signer == local_validator && vote.highest_prepare_qc.is_none()));
+            let key = task.dispatch_key();
+            let result = sign_recovered_lifecycle_task(
+                &planner_io.body_store,
+                &context,
+                &service.key_pair,
+                task,
+            )
+            .expect("sign the exact cold Timeout through the production worker");
+            assert!(result.is_exact());
+            assert!(result.outbound_payload.is_none());
+            planner_io
+                .command_rx
+                .complete_recovered_lifecycle_sign(key, &result)
+                .expect("retain the genuine worker completion under its Sign dispatch key");
+            try_send_tracked_completion_with_lifecycle_ordinal(
+                &planner_io.completion_tx,
+                &planner_io.admission,
+                V2IoCompletion::RecoveredLifecycleSign(Box::new(
+                    GuardedRecoveredLifecycleSignWorkerResultV1::new(
+                        result,
+                        Arc::clone(&output_guard),
+                    ),
+                )),
+                Some(key.lifecycle_ordinal()),
+            )
+            .expect("publish the tracked Timeout completion");
+            executor.lifecycle_reducer_fence_observation().generation()
+        });
+    assert!(
+        launched
+            .retain_recovered_lifecycle_sign_completion()
+            .expect("move the result into its sole parked lifecycle owner")
+    );
+    launched.with_proposal_restart_fixture_for_test(|_, _, service| {
+        let census = service
+            .lifecycle_io_scheduler_snapshot()
+            .expect("live I/O owner");
+        assert_eq!(census.tracked_recovered_signs, 1);
+        assert_eq!(census.tracked_completion_pending, 1);
+        assert_eq!(census.completion_owners, 0);
+        assert!(!census.held_completion);
+    });
+    assert_eq!(
+        launched.settle_recovered_lifecycle_sign_broadcast(),
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionRecoveredLifecycleSignBroadcastSettlementV1::Applied,
+        "the parked Timeout must publish its exact durable Broadcast instead of retrying forever",
+    );
+    launched.with_proposal_restart_fixture_for_test(|_, executor, service| {
+        assert!(executor.lifecycle_reducer_fence_observation().generation() > fence_before);
+        assert_eq!(executor.current_tag().view(), 0);
+        let census = service
+            .lifecycle_io_scheduler_snapshot()
+            .expect("live I/O owner");
+        assert_eq!(census.tracked_recovered_signs, 0);
+        assert_eq!(census.tracked_completion_pending, 0);
+        assert_eq!(census.completion_owners, 0);
+    });
+    assert_eq!(
+        launched.settle_recovered_lifecycle_sign_broadcast(),
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionRecoveredLifecycleSignBroadcastSettlementV1::None,
+        "the worker result can publish only once",
+    );
+    launched.detach_ready_sign_planner_for_test(*planner_io);
+    drop(launched);
+    assert!(!output_guard.restart_required());
+}
+
+/// Prove cold reconciliation retransmits the exact retained signature without a Sign task.
+#[cfg(feature = "bls")]
+#[inline(never)]
+pub(in crate::sumeragi) fn refanout_recovered_timeout_after_terminal_history_for_test(
+    lifecycle_owner: Box<crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1>,
+    context: wire::HeightContext,
+    local_validator: wire::ValidatorIndex,
+    local_signer: KeyPair,
+    wal_path: &std::path::Path,
+    signed: wire::TimeoutVote,
+) {
+    let (mut service, _) = boxed_nonzero_view_worker_service_fixture();
+    service.context = context.clone();
+    service.local_validator = Some(local_validator);
+    service.local_peer = context.roster[local_validator as usize].validator.clone();
+    service.key_pair = local_signer;
+    let admitted_posts = Arc::new(Mutex::new(Vec::new()));
+    let admitted_posts_for_hook = Arc::clone(&admitted_posts);
+    service.set_exact_output_admission_hook(move |post, ticket| {
+        assert!(ticket.is_none());
+        admitted_posts_for_hook
+            .lock()
+            .expect("retain actual timeout fanout")
+            .push(post);
+        Ok(())
+    });
+    service
+        .set_exact_output_shared_unit_capacity_for_test(64)
+        .expect("reserve the complete four-validator output geometry");
+    let output_guard = ConsensusOutputGuard::isolated();
+    let started_at = Instant::now();
+    let source_bytes = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+    let ordinary_bytes = iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES
+        .get()
+        .checked_add(super::super::BODY_ENVELOPE_HEADROOM_BYTES)
+        .expect("default ordinary ingress partition fits usize");
+    let completion_bytes = source_bytes
+        .checked_sub(super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES)
+        .and_then(|bytes| bytes.checked_sub(super::super::TIMEOUT_VOTE_RESERVE_BYTES))
+        .and_then(|bytes| bytes.checked_sub(ordinary_bytes))
+        .expect("default ingress source partitions are disjoint");
+    let global_plaintext = iroha_p2p::frame_plaintext_cap(
+        iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get(),
+    );
+    let ingress = Arc::new(
+        FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            128,
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+            source_bytes,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            super::super::TIMEOUT_VOTE_RESERVE_BYTES,
+            completion_bytes,
+            global_plaintext
+                .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get()),
+            global_plaintext
+                .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get()),
+            global_plaintext
+                .min(iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get()),
+            iroha_config::parameters::defaults::network::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES
+                .get(),
+            None,
+        ),
+    );
+    ingress
+        .configure_roster_for_context(
+            context.roster.iter().map(|entry| entry.validator.clone()),
+            &context.network_id,
+            context.da_layout,
+        )
+        .expect("configure the full four-validator recovered ingress geometry");
+    ingress.require_leader_wire_lifecycle_gate();
+    service.leader_wire_ingress = Arc::clone(&ingress);
+    let (mut launched, planner_io) =
+        crate::sumeragi::v2_lifecycle_coordinator::LaunchedProductionLifecycleV1::recovered_control_services_for_restart_test(
+            lifecycle_owner,
+            service,
+            wal_path,
+            started_at,
+            local_validator,
+            Arc::clone(&output_guard),
+            ingress,
+            false,
+        );
+    launched.with_proposal_restart_fixture_for_test(|owner, executor, service| {
+        assert_eq!(owner.recovered_control_row_summary_for_test(), None);
+        assert_eq!(
+            owner.classify_completion_ready_work(executor.lifecycle_reducer_fence_observation()),
+            crate::sumeragi::v2_lifecycle_coordinator::ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast,
+            "the cold owner must schedule its recovered signed Broadcast, never another Sign",
+        );
+        let census = service.lifecycle_io_scheduler_snapshot().expect("live I/O census");
+        assert_eq!(census.tracked_recovered_signs, 0);
+        assert_eq!(census.tracked_completion_pending, 0);
+    });
+    assert!(
+        planner_io.command_rx.try_recv().is_err(),
+        "cold recovery queued a new worker command"
+    );
+    assert!(matches!(
+        launched.refanout_recovered_broadcast_for_restart_test(),
+        crate::sumeragi::v2_lifecycle_coordinator::ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned { ordinal }
+            if ordinal == 802_073,
+    ));
+    let mut pending = true;
+    for _ in 0..32 {
+        pending = launched
+            .retry_exact_output_for_ready_sign_test()
+            .expect("deliver retained timeout through actual output admission");
+        if !pending {
+            break;
+        }
+    }
+    assert!(!pending, "recovered Timeout fanout must drain boundedly");
+    let posts = admitted_posts
+        .lock()
+        .expect("inspect actual timeout fanout");
+    let mut targets = BTreeSet::new();
+    for post in posts.iter() {
+        let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+            panic!("recovered timeout emitted a non-consensus message");
+        };
+        let BlockMessage::V2(message) = envelope.as_message() else {
+            panic!("recovered timeout emitted a lane message");
+        };
+        assert_eq!(
+            message.payload,
+            wire::ConsensusMessageV2Payload::TimeoutVote(signed.clone()),
+            "refanout must preserve the exact stored Timeout signature and statement"
+        );
+        assert!(
+            targets.insert(post.peer_id.clone()),
+            "duplicate timeout fanout target"
+        );
+    }
+    let expected_targets = context
+        .roster
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != local_validator as usize)
+        .map(|(_, entry)| entry.validator.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        targets, expected_targets,
+        "every remote validator receives the retained Timeout once"
+    );
+    assert!(
+        planner_io.command_rx.try_recv().is_err(),
+        "refanout manufactured a Sign command"
+    );
+    drop(posts);
     launched.detach_ready_sign_planner_for_test(*planner_io);
     drop(launched);
     assert!(!output_guard.restart_required());

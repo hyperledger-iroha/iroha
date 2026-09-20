@@ -2480,7 +2480,7 @@ mod v2_liveness_watchdog_tests {
                 proposal_round: None,
                 subject: None,
                 execution_commitment: None,
-                stage: SumeragiV2OutboundIntentStage::Sent,
+                stage: SumeragiV2OutboundIntentStage::Retained,
             });
         set_v2_status_at(second_tc, started_at + Duration::from_secs(4));
         let observed = v2_status_at(started_at + Duration::from_secs(6)).expect("v2 status");
@@ -2528,7 +2528,7 @@ mod v2_liveness_watchdog_tests {
                 proposal_round: Some(round(&locked, 0)),
                 subject: Some(subject(0xA1)),
                 execution_commitment: Some(execution_commitment(0xA1)),
-                stage: SumeragiV2OutboundIntentStage::Sent,
+                stage: SumeragiV2OutboundIntentStage::Retained,
             });
         set_progress(
             &mut locked,
@@ -2649,7 +2649,7 @@ mod v2_liveness_watchdog_tests {
                 proposal_round: None,
                 subject: None,
                 execution_commitment: None,
-                stage: SumeragiV2OutboundIntentStage::Sent,
+                stage: SumeragiV2OutboundIntentStage::Retained,
             });
         assert_eq!(
             classify_v2_liveness_blocker(&timeout, false),
@@ -2771,7 +2771,7 @@ mod v2_liveness_watchdog_tests {
                 proposal_round: None,
                 subject: None,
                 execution_commitment: None,
-                stage: SumeragiV2OutboundIntentStage::Sent,
+                stage: SumeragiV2OutboundIntentStage::Retained,
             });
         prepare
             .validate()
@@ -2803,7 +2803,7 @@ mod v2_liveness_watchdog_tests {
                 proposal_round: Some(current_lock.proposal_round),
                 subject: Some(current_lock.subject),
                 execution_commitment: Some(current_lock.execution_commitment),
-                stage: SumeragiV2OutboundIntentStage::Sent,
+                stage: SumeragiV2OutboundIntentStage::Retained,
             });
         assert_eq!(
             classify_v2_liveness_blocker(&current_commit, false),
@@ -5754,7 +5754,7 @@ pub fn update_lane_governance_from_statuses(statuses: &[LaneManifestStatus]) {
         .iter()
         .map(|status| {
             let manifest_required = status.governance.is_some();
-            let manifest_ready = manifest_required && status.manifest_path.is_some();
+            let manifest_ready = manifest_required && status.governance_rules.is_some();
             let manifest_path = status
                 .manifest_path
                 .as_ref()

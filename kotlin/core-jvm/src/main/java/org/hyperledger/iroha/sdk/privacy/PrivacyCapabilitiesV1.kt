@@ -8,7 +8,6 @@ import java.util.Collections
 import java.util.LinkedHashMap
 
 private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-private val POLICY_DELAY_BLOCKS_V1 = BigInteger.valueOf(300L)
 private val CONSENSUS_LIMIT_MAXIMA_V1 = linkedMapOf(
     "max_actions_per_transaction" to 1,
     "max_actions_per_block" to 2,
@@ -412,7 +411,6 @@ enum class PrivacyProtocolLifecycleStateV1 {
 class PrivacyProtocolLifecycleV1(
     @JvmField val state: PrivacyProtocolLifecycleStateV1,
     @JvmField val proposedAtHeight: BigInteger,
-    @JvmField val activateAtHeight: BigInteger?,
     @JvmField val activatedAtHeight: BigInteger?,
     @JvmField val stateSinceHeight: BigInteger?,
 ) {
@@ -420,21 +418,11 @@ class PrivacyProtocolLifecycleV1(
         requirePositivePrivacyHeightV1(proposedAtHeight, "privacy proposal height")
         when (state) {
             PrivacyProtocolLifecycleStateV1.PROPOSED -> {
-                val activate = requireNotNull(activateAtHeight) {
-                    "proposed privacy lifecycle must carry activate-at height"
-                }
                 require(activatedAtHeight == null && stateSinceHeight == null) {
                     "proposed privacy lifecycle must not carry activated-at or state-since heights"
                 }
-                requirePositivePrivacyHeightV1(activate, "privacy activate-at height")
-                require(activate > proposedAtHeight) {
-                    "privacy activate-at height must be later than proposal height"
-                }
             }
             PrivacyProtocolLifecycleStateV1.ACTIVE -> {
-                require(activateAtHeight == null) {
-                    "active privacy lifecycle must not carry activate-at height"
-                }
                 val activated = requireNotNull(activatedAtHeight) {
                     "active privacy lifecycle must carry activated-at height"
                 }
@@ -443,14 +431,11 @@ class PrivacyProtocolLifecycleV1(
                 }
                 requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
                 requirePositivePrivacyHeightV1(since, "privacy state-since height")
-                require(activated > proposedAtHeight && since >= activated) {
+                require(activated >= proposedAtHeight && since >= activated) {
                     "active privacy lifecycle heights are out of order"
                 }
             }
             PrivacyProtocolLifecycleStateV1.SUSPENDED -> {
-                require(activateAtHeight == null) {
-                    "suspended privacy lifecycle must not carry activate-at height"
-                }
                 val activated = requireNotNull(activatedAtHeight) {
                     "suspended privacy lifecycle must carry activated-at height"
                 }
@@ -459,21 +444,18 @@ class PrivacyProtocolLifecycleV1(
                 }
                 requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
                 requirePositivePrivacyHeightV1(since, "privacy state-since height")
-                require(activated > proposedAtHeight && since > activated) {
+                require(activated >= proposedAtHeight && since > activated) {
                     "suspended privacy lifecycle heights are out of order"
                 }
             }
             PrivacyProtocolLifecycleStateV1.RETIRED -> {
-                require(activateAtHeight == null) {
-                    "retired privacy lifecycle must not carry activate-at height"
-                }
                 val since = requireNotNull(stateSinceHeight) {
                     "retired privacy lifecycle must carry state-since height"
                 }
                 requirePositivePrivacyHeightV1(since, "privacy state-since height")
                 activatedAtHeight?.let { activated ->
                     requirePositivePrivacyHeightV1(activated, "privacy activated-at height")
-                    require(activated > proposedAtHeight && since > activated) {
+                    require(activated >= proposedAtHeight && since > activated) {
                         "retired privacy lifecycle heights are out of order"
                     }
                 } ?: require(since > proposedAtHeight) {
@@ -487,14 +469,12 @@ class PrivacyProtocolLifecycleV1(
         other is PrivacyProtocolLifecycleV1 &&
             state == other.state &&
             proposedAtHeight == other.proposedAtHeight &&
-            activateAtHeight == other.activateAtHeight &&
             activatedAtHeight == other.activatedAtHeight &&
             stateSinceHeight == other.stateSinceHeight
 
     override fun hashCode(): Int {
         var result = state.hashCode()
         result = 31 * result + proposedAtHeight.hashCode()
-        result = 31 * result + (activateAtHeight?.hashCode() ?: 0)
         result = 31 * result + (activatedAtHeight?.hashCode() ?: 0)
         return 31 * result + (stateSinceHeight?.hashCode() ?: 0)
     }
@@ -627,18 +607,15 @@ private fun requirePositivePrivacyHeightV1(height: BigInteger, subject: String) 
     require(height.signum() > 0) { "$subject must be non-zero" }
 }
 
-private fun requireValidPrivacyPolicyScheduleV1(
+internal fun requireValidPrivacyPolicyScheduleV1(
     scheduledAtHeight: BigInteger,
     effectiveAtHeight: BigInteger,
     subject: String,
 ) {
     requirePositivePrivacyHeightV1(scheduledAtHeight, "$subject scheduled-at height")
     requirePositivePrivacyHeightV1(effectiveAtHeight, "$subject effective-at height")
-    require(scheduledAtHeight <= U64_MAX.subtract(POLICY_DELAY_BLOCKS_V1)) {
-        "$subject scheduled-at height overflows the notice window"
-    }
-    require(effectiveAtHeight >= scheduledAtHeight.add(POLICY_DELAY_BLOCKS_V1)) {
-        "$subject must provide at least ${POLICY_DELAY_BLOCKS_V1} blocks of notice"
+    require(effectiveAtHeight > scheduledAtHeight) {
+        "$subject effective-at height must be after scheduled-at height"
     }
 }
 

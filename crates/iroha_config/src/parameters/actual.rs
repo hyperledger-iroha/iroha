@@ -588,7 +588,9 @@ impl Root {
             self.nexus.configured_lane_catalog = lane_catalog.clone();
             self.nexus.lane_catalog = lane_catalog;
             self.nexus.lane_config = LaneConfig::from_catalog(&self.nexus.lane_catalog);
-            self.nexus.dataspace_catalog = sora_dataspace_catalog();
+            let dataspace_catalog = sora_dataspace_catalog();
+            self.nexus.configured_dataspace_catalog = dataspace_catalog.clone();
+            self.nexus.dataspace_catalog = dataspace_catalog;
             self.nexus.routing_policy = sora_routing_policy();
         }
     }
@@ -2954,6 +2956,12 @@ pub struct Nexus {
     pub lane_config: LaneConfig,
     /// Validated catalog of physical execution, storage, and validator boundaries.
     pub dataspace_catalog: DataSpaceCatalog,
+    /// Immutable dataspace catalog loaded from configuration before committed catalog replay.
+    ///
+    /// Ledger-authorized additions mutate [`Self::dataspace_catalog`] without changing this
+    /// baseline. The execution-policy digest binds this catalog; the per-height Nexus/AMX
+    /// context binds the effective catalog and its committed authorization.
+    pub configured_dataspace_catalog: DataSpaceCatalog,
     /// Default fee sponsor program for each data space.
     pub dataspace_fee_sponsor_program_ids: BTreeMap<DataSpaceId, FeeSponsorProgramId>,
     /// Lane routing policy.
@@ -2989,6 +2997,7 @@ impl_default!(#[allow(clippy::derivable_impls)] Nexus => {
             configured_lane_catalog: LaneCatalog::default(),
             lane_config: LaneConfig::default(),
             dataspace_catalog: DataSpaceCatalog::default(),
+            configured_dataspace_catalog: DataSpaceCatalog::default(),
             dataspace_fee_sponsor_program_ids: BTreeMap::new(),
             routing_policy: LaneRoutingPolicy::default(),
             registry: LaneRegistry::default(),
@@ -3022,6 +3031,7 @@ impl Nexus {
         self.lane_catalog != LaneCatalog::default()
             || self.configured_lane_catalog != LaneCatalog::default()
             || self.dataspace_catalog != DataSpaceCatalog::default()
+            || self.configured_dataspace_catalog != DataSpaceCatalog::default()
             || !self.dataspace_fee_sponsor_program_ids.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
     }
@@ -3341,7 +3351,7 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         })
         .collect();
     let mut dataspaces = nexus
-        .dataspace_catalog
+        .configured_dataspace_catalog
         .entries()
         .iter()
         .map(|entry| NexusConsensusDataspaceV1 {
@@ -5052,6 +5062,27 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     active_validators: &[GenesisActiveNexusLaneRecord],
     retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
 ) -> Hash {
+    sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+        nexus,
+        pipeline,
+        active_validators,
+        retained_lane_lineage,
+        None,
+    )
+}
+/// Commit effective Nexus/AMX inputs together with an authenticated runtime catalog policy.
+///
+/// The root commits the complete ledger-owned dataspace and manifest additions. Callers must
+/// derive it from validated committed state, never from a local configuration overlay. Before
+/// any catalog-policy transaction exists, `None` retains the original projection byte for byte.
+#[must_use]
+pub fn sumeragi_v2_nexus_amx_context_hash_with_catalog_policy(
+    nexus: &Nexus,
+    pipeline: &Pipeline,
+    active_validators: &[GenesisActiveNexusLaneRecord],
+    retained_lane_lineage: &[SumeragiV2LaneLifecycleEntry],
+    committed_catalog_policy_root: Option<Hash>,
+) -> Hash {
     const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
     fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
         let bytes = value.encode();
@@ -5475,6 +5506,9 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         "staged.active_public_lane_validators",
         &active_validators,
     );
+    if let Some(root) = committed_catalog_policy_root {
+        append(&mut preimage, "nexus.committed_catalog_policy.v1", &root);
+    }
     Hash::new(preimage)
 }
 /// Tiered state backend settings controlling hot/cold storage behaviour.

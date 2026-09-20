@@ -252,6 +252,57 @@ fn torii_proxy_query_roundtrip_preserves_numeric_and_string_scalars() {
     assert_eq!(decoded.count_mode, params.count_mode);
 }
 #[test]
+fn account_permissions_handler_query_preserves_signed_pagination_and_count_mode() {
+    // Infer the outer DTO from the production handler, so choosing a correct
+    // inner DTO here cannot hide a field dropped by the HTTP extractor.
+    fn decode_handler_query<Q, H, F>(handler: H, query: &str) -> Q
+    where
+        Q: norito::json::JsonDeserializeOwned,
+        H: Fn(
+            State<SharedAppState>,
+            axum::http::Method,
+            axum::http::Uri,
+            axum::http::HeaderMap,
+            axum::extract::ConnectInfo<std::net::SocketAddr>,
+            AxPath<String>,
+            AxQuery<Q>,
+        ) -> F,
+    {
+        let _ = handler;
+        let plan = routed_read_test_budget()
+            .request_decode_plan()
+            .expect("request decode plan");
+        decode_torii_proxy_query::<Q>(plan, Some(query)).expect("outer permission query")
+    }
+
+    let entry = app_routed_read_http_endpoint(
+        route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET.stable_route_id(),
+    )
+    .expect("permission endpoint admission");
+    assert_eq!(entry.endpoint, ToriiReadEndpointV1::AccountPermissionsGet);
+    assert_eq!(
+        entry.decoder,
+        AppRoutedReadHttpDecoder::Query("PaginationParams")
+    );
+    for (query, limit, offset, count_mode) in [
+        ("limit=500&offset=0&count_mode=exact", 500, 0, "exact"),
+        ("limit=17&offset=34&count_mode=bounded", 17, 34, "bounded"),
+    ] {
+        let outer = decode_handler_query(handler_account_permissions, query);
+        let forwarded = encode_torii_proxy_query(&outer)
+            .expect("forward permission query")
+            .expect("nonempty permission query");
+        let plan = routed_read_test_budget()
+            .request_decode_plan()
+            .expect("request decode plan");
+        let inner = decode_torii_proxy_query::<routing::PaginationParams>(plan, Some(&forwarded))
+            .expect("inner permission handler query");
+        assert_eq!(inner.limit, Some(limit));
+        assert_eq!(inner.offset, offset);
+        assert_eq!(inner.count_mode.as_deref(), Some(count_mode));
+    }
+}
+#[test]
 fn torii_proxy_pipeline_status_query_preserves_decimal_hash_and_whitespace() {
     let hash = "11".repeat(32);
     let params = PipelineStatusQuery {

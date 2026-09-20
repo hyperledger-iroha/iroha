@@ -10,7 +10,7 @@
 //! additional costs. No process RSS, crypto secret-lifecycle or production claim follows here.
 
 use std::{
-    io::{self, Read as _, SeekFrom},
+    io::{self, SeekFrom},
     path::Path,
 };
 

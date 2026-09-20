@@ -31,8 +31,8 @@ use super::{
         validate_historical_autonomous_lane_recovery_record,
     },
     v2_candidate::{
-        CandidateDescriptor, CandidateLimits, CandidateWorkProvider, CandidateWorkUnavailable,
-        PreparedCandidateWork,
+        CandidateDescriptor, CandidateLimits, CandidateWorkDeferral, CandidateWorkError,
+        CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,
     },
     v2_context::StagedGenesisNexusAmxContext,
     v2_core::{
@@ -3872,6 +3872,7 @@ impl V2LaneWorkAdapter {
         } else {
             authenticated_genesis_nexus_amx_context.is_none()
                 && super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                    .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?
                     == context.nexus_amx_context_hash
         };
         let recovered_applied_tip_matches = recovered_applied_height.is_some_and(|pending| {
@@ -15683,6 +15684,26 @@ impl V2LaneWorkAdapter {
                     "canonical lane hydration conflicts with retained recovery sources: {error}"
                 ))
             })?;
+        // A carrier change can retire a drained output while the cache keeps
+        // its complete lane certificate. The global hint is advisory, so
+        // canonical rebinding preserves that certificate and its drained bit.
+        // Restore only an orphaned handoff for the authenticated, unapplied
+        // canonical source; active downstream owners remain exactly-once.
+        for proposal in &raw_proposals {
+            let has_owner = self
+                .pending_committed_lanes
+                .iter()
+                .chain(self.historical_recovery_sessions.iter())
+                .any(|session| session.proposal.same_consensus_identity(proposal))
+                || self
+                    .committed_lane_outputs
+                    .iter()
+                    .any(|output| output.session.proposal.same_consensus_identity(proposal));
+            if !has_owner {
+                self.lane_sessions
+                    .restore_missing_committed_handoff(proposal);
+            }
+        }
         self.historical_autonomous_recovery_records = recovered_historical_records;
         self.pending_autonomous_anchor_payloads = pending_autonomous_anchor_payloads;
         for record in historical_ready_records {
@@ -19577,30 +19598,26 @@ impl V2LaneWorkAdapter {
         context: &wire::HeightContext,
         view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+    ) -> Result<PreparedCandidateWork, CandidateWorkError> {
         if context != &self.context || !candidates.is_empty() {
-            return Err(all_unavailable(
-                candidates.len(),
-                "certified execution carrier requires its exact height and an empty ordinary batch",
+            return Err(CandidateWorkError::Failed(
+                "certified execution carrier requires its exact height and an empty ordinary batch"
+                    .to_owned(),
             ));
         }
         let output_guard = Arc::clone(&self.output_guard);
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
-            return Err(all_unavailable(
-                candidates.len(),
-                "Sumeragi v2 consensus requires process restart",
-            ));
+            return Err(CandidateWorkError::RestartRequired);
         };
         match self.refresh_merge_candidates(view) {
             Ok(MergeRefreshOutcome::Ready) => {}
             Ok(MergeRefreshOutcome::Deferred) => {
                 operation.complete();
-                return Err(all_unavailable(
-                    candidates.len(),
-                    "merge frontier is changing",
+                return Err(CandidateWorkError::Deferred(
+                    CandidateWorkDeferral::MergeFrontier,
                 ));
             }
-            Err(error) => return Err(all_unavailable(candidates.len(), error.to_string())),
+            Err(error) => return Err(CandidateWorkError::Failed(error.to_string())),
         }
         self.planned_lane_proposals.clear();
         self.planned_lane_proposals.insert(
@@ -19637,30 +19654,28 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
         context: &wire::HeightContext,
         view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+    ) -> Result<PreparedCandidateWork, CandidateWorkError> {
         let output_guard = Arc::clone(&self.output_guard);
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
-            return Err(all_unavailable(
-                candidates.len(),
-                "Sumeragi v2 consensus requires process restart",
-            ));
+            return Err(CandidateWorkError::RestartRequired);
         };
         if context != &self.context {
             operation.complete();
-            return Err(all_unavailable(candidates.len(), "height context drift"));
+            return Err(CandidateWorkError::Failed(
+                "height context drift".to_owned(),
+            ));
         }
         match self.refresh_merge_candidates(view) {
             Ok(MergeRefreshOutcome::Ready) => {}
             Ok(MergeRefreshOutcome::Deferred) => {
                 operation.complete();
-                return Err(all_unavailable(
-                    candidates.len(),
-                    "merge frontier is changing",
+                return Err(CandidateWorkError::Deferred(
+                    CandidateWorkDeferral::MergeFrontier,
                 ));
             }
             Err(error) => {
                 drop(operation);
-                return Err(all_unavailable(candidates.len(), error.to_string()));
+                return Err(CandidateWorkError::Failed(error.to_string()));
             }
         }
         let result = (|| {
@@ -19692,7 +19707,8 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 return Err(CandidateWorkUnavailable::new(
                     unavailable,
                     "QueuePlanSynced work requires its globally admitted autonomous reservation",
-                ));
+                )
+                .into());
             }
             let unavailable = candidates
                 .iter()
@@ -19710,7 +19726,8 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 return Err(CandidateWorkUnavailable::new(
                     unavailable,
                     "ordinary work conflicts with an already-reserved autonomous lane slot",
-                ));
+                )
+                .into());
             }
             let autonomous_lane_payloads = self
                 .pending_autonomous_anchor_payloads
@@ -19724,17 +19741,26 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| {
-                    all_unavailable(
-                        candidates.len(),
-                        format!(
-                            "reserved autonomous payload cannot form a canonical anchor: {error}"
-                        ),
-                    )
+                    CandidateWorkError::Failed(format!(
+                        "reserved autonomous payload cannot form a canonical anchor: {error}"
+                    ))
                 })?;
             let routes = candidates
                 .iter()
                 .map(|candidate| candidate.routing_plan().coordinator_route())
                 .collect::<Vec<_>>();
+            let overflow = lane_session_overflow_indices(
+                &routes,
+                autonomous_lane_payloads.len(),
+                self.limits.session_capacity.get(),
+            )?;
+            if !overflow.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    overflow,
+                    "ordinary lane routes exceed capacity after reserved autonomous work",
+                )
+                .into());
+            }
             let hashes = candidates
                 .iter()
                 .map(|candidate| Hash::from(candidate.entrypoint_hash()))
@@ -19752,13 +19778,14 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 if error.is_storage_error() {
                     self.output_guard.close_admission_for_restart();
                 }
-                all_unavailable(candidates.len(), error.to_string())
+                CandidateWorkError::Failed(error.to_string())
             })?;
             if !lane_plan.unavailable_indices.is_empty() {
                 return Err(CandidateWorkUnavailable::new(
                     lane_plan.unavailable_indices,
                     "lane-local author, committee, or predecessor unavailable",
-                ));
+                )
+                .into());
             }
             if lane_plan
                 .proposals
@@ -19766,9 +19793,8 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 .saturating_add(autonomous_lane_payloads.len())
                 > self.limits.session_capacity.get()
             {
-                return Err(all_unavailable(
-                    candidates.len(),
-                    "combined lane-local proposal count exceeds the bounded session capacity",
+                return Err(CandidateWorkError::Failed(
+                    "lane planner exceeded the admitted session capacity".to_owned(),
                 ));
             }
             let participant_controls = self
@@ -19779,15 +19805,17 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                             indices,
                             "Native AMX participant predecessor is pending",
                         )
+                        .into()
                     }
                     NativeParticipantControlPreparationError::Unavailable(indices) => {
                         CandidateWorkUnavailable::new(
                             indices,
                             "Native AMX participant control proposal is unavailable",
                         )
+                        .into()
                     }
                     NativeParticipantControlPreparationError::Storage(error) => {
-                        all_unavailable(candidates.len(), error.to_string())
+                        CandidateWorkError::Failed(error.to_string())
                     }
                 })?;
             let mut receipts = Vec::with_capacity(candidates.len());
@@ -19830,7 +19858,8 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 return Err(CandidateWorkUnavailable::defer_native_for_episode(
                     unavailable,
                     "context-bound Native AMX prepare/commit certificates unavailable",
-                ));
+                )
+                .into());
             }
             self.planned_lane_proposals.insert(
                 wire::ConsensusRound {
@@ -19850,8 +19879,33 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
         result
     }
 }
-fn all_unavailable(count: usize, reason: impl Into<String>) -> CandidateWorkUnavailable {
-    CandidateWorkUnavailable::new((0..count).collect(), reason)
+/// Keep existing autonomous owners and admit additional lane routes in FIFO order.
+/// Every candidate on an overflowing route is deferred together before any native
+/// participant control is prepared; the remaining snapshot can still make progress.
+fn lane_session_overflow_indices(
+    routes: &[RoutingDecision],
+    reserved_sessions: usize,
+    capacity: usize,
+) -> Result<BTreeSet<usize>, CandidateWorkError> {
+    let available = capacity.checked_sub(reserved_sessions).ok_or_else(|| {
+        CandidateWorkError::Failed(
+            "reserved autonomous work exceeds the bounded session capacity".to_owned(),
+        )
+    })?;
+    let mut admitted = BTreeSet::new();
+    let mut overflow = BTreeSet::new();
+    for (index, route) in routes.iter().enumerate() {
+        let key = (route.lane_id, route.dataspace_id);
+        if admitted.contains(&key) {
+            continue;
+        }
+        if admitted.len() < available {
+            admitted.insert(key);
+        } else {
+            overflow.insert(index);
+        }
+    }
+    Ok(overflow)
 }
 fn bitmap_selects(bitmap: &[u8], index: usize) -> bool {
     bitmap
@@ -21509,7 +21563,8 @@ pub(super) mod tests {
             kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
-            ),
+            )
+            .expect("valid committed catalog"),
             execution_policy_hash: super::super::v2_recovery::committed_execution_policy_hash(
                 state.as_ref(),
             )
@@ -21713,7 +21768,8 @@ pub(super) mod tests {
                 BTreeMap::from([(LaneId::SINGLE, default_status), (lane_id, status)]),
             )));
         adapter.context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+                .expect("valid committed catalog");
         adapter.context.execution_policy_hash =
             super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
                 .expect("derive multi-lane test execution policy");
@@ -21746,7 +21802,7 @@ pub(super) mod tests {
         let_row! { dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata { id: dataspace_id, alias: "independent-dataspace".to_owned(), description: None, fault_tolerance: 1, }]) .expect("single custom-dataspace test catalog") };
         stmt_row! { { let mut nexus = adapter.state.nexus.write(); nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy { default_lane: lane_id, default_dataspace: dataspace_id, rules: Vec::new(), }; nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog); nexus.lane_catalog = lane_catalog; nexus.dataspace_catalog = dataspace_catalog; } }
         adapter.state.reseed_static_lane_incarnations_for_tests();
-        stmt_row! { adapter.context.nexus_amx_context_hash = super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()); }
+        stmt_row! { adapter.context.nexus_amx_context_hash = super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()).expect("valid committed catalog"); }
         stmt_row! { adapter.context.execution_policy_hash = super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref()).expect("derive single custom-lane test execution policy"); }
         stmt_row! { assert!(!proposal_lookahead_enabled(&adapter.state.nexus_snapshot(), adapter.context.height,), "one custom route must retain the narrow proposal scan"); }
         stmt_row! { assert_eq!(adapter.state.consensus_lane_routes_at_height(adapter.context.height).into_keys().collect::<Vec<_>>(), vec![(lane_id, dataspace_id)], "fixture must expose exactly one enabled custom route"); }
@@ -25787,7 +25843,8 @@ pub(super) mod tests {
         drop(adapter);
         assert_eq!(
             context.nexus_amx_context_hash,
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog"),
             "the default fresh-genesis fixture starts with the empty committed projection"
         );
         assert!(matches!(
@@ -25806,7 +25863,8 @@ pub(super) mod tests {
         context.nexus_amx_context_hash = Hash::new(b"staged post-genesis Nexus/AMX projection");
         assert_ne!(
             context.nexus_amx_context_hash,
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog"),
             "fixture must distinguish the staged post-genesis projection from empty committed state"
         );
         assert!(matches!(
@@ -25917,7 +25975,8 @@ pub(super) mod tests {
         drop(adapter);
         state.nexus.write().fees.base_fee = Quantity::from(1_u32);
         context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog");
         assert_ne!(
             super::super::v2_recovery::committed_execution_policy_hash(state.as_ref())
                 .expect("changed execution policy"),
@@ -25992,7 +26051,8 @@ pub(super) mod tests {
         }
         assert_ne!(
             context.nexus_amx_context_hash,
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref()),
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog"),
             "fixture must exercise the post-application context-hash exception without changing the frozen context id"
         );
         let block_hash = block.as_ref().hash();
@@ -26324,7 +26384,8 @@ pub(super) mod tests {
             context.network_id,
         ));
         context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
+                .expect("valid committed catalog");
         context.execution_policy_hash =
             super::super::v2_recovery::committed_execution_policy_hash(state.as_ref())
                 .expect("derive initially absent validator execution policy");
@@ -27786,6 +27847,86 @@ pub(super) mod tests {
         assert_eq!(durable.commit_qc, retained.commit_qc);
     }
     #[test]
+    fn canonical_lane_recovery_restores_handoff_after_losing_carrier_retirement() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let mut losing = proposal.clone();
+        losing
+            .payload_block_hint
+            .as_mut()
+            .expect("carrier hint")
+            .proposal_block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"losing-canonical-carrier"));
+        assert!(losing.same_consensus_identity(&proposal));
+        adapter
+            .lane_sessions
+            .insert_proposal(losing.clone())
+            .expect("retain lane proposal");
+        for phase in [CertPhase::Prepare, CertPhase::Commit] {
+            let qc = lane_qc_for_phase(&losing, &keys[..3], phase);
+            let pops = adapter.pops_for_lane_qc(&qc);
+            adapter
+                .lane_sessions
+                .insert_qc_with_pops(qc, &pops)
+                .expect("verified lane quorum");
+        }
+        let mut sessions = adapter.lane_sessions.drain_committed_sessions();
+        assert_eq!(sessions.len(), 1);
+        let session = sessions.pop().expect("drained certificate owner");
+        adapter.pending_committed_lanes.push_back(session.clone());
+        adapter
+            .committed_lane_outputs
+            .push_back(PendingCommittedLaneOutput {
+                session,
+                next_validator: 0,
+            });
+        adapter
+            .kura
+            .store_block(block.clone())
+            .expect("canonical body");
+        let (round, subject) = global_lock_for_block(&adapter, &block);
+        let artifact = finality_artifact_for_block(&adapter, &keys, &block);
+        let verified = verified_finality_artifact_for_block(&adapter, &keys, &block);
+        adapter
+            .kura
+            .store_v2_finality_artifact(&verified)
+            .expect("canonical finality");
+        let committed = ValidBlock::committed_from_replay_signed_block(block);
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        adapter
+            .retain_merge_sidecars_for_global_view(round.view, Some(subject), Some(subject))
+            .expect("retire losing carrier outputs");
+        assert!(adapter.pending_committed_lanes.is_empty());
+        assert!(adapter.committed_lane_outputs.is_empty());
+        assert!(
+            !adapter
+                .durable_completion_matches_finality(&artifact)
+                .expect("missing certificate")
+        );
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("recover orphaned handoff"),
+            1
+        );
+        assert!(
+            adapter
+                .durable_completion_matches_finality(&artifact)
+                .expect("complete canonical evidence")
+        );
+        assert!(
+            adapter
+                .kura
+                .lane_block_application_receipt_available(&proposal)
+        );
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("idempotent recovery"),
+            0
+        );
+    }
+    #[test]
     fn globally_applied_lane_body_without_certificate_remains_recoverable() {
         let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
         adapter.limits.session_capacity = NonZeroUsize::new(1).expect("one exact recovery slot");
@@ -28543,7 +28684,8 @@ pub(super) mod tests {
         context.parent_commit_qc = Some(finality.commit_qc);
         context.snapshot_bootstrap = None;
         context.nexus_amx_context_hash =
-            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
+            super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+                .expect("valid committed catalog");
         context
     }
     fn globally_anchored_lane_block_fixture(
@@ -31589,6 +31731,63 @@ pub(super) mod tests {
     }
     include!("v2_lane_work_autonomous_ready_durability_tests.rs");
     #[test]
+    fn lane_session_capacity_preserves_reserved_owners_and_fifo_route_groups() {
+        let route = |lane, dataspace| RoutingDecision {
+            lane_id: LaneId::new(lane),
+            dataspace_id: DataSpaceId::new(dataspace),
+        };
+        let routes = [
+            route(7, 1),
+            route(2, 1),
+            route(7, 1),
+            route(9, 1),
+            route(2, 1),
+        ];
+        assert_eq!(
+            lane_session_overflow_indices(&routes, 1, 3).expect("two free route slots"),
+            BTreeSet::from([3]),
+        );
+        assert_eq!(
+            lane_session_overflow_indices(&routes, 2, 3).expect("one free route slot"),
+            BTreeSet::from([1, 3, 4]),
+        );
+        assert_eq!(
+            lane_session_overflow_indices(&routes, 3, 3).expect("reserved anchors can progress"),
+            BTreeSet::from([0, 1, 2, 3, 4]),
+        );
+        assert!(
+            lane_session_overflow_indices(&routes, 0, 3)
+                .expect("all routes fit")
+                .is_empty()
+        );
+        assert!(
+            lane_session_overflow_indices(&[], 3, 3)
+                .expect("empty ordinary batch fits")
+                .is_empty()
+        );
+        let distinct_dataspaces = [route(7, 1), route(7, 2), route(7, 1)];
+        assert_eq!(
+            lane_session_overflow_indices(&distinct_dataspaces, 0, 1)
+                .expect("route includes dataspace"),
+            BTreeSet::from([1]),
+        );
+    }
+    #[test]
+    fn lane_session_capacity_rejects_overcommitted_reserved_work_even_when_empty() {
+        let expected = CandidateWorkError::Failed(
+            "reserved autonomous work exceeds the bounded session capacity".to_owned(),
+        );
+        assert_eq!(
+            lane_session_overflow_indices(&[], 4, 3),
+            Err(expected.clone())
+        );
+        let routes = [RoutingDecision {
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(1),
+        }];
+        assert_eq!(lane_session_overflow_indices(&routes, 4, 3), Err(expected));
+    }
+    #[test]
     fn candidate_providers_require_the_installed_unlocked_reducer_view() {
         let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
         let context = adapter.context.clone();
@@ -31601,10 +31800,20 @@ pub(super) mod tests {
             let certified = adapter
                 .prepare_certified_execution_carrier(&context, view, &[])
                 .expect_err("certified admission waits for the exact reducer directive");
-            assert_eq!(ordinary.reason(), "merge frontier is changing");
-            assert_eq!(certified.reason(), "merge frontier is changing");
-            assert!(ordinary.indices().is_empty());
-            assert!(certified.indices().is_empty());
+            crate::sumeragi::v2_candidate::tests::assert_empty_work_deferral_reaches_assembler(
+                ordinary.clone(),
+            );
+            crate::sumeragi::v2_candidate::tests::assert_empty_work_deferral_reaches_assembler(
+                certified.clone(),
+            );
+            assert_eq!(
+                ordinary,
+                CandidateWorkError::Deferred(CandidateWorkDeferral::MergeFrontier)
+            );
+            assert_eq!(
+                certified,
+                CandidateWorkError::Deferred(CandidateWorkDeferral::MergeFrontier)
+            );
             assert!(
                 !adapter.output_guard.restart_required()
                     && adapter.output_guard.acquire().is_some(),
@@ -31698,6 +31907,9 @@ pub(super) mod tests {
                     &[CandidateDescriptor::new(&synced, &routing_plan)],
                 )
                 .expect_err("QueuePlanSynced cannot bypass its autonomous ownership corridor");
+            let CandidateWorkError::Unavailable(unavailable) = unavailable else {
+                panic!("this one transaction must have positional unavailability");
+            };
             assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
             assert_eq!(
                 unavailable.reason(),
@@ -31789,6 +32001,9 @@ pub(super) mod tests {
         let unavailable = provider
             .prepare(&context, 0, &[conflicting])
             .expect_err("ordinary ownership cannot overlap a live lane reservation");
+        let CandidateWorkError::Unavailable(unavailable) = unavailable else {
+            panic!("this one transaction must have positional unavailability");
+        };
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
         assert_eq!(
             unavailable.reason(),

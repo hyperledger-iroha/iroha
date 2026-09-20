@@ -223,11 +223,7 @@ struct LifecycleDirectoryOperationGuard<'directory> {
 #[cfg(all(unix, not(target_os = "espidf")))]
 impl Drop for LifecycleDirectoryOperationGuard<'_> {
     fn drop(&mut self) {
-        #[cfg(not(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita"
-        )))]
+        #[cfg(not(any(target_os = "horizon", target_os = "solaris", target_os = "vita")))]
         let _ = rustix::fs::flock(
             &self.directory.directory,
             rustix::fs::FlockOperation::Unlock,
@@ -313,21 +309,13 @@ impl BoundLifecycleLedgerDirectory {
         let thread_lock = self.operation_lock.lock().map_err(|_| {
             LifecycleLedgerError::Io("lifecycle storage operation lock was poisoned".to_owned())
         })?;
-        #[cfg(not(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita"
-        )))]
+        #[cfg(not(any(target_os = "horizon", target_os = "solaris", target_os = "vita")))]
         rustix::fs::flock(&self.directory, rustix::fs::FlockOperation::LockExclusive)
             .map_err(std::io::Error::from)
             .map_err(|error| {
                 lifecycle_storage_io("lock lifecycle directory", &self.expected_path, error)
             })?;
-        #[cfg(any(
-            target_os = "horizon",
-            target_os = "solaris",
-            target_os = "vita"
-        ))]
+        #[cfg(any(target_os = "horizon", target_os = "solaris", target_os = "vita"))]
         return Err(LifecycleLedgerError::Io(format!(
             "exclusive lifecycle storage locking is unsupported at {}",
             self.expected_path.display()
@@ -2030,6 +2018,10 @@ impl LifecycleCoordinator {
             ));
         }
         store.persist(&LifecycleLedgerV1::from_coordinator(self)?)?;
+        // This helper attaches a live coordinator, after owner construction.
+        // Consume startup publication custody just as production open does,
+        // so later staged publications cannot extend a cold recovery witness.
+        let _ = store.take_owner_open_successor();
         self.ledger_store = Some(store);
         Ok(())
     }
@@ -2538,6 +2530,100 @@ pub(crate) fn install_timeout_broadcasts_before_current_control_for_test(
         ordinal
     } else {
         ordinal.saturating_sub(1)
+    };
+    let Ok(incident) = LifecycleLedgerV1::new(context, high_water, records, BTreeMap::new()) else {
+        return false;
+    };
+    store.persist(&incident).is_ok()
+}
+
+/// Reproduce a standalone Timeout Broadcast before its recovered WAL Sign.
+///
+/// These are deliberately separate owners without a continuation edge, matching
+/// the retained two-row incident rather than an already linked Sign/Broadcast pair.
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) fn install_standalone_timeout_broadcast_before_current_control_for_test(
+    root: &Path,
+    context: LifecycleContext,
+    unsigned: wire::TimeoutVote,
+    signed: wire::TimeoutVote,
+    broadcast_ordinal: u128,
+    completed: bool,
+    shared_owner: bool,
+) -> bool {
+    let Ok((store, ledger)) = LifecycleLedgerStoreV1::open(root, context) else {
+        return false;
+    };
+    let [current] = ledger.records.as_slice() else {
+        return false;
+    };
+    let Some(current_ordinal) = broadcast_ordinal.checked_add(1) else {
+        return false;
+    };
+    if broadcast_ordinal == 0
+        || current.work_class() != Some(LifecycleWorkClass::SignTimeout)
+        || current.terminal() != Some(None)
+        || current.continuation() != Some(DurableContinuation::None)
+    {
+        return false;
+    }
+    let [parent_replay, broadcast_replay] =
+        super::replay_authority::exact_timeout_sign_broadcast_fixture(context, unsigned, signed);
+    if current.key() != Some(parent_replay.key) {
+        return false;
+    }
+    let owner = OwnerId::new(
+        CausalRoot::new(LifecycleDigest::new([0xD1; 32])),
+        broadcast_ordinal,
+    );
+    if owner.causal_root() == current.owner().causal_root() {
+        return false;
+    }
+    let Ok(broadcast) = LifecycleLedgerRecordV1::new(
+        broadcast_replay.key,
+        owner,
+        broadcast_ordinal,
+        LifecycleWorkClass::Broadcast,
+        broadcast_replay.stage,
+        completed.then_some(TerminalOutcome::Advanced),
+        owner.causal_root().digest(),
+        DurablePayloadReference::None,
+        broadcast_replay.authority,
+        DurableContinuation::None,
+    ) else {
+        return false;
+    };
+    let mut current = current.clone();
+    current.owner_first_ordinal = current_ordinal;
+    current.ordinal = current_ordinal;
+    let mut records = vec![broadcast, current];
+    let high_water = if shared_owner {
+        let Some(ordinal) = current_ordinal.checked_add(1) else {
+            return false;
+        };
+        let replay = super::replay_authority::exact_record_fixture(
+            context,
+            LifecycleStageKind::ReportProposalEquivocation,
+            0x7F,
+        );
+        let Ok(other) = LifecycleLedgerRecordV1::new(
+            replay.key,
+            owner,
+            ordinal,
+            replay.work_class,
+            replay.stage,
+            Some(TerminalOutcome::Cancelled),
+            owner.causal_root().digest(),
+            replay.payload,
+            replay.authority,
+            DurableContinuation::None,
+        ) else {
+            return false;
+        };
+        records.push(other);
+        ordinal
+    } else {
+        current_ordinal
     };
     let Ok(incident) = LifecycleLedgerV1::new(context, high_water, records, BTreeMap::new()) else {
         return false;

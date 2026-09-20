@@ -185,54 +185,6 @@ impl ClientQueryRequestHead {
         Ok(query.encode_versioned())
     }
 }
-/// Decode only Torii's canonical query absence/expiry envelope; ingress failures are not state.
-fn decode_query_absence(response: &http::Response<Vec<u8>>) -> QueryError {
-    let invalid = || {
-        QueryError::Other(eyre!(
-            "query absence/expiry requires a bounded canonical Torii query-validation envelope"
-        ))
-    };
-    let content_type_values = response.headers().get_all(CONTENT_TYPE);
-    let mut content_types = content_type_values.iter();
-    let media_type = content_types.next().map(|value| value.as_bytes());
-    if content_types.next().is_some()
-        || response.body().is_empty()
-        || response.body().len() > 64 * 1024
-    {
-        return invalid();
-    }
-    let envelope = match media_type {
-        Some(value) if value == APPLICATION_NORITO.as_bytes() => {
-            let Ok(envelope) = norito::decode_canonical_with_limits::<ErrorEnvelope>(
-                response.body(),
-                norito::canonical_decode_limits(response.body().len()),
-            ) else {
-                return invalid();
-            };
-            envelope
-        }
-        Some(b"application/json") => {
-            let Ok(envelope) = json::from_slice::<ErrorEnvelope>(response.body()) else {
-                return invalid();
-            };
-            if json::to_vec(&envelope).ok().as_ref() != Some(response.body()) {
-                return invalid();
-            }
-            envelope
-        }
-        _ => return invalid(),
-    };
-    if envelope.code() != "query_validation_failed" {
-        return invalid();
-    }
-    let reason = match response.status() {
-        StatusCode::NOT_FOUND => QueryExecutionFail::NotFound,
-        StatusCode::GONE => QueryExecutionFail::Expired,
-        _ => return invalid(),
-    };
-    QueryError::Validation(ValidationFail::QueryFailed(reason))
-}
-
 /// Decode a raw response from the node's query endpoint
 fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryResponse> {
     match resp.status() {
@@ -256,33 +208,66 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
             }
             decode_query_response_body(body)
         }
-        StatusCode::NOT_FOUND | StatusCode::GONE => Err(decode_query_absence(resp)),
-        StatusCode::BAD_REQUEST
-        | StatusCode::UNAUTHORIZED
-        | StatusCode::FORBIDDEN
-        | StatusCode::UNPROCESSABLE_ENTITY => {
-            let body = resp.body();
-            match norito::decode_from_bytes::<ValidationFail>(body) {
-                Ok(fail) => Err(QueryError::Validation(fail)),
-                Err(decode_err) => {
-                    let report = ResponseReport::with_msg("Query failed", resp).map_or_else(
-                        |_| {
-                            Report::new(decode_err).wrap_err(
-                                "Failed to decode response from Iroha. \
-                                Response is neither a `ValidationFail` encoded value nor a valid utf-8 string error response. \
-                                You are likely using a version of the client library that is incompatible with the version of the peer software",
-                            )
-                        },
-                        Into::into,
-                    );
-                    Err(QueryError::Other(report))
-                }
+        _ => Err(decode_query_failure(resp)),
+    }
+}
+/// Decode the public Torii failure contract without inventing query-store state.
+/// Only an explicit asset-absence code with its typed identity proves a missing
+/// asset. Generic status codes and diagnostics never establish query-store state.
+fn decode_query_failure(response: &http::Response<Vec<u8>>) -> QueryError {
+    const MAX_ERROR_BYTES: usize = 64 * 1024;
+    let protocol_error = |reason: &str| {
+        QueryError::Other(eyre!("query HTTP {} failure {reason}", response.status()))
+    };
+    let content_type_values = response.headers().get_all(CONTENT_TYPE);
+    let mut content_types = content_type_values.iter();
+    let content_type = content_types.next().map(|value| value.as_bytes());
+    if content_types.next().is_some() {
+        return protocol_error("requires exactly one Content-Type header");
+    }
+    let body = response.body();
+    if body.is_empty() || body.len() > MAX_ERROR_BYTES {
+        return protocol_error("requires a nonempty error envelope of at most 65536 bytes");
+    }
+    let envelope = match content_type {
+        Some(b"application/x-norito") => {
+            match norito::decode_canonical_with_limits::<ErrorEnvelope>(
+                body,
+                norito::canonical_decode_limits(body.len()),
+            ) {
+                Ok(envelope) => envelope,
+                Err(_) => return protocol_error("is not one canonical Norito ErrorEnvelope"),
             }
         }
-        _ => Err(ResponseReport::with_msg("Unexpected query response", resp)
-            .unwrap_or_else(core::convert::identity)
-            .into()),
+        Some(b"application/json") => match json::from_slice::<ErrorEnvelope>(body) {
+            Ok(envelope) => envelope,
+            Err(_) => return protocol_error("is not one JSON ErrorEnvelope"),
+        },
+        _ => return protocol_error("requires application/x-norito or application/json"),
+    };
+    if envelope.code() == "query_asset_not_found" {
+        if response.status() != StatusCode::NOT_FOUND {
+            return protocol_error("claims asset absence without HTTP 404");
+        }
+        let Some(asset_id) = envelope
+            .details
+            .as_ref()
+            .and_then(|details| details.query_asset_not_found.as_ref())
+        else {
+            return protocol_error("claims asset absence without its typed asset identity");
+        };
+        return QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            crate::data_model::query::error::FindError::Asset(Box::new(asset_id.clone())),
+        )));
     }
+    // ErrorEnvelope is the node's public, redacted diagnostic. Never display
+    // unparsed upstream bytes or infer ValidationFail variants from status alone.
+    QueryError::Other(eyre!(
+        "query failed; HTTP {}; {}: {}",
+        response.status(),
+        envelope.code(),
+        envelope.message()
+    ))
 }
 /// Decode `QueryResponse` from a canonical Norito byte body.
 fn decode_query_response_body(body: &[u8]) -> QueryResult<QueryResponse> {
@@ -541,114 +526,20 @@ mod tests {
         assert!(super::validate_fetch_size(DEFAULT_FETCH_SIZE).is_ok());
     }
     #[test]
-    fn only_canonical_query_envelopes_can_prove_absence_or_expiry() {
-        for status in [StatusCode::NOT_FOUND, StatusCode::GONE] {
-            let body = norito::to_bytes(&ErrorEnvelope::new(
-                "query_validation_failed",
-                "missing or expired",
-            ))
-            .unwrap();
-            let response = http::Response::builder()
-                .status(status)
-                .header(CONTENT_TYPE, APPLICATION_NORITO)
-                .body(body.clone())
-                .unwrap();
-            let error = super::decode_query_response(&response).unwrap_err();
-            assert!(matches!(
-                (status, error),
-                (
-                    StatusCode::NOT_FOUND,
-                    QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::NotFound
-                    ))
-                ) | (
-                    StatusCode::GONE,
-                    QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::Expired
-                    ))
-                )
-            ));
-            let json_body = json::to_vec(&ErrorEnvelope::new(
-                "query_validation_failed",
-                "missing or expired",
-            ))
-            .unwrap();
-            let response = http::Response::builder()
-                .status(status)
-                .header(CONTENT_TYPE, "application/json")
-                .body(json_body.clone())
-                .unwrap();
-            assert!(matches!(
-                (status, super::decode_query_response(&response)),
-                (
-                    StatusCode::NOT_FOUND,
-                    Err(QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::NotFound
-                    )))
-                ) | (
-                    StatusCode::GONE,
-                    Err(QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::Expired
-                    )))
-                )
-            ));
-            let mut noncanonical_json = json_body;
-            noncanonical_json.push(b' ');
-            let response = http::Response::builder()
-                .status(status)
-                .header(CONTENT_TYPE, "application/json")
-                .body(noncanonical_json)
-                .unwrap();
-            assert!(matches!(
-                super::decode_query_response(&response),
-                Err(QueryError::Other(_))
-            ));
-            let mut trailing = body.clone();
-            trailing.push(0);
-            for invalid in [
-                vec![],
-                b"<html>missing route</html>".to_vec(),
-                body[..body.len() - 1].to_vec(),
-                trailing,
-                norito::to_bytes(&ErrorEnvelope::new("route_unavailable", "missing route"))
-                    .unwrap(),
-            ] {
-                let response = http::Response::builder()
-                    .status(status)
-                    .header(CONTENT_TYPE, APPLICATION_NORITO)
-                    .body(invalid)
-                    .unwrap();
-                assert!(matches!(
-                    super::decode_query_response(&response),
-                    Err(QueryError::Other(_))
-                ));
-            }
-            for content_type in ["text/html", "application/json"] {
-                let response = http::Response::builder()
-                    .status(status)
-                    .header(CONTENT_TYPE, content_type)
-                    .body(body.clone())
-                    .unwrap();
-                assert!(matches!(
-                    super::decode_query_response(&response),
-                    Err(QueryError::Other(_))
-                ));
-            }
-        }
-    }
-    #[test]
-    fn garbled_not_found_is_a_protocol_failure() {
+    fn garbled_not_found_remains_a_protocol_error() {
         let resp = http::Response::builder()
             .status(StatusCode::NOT_FOUND)
+            .header(CONTENT_TYPE, APPLICATION_NORITO)
             .body(vec![0xff, 0x00, 0x01])
             .expect("response");
         let err = super::decode_query_response(&resp).expect_err("expected validation error");
         assert!(matches!(err, QueryError::Other(_)));
     }
     #[test]
-    fn garbled_gone_is_a_protocol_failure() {
+    fn garbled_gone_remains_a_protocol_error() {
         let resp = http::Response::builder()
             .status(StatusCode::GONE)
+            .header(CONTENT_TYPE, APPLICATION_NORITO)
             .body(b"query_validation_failed: The stored cursor has expired".to_vec())
             .expect("response");
         let err = super::decode_query_response(&resp).expect_err("expected validation error");
@@ -862,7 +753,7 @@ mod query_errors_handling {
     use iroha_service_model::soranet::RolloutPhase;
     use iroha_test_samples::gen_account_in;
     use iroha_version::codec::DecodeVersioned as _;
-    use norito::codec::{Decode, Encode};
+    use norito::codec::Decode;
     use sorafs_manifest::alias_cache::AliasCachePolicy;
     use std::{
         collections::HashMap,
@@ -875,18 +766,145 @@ mod query_errors_handling {
     };
     use url::Url;
     #[test]
-    fn certain_errors() -> Result<()> {
-        let responses = vec![(StatusCode::UNPROCESSABLE_ENTITY, ValidationFail::TooComplex)];
-        for (status_code, err) in responses {
-            let body = norito::to_bytes(&err)?;
-            let resp = Response::builder().status(status_code).body(body)?;
-            match decode_query_response(&resp) {
-                Err(QueryError::Validation(actual)) => {
-                    // PartialEq isn't implemented, so asserting by encoded repr
-                    assert_eq!(actual.encode(), err.encode());
-                }
-                x => return Err(eyre!("Wrong output for {:?}: {:?}", (status_code, err), x)),
+    fn query_error_envelope_preserves_missing_asset_diagnostic() -> Result<()> {
+        use iroha_data_model::{
+            asset::{AssetDefinitionId, AssetId},
+            query::error::FindError,
+        };
+        use iroha_model_base::domain::DomainId;
+        let asset = AssetId::new(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal")?,
+                "xor".parse()?,
+            ),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let fail = QueryExecutionFail::Find(FindError::Asset(Box::new(asset)));
+        let envelope = ErrorEnvelope::new("query_validation_failed", fail.to_string());
+        for (media_type, body) in [
+            (APPLICATION_NORITO, norito::to_bytes(&envelope)?),
+            ("application/json", json::to_vec(&envelope)?),
+        ] {
+            let response = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(CONTENT_TYPE, media_type)
+                .body(body)?;
+            let error = decode_singular_query_response(&response).expect_err("asset is missing");
+            assert!(matches!(error, QueryError::Other(_)));
+            let message = error.to_string();
+            assert!(message.contains("404") && message.contains(envelope.code()));
+            assert!(message.contains(envelope.message()));
+            assert!(!message.contains("live query store"));
+        }
+        Ok(())
+    }
+    #[test]
+    fn query_error_envelope_decodes_exact_asset_absence() -> Result<()> {
+        use iroha_data_model::{asset::AssetId, query::error::FindError};
+        use iroha_torii_shared::ErrorDetails;
+
+        let id = AssetId::new(
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse()?,
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let envelope = ErrorEnvelope::new("query_asset_not_found", "asset is missing")
+            .with_details(ErrorDetails {
+                query_asset_not_found: Some(id.clone()),
+                ..ErrorDetails::default()
+            });
+        for (media_type, body) in [
+            (APPLICATION_NORITO, norito::to_bytes(&envelope)?),
+            ("application/json", json::to_vec(&envelope)?),
+        ] {
+            let response = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(CONTENT_TYPE, media_type)
+                .body(body)?;
+            let error = decode_query_response(&response).expect_err("exact asset is absent");
+            assert!(matches!(
+                error,
+                QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                    FindError::Asset(missing),
+                ))) if missing.as_ref() == &id
+            ));
+        }
+        Ok(())
+    }
+    #[test]
+    fn query_error_envelope_rejects_unbound_asset_absence() -> Result<()> {
+        use iroha_data_model::asset::AssetId;
+        use iroha_torii_shared::ErrorDetails;
+
+        let id = AssetId::new(
+            "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse()?,
+            iroha_test_samples::ALICE_ID.clone(),
+        );
+        let details = ErrorDetails {
+            query_asset_not_found: Some(id),
+            ..ErrorDetails::default()
+        };
+        for (status, envelope) in [
+            (
+                StatusCode::NOT_FOUND,
+                ErrorEnvelope::new("query_asset_not_found", "missing typed details"),
+            ),
+            (
+                StatusCode::NOT_FOUND,
+                ErrorEnvelope::new("query_asset_not_found", "missing typed identity")
+                    .with_details(ErrorDetails::default()),
+            ),
+            (
+                StatusCode::NOT_FOUND,
+                ErrorEnvelope::new("query_validation_failed", "asset is missing")
+                    .with_details(details.clone()),
+            ),
+            (
+                StatusCode::GONE,
+                ErrorEnvelope::new("query_asset_not_found", "asset is missing")
+                    .with_details(details.clone()),
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                ErrorEnvelope::new("query_asset_not_found", "asset is missing")
+                    .with_details(details.clone()),
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorEnvelope::new("query_asset_not_found", "asset is missing")
+                    .with_details(details),
+            ),
+        ] {
+            for (media_type, body) in [
+                (APPLICATION_NORITO, norito::to_bytes(&envelope)?),
+                ("application/json", json::to_vec(&envelope)?),
+            ] {
+                let response = Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, media_type)
+                    .body(body)?;
+                assert!(matches!(
+                    decode_query_response(&response),
+                    Err(QueryError::Other(_))
+                ));
             }
+        }
+        for value in [
+            json::Value::Null,
+            norito::json!(42),
+            norito::json!("invalid-asset-id"),
+        ] {
+            let response = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(CONTENT_TYPE, "application/json")
+                .body(json::to_vec(&norito::json!({
+                    "code": "query_asset_not_found",
+                    "message": "asset is missing",
+                    "details": { "query_asset_not_found": value },
+                }))?)?;
+            assert!(matches!(
+                decode_query_response(&response),
+                Err(QueryError::Other(_))
+            ));
         }
         Ok(())
     }
@@ -1073,34 +1091,110 @@ mod query_errors_handling {
         }
     }
     #[test]
-    fn validation_fail_with_json_content_type_is_parsed() -> Result<()> {
-        let body = norito::to_bytes(&ValidationFail::TooComplex)?;
-        let response = Response::builder()
-            .status(HttpStatusCode::UNPROCESSABLE_ENTITY)
-            .header("content-type", "application/json")
-            .body(body)?;
-        match decode_query_response(&response) {
-            Err(QueryError::Validation(v)) => {
-                assert_eq!(v.encode(), ValidationFail::TooComplex.encode());
-                Ok(())
-            }
-            other => Err(eyre!("expected Validation error, got {other:?}")),
+    fn query_error_envelope_rejects_wrong_media_and_noncanonical_bytes() -> Result<()> {
+        let envelope = ErrorEnvelope::new("query_validation_failed", "missing fixture entity");
+        let canonical = norito::to_bytes(&envelope)?;
+        let mut trailing = canonical.clone();
+        trailing.push(0);
+        for (media_type, body) in [
+            ("application/json", canonical.clone()),
+            (APPLICATION_NORITO, json::to_vec(&envelope)?),
+            (
+                APPLICATION_NORITO,
+                norito::to_bytes(&ValidationFail::TooComplex)?,
+            ),
+            (APPLICATION_NORITO, trailing),
+            ("text/plain", b"upstream-private-body-marker".to_vec()),
+            (
+                "application/json",
+                br#"{"code":"query_validation_failed","message":"fixture","unknown":true}"#
+                    .to_vec(),
+            ),
+            (
+                "application/json",
+                br#"{"code":"query_validation_failed","code":"replacement","message":"fixture"}"#
+                    .to_vec(),
+            ),
+            (
+                "application/json",
+                br#"{"code":"query_validation_failed","message":"fixture","message":"replacement"}"#
+                    .to_vec(),
+            ),
+            (APPLICATION_NORITO, Vec::new()),
+            (APPLICATION_NORITO, vec![0; 65_537]),
+        ] {
+            let response = Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(CONTENT_TYPE, media_type)
+                .body(body)?;
+            let error = decode_query_response(&response).expect_err("invalid envelope");
+            assert!(matches!(error, QueryError::Other(_)));
+            let message = error.to_string();
+            assert!(message.starts_with("query HTTP 404 Not Found failure "));
+            assert!(!message.contains("query failed;"));
+            assert!(!message.contains("live query store"));
+            assert!(!message.contains("upstream-private-body-marker"));
         }
+        for duplicate in [false, true] {
+            let mut response = Response::builder().status(StatusCode::GONE);
+            if duplicate {
+                response = response
+                    .header(CONTENT_TYPE, APPLICATION_NORITO)
+                    .header(CONTENT_TYPE, APPLICATION_NORITO);
+            }
+            let error = decode_query_response(&response.body(canonical.clone())?)
+                .expect_err("missing or duplicate media type");
+            assert!(matches!(error, QueryError::Other(_)));
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("query HTTP 410 Gone failure ")
+            );
+            assert!(!error.to_string().contains("expired"));
+        }
+        Ok(())
     }
     #[test]
-    fn validation_fail_with_norito_header_is_parsed() -> Result<()> {
-        let body = norito::to_bytes(&ValidationFail::TooComplex)?;
-        let response = Response::builder()
-            .status(HttpStatusCode::UNPROCESSABLE_ENTITY)
-            .header("content-type", APPLICATION_NORITO)
-            .body(body)?;
-        match decode_query_response(&response) {
-            Err(QueryError::Validation(v)) => {
-                assert_eq!(v.encode(), ValidationFail::TooComplex.encode());
-                Ok(())
-            }
-            other => Err(eyre!("expected Validation error, got {other:?}")),
+    fn query_error_envelope_preserves_service_failure_without_cursor_inference() -> Result<()> {
+        for (status, code, message) in [
+            (
+                StatusCode::NOT_FOUND,
+                "route_not_found",
+                "route unavailable",
+            ),
+            (
+                StatusCode::GONE,
+                "query_validation_failed",
+                "cursor lease expired",
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                "query_validation_failed",
+                "permission denied",
+            ),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                "query_validation_failed",
+                "query capacity reached",
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_server_error",
+                "Torii could not complete the request.",
+            ),
+        ] {
+            let envelope = ErrorEnvelope::new(code, message);
+            let response = Response::builder()
+                .status(status)
+                .header(CONTENT_TYPE, APPLICATION_NORITO)
+                .body(norito::to_bytes(&envelope)?)?;
+            let error = decode_query_response(&response).expect_err("server failure");
+            assert!(matches!(error, QueryError::Other(_)));
+            let rendered = error.to_string();
+            assert!(rendered.contains(status.as_str()));
+            assert!(rendered.contains(code) && rendered.contains(message));
         }
+        Ok(())
     }
     #[test]
     fn query_request_head_sets_accept_header() {

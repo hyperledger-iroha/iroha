@@ -2,8 +2,8 @@
   "schema": "iroha.taira.privacy_rollout_plan.v1",
   "schema_version": 1,
   "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
-  "cargo_lock_sha256": "0b0b667130e0a0538b256eeea0227f30c5d37096b45074b12c03dba1c5411bf7",
-  "protocol_matrix_sha256": "5e6f7f5468f6834b5c9d0b1993a53a0c618a2aa12697b7703e853ba80071b386",
+  "cargo_lock_sha256": "82ccdcfe757e3edffce7076dae9b025c9499af270c5477d8f2572a25d0052eb3",
+  "protocol_matrix_sha256": "31e6f8246a0014c9ccacd523449f4812c93dd04231b16ceacac75ba6f97dfff7",
   "wire_contract": {
     "catalog_size": 12,
     "catalog_commitment_le_hex": "e037f13904a0307c00db15d85cfb406bd79772d20144a949def0f3fda78e342e747f65787cbfbffac94f11c369e2bbff",
@@ -17,17 +17,15 @@
     "caller_asserted_readiness_forbidden": true
   },
   "activation_contract": {
-    "mode": "governance",
+    "mode": "explicit-register-then-activate",
+    "execution_height": 1,
     "proposed_lifecycle": "Proposed",
     "active_lifecycle": "Active",
-    "one_committed_transaction_per_protocol": true
+    "ordered_instruction_count": 24,
+    "protocol_count": 12,
+    "one_governed_instruction_batch": true
   },
   "canary_contract": {
-    "per_wave": [
-      "positive",
-      "negative",
-      "replay"
-    ],
     "positive_query_scope": [
       "public-torii",
       "taira-validator-1",
@@ -43,7 +41,12 @@
       "taira-validator-4"
     ],
     "malformed_failure_code": "privacy-malformed-proof",
-    "replay_failure_code": "privacy-replay"
+    "replay_failure_code": "privacy-replay",
+    "per_protocol": [
+      "positive",
+      "negative",
+      "replay"
+    ]
   },
   "endpoints": [
     "public-torii",
@@ -60,10 +63,6 @@
     "restart-convergence-failed",
     "receipt-or-release-binding-mismatch"
   ],
-  "intervals": {
-    "notice_blocks": 300,
-    "observation_blocks": 300
-  },
   "post_cutover_contract": {
     "mode": "signed-write-and-privacy",
     "authority_scope": "dedicated-no-governance-canary",
@@ -148,7 +147,6 @@
     "zk_ams_evaluated_key_bytes": 48452611616
   },
   "restart_contract": {
-    "one_validator_per_wave": true,
     "exact_sentinel_height_and_hash": true,
     "successor_finality_required": true,
     "peer_finality_scope": [
@@ -157,48 +155,16 @@
       "taira-validator-2",
       "taira-validator-3",
       "taira-validator-4"
+    ],
+    "sequential_validators": [
+      "taira-validator-1",
+      "taira-validator-2",
+      "taira-validator-3",
+      "taira-validator-4"
     ]
   },
   "rollback_contract": {
-    "armed_before_first_wave": true,
-    "restore_mode": "immutable-release-and-capability-set"
-  },
-  "waves": [
-    {
-      "index": 1,
-      "label": "wave-1",
-      "protocols": [
-        "zk-ace-pq-authorization-v1",
-        "anonymous-pgc-k-out-of-n-v1",
-        "verange-transparent-range-v1",
-        "iroha-bootle-lantern-anoncred-v1"
-      ]
-    },
-    {
-      "index": 2,
-      "label": "wave-2",
-      "protocols": [
-        "orchard-halo2-actions-v1",
-        "monero-fcmp-plus-plus-v1",
-        "iroha-ivm-private-note-stark-v1",
-        "pq-masp-stark-v1"
-      ]
-    },
-    {
-      "index": 3,
-      "label": "wave-3",
-      "protocols": [
-        "vega-existing-credential-zk-v1",
-        "iroha-jindo-polynomial-commitment-v1"
-      ]
-    },
-    {
-      "index": 4,
-      "label": "wave-4",
-      "protocols": [
-        "iroha-zk-x509-stark-p256-v1",
-        "iroha-zk-ams-v1"
-      ]
-    }
-  ]
+    "restore_mode": "immutable-release-and-capability-set",
+    "armed_before_activation": true
+  }
 }

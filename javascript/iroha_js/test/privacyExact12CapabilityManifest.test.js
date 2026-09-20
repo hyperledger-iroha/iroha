@@ -105,18 +105,18 @@ const OPERATION_TUPLES = Object.freeze([
   ["pq_masp_note_action_v1", "note_action", 31],
 ]);
 const BINDING_TUPLES = Object.freeze([
-  ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   ["anonymous-pgc-p256", "native-anonymous-pgc-p256"],
   ["iroha-verange-p256", "native-verange-p256"],
   ["zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512", "native-zk-ams-masked-relaxed-spartan-t256-ristretto255"],
   ["vega-neutron-nova-spartan-hyrax-t256", "native-vega"],
-  ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   ["jindo-polynomial-commitment", "native-jindo"],
   ["lantern-lnp22-module-linear-norm", "native-lantern-lnp22"],
   ["halo2-ipa-pasta", "native-halo2-orchard"],
   ["fcmp-plus-plus-curve-tree-bulletproofs", "native-fcmp-plus-plus"],
-  ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
-  ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
+  ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
 ]);
 
 function tagged(protocol) {
@@ -565,7 +565,7 @@ test("unavailable readiness preserves exact registration and lifecycle reasons",
       "proposed",
       {
         state: "proposed",
-        record: { proposed_at_height: 1, activate_at_height: 43 },
+        record: { proposed_at_height: 1 },
       },
     ],
     [
@@ -606,6 +606,123 @@ test("unavailable readiness preserves exact registration and lifecycle reasons",
     await withNative(fakeNative(payload), () => {
       const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
       assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
+    });
+  }
+});
+
+test("pending tightening accepts next block and rejects invalid snapshot heights", async () => {
+  for (const kind of ["consensus", "protocol"]) {
+    for (const [scheduled, effective, committed, accepted] of [
+      [42, 43, 42, true],
+      [42, 44, 42, true],
+      ["18446744073709551614", "18446744073709551615", "18446744073709551614", true],
+      [0, 43, 42, false],
+      [42, 42, 42, false],
+      [42, 41, 42, false],
+      [43, 44, 42, false],
+      [42, 43, 43, false],
+      ["18446744073709551615", "18446744073709551615", "18446744073709551615", false],
+      ["18446744073709551615", "18446744073709551616", "18446744073709551615", false],
+    ]) {
+      const payload = manifestPayload();
+      payload.committed_height = committed;
+      const pending = { scheduled_at_height: scheduled, effective_at_height: effective };
+      if (kind === "consensus") {
+        pending.next_limits = { ...payload.consensus_policy.current_limits, retained_root_count: 1024 };
+        payload.consensus_policy.pending_tightening = pending;
+      } else {
+        const row = payload.protocols[1];
+        pending.next_limits = {
+          protocol: ACTIVE_PROTOCOL,
+          limits: { max_anonymity_set_size: 32, max_recipient_count: 8 },
+        };
+        row.activation.pending_protocol_limits_tightening = pending;
+      }
+      // Native JSON carries uint64 values as integer tokens, never quoted strings.
+      const native = fakeNative(payload, {
+        privacyExact12CapabilityManifestJsonV1: () =>
+          JSON.stringify(payload).replace(
+            /"(committed_height|scheduled_at_height|effective_at_height)":"([0-9]+)"/gu,
+            '"$1":$2',
+          ),
+      });
+      await withNative(native, () => {
+        if (accepted) {
+          const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+          const actual = kind === "consensus"
+            ? manifest.consensus_policy.pending_tightening
+            : manifest.protocols[1].activation.pending_protocol_limits_tightening;
+          assert.equal(actual.effective_at_height, BigInt(effective));
+          assert.throws(() => requirePrivacyExact12CapabilityAdmissionV1(manifest, ACTIVE_PROTOCOL));
+        } else {
+          assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+        }
+      });
+    }
+  }
+});
+
+test("proposed remains pending at later heights until explicit activation", async () => {
+  for (const committedHeight of [1, 42, 4_000]) {
+    const payload = manifestPayload();
+    payload.committed_height = committedHeight;
+    const row = payload.protocols[1];
+    row.activation.lifecycle = { state: "proposed", record: { proposed_at_height: 1 } };
+    row.readiness = { readiness: "unavailable", detail: { reason: "proposed", detail: null } };
+    await withNative(fakeNative(payload), () => {
+      const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+      assert.deepEqual(manifest.protocols[1].activation.lifecycle.record, { proposed_at_height: 1n });
+      assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
+    });
+    row.readiness = { readiness: "unavailable", detail: { reason: "missing-production-qualification", detail: null } };
+    await withNative(fakeNative(payload), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /Exact12 capability manifest/u);
+    });
+  }
+});
+
+test("same-height activation preserves history and qualification requirements", async () => {
+  for (const [state, since, reason] of [
+    ["active", 1, "missing-production-qualification"],
+    ["suspended", 2, "suspended"],
+    ["retired", 2, "retired"],
+  ]) {
+    const payload = manifestPayload();
+    const row = payload.protocols[1];
+    row.activation.lifecycle = {
+      state,
+      record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: since },
+    };
+    row.readiness = { readiness: "unavailable", detail: { reason, detail: null } };
+    await withNative(fakeNative(payload), () => {
+      const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
+      assert.equal(manifest.protocols[1].activation.lifecycle.record.activated_at_height, 1n);
+      assert.deepEqual(manifest.protocols[1].readiness, row.readiness);
+    });
+  }
+});
+
+test("explicit activation rejects scheduled fields and reversed or future history", async () => {
+  const cases = [
+    { state: "proposed", record: { proposed_at_height: 1, activate_at_height: 43 } },
+    { state: "proposed", record: {} },
+    { state: "proposed", record: { proposed_at_height: 0 } },
+    { state: "proposed", record: { proposed_at_height: 43 } },
+    { state: "active", record: { proposed_at_height: 2, activated_at_height: 1, state_since_height: 2 } },
+    { state: "active", record: { proposed_at_height: 1, activated_at_height: 2, state_since_height: 1 } },
+    { state: "active", record: { proposed_at_height: 1, activated_at_height: 43, state_since_height: 43 } },
+    { state: "suspended", record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: 1 } },
+    { state: "retired", record: { proposed_at_height: 1, activated_at_height: 1, state_since_height: 1 } },
+    { state: "retired", record: { proposed_at_height: 1, activated_at_height: null, state_since_height: 1 } },
+  ];
+  for (const lifecycle of cases) {
+    const payload = manifestPayload();
+    const row = payload.protocols[1];
+    row.activation.lifecycle = lifecycle;
+    const reason = lifecycle.state === "active" ? "missing-production-qualification" : lifecycle.state;
+    row.readiness = { readiness: "unavailable", detail: { reason, detail: null } };
+    await withNative(fakeNative(payload), () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), /Exact12 capability manifest/u);
     });
   }
 });
@@ -812,4 +929,18 @@ test("Exact12 transport ignores mutable client and static normalization override
       ToriiClient._normalizePrivateKey = originalKey;
     }
   });
+});
+
+
+test("privacy STARK capability bindings reject a different outer suite", async () => {
+  for (const [key, field, label] of [
+    ["proof_system_id", "proof_system", "stark-fri-poseidon-x7-goldilocks-6x64-v1"],
+    ["engine_id", "engine", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  ]) {
+    const payload = qualifiedManifestPayload();
+    payload.qualification.release_manifest.protocols[0][key][field] = label;
+    await withNative(fakeNative(payload), async () => {
+      assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
+    });
+  }
 });

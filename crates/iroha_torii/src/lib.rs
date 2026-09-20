@@ -1586,6 +1586,11 @@ struct LiveResolvedAccountAlias {
 }
 fn live_dataspace_resolution_error(error: iroha_core::sns::SnsError) -> Error {
     match error {
+        error @ iroha_core::sns::SnsError::RegistrationNotFound { .. } => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(error.to_string()),
+            ))
+        }
         iroha_core::sns::SnsError::Conflict(message) => Error::AppConflict {
             code: iroha_core::sns::ALIAS_CATALOG_MAPPING_CONFLICT_CODE,
             message,
@@ -5966,6 +5971,20 @@ fn sanitize_fee_error_details(details: &mut FeeErrorDetails) -> bool {
     true
 }
 fn sanitize_error_details(details: &mut ErrorDetails) {
+    if details
+        .sns_registration_not_found
+        .as_ref()
+        .is_some_and(|absence| {
+            !matches!(
+                absence.suffix_id,
+                iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID
+                    | iroha_data_model::sns::DOMAIN_NAME_SUFFIX_ID
+                    | iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID
+            ) || !utils::is_valid_error_detail_text(&absence.label)
+        })
+    {
+        details.sns_registration_not_found = None;
+    }
     retain_valid_error_detail(&mut details.layer);
     if details
         .reject_code
@@ -6074,6 +6093,14 @@ fn canonical_error_response(
         }
     }
     if let Some(details) = envelope.details.as_mut() {
+        if parts.status != StatusCode::NOT_FOUND
+            || envelope.code != iroha_torii_shared::sns::SNS_REGISTRATION_NOT_FOUND_CODE
+        {
+            details.sns_registration_not_found = None;
+        }
+        if parts.status != StatusCode::NOT_FOUND || envelope.code != "query_asset_not_found" {
+            details.query_asset_not_found = None;
+        }
         sanitize_error_details(details);
     }
     if envelope
@@ -9044,7 +9071,7 @@ async fn handler_account_permissions(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    AxQuery(p): AxQuery<crate::filter::Pagination>,
+    AxQuery(p): AxQuery<routing::PaginationParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let rate_limit_bypassed =
@@ -10113,7 +10140,13 @@ async fn handler_accounts_faucet_policy(
             message: "Faucet policy discovery accepts no query parameters or body.".to_owned(),
         });
     }
-    check_access(&app, &headers, Some(remote.ip()), "v1/accounts/faucet/policy").await?;
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/accounts/faucet/policy",
+    )
+    .await?;
     routing::handle_v1_accounts_faucet_policy(app).await
 }
 
@@ -21861,7 +21894,7 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
     // materialized; each local route decodes exactly one D-bounded request.
     drop(verified_query);
     let mut first_output: Option<iroha_data_model::query::SingularQueryOutputBox> = None;
-    let mut skipped = SkippedRoutedQueryErrors::default();
+    let mut skipped = SingularRoutedQueryErrors::default();
     let mut diagnostics = ToriiFanoutDiagnostics::default();
     for route in routes {
         diagnostics.record_attempt();
@@ -21877,14 +21910,19 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
         } else {
             None
         };
-        let outcome = execute_torii_signed_query_route_scan_for_route(
-            app,
-            Arc::clone(&query_bytes),
-            request,
-            route,
-            envelope,
-            fanout_reservation.clone(),
-            proxy_memory.clone(),
+        // Local route failures use the same canonical Norito corridor as proxied route scans,
+        // independently of the public response format selected by the caller.
+        let outcome = utils::with_current_response_format(
+            ResponseFormat::Norito,
+            execute_torii_signed_query_route_scan_for_route(
+                app,
+                Arc::clone(&query_bytes),
+                request,
+                route,
+                envelope,
+                fanout_reservation.clone(),
+                proxy_memory.clone(),
+            ),
         )
         .await;
         match outcome {
@@ -21906,7 +21944,17 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
             }
             Err(response) if should_skip_singleton_routed_query_route_error(&response) => {
                 diagnostics.record_skipped_response(&response);
-                skipped.record_and_drop(response);
+                if let Err(response) = skipped
+                    .record_and_drop(
+                        response,
+                        &verified_request_frame,
+                        envelope,
+                        app.signed_query_admission.body_read_timeout(),
+                    )
+                    .await
+                {
+                    return with_torii_fanout_headers(response, diagnostics);
+                }
             }
             Err(response) => {
                 diagnostics.record_skipped_response(&response);
@@ -21915,7 +21963,10 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
         }
     }
     let Some(first_output) = first_output else {
-        return with_torii_fanout_headers(skipped.into_response(), diagnostics);
+        return with_torii_fanout_headers(
+            skipped.into_response(&verified_request_frame, envelope, format),
+            diagnostics,
+        );
     };
     drop(verified_request_frame);
     drop(query_bytes);
@@ -22664,7 +22715,12 @@ fn should_retry_generic_torii_proxy_snapshot(snapshot: &ToriiProxyHttpResponseV1
     if should_retry_torii_proxy_status(status) {
         return true;
     }
-    if status != StatusCode::TOO_MANY_REQUESTS {
+    torii_proxy_has_exact_capacity_rejection(snapshot)
+}
+/// Exact candidate-local memory pressure, shared by ordinary and strict admission retries.
+#[cfg(feature = "connect")]
+fn torii_proxy_has_exact_capacity_rejection(snapshot: &ToriiProxyHttpResponseV1) -> bool {
+    if snapshot.status_code != StatusCode::TOO_MANY_REQUESTS.as_u16() {
         return false;
     }
 
@@ -23032,17 +23088,31 @@ fn validate_queue_plan_synced_acceptance(
     )?;
     Ok(validated.certificate.attestations)
 }
-/// A retry hint only: this never proves non-admission or contributes an attestation.
+/// Bounded authority-local retry hints; neither proves non-admission or adds an attestation.
 #[cfg(feature = "connect")]
-fn queue_plan_synced_authority_needs_catch_up(snapshot: &ToriiProxyHttpResponseV1) -> bool {
-    snapshot.status_code == StatusCode::SERVICE_UNAVAILABLE.as_u16()
-        && validate_queue_plan_synced_snapshot_bounds(snapshot).is_ok()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuePlanSyncedAuthorityRetryReason {
+    /// The exact immutable context is ahead of this authority.
+    ContextCatchUp,
+    /// This authority could not reserve its bounded proxy working set.
+    ProxyCapacity,
+}
+#[cfg(feature = "connect")]
+fn queue_plan_synced_authority_retry_reason(
+    snapshot: &ToriiProxyHttpResponseV1,
+) -> Option<QueuePlanSyncedAuthorityRetryReason> {
+    validate_queue_plan_synced_snapshot_bounds(snapshot).ok()?;
+    if torii_proxy_has_exact_capacity_rejection(snapshot) {
+        return Some(QueuePlanSyncedAuthorityRetryReason::ProxyCapacity);
+    }
+    (snapshot.status_code == StatusCode::SERVICE_UNAVAILABLE.as_u16()
         && validate_queue_plan_synced_response_header(
             snapshot,
             "x-iroha-reject-code",
             Some("queue_plan_admission_context_future"),
         )
-        .is_ok()
+        .is_ok())
+    .then_some(QueuePlanSyncedAuthorityRetryReason::ContextCatchUp)
 }
 #[cfg(feature = "connect")]
 fn merge_queue_plan_synced_attestations(
@@ -24339,7 +24409,35 @@ where
             };
             match outcome {
                 Ok(mut snapshot) => {
-                    retry_authority |= queue_plan_synced_authority_needs_catch_up(&snapshot);
+                    let retry_reason = queue_plan_synced_authority_retry_reason(&snapshot);
+                    retry_authority |= retry_reason.is_some();
+                    if !StatusCode::from_u16(snapshot.status_code)
+                        .is_ok_and(|status| status.is_success())
+                    {
+                        // Public routing/status metadata only. Never record request bodies,
+                        // statements, credentials, signatures or returned error payloads.
+                        iroha_logger::debug!(
+                            target: "iroha_torii::queue_plan_admission",
+                            request_id = %request_id,
+                            entrypoint_hash = ?queue_plan_synced_expectation
+                                .as_ref()
+                                .map(|expected| &expected.entrypoint_hash),
+                            signed_transaction_hash = ?queue_plan_synced_expectation
+                                .as_ref()
+                                .and_then(|expected| expected.signed_transaction_hash.as_ref()),
+                            peer_id = %peer_id.peer_id(),
+                            transport = peer_id.transport_label(),
+                            candidate_index,
+                            status_code = snapshot.status_code,
+                            ?retry_reason,
+                            attempt_budget_ms = attempt_budget.as_millis() as u64,
+                            remaining_deadline_ms = execution_deadline
+                                .saturating_duration_since(tokio::time::Instant::now())
+                                .as_millis() as u64,
+                            durable_authority_count = durable_attestations.len(),
+                            "strict QueuePlan authority attempt returned a rejection"
+                        );
+                    }
                     if let Some(expected) = queue_plan_synced_expectation.as_ref() {
                         match validate_queue_plan_synced_acceptance(&snapshot, expected) {
                             Ok(receipts) => {
@@ -24415,6 +24513,24 @@ where
                                             continue;
                                         }
                                     };
+                                    // The distinct durable certificate is encoded. This does
+                                    // not establish response delivery or transaction application.
+                                    iroha_logger::debug!(
+                                        target: "iroha_torii::queue_plan_admission",
+                                        request_id = %request_id,
+                                        entrypoint_hash = %expected.entrypoint_hash,
+                                        signed_transaction_hash = ?expected.signed_transaction_hash,
+                                        peer_id = %peer_id.peer_id(),
+                                        transport = peer_id.transport_label(),
+                                        candidate_index,
+                                        durable_authority_count = durable_attestations.len(),
+                                        durability_threshold = expected.durability_threshold,
+                                        certificate_authority_count = certificate.attestations.len(),
+                                        remaining_deadline_ms = execution_deadline
+                                            .saturating_duration_since(tokio::time::Instant::now())
+                                            .as_millis() as u64,
+                                        "strict QueuePlan durable admission certificate ready"
+                                    );
                                     snapshot.status_code = StatusCode::ACCEPTED.as_u16();
                                     snapshot.headers =
                                         canonical_queue_plan_synced_certificate_headers(expected);
@@ -24489,7 +24605,7 @@ where
         if !retry_authority {
             break;
         }
-        // Retry an explicit catch-up hint or timed-out attempt without renewing
+        // Retry exact catch-up/capacity hints or timed-out attempts without renewing
         // the signed request, binding, identity, or absolute deadline. The next
         // round skips already-attested authorities and gives slow peers more time.
         let retry_at = tokio::time::Instant::now() + retry_delay;
@@ -29355,6 +29471,9 @@ fn resolve_active_soradns_gateway_host(
         now_ms,
     )
     .map_err(|error| match error {
+        error @ iroha_core::sns::SnsError::RegistrationNotFound { .. } => {
+            soradns_public_gateway_error(StatusCode::NOT_FOUND, error.to_string())
+        }
         iroha_core::sns::SnsError::BadRequest(message) => {
             soradns_public_gateway_error(StatusCode::BAD_REQUEST, message)
         }
@@ -45181,8 +45300,7 @@ impl Torii {
         );
         builder.route(
             &routes::BUNDLE_RECEIPT,
-            catalog_get(private_settlement::handler_bundle_receipt)
-                .layer(axum::Extension(self.private_settlement_runtime.clone())),
+            catalog_get(private_settlement::handler_bundle_receipt),
         );
         #[cfg(feature = "test-network-private-settlement-route-control")]
         builder.route(
@@ -48180,7 +48298,6 @@ impl Torii {
         let route_index = mounted_manifest.route_index();
         let mut router = router
             .fallback(handler_route_not_found_or_sorafs_site)
-            .method_not_allowed_fallback(handler_method_not_allowed)
             .layer(axum::middleware::from_fn(enforce_route_timeout));
         #[cfg(feature = "app_api")]
         {
@@ -50083,6 +50200,19 @@ fn public_validation_fail_envelope(
             "Torii could not complete the request.",
         );
     }
+    if status == StatusCode::NOT_FOUND
+        && let iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Find(
+                iroha_data_model::query::error::FindError::Asset(asset_id),
+            ),
+        ) = fail
+    {
+        return ErrorEnvelope::new("query_asset_not_found", validation_fail_message(fail))
+            .with_details(ErrorDetails {
+                query_asset_not_found: Some(asset_id.as_ref().clone()),
+                ..Default::default()
+            });
+    }
     ErrorEnvelope::new("query_validation_failed", validation_fail_message(fail))
 }
 impl IntoResponse for Error {
@@ -50104,10 +50234,9 @@ impl IntoResponse for Error {
                     iroha_data_model::ValidationFail::AxtReject(ctx) => Some(ctx.clone()),
                     _ => None,
                 };
-                let mut details = ErrorDetails {
-                    reject_code: kagemusha_reason.clone(),
-                    ..Default::default()
-                };
+                let mut envelope = public_validation_fail_envelope(&err, status);
+                let mut details = envelope.details.take().unwrap_or_default();
+                details.reject_code = kagemusha_reason.clone();
                 details.axt = axt.as_ref().map(|ctx| AxtErrorDetails {
                     code: Some(ctx.reason.code().to_owned()),
                     reason: Some(ctx.reason.label().to_owned()),
@@ -50117,7 +50246,6 @@ impl IntoResponse for Error {
                     active_handle_era: ctx.active_handle_era,
                     next_handle_counter: ctx.next_handle_counter,
                 });
-                let mut envelope = public_validation_fail_envelope(&err, status);
                 if !details.is_empty() {
                     envelope = envelope.with_details(details);
                 }

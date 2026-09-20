@@ -2,10 +2,7 @@
 //! Smart contract query behaviour checks.
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
-use iroha::{
-    client::QueryError,
-    data_model::{prelude::*, query::error::QueryExecutionFail},
-};
+use iroha::{client::QueryError, data_model::prelude::*};
 use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -36,7 +33,8 @@ fn smart_contract_query_scenarios() -> Result<()> {
     let client = network.client();
     let torii = client.client().endpoint().clone();
     let env_dir = network.env_dir().to_path_buf();
-    // live_query_is_dropped_after_smart_contract_end
+    // The contract writes a synthetic cursor that has no server-owned stored query.
+    // Continuing it must fail before executor validation or cursor advancement.
     {
         let bytecode = load_sample_ivm("query_assets_and_save_cursor");
         let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
@@ -65,21 +63,13 @@ fn smart_contract_query_scenarios() -> Result<()> {
         let err = client
             .client()
             .raw_continue_iterable_query(asset_cursor)
-            .expect_err("Request with cursor from smart contract should fail");
-        // Continuation must fail; the exact error depends on cursor mode/config.
-        let allowed = matches!(
-            &err,
-            QueryError::Validation(ValidationFail::NotPermitted(_))
-                | QueryError::Validation(ValidationFail::QueryFailed(
-                    QueryExecutionFail::Expired
-                        | QueryExecutionFail::NotFound
-                        | QueryExecutionFail::CursorMismatch
-                        | QueryExecutionFail::CursorDone
-                ))
-        ) || err
-            .to_string()
-            .contains("cursor continuation requires stored cursor mode");
-        assert!(allowed, "unexpected query error: {err:?}");
+            .expect_err("a contract-supplied synthetic cursor must not resume a stored query");
+        assert!(matches!(err, QueryError::Other(_)));
+        assert!(
+            err.to_string()
+                .starts_with("query failed; HTTP 410 Gone; query_validation_failed: "),
+            "expected the decoded Torii envelope for a contract-supplied cursor absent from the store: {err:?}"
+        );
     }
     // smart_contract_can_filter_queries
     {

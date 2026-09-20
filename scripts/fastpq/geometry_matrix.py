@@ -4,8 +4,9 @@ Summarise FASTPQ Metal geometry sweep outputs into stability artefacts.
 
 The geometry sweep helper (`launch_geometry_sweep.py`) writes a `summary.json`
 bundle alongside the raw benchmark artefacts. This script ingests that summary,
-labels every run as either *stable* (GPU timings captured for FFT/LDE and both six-lane operations)
-or *unstable* (missing timings, timeouts, or other failures), and emits both a
+labels every run as either *stable* (a complete canonical all-operation report
+with GPU timings for FFT/LDE and both six-lane operations) or *unstable* (focused
+scope, invalid evidence, missing timings, timeouts, or other failures), and emits both a
 Markdown table and optional JSON matrices that CI dashboards can ingest. Use the
 host and environment summaries to understand which launch geometries stay
 stable, which hosts produce the artefacts, and which reasons prevent GPU runs
@@ -22,8 +23,12 @@ from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 try:
     from .digest384_evidence import validate_digest384_operation
+    from .benchmark_operations import CANONICAL_OPERATION_ORDER, reject_retired_fields, require_filter
+    from .report_projection import project_report
 except ImportError:  # Direct script invocation.
     from digest384_evidence import validate_digest384_operation
+    from benchmark_operations import CANONICAL_OPERATION_ORDER, reject_retired_fields, require_filter
+    from report_projection import project_report
 
 ENV_COLUMNS: Sequence[tuple[str, str]] = (
     ("FASTPQ_METAL_FFT_COLUMNS", "FFT"),
@@ -89,12 +94,44 @@ def _normalise_env_value(value: Any) -> str:
     return str(value)
 
 
+def project_summary(entry: Dict[str, Any]) -> dict:
+    """Revalidate a sweep's explicitly scoped operation map through the report owner."""
+    reject_retired_fields(entry)
+    operation_filter = require_filter(entry.get("operation_filter"))
+    if "operation" in entry and entry["operation"] != operation_filter:
+        raise ValueError("requested operation disagrees with retained operation_filter")
+    operations = entry.get("operations")
+    if not isinstance(operations, dict) or not operations:
+        raise ValueError("summary requires a nonempty operation map")
+    expected = CANONICAL_OPERATION_ORDER if operation_filter == "all" else (operation_filter,)
+    if set(operations) != set(expected):
+        raise ValueError("summary operation map disagrees with its exact operation_filter")
+    entries = []
+    for name in expected:
+        operation = operations[name]
+        if not isinstance(operation, dict):
+            raise ValueError(f"{name} operation must be an object")
+        if operation.get("operation") != name:
+            raise ValueError("operation map key disagrees with its embedded operation")
+        entries.append(operation)
+    # JSON object member order is not semantic. The map is projected in the
+    # single catalog order only after its complete exact key set is checked.
+    return project_report({**entry, "operations": entries}, flattened=True,
+                          producer_schema=entry.get("producer_schema"))
+
+
 def classify_entry(entry: Dict[str, Any]) -> tuple[str, List[str]]:
     """Return classification plus reasons (non-empty for unstable)."""
 
     # CPU fallback or missing accelerator should be treated as unstable so matrix
     # consumers can quickly spot hosts that never executed on the GPU.
     reasons = _accelerator_reasons(entry)
+    try:
+        project_summary(entry)
+    except ValueError as error:
+        reasons.append(f"invalid_report: {error}")
+    if entry.get("operation_filter") != "all":
+        reasons.append("focused_or_missing_operation_filter")
 
     status = entry.get("status")
     if status != "ok":
@@ -252,6 +289,10 @@ def build_matrix_entries(
         host = entry.get("host") if isinstance(entry.get("host"), dict) else None
         classification, reasons = _classification_from_entry(entry)
         warnings = _warnings_from_entry(entry)
+        try:
+            evidence = project_summary(entry)
+        except ValueError:
+            evidence = None
         row = {
             "env": {env_key: env.get(env_key, "—") for env_key, _ in ENV_COLUMNS},
             "status": entry.get("status", "unknown"),
@@ -273,7 +314,8 @@ def build_matrix_entries(
             "source": source,
             "execution_mode": entry.get("execution_mode"),
             "gpu_backend": entry.get("gpu_backend"),
-            "operation": entry.get("operation", "all"),
+            "operation": entry.get("operation_filter"),
+            "operation_evidence": evidence,
             "rows": entry.get("rows"),
             "iterations": entry.get("iterations"),
             "warmups": entry.get("warmups"),

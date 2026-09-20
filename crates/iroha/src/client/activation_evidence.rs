@@ -14,6 +14,53 @@ use iroha_data_model::{
 const BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 impl Client {
+    /// Fetch a canonical challenge-bound statement for an exact durable tip.
+    ///
+    /// Verifies the reporting node signature and request bindings. Callers must
+    /// independently anchor and verify both embedded finality proofs before
+    /// treating this statement as chain finality.
+    ///
+    /// # Errors
+    /// Rejects transport/codec failures, zero challenges, wrong node/network/height,
+    /// and inconsistent or invalid node signatures.
+    pub fn get_bridge_finality_attestation(
+        &self,
+        height: NonZeroU64,
+        challenge: [u8; 32],
+        expected_node: &iroha_model_base::peer::PeerId,
+    ) -> Result<iroha_data_model::bridge::BridgeFinalityAttestationV1> {
+        if challenge == [0; 32] {
+            return Err(eyre!("finality challenge must be nonzero"));
+        }
+        self.ensure_data_model_compatibility()?;
+        let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
+            .path()
+            .replace("{height}", &height.get().to_string());
+        let response = self.send_builder(
+            self.canonical_norito_get_request(&path, BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES)
+                .header("X-Iroha-Finality-Challenge", &hex::encode(challenge)),
+        )?;
+        let attestation: iroha_data_model::bridge::BridgeFinalityAttestationV1 =
+            Self::decode_canonical_norito_response(
+                &response,
+                BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES,
+                "Failed to get finality attestation",
+            )?;
+        attestation
+            .verify()
+            .map_err(|error| eyre!("invalid finality attestation: {error}"))?;
+        if attestation.body.challenge != challenge
+            || attestation.body.node_id != *expected_node
+            || attestation.body.network_id != self.network_id
+            || attestation.body.status.last_committed_height != height.get()
+        {
+            return Err(eyre!(
+                "finality attestation differs from exact request bindings"
+            ));
+        }
+        Ok(attestation)
+    }
+
     fn bounded_norito_response_body<'a>(
         response: &'a Response<Vec<u8>>,
         maximum: usize,
@@ -69,7 +116,9 @@ impl Client {
     fn canonical_norito_get_request(&self, path: &str, maximum: usize) -> DefaultRequestBuilder {
         let mut headers = self.headers.clone();
         headers.retain(|name, _| {
-            !name.eq_ignore_ascii_case("accept") && !name.eq_ignore_ascii_case("content-type")
+            !name.eq_ignore_ascii_case("accept")
+                && !name.eq_ignore_ascii_case("content-type")
+                && !name.eq_ignore_ascii_case("x-iroha-finality-challenge")
         });
         let mut builder =
             DefaultRequestBuilder::new(HttpMethod::GET, join_torii_url(&self.torii_url, path))
@@ -83,21 +132,29 @@ impl Client {
         builder
     }
 
-    /// Fetch the exact canonical, result-bearing executed block wire containing `committed`.
+    /// Fetch canonical block wire bound to an independently authenticated execution commitment.
     ///
     /// The returned bytes are accepted only when the route yields bounded Norito, the block
     /// round-trips to the byte-identical canonical [`SignedBlock`] wire, its requested height and
-    /// block hash match, its entrypoint/result Merkle material is internally consistent, and the
-    /// supplied successful committed transaction verifies against that exact carrier block.
+    /// block hash match, its external-entrypoint/result roots and execution context match the
+    /// header commitments, its Merkle caches/counts are consistent, and the supplied successful
+    /// transaction verifies at its exact ordinary index or certified-merge reference.
+    ///
+    /// The required commitment must come from an independently verified, externally anchored
+    /// native finality proof for this carrier. Its exact wire hash and length authenticate results
+    /// and time triggers, which the consensus header hash alone does not bind. This reader verifies
+    /// that binding; it does not establish finality or trust in a caller-supplied commitment.
     ///
     /// # Errors
     ///
     /// Returns an error for transport, status, media-type, size, decode, canonicality, height,
-    /// hash, result-shape, Merkle-cache, transaction-result, or inclusion-proof failures.
+    /// hash, result-shape, Merkle-cache, execution-commitment, transaction-result, or inclusion-proof
+    /// failures.
     pub fn get_canonical_executed_block_wire(
         &self,
         height: NonZeroU64,
         committed: &CommittedTransaction,
+        execution_commitment: &iroha_data_model::block::consensus_v2::ExecutionCommitment,
     ) -> Result<Vec<u8>> {
         self.ensure_data_model_compatibility()?;
         let path =
@@ -150,9 +207,9 @@ impl Client {
                 "committed transaction carries a rejected execution result"
             ));
         }
-        if !committed.verify_inclusion_in_block(&block) {
+        if !committed.verify_inclusion_in_authenticated_execution(&block, execution_commitment) {
             return Err(eyre!(
-                "committed transaction does not verify against the exact executed block"
+                "committed transaction does not verify against the authenticated execution commitment"
             ));
         }
         Ok(canonical)

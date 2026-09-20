@@ -510,12 +510,14 @@ fn generated_spec_documents_read_only_nexus_lifecycle_status() {
     assert_eq!(schema.get("additionalProperties"), Some(&Value::Bool(false)));
     assert_required_inventory(schema, "lifecycle.required", "lifecycle status");
     let properties = schema.get("properties").and_then(Value::as_object).expect("lifecycle properties");
-    assert_eq!(object_field_set(properties), ["catalog_hash", "incarnation_root", "incarnations", "lane_count", "lanes", "version"].into_iter().collect(), "lifecycle schema must expose exactly the current V1 fields");
+    assert_eq!(object_field_set(properties), ["catalog_hash", "incarnation_root", "incarnations", "lane_count", "lanes", "runtime_catalog_hash", "version"].into_iter().collect(), "lifecycle schema must expose exactly the current V1 fields");
     assert_eq!(properties.get("lanes").and_then(|property| property.get("type")).and_then(Value::as_str), Some("array"));
     assert!(!properties.contains_key("nexus_enabled"), "the current-only lifecycle schema must not retain the removed enablement switch");
-    for name in ["catalog_hash", "incarnations", "incarnation_root"] {
+    for name in ["catalog_hash", "incarnations", "incarnation_root", "runtime_catalog_hash"] {
         assert!(properties.contains_key(name));
     }
+    let runtime_root = properties.get("runtime_catalog_hash").expect("required runtime root");
+    assert_eq!(runtime_root.get("type"), Some(&norito::json!(["string", "null"])));
     assert_eq!(properties.get("incarnations").and_then(|property| property.get("items")).and_then(|items| items.get("$ref")).and_then(Value::as_str), Some("#/components/schemas/NexusLaneLifecycleIncarnationEntry"));
 }
 

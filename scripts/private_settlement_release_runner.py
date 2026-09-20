@@ -83,19 +83,16 @@ MAX_BOOTSTRAP_ITERATIONS = 10_000_000
 MAX_OBSERVATION_COUNT = (1 << 64) - 1
 DEFAULT_BOOTSTRAP_ITERATIONS = 2_000
 MAX_HARNESS_RESPONSE_BYTES = 16 * 1024 * 1024
-# Keep this timing contract synchronized with the production-like real-process
-# fixture.  A fault job must first pay the governed private-profile activation
-# delay and then advance four deliberately non-finalized crash trials past
-# their bundle expiries.  This is a protocol floor, before startup, proof,
-# restart, transaction, and polling overhead.
+# Keep this timing contract synchronized with the real-process fixture.
+# Privacy is active in genesis. A fault job still advances four deliberately
+# non-finalized crash trials past their bundle expiries. Preserve that expiry
+# budget before startup, proof, restart, transaction, and polling overhead.
 REAL_PROCESS_BLOCK_CADENCE_SECONDS = 4
-PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS = 300
 FAULT_NONFINALIZED_EXPIRY_TRIALS = 4
 FAULT_BUNDLE_EXPIRY_BLOCKS = 96
 FAULT_EXPIRY_ADVANCE_BLOCKS = FAULT_BUNDLE_EXPIRY_BLOCKS + 1
 FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS = (
-    PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS
-    + FAULT_NONFINALIZED_EXPIRY_TRIALS * FAULT_EXPIRY_ADVANCE_BLOCKS
+    FAULT_NONFINALIZED_EXPIRY_TRIALS * FAULT_EXPIRY_ADVANCE_BLOCKS
 ) * REAL_PROCESS_BLOCK_CADENCE_SECONDS
 # Leave substantial headroom above the deterministic floor for 16 processes,
 # native proofs, restart recovery, and control acknowledgements.
@@ -6923,7 +6920,7 @@ def validate_campaign_timeout(
         timeout_seconds < FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS
     ):
         raise RunnerError(
-            "fault harness timeout is shorter than its mandatory activation-and-expiry "
+            "fault harness timeout is shorter than its mandatory nonfinalized-expiry "
             f"protocol floor ({FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS} seconds)"
         )
 

@@ -20720,6 +20720,35 @@ pub mod isi {
         ) -> Result<(), Error> {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
+                if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "the committed Nexus runtime catalog can only be changed by its typed catalog transition"
+                                .to_owned(),
+                        ),
+                    ));
+                }
+                match iroha_data_model::nexus::NexusCatalogTransitionV1::from_custom_parameter(
+                    custom,
+                ) {
+                    Ok(Some(payload)) => state_transaction
+                        .stage_consensus_catalog_transition(&payload)
+                        .map_err(|err| {
+                            InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(format!(
+                                    "invalid Nexus catalog transition: {err}"
+                                )),
+                            )
+                        })?,
+                    Ok(None) => {}
+                    Err(err) => {
+                        return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(format!(
+                                "invalid Nexus catalog transition payload: {err}"
+                            )),
+                        ));
+                    }
+                }
                 validate_alias_registry_routing_activation(custom, state_transaction)?;
                 validate_alias_dataspace_bootstrap_grant(custom, state_transaction)?;
                 validate_governed_pipeline_gas_parameter(custom)?;

@@ -7,15 +7,15 @@ use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     data_model::{
-        Level,
         account::Account,
         asset::AssetDefinition,
         domain::Domain,
         isi::{
-            Grant, InstructionBox, Log, Mint, Register, SetParameter,
+            Grant, InstructionBox, Mint, Register, SetParameter,
             privacy::{
                 BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyProofManagedPoolV1,
                 RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
+                TransitionPrivacyProtocolLifecycleV1,
             },
         },
         parameter::{Parameter, TransactionParameter},
@@ -37,7 +37,6 @@ use iroha::{
     },
 };
 use iroha_core::{
-    privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
     privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
     privacy_release_evidence::{
         PrivacyReleaseOrchardNetworkActionV1, PrivacyReleasePqMaspNetworkActionsV1,
@@ -62,7 +61,6 @@ const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(180);
 const PROVER_TIMEOUT: Duration = Duration::from_secs(900);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(120);
-const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(240);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ACTION_TTL: Duration = Duration::from_secs(7_200);
@@ -217,24 +215,22 @@ async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be nonzero");
     Ok(hash)
 }
-async fn next_incoming_height(client: &Client) -> Result<u64> {
-    read_privacy_capabilities(&client)
+// These isolated fixtures submit through the QueuePlanSynced client API: one
+// block admits the plan, one certifies it, and the third executes its payload.
+async fn next_governed_execution_height(client: &Client) -> Result<u64> {
+    read_privacy_capabilities(client)
         .await
         .wrap_err("query committed height before governed transaction")?
         .committed_height
-        .checked_add(1)
-        .ok_or_else(|| eyre!("incoming privacy height overflowed"))
+        .checked_add(3)
+        .ok_or_else(|| eyre!("governed privacy execution height overflowed"))
 }
 fn proposed_activation(
     compiled: CompiledPrivacyProfileV1,
     proposed_at_height: u64,
-    activate_at_height: u64,
 ) -> PrivacyProtocolActivationRecordV1 {
     compiled.activation_record(PrivacyProtocolLifecycleV1::Proposed(
-        PrivacyProposedLifecycleV1 {
-            proposed_at_height,
-            activate_at_height,
-        },
+        PrivacyProposedLifecycleV1 { proposed_at_height },
     ))
 }
 fn active_activation(
@@ -278,39 +274,6 @@ async fn submit_signed_transaction(
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?
     .wrap_err_with(|| context.to_owned())
-}
-async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
-    let start = read_privacy_capabilities(&client)
-        .await
-        .wrap_err("query height before deterministic activation advance")?
-        .committed_height;
-    ensure!(
-        start <= target_height,
-        "cannot advance backwards from height {start} to {target_height}"
-    );
-    for incoming_height in start.saturating_add(1)..=target_height {
-        submit_instructions(
-            client,
-            vec![
-                Log::new(
-                    Level::INFO,
-                    format!("Orchard/PQ-MASP activation advance {incoming_height}"),
-                )
-                .into(),
-            ],
-            "advance retained-native activation height",
-        )
-        .await?;
-    }
-    let observed = read_privacy_capabilities(&client)
-        .await
-        .wrap_err("query height after deterministic activation advance")?
-        .committed_height;
-    ensure!(
-        observed == target_height,
-        "activation advance landed at {observed}, expected {target_height}"
-    );
-    Ok(())
 }
 async fn exact_transaction_result(
     client: &Client,
@@ -658,13 +621,10 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "grant CanEnactGovernance",
         )
         .await?;
-        let registration_height = next_incoming_height(&client).await?;
-        let activation_height = registration_height
-            .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-            .ok_or_else(|| eyre!("retained-native activation height overflowed"))?;
+        let registration_height = next_governed_execution_height(&client).await?;
         let orchard_proposed =
-            proposed_activation(orchard_compiled, registration_height, activation_height);
-        let pq_proposed = proposed_activation(pq_compiled, registration_height, activation_height);
+            proposed_activation(orchard_compiled, registration_height);
+        let pq_proposed = proposed_activation(pq_compiled, registration_height);
         submit_instructions(
             &client,
             vec![
@@ -742,7 +702,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
                 orchard_pool,
                 orchard_asset_for_builder.clone(),
                 reserve_for_builder.clone(),
-                activation_height.saturating_add(1_000),
+                registration_height.saturating_add(1_000),
                 [0x31; 32],
                 &signing_key,
             )
@@ -752,7 +712,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
                 orchard_pool,
                 orchard_asset_for_builder,
                 reserve_for_builder,
-                activation_height.saturating_add(1_000),
+                registration_height.saturating_add(1_000),
                 [0x32; 32],
                 &signing_key,
             )
@@ -788,17 +748,6 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             pre_orchard.transaction.hash() != final_orchard.transaction.hash(),
             "pre-activation and final Orchard actions must be distinct"
         );
-        let advance_target = activation_height
-            .checked_sub(3)
-            .ok_or_else(|| eyre!("activation height lacks two probe predecessors"))?;
-        timeout(
-            ACTIVATION_ADVANCE_TIMEOUT,
-            advance_to_exact_height(&client, advance_target),
-        )
-        .await
-        .map_err(|_| {
-            eyre!("advancing through the activation lead exceeded {ACTIVATION_ADVANCE_TIMEOUT:?}")
-        })??;
         let pre_orchard_error = submit_signed_transaction(
             &client,
             &pre_orchard.transaction,
@@ -845,21 +794,13 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "pre-activation rejections must preserve public bridge balances",
         )
         .await?;
-        submit_instructions(
-            &client,
-            vec![
-                Log::new(
-                    Level::INFO,
-                    format!("exact Orchard/PQ-MASP activation block {activation_height}"),
-                )
-                .into(),
-            ],
-            "commit exact retained-native activation block",
-        )
-        .await?;
-        let orchard_active =
-            active_activation(orchard_compiled, registration_height, activation_height);
+        let activation_height = next_governed_execution_height(&client).await?;
+        let orchard_active = active_activation(orchard_compiled, registration_height, activation_height);
         let pq_active = active_activation(pq_compiled, registration_height, activation_height);
+        submit_instructions(&client, vec![
+            TransitionPrivacyProtocolLifecycleV1::new(ORCHARD_PROTOCOL, orchard_active.lifecycle).into(),
+            TransitionPrivacyProtocolLifecycleV1::new(PQ_MASP_PROTOCOL, pq_active.lifecycle).into(),
+        ], "explicitly activate exact Orchard and PQ-MASP profiles").await?;
         let active_expectations = [
             ProtocolExpectationV1 {
                 protocol: ORCHARD_PROTOCOL,

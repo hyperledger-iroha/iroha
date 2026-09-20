@@ -788,6 +788,139 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         } catch AtomicPrivateSettlementClientErrorV1.responseSubstitution {}
     }
 
+    func testPublicReceiptAcceptsExactPendingAndCanonicalTerminalIdentifiers() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let bundle = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["bundle_hex"] as? String)
+        )
+        // Terminal fixtures check transport shape and identity, not certificate validity.
+        for name in ["receipt_pending", "receipt_finalized", "receipt_aborted"] {
+            let wire = try XCTUnwrap(responses[name] as? [String: Any])
+            let encoded = try JSONSerialization.data(withJSONObject: wire, options: [.sortedKeys])
+            installRaw(encoded, statusCode: 200)
+            let actual = try await makeClient().getBundleReceipt(bundleId: bundle)
+            XCTAssertEqual(try actual.bytes(), encoded)
+            let request = try XCTUnwrap(AtomicPrivateSettlementStubURLProtocolV1.lastRequest)
+            XCTAssertNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-Iroha-Operator-Signature"))
+            actual.close()
+        }
+    }
+
+    func testPublicReceiptRejectsRemovedPendingLifecycleAndUnexpectedFields() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let bundleText = try XCTUnwrap(ids["bundle_json"] as? String)
+        let bundle = try AtomicPrivateSettlementIdentifierV1(bundleText)
+        var invalid: [[String: Any]] = [
+            ["status": "pending", "value": ["bundle_id": bundleText, "memo": "RECEIPT_PRIVATE_CANARY"]],
+            ["status": "pending", "value": [String: Any]()],
+            ["status": "pending", "value": ["bundle_id": try XCTUnwrap(ids["payload_json"])]],
+            ["status": "pending", "value": ["bundle_id": NSNull()]],
+            ["status": "pending", "value": NSNull()],
+            ["status": "pending", "value": [Any]()],
+            ["status": "unknown", "value": ["bundle_id": bundleText]],
+            ["status": "pending", "value": ["bundle_id": bundleText], "lifecycle": NSNull()],
+        ]
+        for status in ["collecting", "audited", "prepared", "commit_certified", "finalized", "aborted", "expired"] {
+            invalid.append(["status": "pending", "value": [
+                "bundle_id": bundleText, "lifecycle": ["status": status, "value": NSNull()],
+            ]])
+        }
+        for wire in invalid {
+            install(wire)
+            do {
+                _ = try await makeClient().getBundleReceipt(bundleId: bundle)
+                XCTFail("malformed pending receipt must fail")
+            } catch {
+                XCTAssertNotNil(error as? AtomicPrivateSettlementClientErrorV1)
+                XCTAssertFalse(String(describing: error).contains("RECEIPT_PRIVATE_CANARY"))
+            }
+        }
+        let duplicate = "{\"status\":\"pending\",\"value\":{\"bundle_id\":\"RECEIPT_PRIVATE_CANARY\",\"bundle_id\":\"\(bundleText)\"}}"
+        installRaw(Data(duplicate.utf8), statusCode: 200)
+        do {
+            _ = try await makeClient().getBundleReceipt(bundleId: bundle)
+            XCTFail("duplicate pending identifier must fail")
+        } catch {
+            XCTAssertNotNil(error as? AtomicPrivateSettlementClientErrorV1)
+            XCTAssertFalse(String(describing: error).contains("RECEIPT_PRIVATE_CANARY"))
+        }
+    }
+
+    func testPublicReceiptFinalizedRejectsRootAliasesAndSubstitutedManifests() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let bundleText = try XCTUnwrap(ids["bundle_json"] as? String)
+        let bundle = try AtomicPrivateSettlementIdentifierV1(bundleText)
+        let finalized = try XCTUnwrap(responses["receipt_finalized"] as? [String: Any])
+        let value = try XCTUnwrap(finalized["value"] as? [String: Any])
+        var aliasOnly = value
+        aliasOnly.removeValue(forKey: "manifest")
+        aliasOnly["bundle_id"] = bundleText
+        var withAlias = value
+        withAlias["bundle_id"] = bundleText
+        var invalidValues = [aliasOnly, withAlias]
+        for manifest in [NSNull(), [Any](), [String: Any](),
+                         ["bundle_id": try XCTUnwrap(ids["payload_json"])],
+                         ["bundle_id": NSNull()]] as [Any] {
+            var malformed = value
+            malformed["manifest"] = manifest
+            invalidValues.append(malformed)
+        }
+        var invalid = invalidValues.map { ["status": "finalized", "value": $0] as [String: Any] }
+        var aborted = try XCTUnwrap(responses["receipt_aborted"] as? [String: Any])
+        var abortValue = try XCTUnwrap(aborted["value"] as? [String: Any])
+        abortValue["bundle_id"] = ids["payload_json"]
+        aborted["value"] = abortValue
+        invalid.append(aborted)
+        for wire in invalid {
+            install(wire)
+            do {
+                _ = try await makeClient().getBundleReceipt(bundleId: bundle)
+                XCTFail("substituted or aliased terminal identifier must fail")
+            } catch {
+                XCTAssertNotNil(error as? AtomicPrivateSettlementClientErrorV1)
+            }
+        }
+    }
+
+    func testPublicReceiptKeeps404AndTransportErrorsDistinctFromPending() async throws {
+        let root = try fixture()
+        let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let bundle = try AtomicPrivateSettlementIdentifierV1(
+            try XCTUnwrap(ids["bundle_hex"] as? String)
+        )
+        for code in ["not_found", "private_settlement_unavailable"] {
+            install(try XCTUnwrap(responses["receipt_pending"] as? [String: Any]),
+                    statusCode: 404,
+                    headers: ["Content-Type": "application/json", "X-Iroha-Reject-Code": code])
+            do {
+                _ = try await makeClient().getBundleReceipt(bundleId: bundle)
+                XCTFail("HTTP 404 must not become pending")
+            } catch let error as AtomicPrivateSettlementClientErrorV1 {
+                guard case let .httpStatus(status, _) = error else {
+                    XCTFail("expected HTTP error, received \(error)")
+                    continue
+                }
+                XCTAssertEqual(status, 404)
+            }
+        }
+        AtomicPrivateSettlementStubURLProtocolV1.handler = { _ in
+            throw URLError(.cannotConnectToHost)
+        }
+        do {
+            _ = try await makeClient().getBundleReceipt(bundleId: bundle)
+            XCTFail("transport failure must not become pending")
+        } catch {
+            XCTAssertEqual(error as? AtomicPrivateSettlementClientErrorV1, .transport)
+        }
+    }
+
     func testHTTPErrorDoesNotRenderCanaryBody() async throws {
         let root = try fixture()
         let ids = try XCTUnwrap(root["identifiers"] as? [String: Any])

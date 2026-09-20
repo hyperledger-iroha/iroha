@@ -406,4 +406,6 @@ mod content_capture_tests;
 #[cfg(test)]
 mod precomputed_digest_tests;
 #[cfg(test)]
+mod recorder_isolation_tests;
+#[cfg(test)]
 mod tests;

@@ -3,6 +3,11 @@
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
+use iroha::query::QueryError;
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
+};
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
@@ -69,27 +74,18 @@ fn find_asset(
     account_id: &AccountId,
     asset_definition_id: &AssetDefinitionId,
 ) -> Result<Option<Asset>> {
-    use iroha::{
-        data_model::{
-            ValidationFail,
-            query::{
-                asset::prelude::FindAssetById,
-                error::{FindError, QueryExecutionFail},
-            },
-        },
-        query::QueryError,
-    };
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-    let query = FindAssetById::new(asset_id);
-    match peer.client().client().query_single(query) {
-        Ok(asset) => Ok(Some(asset)),
+    match peer
+        .client()
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+    {
+        Ok(asset) if asset.id() == &asset_id => Ok(Some(asset)),
+        Ok(_) => Err(eyre!("exact asset query returned a different asset")),
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-            FindError::Asset(_),
-        )))) => Ok(None),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
-            Ok(None)
-        }
-        Err(err) => Err(eyre!("FindAsset query failed: {:?}", err)),
+            FindError::Asset(missing),
+        )))) if missing.as_ref() == &asset_id => Ok(None),
+        Err(error) => Err(eyre!(error)),
     }
 }
 fn assert_asset_amount(

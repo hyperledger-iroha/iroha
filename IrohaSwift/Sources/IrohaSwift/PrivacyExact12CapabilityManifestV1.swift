@@ -162,7 +162,7 @@ public struct PrivacyConsensusPolicyV1: Equatable, Sendable {
 }
 
 public enum PrivacyProtocolLifecycleV1: Equatable, Sendable {
-    case proposed(proposedAtHeight: UInt64, activateAtHeight: UInt64)
+    case proposed(proposedAtHeight: UInt64)
     case active(proposedAtHeight: UInt64, activatedAtHeight: UInt64, stateSinceHeight: UInt64)
     case suspended(proposedAtHeight: UInt64, activatedAtHeight: UInt64, stateSinceHeight: UInt64)
     case retired(proposedAtHeight: UInt64, activatedAtHeight: UInt64?, stateSinceHeight: UInt64)
@@ -556,7 +556,6 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
     private static let maximumFieldBytes = PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
     private static let maximumEvidenceBytes = PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
     private static let maximumActionBytes = 9 * 1024 * 1024
-    private static let noticeBlocks: UInt64 = 300
 
     static func decode(
         _ archive: Data,
@@ -1546,13 +1545,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         let lifecycle: PrivacyProtocolLifecycleV1
         switch tagged.tag {
         case 0:
-            let activate = try exactUInt64(
-                state.readField(maximum: 8, label: "activate height"), "activate height"
-            )
-            guard activate > proposed, activate > committedHeight else {
-                throw invalid("proposed lifecycle has a due or unordered activation height")
-            }
-            lifecycle = .proposed(proposedAtHeight: proposed, activateAtHeight: activate)
+            lifecycle = .proposed(proposedAtHeight: proposed)
         case 1, 2:
             let activated = try exactUInt64(
                 state.readField(maximum: 8, label: "activated height"), "activated height"
@@ -1561,7 +1554,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 state.readField(maximum: 8, label: "state-since height"), "state-since height"
             )
             let validSince = tagged.tag == 1 ? since >= activated : since > activated
-            guard activated > proposed, validSince,
+            guard activated >= proposed, validSince,
                   activated <= committedHeight, since <= committedHeight else {
                 throw invalid("active/suspended lifecycle heights are invalid")
             }
@@ -1580,7 +1573,7 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 "retired state-since height"
             )
             if let activated {
-                guard activated > proposed, since > activated else {
+                guard activated >= proposed, since > activated else {
                     throw invalid("retired lifecycle activation history is invalid")
                 }
             } else if since <= proposed {
@@ -1795,10 +1788,9 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         _ effective: UInt64,
         committedHeight: UInt64
     ) throws {
-        let (earliest, overflow) = scheduled.addingReportingOverflow(noticeBlocks)
-        guard scheduled > 0, !overflow, effective >= earliest,
+        guard scheduled > 0, effective > scheduled,
               scheduled <= committedHeight, effective > committedHeight else {
-            throw invalid("pending tightening violates notice or committed-height bounds")
+            throw invalid("pending tightening violates future or committed-height bounds")
         }
     }
 

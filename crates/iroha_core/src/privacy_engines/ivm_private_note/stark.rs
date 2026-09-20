@@ -43,8 +43,8 @@ use crate::privacy_engines::{
         prove_proof_managed_note_stark_v1_with_rng, verify_proof_managed_note_stark_v1,
     },
     transparent_stark::{
-        GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkDigestContextV1,
-        TransparentTranscriptV1, goldilocks_digest384_frame_v1,
+        GoldilocksFieldV1 as F, PrivacyOuterDigestV1, TransparentStarkDigestContextV1,
+        TransparentTranscriptV1, privacy_outer_digest_frame_v1,
     },
 };
 use iroha_data_model::privacy::{
@@ -96,7 +96,7 @@ pub(crate) const PRIVATE_NOTE_PROFILE_CONSTRAINT_DEGREE_V1: u8 =
     PROOF_MANAGED_NOTE_MAX_CONSTRAINT_DEGREE_V1;
 const PROFILE_AUX_VM_CARRY_BRIDGE: usize = 0;
 /// Relation-local descriptor combined with the shared proof-driver geometry.
-pub(crate) const IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:relation=proof-managed-note:wire=IPS1-v1:trace=2^14:base=556:profile-aux=1:profile-fixed=123:profile-constraints=1375:constraint-degree=4:max-proof=8388608:sha256-wide-air:public-digest=poseidon-x7-goldilocks-6x64(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:vm=16x8:ciphertext=IPNE-v1:fee=separate:legacy=unrepresentable:governance=typed-lifecycle";
+pub(crate) const IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-ivm-private-note-stark-v1:relation=proof-managed-note:wire=IPS1-v1:trace=2^14:base=556:profile-aux=1:profile-fixed=123:profile-constraints=1375:constraint-degree=4:max-proof=8388608:sha256-wide-air:public-digest=sha3-384-opaque48(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:vm=16x8:ciphertext=IPNE-v1:fee=separate:legacy=unrepresentable:governance=typed-lifecycle";
 /// Exact first-release proof ceiling enforced by the private-note verifier.
 pub const IVM_PRIVATE_NOTE_MAX_PROOF_BYTES_V1: usize = 8 * 1024 * 1024;
 const PRIVATE_NOTE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
@@ -823,10 +823,10 @@ impl<'a> PrivateNoteStarkAdapterV1<'a> {
 fn private_note_public_input_digest_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     consensus_binding_digest: PrivacyNativeConsensusBindingDigestV1,
-) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
     let encoded =
         norito::to_bytes(statement).map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         PRIVATE_NOTE_DOMAINS_V1.digest_context,
         b"ivm-private-note-stark-public-input-with-consensus-binding-v1",
         b"statement-binding",
@@ -842,9 +842,7 @@ impl ProofManagedNoteStarkAdapterV1 for PrivateNoteStarkAdapterV1<'_> {
     fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1 {
         private_note_protocol_v1()
     }
-    fn public_input_digest_v1(
-        &self,
-    ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
+    fn public_input_digest_v1(&self) -> Result<PrivacyOuterDigestV1, ProofManagedNoteStarkErrorV1> {
         self.consensus_binding
             .validate_against_context(&self.statement.context, self.consensus_limits)
             .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
@@ -933,8 +931,6 @@ pub(super) fn prove_private_note_stark_v1_with_rng<R: TryRngCore>(
 ) -> Result<Vec<u8>, ProofManagedNoteStarkErrorV1> {
     let base_columns = compile_private_note_prover_columns_v1(statement, witness)?;
     prove_proof_managed_note_stark_v1_with_rng(
-        fastpq_prover::DigestExecutionV1::Cpu,
-        fastpq_prover::DigestExecutionV1::Cpu,
         &PrivateNoteStarkAdapterV1::new(statement, consensus_binding, consensus_limits),
         &base_columns,
         rng,
@@ -961,6 +957,7 @@ pub(crate) fn verify_private_note_stark_v1(
 mod tests {
     use super::*;
     use crate::privacy_engines::ivm_private_note::tests::{fixture, three_output_fixture};
+    use crate::privacy_engines::proof_managed_note_stark::fixed_query_audit;
     use iroha_data_model::privacy::{
         PrivacyActionDigestV1, PrivacyEngineManifestDigestV1,
         PrivacyNativeConsensusBindingValidationErrorV1, PrivacyParameterDigestV1,
@@ -1161,6 +1158,22 @@ mod tests {
         );
     }
     #[test]
+    fn private_note_fixed_queries_match_full_lde_at_all_fixture_queries_and_boundaries() {
+        let value = fixture();
+        let (binding, limits) = consensus_material(&value.statement);
+        let adapter = PrivateNoteStarkAdapterV1::new(&value.statement, &binding, &limits);
+        fixed_query_audit::assert_profile_matches_full_lde_v1(&adapter);
+    }
+
+    #[test]
+    fn private_note_malformed_wire_is_rejected_before_fixed_column_construction() {
+        let value = fixture();
+        let (binding, limits) = consensus_material(&value.statement);
+        let adapter = PrivateNoteStarkAdapterV1::new(&value.statement, &binding, &limits);
+        fixed_query_audit::assert_malformed_rejected_before_fixed_v1(&adapter);
+    }
+
+    #[test]
     fn public_input_digest_commits_the_typed_consensus_binding_on_every_axis() {
         let value = fixture();
         let (binding, limits) = consensus_material(&value.statement);
@@ -1245,9 +1258,9 @@ mod tests {
             IVM_PRIVATE_NOTE_STARK_PROFILE_DESCRIPTOR_V1,
         )
         .expect("canonical IVM private-note profile digest");
-        assert_ne!(profile_digest, GoldilocksDigest384V1::default());
+        assert_ne!(profile_digest, PrivacyOuterDigestV1::default());
         let expected_descriptor = format!(
-            "iroha-ivm-private-note-stark-v1:relation=proof-managed-note:wire=IPS1-v1:trace=2^{}:base={}:profile-aux={}:profile-fixed={}:profile-constraints={}:constraint-degree={}:max-proof={}:sha256-wide-air:public-digest=poseidon-x7-goldilocks-6x64(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:vm=16x8:ciphertext=IPNE-v1:fee=separate:legacy=unrepresentable:governance=typed-lifecycle",
+            "iroha-ivm-private-note-stark-v1:relation=proof-managed-note:wire=IPS1-v1:trace=2^{}:base={}:profile-aux={}:profile-fixed={}:profile-constraints={}:constraint-degree={}:max-proof={}:sha256-wide-air:public-digest=sha3-384-opaque48(canonical-statement,PrivacyNativeConsensusBindingDigestV1):tree-depth=32:vm=16x8:ciphertext=IPNE-v1:fee=separate:legacy=unrepresentable:governance=typed-lifecycle",
             PRIVATE_NOTE_TRACE_LOG2_V1,
             PRIVATE_NOTE_BASE_WIDTH_V1,
             PRIVATE_NOTE_PROFILE_AUX_WIDTH_V1,
@@ -1320,6 +1333,10 @@ mod tests {
         assert!(proof.len() <= PRIVATE_NOTE_PARAMETERS_V1.maximum_proof_bytes);
         super::super::verify_ivm_private_note_v1(&value.statement, &binding, &limits, &proof)
             .expect("full-domain private-note facade verification");
+        fixed_query_audit::assert_proof_queries_match_full_lde_v1(
+            &PrivateNoteStarkAdapterV1::new(&value.statement, &binding, &limits),
+            &proof,
+        );
         let mut rejected_draft_magic = proof.clone();
         rejected_draft_magic[..4].copy_from_slice(b"IPN2");
         assert!(
@@ -1332,7 +1349,7 @@ mod tests {
             .is_err(),
             "the superseded IPN2 draft magic was accepted"
         );
-        let proof_digest = goldilocks_digest384_frame_v1(
+        let proof_digest = privacy_outer_digest_frame_v1(
             PRIVATE_NOTE_DOMAINS_V1.digest_context,
             b"ivm-private-note-stark-proof-kat-v1",
             b"proof-wire",
@@ -1342,7 +1359,7 @@ mod tests {
             &[&proof],
         )
         .expect("canonical proof KAT digest");
-        assert_ne!(proof_digest, GoldilocksDigest384V1::default());
+        assert_ne!(proof_digest, PrivacyOuterDigestV1::default());
         assert!(
             verify_private_note_stark_v1(
                 &value.statement,
@@ -1464,16 +1481,10 @@ mod tests {
             value.profile,
         );
         let mut rng = StdRng::from_seed([0xB7; 32]);
-        let proof = prove_proof_managed_note_stark_v1_with_rng(
-            fastpq_prover::DigestExecutionV1::Cpu,
-            fastpq_prover::DigestExecutionV1::Cpu,
-            &adapter,
-            &base_columns,
-            &mut rng,
-        )
-        .expect("three-output seam candidate")
-        .verify_into_bytes_v1(&adapter)
-        .expect("verified three-output seam proof");
+        let proof = prove_proof_managed_note_stark_v1_with_rng(&adapter, &base_columns, &mut rng)
+            .expect("three-output seam candidate")
+            .verify_into_bytes_v1(&adapter)
+            .expect("verified three-output seam proof");
         verify_proof_managed_note_stark_v1(&adapter, &proof)
             .expect("canonical fixed output memos verify");
 
@@ -1537,8 +1548,8 @@ mod tests {
         let mut transcript = TransparentTranscriptV1::new(
             PRIVATE_NOTE_DOMAINS_V1.digest_context,
             b"private-note-residue-test-v1",
-            &GoldilocksDigest384V1::new([1; 6]).expect("profile digest"),
-            &GoldilocksDigest384V1::new([2; 6]).expect("public digest"),
+            &PrivacyOuterDigestV1::from_bytes([1; 48]),
+            &PrivacyOuterDigestV1::from_bytes([2; 48]),
         )
         .expect("transcript");
         let copy_challenges =
@@ -1637,8 +1648,8 @@ mod tests {
         let mut transcript = TransparentTranscriptV1::new(
             PRIVATE_NOTE_DOMAINS_V1.digest_context,
             b"private-note-hostile-prover-v1",
-            &GoldilocksDigest384V1::new([5; 6]).expect("profile digest"),
-            &GoldilocksDigest384V1::new([6; 6]).expect("public digest"),
+            &PrivacyOuterDigestV1::from_bytes([5; 48]),
+            &PrivacyOuterDigestV1::from_bytes([6; 48]),
         )
         .expect("transcript");
         let copy_challenges =
@@ -1853,8 +1864,8 @@ mod tests {
         let mut transcript = TransparentTranscriptV1::new(
             PRIVATE_NOTE_DOMAINS_V1.digest_context,
             b"private-note-mutation-test-v1",
-            &GoldilocksDigest384V1::new([3; 6]).expect("profile digest"),
-            &GoldilocksDigest384V1::new([4; 6]).expect("public digest"),
+            &PrivacyOuterDigestV1::from_bytes([3; 48]),
+            &PrivacyOuterDigestV1::from_bytes([4; 48]),
         )
         .expect("transcript");
         let copy_challenges =

@@ -173,7 +173,7 @@ def _healthy_status() -> dict[str, object]:
                     },
                     "subject": _subject(),
                     "execution_commitment": _execution_commitment(),
-                    "stage": {"stage": "sent", "details": None},
+                    "stage": {"stage": "retained", "details": None},
                 }
             ],
             "work": {
@@ -312,6 +312,7 @@ def test_status_parses_authoritative_reducer_state() -> None:
     )
     assert len(status.liveness.outbound_intents) == 1
     outbound_intent = status.liveness.outbound_intents[0]
+    assert outbound_intent.stage == "retained"
     assert outbound_intent.round.view == 4
     assert outbound_intent.proposal_round is not None
     assert outbound_intent.proposal_round.view == 4
@@ -322,6 +323,19 @@ def test_status_parses_authoritative_reducer_state() -> None:
     )
     assert not hasattr(status, "lane_payload_ownerships")
     assert not hasattr(status, "operator")
+
+
+def test_status_rejects_sent_outbound_stage() -> None:
+    payload = _healthy_status()
+    payload["liveness"]["outbound_intents"][0]["stage"] = {
+        "stage": "sent", "details": None,
+    }
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"outbound_intents\[0\]\.stage\.stage is not a supported v2 variant",
+    ):
+        SumeragiStatusSnapshot.from_payload(payload)
 
 
 def test_diagnostics_parse_separately_from_authoritative_status() -> None:

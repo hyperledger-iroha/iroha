@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Tuple
 
 try:
-    from .benchmark_operations import CANONICAL_OPERATION_ORDER, CANONICAL_OPERATIONS, CANONICAL_FILTERS, DIGEST384_OPERATIONS, reject_retired_fields
+    from .benchmark_operations import CANONICAL_OPERATION_ORDER, CANONICAL_OPERATIONS, CANONICAL_FILTERS, DIGEST384_OPERATIONS, checked_invocations, reject_retired_fields
     from .digest384_evidence import validate_digest384_operation
     from .validate_row_usage_snapshot import (
         COUNT_FIELDS,
@@ -23,7 +23,7 @@ try:
         validate_row_usage_snapshot,
     )
 except ImportError:  # Direct `python3 scripts/fastpq/wrap_benchmark.py` execution.
-    from benchmark_operations import CANONICAL_OPERATION_ORDER, CANONICAL_OPERATIONS, CANONICAL_FILTERS, DIGEST384_OPERATIONS, reject_retired_fields
+    from benchmark_operations import CANONICAL_OPERATION_ORDER, CANONICAL_OPERATIONS, CANONICAL_FILTERS, DIGEST384_OPERATIONS, checked_invocations, reject_retired_fields
     from digest384_evidence import validate_digest384_operation
     from validate_row_usage_snapshot import (  # type: ignore[no-redef]
         COUNT_FIELDS,
@@ -806,7 +806,7 @@ def _operation_mean_ms(
     require_range: bool,
 ) -> float | int | None:
     sample = entry.get(field)
-    if sample is None and not required:
+    if field not in entry and not required:
         return None
     if not isinstance(sample, dict):
         raise SystemExit(f"Benchmark operation {operation!r} must contain `{field}` metrics.")
@@ -815,12 +815,11 @@ def _operation_mean_ms(
     )
     for timing_field in timing_fields:
         value = sample.get(timing_field)
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or value < 0
-        ):
+        try:
+            finite = type(value) in (int, float) and math.isfinite(value)
+        except OverflowError:
+            finite = False
+        if not finite or value < 0:
             raise SystemExit(
                 f"Benchmark operation {operation!r} must contain finite non-negative "
                 f"`{field}.{timing_field}`."
@@ -897,6 +896,8 @@ def summarize_operations(
         if "gpu_available" in report and (gpu_mean_ms is not None) != report["gpu_available"]:
             raise SystemExit(f"Benchmark operation {operation!r} GPU timing disagrees with availability.")
         speedup = entry.get("speedup")
+        if gpu_mean_ms is None and ("gpu" in entry or "speedup" in entry):
+            raise SystemExit(f"Benchmark operation {operation!r} in CPU mode must omit GPU metrics.")
         if not metal_schema and ((entry.get("gpu") is None) != (speedup is None)):
             raise SystemExit(
                 f"Benchmark operation {operation!r} must provide `gpu` and `speedup` together."
@@ -918,13 +919,11 @@ def summarize_operations(
                 )
             for field in ("ratio", "delta_ms"):
                 value = speedup.get(field)
-                if field == "delta_ms" and value is None and not metal_schema:
-                    continue
-                if (
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
-                    or not math.isfinite(value)
-                ):
+                try:
+                    finite = type(value) in (int, float) and math.isfinite(value)
+                except OverflowError:
+                    finite = False
+                if not finite or (field == "ratio" and value < 0):
                     raise SystemExit(
                         f"Benchmark operation {operation!r} must contain finite numeric "
                         f"`speedup.{field}`."
@@ -1160,8 +1159,12 @@ def validate_report_header(report: dict[str, Any], producer_schema: str) -> None
         raise SystemExit("Benchmark producer_schema disagrees with the selected decoder.")
     rows = _required_report_count(report, "rows", minimum=1)
     padded_rows = _required_report_count(report, "padded_rows", minimum=1)
-    _required_report_count(report, "iterations", minimum=1)
-    _required_report_count(report, "warmups", minimum=0)
+    iterations = _required_report_count(report, "iterations", minimum=1)
+    warmups = _required_report_count(report, "warmups", minimum=0)
+    try:
+        checked_invocations(warmups, iterations)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     _required_report_count(report, "column_count", minimum=1)
     if padded_rows < rows:
         raise SystemExit("Benchmark report `padded_rows` must be at least `rows`.")

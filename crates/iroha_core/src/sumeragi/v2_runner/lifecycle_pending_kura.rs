@@ -914,6 +914,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
     mut retained_merge_sidecars: Option<RetainedMergeSidecars>,
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     mut block_sync_server: Option<V2BlockSyncServer>,
+    startup_recovery: &crate::sumeragi::StartupRecoveryPublisher,
 ) -> Result<(), V2RunnerError> {
     let emergency_fast = kura.emergency_fast_startup_enabled();
     if pending_successor_activation.is_some()
@@ -1263,6 +1264,11 @@ pub(super) fn run_pending_kura_lifecycle_height(
     let (successor, retained_merge_sidecars) = match completed {
         HeightRunOutcome::Successor(successor) => successor,
         HeightRunOutcome::Terminal => {
+            if context.height != u64::MAX {
+                return Err(V2RunnerError::SuccessorRefinementRejected);
+            }
+            // The no-clock pending Apply has finalized its exact terminal tip.
+            startup_recovery.ready();
             wait_for_terminal_shutdown(
                 context.height,
                 context.id(),
@@ -1319,5 +1325,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
         Some(retained_merge_sidecars),
         kura_replica_advert_refresh,
         block_sync_server,
+        Some(startup_recovery),
     )
 }

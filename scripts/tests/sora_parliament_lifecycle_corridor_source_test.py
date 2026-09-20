@@ -191,16 +191,14 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     "fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str)",
     "let query = FindAssetById::new(asset_id.clone());",
     "query.asset_id(),",
-    "singular asset query must remain bound to the exact requested identifier",
+    '"{label}: bind the exact requested asset"',
+    "match client.client().query_single(query) {",
+    "Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(",
     "FindError::Asset(missing),",
-    "if missing.as_ref() == asset_id => Ok(())",
-    "Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {",
-    ".query(FindAssets::new())",
-    '.filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())',
-    ".execute_single_opt()",
-    "exact-ID asset query failed after a generic not-found response",
-    "generic not-found contradicted by exact-ID query returning asset",
-    "expected an exact asset-not-found result",
+    ")))) if missing.as_ref() == asset_id => Ok(()),",
+    "Ok(asset) => Err(eyre!(",
+    "expected asset `{asset_id}` to be absent, but the query returned `{}`",
+    "expected typed absence of exact asset `{asset_id}",
     "fn assert_timed_ovn_casting_context_not_castable(",
     '.expect_err("a sealed timed-OVN corpus must not return a casting context");',
     'rendered.contains("400 Bad Request")',
@@ -602,23 +600,18 @@ def validate_exact_absence_classification(source: str) -> None:
         source.count("assert_governed_contract_binding(") == 7,
         "all six active-contract checks must use the exact projection helper",
     )
+    asset_helper = source.split("fn assert_asset_not_found(", 1)[1].split(
+        "fn assert_timed_ovn_casting_context_not_castable(", 1
+    )[0]
     require(
-        source.count(
-            "Err(QueryError::Validation(ValidationFail::QueryFailed("
-            "QueryExecutionFail::NotFound))) => {"
-        )
-        == 1,
-        "asset absence must classify exactly one nested NotFound fallback",
-    )
-    require(
-        source.count("let query = FindAssetById::new(asset_id.clone());") == 1
-        and source.count("query.asset_id(),") == 1
-        and source.count(
-            '.filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())'
-        )
-        == 1
-        and source.count(".execute_single_opt()") == 1,
-        "generic asset NotFound must be corroborated by one bounded exact-ID query",
+        asset_helper.count("let query = FindAssetById::new(asset_id.clone());") == 1
+        and asset_helper.count("query.asset_id(),") == 1
+        and asset_helper.count("match client.client().query_single(query)") == 1
+        and asset_helper.count("FindError::Asset(missing)") == 1
+        and asset_helper.count("if missing.as_ref() == asset_id => Ok(())") == 1
+        and asset_helper.count("Ok(())") == 1
+        and "QueryExecutionFail::NotFound" not in asset_helper,
+        "asset absence requires one bound singular query and typed absence of its exact asset ID",
     )
     require(
         source.count(
@@ -1377,14 +1370,34 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "sealed timed-OVN casting-context lookup": corridor
             + "\nclient.get_parliament_timed_ovn_casting_context(ballot_attempt_id)"
             ".is_err();\n",
-            "generic asset not-found drops exact request binding": corridor.replace(
-                "query.asset_id(),",
-                "asset_id,",
+            "asset absence accepts a present exact match": corridor.replace(
+                "Ok(asset) => Err(eyre!(",
+                "Ok(asset) => Ok(eyre!(",
                 1,
             ),
-            "generic asset not-found drops exact corroboration": corridor.replace(
-                '.filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())',
-                '.filter_with(|asset| asset.equals("definition", asset_id.clone()).into_predicate())',
+            "asset absence drops exact request binding": corridor.replace(
+                "let query = FindAssetById::new(asset_id.clone());",
+                "let query = FindAssetById::new(other_asset_id.clone());",
+                1,
+            ),
+            "asset absence bypasses bound query": corridor.replace(
+                "match client.client().query_single(query) {",
+                "match client.client().query_single(other_query) {",
+                1,
+            ),
+            "asset absence accepts status-only not-found": corridor.replace(
+                "QueryExecutionFail::Find(\n            FindError::Asset(missing),\n        )",
+                "QueryExecutionFail::NotFound",
+                1,
+            ),
+            "asset absence swallows a failed query": corridor.replace(
+                'Err(error) => Err(eyre!(\n            "{label}: expected typed absence',
+                'Err(error) => Ok(()),\n            "{label}: expected typed absence',
+                1,
+            ),
+            "asset absence accepts a wrong identifier": corridor.replace(
+                "if missing.as_ref() == asset_id => Ok(())",
+                "if missing.as_ref() != asset_id => Ok(())",
                 1,
             ),
             "block lookup drops exact height filter": corridor.replace(

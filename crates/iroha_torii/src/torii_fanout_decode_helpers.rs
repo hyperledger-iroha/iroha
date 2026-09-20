@@ -1266,18 +1266,18 @@ impl SkippedRoutedQueryErrors {
         drop(response);
     }
     fn into_response(self) -> Response {
+        if self.saw_route_unavailable {
+            return torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "one or more queried dataspace routes were unavailable",
+            );
+        }
         if self.saw_not_found {
             return torii_proxy_error_response(
                 StatusCode::NOT_FOUND,
                 "not_found",
                 "query result was not found in any dataspace",
-            );
-        }
-        if self.saw_route_unavailable {
-            return torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                "no queried dataspace route was available",
             );
         }
         torii_proxy_error_response(
@@ -1286,4 +1286,171 @@ impl SkippedRoutedQueryErrors {
             "query result was not found in any dataspace",
         )
     }
+}
+/// A fixed-size absence summary; route bodies and decoded selectors never cross route boundaries.
+#[derive(Debug, Default)]
+struct SingularRoutedQueryErrors {
+    skipped: SkippedRoutedQueryErrors,
+    saw_matching_asset_absence: bool,
+    saw_other_not_found: bool,
+}
+impl SingularRoutedQueryErrors {
+    async fn record_and_drop(
+        &mut self,
+        response: Response,
+        verified_request_frame: &[u8],
+        envelope: QueryFanoutMemoryEnvelope,
+        body_read_timeout: Duration,
+    ) -> Result<(), Response> {
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            self.skipped.record_and_drop(response);
+            return Ok(());
+        }
+        debug_assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        self.skipped.saw_not_found = true;
+        // Decode the already charged request frame in its existing request phase. The selector
+        // stays borrowed from this transient request while one bounded error is authenticated.
+        let request =
+            decode_verified_singular_fanout_request_bounded(verified_request_frame, envelope)?;
+        let iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::SingularQueryBox::FindAssetById(query),
+        ) = &request.request
+        else {
+            self.saw_other_not_found = true;
+            drop(response);
+            return Ok(());
+        };
+        if matching_singular_asset_absence(response, &query.id, envelope, body_read_timeout).await?
+        {
+            self.saw_matching_asset_absence = true;
+        } else {
+            self.saw_other_not_found = true;
+        }
+        Ok(())
+    }
+    fn into_response(
+        self,
+        verified_request_frame: &[u8],
+        envelope: QueryFanoutMemoryEnvelope,
+        format: ResponseFormat,
+    ) -> Response {
+        if self.skipped.saw_route_unavailable
+            || self.saw_other_not_found
+            || !self.saw_matching_asset_absence
+        {
+            return self.skipped.into_response();
+        }
+        let request =
+            match decode_verified_singular_fanout_request_bounded(verified_request_frame, envelope)
+            {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+        let iroha_data_model::query::QueryRequest::Singular(
+            iroha_data_model::query::SingularQueryBox::FindAssetById(query),
+        ) = request.request
+        else {
+            return self.skipped.into_response();
+        };
+        let error = ErrorEnvelope::new(
+            "query_asset_not_found",
+            "the requested asset was not found in any selected dataspace",
+        )
+        .with_details(ErrorDetails {
+            query_asset_not_found: Some(query.id),
+            ..Default::default()
+        });
+        let mut response = match format {
+            ResponseFormat::Norito => {
+                let _flags =
+                    norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+                match utils::encode_norito_bounded(&error, envelope.final_body_bytes) {
+                    Ok(bytes) => signed_query_fanout_response_from_norito_bytes(bytes),
+                    Err(error) => return bounded_signed_query_fanout_encode_error_response(error),
+                }
+            }
+            ResponseFormat::Json => {
+                match utils::encode_json_bounded(&error, envelope.final_body_bytes) {
+                    Ok(json) => signed_query_fanout_response_from_json(json),
+                    Err(error) => {
+                        return bounded_signed_query_fanout_json_encode_error_response(error);
+                    }
+                }
+            }
+        };
+        *response.status_mut() = StatusCode::NOT_FOUND;
+        response.headers_mut().insert(
+            HeaderName::from_static("x-iroha-reject-code"),
+            HeaderValue::from_static("query_asset_not_found"),
+        );
+        response
+    }
+}
+/// Prove one selector-bound absence within the existing raw-body, decode and encoder phases.
+async fn matching_singular_asset_absence(
+    response: Response,
+    expected: &iroha_data_model::asset::AssetId,
+    envelope: QueryFanoutMemoryEnvelope,
+    body_read_timeout: Duration,
+) -> Result<bool, Response> {
+    if response.status() != StatusCode::NOT_FOUND {
+        drop(response);
+        return Ok(false);
+    }
+    let invalid = || {
+        torii_proxy_error_response(
+            StatusCode::BAD_GATEWAY,
+            "route_unavailable",
+            "routed asset absence did not carry a canonical matching error envelope",
+        )
+    };
+    let mut content_types = response
+        .headers()
+        .get_all(axum::http::header::CONTENT_TYPE)
+        .iter();
+    if content_types.next().map(HeaderValue::as_bytes) != Some(utils::NORITO_MIME_TYPE.as_bytes())
+        || content_types.next().is_some()
+    {
+        drop(response);
+        return Ok(false);
+    }
+    let declared_code_matches = response
+        .headers()
+        .contains_key("x-iroha-reject-code")
+        .then(|| torii_response_has_reject_code(&response, "query_asset_not_found"));
+    let (parts, body) = response.into_parts();
+    // Body ownership carries any response lease until collection/cancellation completes. The
+    // extension copy is released now, and no part of this response survives the next route.
+    drop(parts);
+    let bytes = tokio::time::timeout(
+        body_read_timeout,
+        axum::body::to_bytes(body, envelope.route_body_bytes),
+    )
+    .await
+    .map_err(|_| invalid())?
+    .map_err(|_| invalid())?;
+    let error: ErrorEnvelope = norito::decode_from_bytes_with_limits(
+        &bytes,
+        envelope.response_decode_limits(bytes.len())?,
+    )
+    .map_err(|_| invalid())?;
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let canonical = utils::encode_norito_bounded(&error, envelope.candidate_encoded_bytes)
+        .map_err(|_| invalid())?;
+    if canonical.as_slice() != bytes.as_ref() {
+        return Err(invalid());
+    }
+    if error.code() != "query_asset_not_found" {
+        return Ok(false);
+    }
+    if declared_code_matches == Some(false)
+        || error
+            .details
+            .as_ref()
+            .and_then(|details| details.query_asset_not_found.as_ref())
+            != Some(expected)
+    {
+        return Err(invalid());
+    }
+    Ok(true)
 }

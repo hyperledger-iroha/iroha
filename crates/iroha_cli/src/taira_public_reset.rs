@@ -55,13 +55,14 @@ const VALIDATOR_SLUGS: [&str; 4] = [
     "taira-validator-3",
     "taira-validator-4",
 ];
-const VALIDATOR_ARTIFACT_ROLES: [&str; 6] = [
+const VALIDATOR_ARTIFACT_ROLES: [&str; 7] = [
     "iroha3d",
     "iroha_cli",
     "sorafs_node",
     "config",
     "genesis",
     "genesis_hash",
+    "validator_unit",
 ];
 const EDGE_ARTIFACT_ROLES: [&str; 2] = ["iroha_cli", "edge_config"];
 const MAX_SOURCE_FILES: usize = 100_000;
@@ -76,9 +77,21 @@ const RECOVERY_INTENT_SCHEMA_V1: &str = "iroha.taira.public-reset.recovery-inten
 mod config;
 #[path = "taira_public_reset_host.rs"]
 mod host;
+#[path = "taira_public_reset_validator_config.rs"]
+mod validator_config;
 pub(crate) use host::maintenance::StoppedOwnerMaintenance;
 #[path = "taira_public_reset_inputs.rs"]
 mod inputs;
+#[path = "taira_public_reset_public_inputs.rs"]
+mod public_inputs;
+#[path = "taira_public_reset_deployment_profile.rs"]
+mod deployment_profile;
+
+#[cfg(test)]
+pub(crate) fn deployment_genesis_fixture()
+-> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
+    public_inputs::deployment_genesis_fixture()
+}
 #[path = "taira_public_reset_source.rs"]
 mod source;
 
@@ -96,10 +109,16 @@ enum PublicResetCommand {
     SourceManifest(PublicResetSourceManifest),
     /// Materialize a retained validator config from an inherited descriptor without printing secrets.
     ConfigRebase(config::ConfigRebase),
+    /// Materialize a fresh validator config for its exact public-reset runtime paths.
+    MaterializeValidatorConfig(validator_config::MaterializeValidatorConfig),
     /// Rebind a retained client config to an explicitly checked new genesis identity.
     ClientConfigRebase(config::ClientConfigRebase),
     /// Generate a dedicated runtime operator credential without exposing private key bytes.
     OperatorKeygen(config::OperatorKeygen),
+    /// Derive and validate the complete public genesis and canary bundle without private keys.
+    PreparePublicInputs(public_inputs::PreparePublicInputs),
+    /// Export a public deployment target profile from assembled inventory and native inputs.
+    ExportDeploymentProfile(deployment_profile::ExportDeploymentProfile),
     /// Assemble exact release inputs locally from an explicit inventory draft.
     Assemble(inputs::Assemble),
     /// Sign retained release inputs using an independently trusted owner key.
@@ -274,10 +293,11 @@ impl PublicResetApply {
             .onboarding_token
             .clone()
             .ok_or_else(|| eyre!("forward execution requires --onboarding-token"))?;
-        let inrou_stage_dir = self
-            .inrou_stage_dir
-            .clone()
-            .ok_or_else(|| eyre!("forward execution requires --inrou-stage-dir"))?;
+        admitted
+            .inventory
+            .qualification_scope
+            .validate_stage_argument(self.inrou_stage_dir.as_deref())?;
+        let inrou_stage_dir = self.inrou_stage_dir.clone();
         Ok(host::RuntimeCanaryInputs {
             client_config,
             validator_client_configs: self.validator_client_config.clone(),
@@ -304,12 +324,24 @@ impl PublicReset {
                 config::config_rebase(args)?;
                 return Ok(());
             }
+            PublicResetCommand::MaterializeValidatorConfig(args) => {
+                validator_config::materialize(args)?;
+                return Ok(());
+            }
             PublicResetCommand::ClientConfigRebase(args) => {
                 config::client_config_rebase(args)?;
                 return Ok(());
             }
             PublicResetCommand::OperatorKeygen(args) => {
                 config::operator_keygen(args, &mut output)?;
+                return Ok(());
+            }
+            PublicResetCommand::PreparePublicInputs(args) => {
+                public_inputs::prepare(args, &mut output)?;
+                return Ok(());
+            }
+            PublicResetCommand::ExportDeploymentProfile(args) => {
+                deployment_profile::export(args, &mut output)?;
                 return Ok(());
             }
             PublicResetCommand::Assemble(args) => {
@@ -345,6 +377,13 @@ impl PublicReset {
                     &args.ssh_identity,
                     &args.known_hosts,
                 )?;
+                if !admitted.inventory.qualification_scope.includes_inrou()
+                    && args.inrou_stage_dir.is_some()
+                {
+                    return Err(eyre!(
+                        "core_testnet forbids --inrou-stage-dir, including recovery"
+                    ));
+                }
                 match executor_model::DurableJournal::classify(journal_dir, &admitted)? {
                     executor_model::JournalOpen::Fresh(seed) => {
                         let now_ms = now_unix_ms()?;
@@ -608,26 +647,34 @@ fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QualificationScopeV1 {
     CoreTestnet,
-    Inrou,
+    FullInrou,
 }
 
 impl QualificationScopeV1 {
     const fn as_str(self) -> &'static str {
         match self {
             Self::CoreTestnet => "core_testnet",
-            Self::Inrou => "inrou",
+            Self::FullInrou => "full_inrou",
         }
     }
 
     const fn includes_inrou(self) -> bool {
-        matches!(self, Self::Inrou)
+        matches!(self, Self::FullInrou)
+    }
+
+    fn validate_stage_argument(self, stage: Option<&Path>) -> Result<()> {
+        match (self, stage) {
+            (Self::CoreTestnet, None) | (Self::FullInrou, Some(_)) => Ok(()),
+            (Self::CoreTestnet, Some(_)) => Err(eyre!("core_testnet forbids --inrou-stage-dir")),
+            (Self::FullInrou, None) => Err(eyre!("full_inrou requires --inrou-stage-dir")),
+        }
     }
 
     /// Canonical inventory slots restarted by this signed qualification plan.
     const fn restart_validator_indices(self) -> &'static [usize] {
         match self {
             Self::CoreTestnet => &[0],
-            Self::Inrou => &[0, 1, 2, 3],
+            Self::FullInrou => &[0, 1, 2, 3],
         }
     }
 
@@ -644,7 +691,7 @@ impl QualificationScopeV1 {
     const fn canary_kinds(self) -> &'static [&'static str] {
         match self {
             Self::CoreTestnet => &["onboarding", "faucet", "write_canary"],
-            Self::Inrou => &[
+            Self::FullInrou => &[
                 "onboarding",
                 "faucet",
                 "write_canary",
@@ -674,7 +721,7 @@ impl JsonDeserialize for QualificationScopeV1 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         match parser.parse_string()?.as_str() {
             "core_testnet" => Ok(Self::CoreTestnet),
-            "inrou" => Ok(Self::Inrou),
+            "full_inrou" => Ok(Self::FullInrou),
             _ => Err(json::Error::Message(
                 "unsupported public-reset qualification scope".to_owned(),
             )),
@@ -699,7 +746,8 @@ struct InventoryV1 {
     /// Dedicated public operator identity accepted by every candidate validator.
     operator_public_key: String,
     edge: EdgeV1,
-    inrou_canary: InrouCanaryV1,
+    #[norito(required)]
+    inrou_canary: Option<InrouCanaryV1>,
     canary_onboarding_request: AccountOnboardingPlanRequestV1,
     faucet_policy: FaucetPolicyV1,
     fee_intent: FeeIntentV1,
@@ -709,7 +757,41 @@ struct InventoryV1 {
     runtime_client_config_sha256: String,
     onboarding_token_sha256: String,
     validator_client_configs_sha256: String,
-    inrou_stage_tree_sha256: String,
+    #[norito(required)]
+    inrou_stage_tree_sha256: Option<String>,
+}
+
+impl InventoryV1 {
+    fn validate_inrou_scope(&self) -> Result<()> {
+        match (
+            self.qualification_scope,
+            &self.inrou_canary,
+            &self.inrou_stage_tree_sha256,
+        ) {
+            (QualificationScopeV1::CoreTestnet, None, None) => Ok(()),
+            (QualificationScopeV1::FullInrou, Some(canary), Some(hash)) => {
+                validate_lower_hex("Inrou stage closure SHA-256", hash, 64)?;
+                if hash != &canary.stage_tree_sha256 {
+                    return Err(eyre!(
+                        "full_inrou stage hash differs from the complete canary closure"
+                    ));
+                }
+                validate_inrou(canary)
+            }
+            _ => Err(eyre!(
+                "core_testnet requires null Inrou fields; full_inrou requires the complete Inrou closure"
+            )),
+        }
+    }
+
+    fn inrou_canary(&self) -> Result<&InrouCanaryV1> {
+        if !self.qualification_scope.includes_inrou() {
+            return Err(eyre!("this action requires full_inrou qualification"));
+        }
+        self.inrou_canary
+            .as_ref()
+            .ok_or_else(|| eyre!("full_inrou canary closure is absent"))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -809,14 +891,34 @@ struct ArtifactV1 {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct ValidatorAdmittedReleaseV1 {
+    /// Source identity of the selected configuration release, independently of its executable.
     commit: String,
     release_root: String,
-    iroha3d_sha256: String,
-    iroha_cli_sha256: String,
-    sorafs_node_sha256: String,
-    config_sha256: String,
-    genesis_sha256: String,
-    genesis_hash_sha256: String,
+    /// Exact daemon argv, including the stable configuration selector.
+    argv: Vec<String>,
+    artifacts: Vec<OccupiedArtifactV1>,
+}
+
+/// An independently admitted prior artifact. These bytes are never supplied by the candidate.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct OccupiedArtifactV1 {
+    role: String,
+    path: String,
+    sha256: String,
+    size: u64,
+    mode: u16,
+    /// Exact producer revision for this role; executable paths must bind this revision.
+    source_commit: String,
+}
+
+impl ValidatorAdmittedReleaseV1 {
+    fn artifact(&self, role: &str) -> Result<&OccupiedArtifactV1> {
+        self.artifacts
+            .iter()
+            .find(|entry| entry.role == role)
+            .ok_or_else(|| eyre!("occupied runtime omits artifact role `{role}`"))
+    }
 }
 
 /// Signed target occupancy; a vacant target has no prior release to restore.
@@ -1007,7 +1109,8 @@ struct AuthorizationClaimsV1 {
     runtime_client_config_sha256: String,
     onboarding_token_sha256: String,
     validator_client_configs_sha256: String,
-    inrou_stage_tree_sha256: String,
+    #[norito(required)]
+    inrou_stage_tree_sha256: Option<String>,
     faucet_policy: FaucetPolicyV1,
     fee_intent: FeeIntentV1,
     authorization_nonce: String,
@@ -1015,6 +1118,17 @@ struct AuthorizationClaimsV1 {
     not_before_unix_ms: u64,
     expires_at_unix_ms: u64,
     execution_expires_at_unix_ms: u64,
+}
+
+impl AuthorizationClaimsV1 {
+    fn inrou_stage_hash(&self) -> Result<&str> {
+        if !self.qualification_scope.includes_inrou() {
+            return Err(eyre!("Inrou stage authorization requires full_inrou"));
+        }
+        self.inrou_stage_tree_sha256
+            .as_deref()
+            .ok_or_else(|| eyre!("full_inrou stage authorization is absent"))
+    }
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -1387,18 +1501,10 @@ fn verify_authorization_window(
             "validator client-config closure SHA-256",
             claims.validator_client_configs_sha256.as_str(),
         ),
-        (
-            "Inrou stage tree SHA-256",
-            claims.inrou_stage_tree_sha256.as_str(),
-        ),
     ] {
         validate_lower_hex(label, value, 64)?;
     }
-    if claims.inrou_stage_tree_sha256 != inventory.inrou_canary.stage_tree_sha256 {
-        return Err(eyre!(
-            "authorization does not bind the inventory Inrou stage tree"
-        ));
-    }
+    inventory.validate_inrou_scope()?;
     if claims.not_before_unix_ms < claims.issued_at_unix_ms
         || claims.expires_at_unix_ms <= claims.not_before_unix_ms
         || claims.expires_at_unix_ms - claims.issued_at_unix_ms > MAX_AUTHORIZATION_LIFETIME_MS
@@ -1553,18 +1659,10 @@ fn validate_inventory_for_controller(
             "validator client-config closure SHA-256",
             inventory.validator_client_configs_sha256.as_str(),
         ),
-        (
-            "Inrou stage closure SHA-256",
-            inventory.inrou_stage_tree_sha256.as_str(),
-        ),
     ] {
         validate_lower_hex(label, value, 64)?;
     }
-    if inventory.inrou_stage_tree_sha256 != inventory.inrou_canary.stage_tree_sha256 {
-        return Err(eyre!(
-            "inventory runtime closure does not bind its retained Inrou stage"
-        ));
-    }
+    inventory.validate_inrou_scope()?;
     for (label, value) in [
         (
             "previous genesis hash",
@@ -1582,7 +1680,6 @@ fn validate_inventory_for_controller(
     validate_nonce(&inventory.authorization_nonce)?;
     validate_revision_for_controller(&inventory.revision, admission)?;
     validate_timeout_policy(inventory)?;
-    validate_inrou(&inventory.inrou_canary)?;
     validate_canary_onboarding_request(&inventory.canary_onboarding_request)?;
     validate_faucet_policy(&inventory.faucet_policy)?;
     validate_fee_intent(&inventory.fee_intent)?;
@@ -1601,7 +1698,12 @@ fn validate_inventory_for_controller(
     let mut build_fingerprint = None;
     let mut config_fingerprint = None;
     for (validator, expected_slug) in inventory.validators.iter().zip(VALIDATOR_SLUGS) {
-        validate_validator(validator, expected_slug, &inventory.revision)?;
+        validate_validator(
+            validator,
+            expected_slug,
+            &inventory.revision,
+            inventory.qualification_scope,
+        )?;
         if !hostnames.insert(validator.endpoint.hostname.clone()) {
             return Err(eyre!("validator hostnames must be distinct"));
         }
@@ -1626,9 +1728,13 @@ fn validate_inventory_for_controller(
     let mut client_accounts = BTreeSet::new();
     let mut client_peers = BTreeSet::new();
     let mut probe_origins = BTreeSet::new();
+    let mut public_origins = BTreeSet::new();
     let mut client_placement_targets = BTreeSet::new();
     for (client, expected_slug) in inventory.validator_clients.iter().zip(VALIDATOR_SLUGS) {
-        let expected_origin = format!("https://{expected_slug}.sora.org/");
+        validate_validator_public_origin(&client.torii_origin)?;
+        if !public_origins.insert(&client.torii_origin) {
+            return Err(eyre!("validator public Torii origins must be distinct"));
+        }
         validate_candidate_probe_origin(&client.probe_origin)?;
         if !probe_origins.insert(&client.probe_origin) {
             return Err(eyre!(
@@ -1636,7 +1742,6 @@ fn validate_inventory_for_controller(
             ));
         }
         if client.slug != expected_slug
-            || client.torii_origin != expected_origin
             || client.account_id.is_empty()
             || client.peer_id.is_empty()
             || !client_accounts.insert(client.account_id.clone())
@@ -1667,7 +1772,9 @@ fn validate_inventory_for_controller(
         target.validate()?;
         client_placement_targets.insert(target);
     }
-    if inventory.inrou_canary.placement_targets != client_placement_targets {
+    if let Some(canary) = &inventory.inrou_canary
+        && canary.placement_targets != client_placement_targets
+    {
         return Err(eyre!(
             "Inrou canary placement targets must equal the exact four validator client identities"
         ));
@@ -1973,11 +2080,16 @@ fn source_closure_sha256(manifest: &SourceManifestV1) -> String {
     hex::encode(digest.finalize())
 }
 
-fn validate_validator(validator: &ValidatorV1, slug: &str, revision: &RevisionV1) -> Result<()> {
+fn validate_validator(
+    validator: &ValidatorV1,
+    slug: &str,
+    revision: &RevisionV1,
+    scope: QualificationScopeV1,
+) -> Result<()> {
     if validator.slug != slug {
         return Err(eyre!("validator order is canonical; expected `{slug}`"));
     }
-    validate_platform(&validator.platform, true)?;
+    validate_platform(&validator.platform, scope.includes_inrou().then_some(12))?;
     for (label, value) in [
         ("validator node fingerprint", &validator.node_fingerprint),
         ("validator build fingerprint", &validator.build_fingerprint),
@@ -2042,6 +2154,16 @@ fn validate_validator(validator: &ValidatorV1, slug: &str, revision: &RevisionV1
         "genesis_hash",
         &format!("{release_root}/genesis/genesis.sha256"),
     )?;
+    require_remote_artifact(
+        &validator.artifacts,
+        "validator_unit",
+        &format!("{release_root}/systemd/{}", validator.systemd_unit),
+    )?;
+    if artifact(&validator.artifacts, "validator_unit")?.sha256 != validator.systemd_unit_sha256 {
+        return Err(eyre!(
+            "candidate unit pin differs from its installed artifact"
+        ));
+    }
     if validator.endpoint.remote_cli != format!("{release_root}/bin/iroha") {
         return Err(eyre!(
             "validator `{slug}` remote CLI is not the exact same-revision artifact"
@@ -2049,37 +2171,6 @@ fn validate_validator(validator: &ValidatorV1, slug: &str, revision: &RevisionV1
     }
     if validator.is_vacant() {
         return Ok(());
-    }
-    validate_lower_hex(
-        "rollback daemon SHA-256",
-        &validator.admitted_release()?.iroha3d_sha256,
-        64,
-    )?;
-    validate_lower_hex(
-        "rollback CLI SHA-256",
-        &validator.admitted_release()?.iroha_cli_sha256,
-        64,
-    )?;
-    validate_lower_hex(
-        "rollback SoraFS SHA-256",
-        &validator.admitted_release()?.sorafs_node_sha256,
-        64,
-    )?;
-    for (label, value) in [
-        (
-            "rollback config SHA-256",
-            &validator.admitted_release()?.config_sha256,
-        ),
-        (
-            "rollback genesis SHA-256",
-            &validator.admitted_release()?.genesis_sha256,
-        ),
-        (
-            "rollback genesis-hash SHA-256",
-            &validator.admitted_release()?.genesis_hash_sha256,
-        ),
-    ] {
-        validate_lower_hex(label, value, 64)?;
     }
     let release = validator.admitted_release()?;
     validate_lower_hex("admitted validator release commit", &release.commit, 40)?;
@@ -2090,7 +2181,7 @@ fn validate_validator(validator: &ValidatorV1, slug: &str, revision: &RevisionV1
             "validator `{slug}` admitted release is not a distinct canonical prior release"
         ));
     }
-    Ok(())
+    host::occupied::validate_occupied_binding(validator)
 }
 
 fn validate_edge(edge: &EdgeV1, revision: &RevisionV1) -> Result<()> {
@@ -2117,7 +2208,7 @@ fn validate_edge(edge: &EdgeV1, revision: &RevisionV1) -> Result<()> {
         validate_lower_hex("edge rollback CLI SHA-256", &release.cli_sha256, 64)?;
         validate_lower_hex("edge rollback config SHA-256", &release.config_sha256, 64)?;
     }
-    validate_platform(&edge.platform, false)?;
+    validate_platform(&edge.platform, Some(0))?;
     validate_endpoint(&edge.endpoint, &edge.service_root, revision)?;
     validate_artifacts(
         &edge.artifacts,
@@ -2144,15 +2235,47 @@ fn validate_edge(edge: &EdgeV1, revision: &RevisionV1) -> Result<()> {
     Ok(())
 }
 
-fn validate_platform(platform: &PlatformV1, require_kvm: bool) -> Result<()> {
+fn validate_platform(platform: &PlatformV1, required_kvm_api_version: Option<u32>) -> Result<()> {
     if platform.os != "linux" || platform.arch != "aarch64" {
         return Err(eyre!("public Taira hosts must be Linux/AArch64"));
     }
-    if (require_kvm && platform.kvm_api_version != 12)
-        || (!require_kvm && platform.kvm_api_version != 0)
+    // Core validators report observed KVM availability without requiring a guest runtime.
+    if !matches!(platform.kvm_api_version, 0 | 12)
+        || required_kvm_api_version.is_some_and(|required| platform.kvm_api_version != required)
     {
         return Err(eyre!(
-            "validators require KVM API 12 and the edge must declare KVM API 0"
+            "core validators may declare KVM API 0 or 12, full_inrou validators require 12, and the edge requires 0"
+        ));
+    }
+    Ok(())
+}
+
+/// Public validator routing is selected by the reviewed inventory, independently
+/// of role slugs. Preserve the signed request path by admitting HTTPS roots only.
+fn validate_validator_public_origin(origin: &str) -> Result<()> {
+    let url = url::Url::parse(origin).wrap_err("validator public Torii origin is invalid")?;
+    let Some(url::Host::Domain(host)) = url.host() else {
+        return Err(eyre!(
+            "validator public Torii origin requires a DNS hostname"
+        ));
+    };
+    validate_hostname(host).wrap_err("validator public Torii hostname is invalid")?;
+    if host.split('.').any(|label| {
+        label.is_empty() || label.len() > 63 || label.starts_with('-') || label.ends_with('-')
+    }) || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+        || url.port() == Some(0)
+        || url.as_str() != origin
+    {
+        return Err(eyre!(
+            "validator public Torii origin must be one canonical HTTPS DNS root without credentials, query, fragment, or path prefix"
         ));
     }
     Ok(())
@@ -2507,6 +2630,7 @@ fn artifact_role_policy(role: &str) -> Result<(u16, u64)> {
         "genesis" => Ok((0o644, 64 * MIB)),
         "genesis_hash" => Ok((0o644, 65)),
         "edge_config" => Ok((0o640, MIB)),
+        "validator_unit" => Ok((0o644, MIB)),
         _ => Err(eyre!("unsupported first-release artifact role `{role}`")),
     }
 }
@@ -3272,11 +3396,14 @@ fn read_pinned_bytes(
     snapshot: &FileSnapshot,
     maximum: u64,
 ) -> Result<Vec<u8>> {
+    if snapshot.len > maximum {
+        return Err(eyre!("{label} exceeds the {maximum}-byte V1 limit"));
+    }
     let capacity =
         usize::try_from(snapshot.len).wrap_err("pinned input length is not representable")?;
     let mut bytes = Vec::with_capacity(capacity);
     {
-        let mut limited = (&mut file).take(maximum + 1);
+        let mut limited = (&mut file).take(maximum.saturating_add(1));
         limited
             .read_to_end(&mut bytes)
             .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
@@ -3531,6 +3658,19 @@ mod executor_model {
         CleanupPending,
     }
 
+    /// Exclusive journal lock whose release follows its owning admission.
+    struct JournalLock {
+        file: File,
+    }
+
+    impl Drop for JournalLock {
+        fn drop(&mut self) {
+            // Closing our descriptor alone can leave the lock held by an
+            // unrelated child between fork and exec, before CLOEXEC takes effect.
+            let _ = self.file.unlock();
+        }
+    }
+
     pub(super) struct JournalSeed {
         directory: PathBuf,
         current_path: PathBuf,
@@ -3538,7 +3678,7 @@ mod executor_model {
         deployment_receipt_path: PathBuf,
         aborted_receipt_path: PathBuf,
         rollback_receipt_path: PathBuf,
-        _lock: File,
+        _lock: JournalLock,
     }
 
     pub(super) struct DurableJournal {
@@ -3549,7 +3689,7 @@ mod executor_model {
         aborted_receipt_path: PathBuf,
         rollback_receipt_path: PathBuf,
         state: JournalV1,
-        _lock: File,
+        _lock: JournalLock,
     }
 
     impl DurableJournal {
@@ -3567,6 +3707,7 @@ mod executor_model {
             let lock = open_private_rw(&lock_path)?;
             lock.try_lock()
                 .wrap_err("another public-reset executor holds the journal lock")?;
+            let lock = JournalLock { file: lock };
 
             let completed_dir = directory.join("completed");
             if !completed_dir.exists() {
@@ -3724,7 +3865,7 @@ mod executor_model {
             if self.state.status != "recovery_pending" {
                 return Err(eyre!("journal is not at a recovery-pending boundary"));
             }
-            EXECUTION_STEPS
+            execution_steps(self.state.qualification_scope)
                 .get(usize::from(self.state.next_step))
                 .copied()
                 .filter(|step| step.supports_recovery())
@@ -3775,7 +3916,8 @@ mod executor_model {
         fn mark_deployment_proven(&mut self, state: JournalV1) -> Result<()> {
             if state.status != "sealing"
                 || state.phase != "seal"
-                || usize::from(state.next_step) != EXECUTION_STEPS.len() - 2
+                || usize::from(state.next_step)
+                    != execution_steps(state.qualification_scope).len() - 2
             {
                 return Err(eyre!(
                     "deployment proof is not at the exact sealing boundary"
@@ -3866,7 +4008,7 @@ mod executor_model {
                     | "finishing"
                     | "rolled_back"
             )
-            || usize::from(actual.next_step) > EXECUTION_STEPS.len()
+            || usize::from(actual.next_step) > execution_steps(actual.qualification_scope).len()
             || usize::from(actual.rollback_next_validator) > actual.touched_validators.len()
             || actual.failure_summary.len() > 512
             || actual.rollback_failures.len() > 5
@@ -3884,7 +4026,7 @@ mod executor_model {
             .take(actual.touched_validators.len())
             .copied()
             .collect::<Vec<_>>();
-        let edge_stage_index = EXECUTION_STEPS
+        let edge_stage_index = execution_steps(actual.qualification_scope)
             .iter()
             .position(|step| *step == ExecutionStep::EdgeStage)
             .expect("the canonical plan contains edge staging");
@@ -3897,7 +4039,7 @@ mod executor_model {
             ));
         }
         let valid_recovery = if actual.status == "recovery_pending" {
-            EXECUTION_STEPS
+            execution_steps(actual.qualification_scope)
                 .get(usize::from(actual.next_step))
                 .copied()
                 .filter(|step| step.supports_recovery())
@@ -3920,7 +4062,7 @@ mod executor_model {
             || (actual.status == "in_progress"
                 && (!valid_in_progress_phase(actual)
                     || actual.recovery_intent.as_ref().is_some_and(|intent| {
-                        !EXECUTION_STEPS
+                        !execution_steps(actual.qualification_scope)
                             .get(usize::from(actual.next_step))
                             .copied()
                             .is_some_and(|step| {
@@ -3938,7 +4080,8 @@ mod executor_model {
                     || !actual.rollback_failures.is_empty()))
             || (actual.status == "sealing"
                 && (actual.phase != "seal"
-                    || usize::from(actual.next_step) != EXECUTION_STEPS.len() - 2
+                    || usize::from(actual.next_step)
+                        != execution_steps(actual.qualification_scope).len() - 2
                     || actual.recovery_intent.is_some()
                     || actual.edge_rollback_complete
                     || actual.rollback_next_validator != 0
@@ -3949,7 +4092,8 @@ mod executor_model {
                     || actual.failure_summary.is_empty()))
             || (actual.status == "cleanup_pending"
                 && (actual.phase != "cleanup_pending"
-                    || usize::from(actual.next_step) != EXECUTION_STEPS.len() - 1
+                    || usize::from(actual.next_step)
+                        != execution_steps(actual.qualification_scope).len() - 1
                     || actual.recovery_intent.is_some()
                     || actual.edge_rollback_complete
                     || actual.rollback_next_validator != 0
@@ -3971,7 +4115,8 @@ mod executor_model {
                         != actual.touched_validators.len()
                     || (actual.edge_touched && !actual.edge_rollback_complete)))
             || (actual.status == "finishing"
-                && (usize::from(actual.next_step) != EXECUTION_STEPS.len()
+                && (usize::from(actual.next_step)
+                    != execution_steps(actual.qualification_scope).len()
                     || actual.phase != "finishing"
                     || actual.recovery_intent.is_some()
                     || actual.edge_rollback_complete
@@ -3986,11 +4131,11 @@ mod executor_model {
 
     fn valid_in_progress_phase(state: &JournalV1) -> bool {
         let next = usize::from(state.next_step);
-        if next >= EXECUTION_STEPS.len() - 2 {
+        if next >= execution_steps(state.qualification_scope).len() - 2 {
             return false;
         }
         (next == 0 && state.phase == "admitted")
-            || EXECUTION_STEPS
+            || execution_steps(state.qualification_scope)
                 .get(next)
                 .is_some_and(|step| state.phase == step.label())
     }
@@ -4112,7 +4257,7 @@ mod executor_model {
             ("recovery_pending", "in_progress") if after.recovery_intent.is_some() => {
                 before.recovery_intent == after.recovery_intent
                     && after.next_step == before.next_step
-                    && EXECUTION_STEPS
+                    && execution_steps(after.qualification_scope)
                         .get(usize::from(after.next_step))
                         .copied()
                         .zip(after.recovery_intent.as_ref())
@@ -4318,7 +4463,8 @@ mod executor_model {
     ) -> Result<()> {
         if finishing.status != "finishing"
             || finishing.phase != "finishing"
-            || usize::from(finishing.next_step) != EXECUTION_STEPS.len()
+            || usize::from(finishing.next_step)
+                != execution_steps(finishing.qualification_scope).len()
         {
             return Err(eyre!("journal is not at the exact finishing boundary"));
         }
@@ -4351,17 +4497,24 @@ mod executor_model {
         let mut proven = state.clone();
         let valid_boundary = match state.status.as_str() {
             "sealing" => {
-                state.phase == "seal" && usize::from(state.next_step) == EXECUTION_STEPS.len() - 2
+                state.phase == "seal"
+                    && usize::from(state.next_step)
+                        == execution_steps(state.qualification_scope).len() - 2
             }
             "cleanup_pending" => {
                 state.phase == "cleanup_pending"
-                    && usize::from(state.next_step) == EXECUTION_STEPS.len() - 1
+                    && usize::from(state.next_step)
+                        == execution_steps(state.qualification_scope).len() - 1
             }
             "finishing" => {
-                state.phase == "finishing" && usize::from(state.next_step) == EXECUTION_STEPS.len()
+                state.phase == "finishing"
+                    && usize::from(state.next_step)
+                        == execution_steps(state.qualification_scope).len()
             }
             "completed" => {
-                state.phase == "completed" && usize::from(state.next_step) == EXECUTION_STEPS.len()
+                state.phase == "completed"
+                    && usize::from(state.next_step)
+                        == execution_steps(state.qualification_scope).len()
             }
             _ => false,
         };
@@ -4376,8 +4529,8 @@ mod executor_model {
         }
         proven.status = "sealing".to_owned();
         proven.phase = "seal".to_owned();
-        proven.next_step =
-            u16::try_from(EXECUTION_STEPS.len() - 2).expect("bounded execution plan");
+        proven.next_step = u16::try_from(execution_steps(state.qualification_scope).len() - 2)
+            .expect("bounded execution plan");
         proven.failure_summary.clear();
         if state.status == "sealing" {
             publish_json_no_replace(receipt, &proven)
@@ -4568,7 +4721,8 @@ mod executor_model {
             || completed.phase != "completed"
             || completed.inventory_sha256 != expected.inventory_sha256
             || completed.authorization_sha256 != expected.authorization_sha256
-            || usize::from(completed.next_step) != EXECUTION_STEPS.len()
+            || usize::from(completed.next_step)
+                != execution_steps(completed.qualification_scope).len()
         {
             return Err(eyre!(
                 "completed receipt is not this exact finished execution"
@@ -4656,7 +4810,7 @@ mod executor_model {
         Cleanup,
     }
 
-    const EXECUTION_STEPS: [ExecutionStep; 15] = [
+    const FULL_INROU_EXECUTION_STEPS: [ExecutionStep; 15] = [
         ExecutionStep::Preflight,
         ExecutionStep::Stage,
         ExecutionStep::Stop,
@@ -4673,6 +4827,30 @@ mod executor_model {
         ExecutionStep::Seal,
         ExecutionStep::Cleanup,
     ];
+
+    const CORE_TESTNET_EXECUTION_STEPS: [ExecutionStep; 14] = [
+        ExecutionStep::Preflight,
+        ExecutionStep::Stage,
+        ExecutionStep::Stop,
+        ExecutionStep::Install,
+        ExecutionStep::Reset,
+        ExecutionStep::Start,
+        ExecutionStep::Convergence,
+        ExecutionStep::Canary,
+        ExecutionStep::RestartProof,
+        ExecutionStep::EdgeStage,
+        ExecutionStep::EdgeCutover,
+        ExecutionStep::EdgeVerify,
+        ExecutionStep::Seal,
+        ExecutionStep::Cleanup,
+    ];
+
+    fn execution_steps(scope: QualificationScopeV1) -> &'static [ExecutionStep] {
+        match scope {
+            QualificationScopeV1::CoreTestnet => &CORE_TESTNET_EXECUTION_STEPS,
+            QualificationScopeV1::FullInrou => &FULL_INROU_EXECUTION_STEPS,
+        }
+    }
 
     impl ExecutionStep {
         pub(super) const fn label(self) -> &'static str {
@@ -4848,7 +5026,12 @@ mod executor_model {
             return Err(eyre!("resumed public-reset rollback completed"));
         }
         let start = usize::from(journal.state().next_step);
-        for (index, step) in EXECUTION_STEPS.iter().copied().enumerate().skip(start) {
+        for (index, step) in execution_steps(inventory.qualification_scope)
+            .iter()
+            .copied()
+            .enumerate()
+            .skip(start)
+        {
             let mut state = journal.state().clone();
             if step != ExecutionStep::Cleanup || state.status != "cleanup_pending" {
                 state.phase = step.label().to_owned();
@@ -4989,7 +5172,7 @@ mod executor_model {
                 "journal cannot publish a forward successor outside its exact cursor"
             ));
         }
-        let successor = EXECUTION_STEPS
+        let successor = execution_steps(state.qualification_scope)
             .get(successor_index)
             .ok_or_else(|| eyre!("execution step has no forward successor"))?;
         state.phase = successor.label().to_owned();
@@ -5070,7 +5253,7 @@ mod executor_model {
         journal: &mut J,
     ) -> Result<()> {
         let index = usize::from(journal.state().next_step);
-        let step = EXECUTION_STEPS
+        let step = execution_steps(inventory.qualification_scope)
             .get(index)
             .copied()
             .filter(|step| step.supports_recovery())
@@ -5733,7 +5916,15 @@ mod executor_model {
             use iroha::data_model::account::address::chain_discriminant;
             let _ambient = ChainDiscriminantGuard::enter(753);
             let inventory = sample_inventory();
-            assert_eq!(inventory.inrou_canary.placement_targets.len(), 4);
+            assert_eq!(
+                inventory
+                    .inrou_canary
+                    .as_ref()
+                    .expect("full Inrou fixture")
+                    .placement_targets
+                    .len(),
+                4
+            );
             let bytes = canonical_inventory_bytes(&inventory).expect("canonical Taira inventory");
             assert_eq!(chain_discriminant(), 753, "serializer restores its caller");
             let value: Value = json::from_slice(&bytes).expect("public inventory JSON");
@@ -5759,8 +5950,16 @@ mod executor_model {
                     .expect("fixed-network boundary decodes all four placements");
                 assert_eq!(chain_discriminant(), CHAIN_DISCRIMINANT);
                 assert_eq!(
-                    decoded.inrou_canary.placement_targets,
-                    inventory.inrou_canary.placement_targets
+                    decoded
+                        .inrou_canary
+                        .as_ref()
+                        .expect("full Inrou fixture")
+                        .placement_targets,
+                    inventory
+                        .inrou_canary
+                        .as_ref()
+                        .expect("full Inrou fixture")
+                        .placement_targets
                 );
                 validate_inventory(&decoded).expect("decoded inventory remains admissible");
                 assert_eq!(
@@ -5793,6 +5992,8 @@ mod executor_model {
             let canonical: Value = json::from_slice(&bytes).expect("public inventory value");
             let foreign_account = inventory
                 .inrou_canary
+                .as_ref()
+                .expect("full Inrou fixture")
                 .placement_targets
                 .iter()
                 .next()
@@ -5850,13 +6051,189 @@ mod executor_model {
         }
 
         #[test]
-        fn qualification_scope_is_required_and_canonical_in_all_authority_documents() {
+        fn qualification_scope_requires_exact_nullable_inrou_closure() {
+            let full = sample_inventory();
+            validate_inventory(&full).expect("complete full_inrou fixture");
+            let mut core = full.clone();
+            core.qualification_scope = QualificationScopeV1::CoreTestnet;
+            assert!(
+                validate_inventory(&core).is_err(),
+                "core rejects an Inrou object"
+            );
+            core.inrou_canary = None;
+            assert!(
+                validate_inventory(&core).is_err(),
+                "core rejects an Inrou stage hash"
+            );
+            core.inrou_stage_tree_sha256 = None;
+            validate_inventory(&core).expect("core accepts validators reporting KVM API 12");
+            let mut no_kvm_core = core.clone();
+            for validator in &mut no_kvm_core.validators {
+                validator.platform.kvm_api_version = 0;
+            }
+            validate_inventory(&no_kvm_core).expect("all four core validators may run without KVM");
+            for index in 0..full.validators.len() {
+                let mut no_kvm_full = full.clone();
+                no_kvm_full.validators[index].platform.kvm_api_version = 0;
+                assert!(
+                    validate_inventory(&no_kvm_full).is_err(),
+                    "every full_inrou validator requires KVM API 12"
+                );
+            }
+            let mut unknown_kvm_core = no_kvm_core.clone();
+            unknown_kvm_core.validators[0].platform.kvm_api_version = 11;
+            assert!(
+                validate_inventory(&unknown_kvm_core).is_err(),
+                "core still rejects unsupported observed KVM API versions"
+            );
+            let mut kvm_edge = no_kvm_core.clone();
+            kvm_edge.edge.platform.kvm_api_version = 12;
+            assert!(
+                validate_inventory(&kvm_edge).is_err(),
+                "the edge must still declare KVM API 0"
+            );
+            for inventory in [&core, &full] {
+                let encoded = json::to_value(inventory).expect("typed inventory");
+                for field in ["inrou_canary", "inrou_stage_tree_sha256"] {
+                    let mut missing = encoded.clone();
+                    missing.as_object_mut().unwrap().remove(field);
+                    assert!(
+                        json::from_value::<InventoryV1>(missing).is_err(),
+                        "{field} must be explicit, even when null"
+                    );
+                }
+                let authority = admitted((*inventory).clone());
+                let mut claims = json::to_value(&authority.authorization.claims).unwrap();
+                claims
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("inrou_stage_tree_sha256");
+                assert!(json::from_value::<AuthorizationClaimsV1>(claims).is_err());
+            }
+            for remove_canary in [true, false] {
+                let mut incomplete = full.clone();
+                if remove_canary {
+                    incomplete.inrou_canary = None;
+                } else {
+                    incomplete.inrou_stage_tree_sha256 = None;
+                }
+                assert!(
+                    validate_inventory(&incomplete).is_err(),
+                    "full scope never defaults a missing stage dependency"
+                );
+            }
+            let mut drift = full.clone();
+            drift.inrou_stage_tree_sha256 = Some("b".repeat(64));
+            assert!(validate_inventory(&drift).is_err());
+            assert!(
+                json::from_value::<QualificationScopeV1>(Value::String("inrou".to_owned()))
+                    .is_err(),
+                "no old scope alias"
+            );
+            let path = Path::new("/unopened-inrou-stage");
+            assert!(
+                QualificationScopeV1::CoreTestnet
+                    .validate_stage_argument(None)
+                    .is_ok()
+            );
+            assert!(
+                QualificationScopeV1::CoreTestnet
+                    .validate_stage_argument(Some(path))
+                    .is_err()
+            );
+            assert!(
+                QualificationScopeV1::FullInrou
+                    .validate_stage_argument(None)
+                    .is_err()
+            );
+            assert!(
+                QualificationScopeV1::FullInrou
+                    .validate_stage_argument(Some(path))
+                    .is_ok()
+            );
+        }
+
+        #[test]
+        fn qualification_scope_reopens_exact_durable_execution_boundaries() {
             for scope in [
                 QualificationScopeV1::CoreTestnet,
-                QualificationScopeV1::Inrou,
+                QualificationScopeV1::FullInrou,
             ] {
                 let mut inventory = sample_inventory();
                 inventory.qualification_scope = scope;
+                if !scope.includes_inrou() {
+                    inventory.inrou_canary = None;
+                    inventory.inrou_stage_tree_sha256 = None;
+                }
+                let steps = execution_steps(scope);
+                assert_eq!(steps.len(), if scope.includes_inrou() { 15 } else { 14 });
+                assert_eq!(
+                    steps.contains(&ExecutionStep::Preseed),
+                    scope.includes_inrou()
+                );
+                for boundary in [5, 6, steps.len() - 3] {
+                    let admitted = admitted(inventory.clone());
+                    let directory = private_tempdir();
+                    let canonical = directory.path().canonicalize().unwrap();
+                    let journal = DurableJournal::open(&canonical, &admitted).unwrap();
+                    let mut crashing = CrashAfterDurableSuccessor {
+                        journal,
+                        next_step: u16::try_from(boundary).unwrap(),
+                        crashed: false,
+                    };
+                    let mut first = MockTransport::default();
+                    let error = execute_plan(&admitted.inventory, &mut first, &mut crashing)
+                        .expect_err("crash after durable boundary");
+                    assert!(
+                        format!("{error:#}").contains("injected crash after durable successor")
+                    );
+                    assert_eq!(crashing.state().phase, steps[boundary].label());
+                    let mut wrong = crashing.state().clone();
+                    wrong.phase = if scope.includes_inrou() {
+                        "missing-full-stage"
+                    } else {
+                        "preseed"
+                    }
+                    .to_owned();
+                    assert!(validate_resumable_journal(&wrong, crashing.state()).is_err());
+                    drop(crashing);
+                    let mut resumed = match DurableJournal::classify(&canonical, &admitted).unwrap()
+                    {
+                        JournalOpen::Resumable(journal) => journal,
+                        JournalOpen::Fresh(_) => panic!("durable boundary must remain resumable"),
+                    };
+                    assert_eq!(resumed.state().phase, steps[boundary].label());
+                    let mut retry = MockTransport::default();
+                    execute_plan(&admitted.inventory, &mut retry, &mut resumed)
+                        .expect("exact scope resumes to completion");
+                    assert_eq!(usize::from(resumed.state().next_step), steps.len());
+                    assert_eq!(resumed.state().status, "completed");
+                    if !scope.includes_inrou() {
+                        assert!(
+                            !first
+                                .events
+                                .iter()
+                                .chain(&retry.events)
+                                .any(|event| event.contains("preseed")),
+                            "core records no fake preseed work"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn qualification_scope_is_required_and_canonical_in_all_authority_documents() {
+            for scope in [
+                QualificationScopeV1::CoreTestnet,
+                QualificationScopeV1::FullInrou,
+            ] {
+                let mut inventory = sample_inventory();
+                inventory.qualification_scope = scope;
+                if !scope.includes_inrou() {
+                    inventory.inrou_canary = None;
+                    inventory.inrou_stage_tree_sha256 = None;
+                }
                 validate_inventory(&inventory).expect("both explicit scopes are admitted");
                 let bytes = canonical_inventory_bytes(&inventory).expect("inventory bytes");
                 let inventory_value: Value = json::from_slice(&bytes).expect("inventory JSON");
@@ -5927,8 +6304,10 @@ mod executor_model {
         fn qualification_scope_is_bound_before_normal_and_recovery_signature_admission() {
             let mut inventory = sample_inventory();
             inventory.qualification_scope = QualificationScopeV1::CoreTestnet;
+            inventory.inrou_canary = None;
+            inventory.inrou_stage_tree_sha256 = None;
             let mut admitted = admitted(inventory);
-            admitted.authorization.claims.qualification_scope = QualificationScopeV1::Inrou;
+            admitted.authorization.claims.qualification_scope = QualificationScopeV1::FullInrou;
             for admission_window in [true, false] {
                 let error = verify_authorization_window(
                     &admitted.inventory,
@@ -5952,11 +6331,13 @@ mod executor_model {
         fn qualification_scope_is_immutable_in_recovery_and_reported_explicitly() {
             let mut inventory = sample_inventory();
             inventory.qualification_scope = QualificationScopeV1::CoreTestnet;
+            inventory.inrou_canary = None;
+            inventory.inrou_stage_tree_sha256 = None;
             let admitted = admitted(inventory);
             let initial = initial_journal(&admitted);
             validate_resumable_journal(&initial, &initial).expect("same core scope resumes");
             let mut changed = initial.clone();
-            changed.qualification_scope = QualificationScopeV1::Inrou;
+            changed.qualification_scope = QualificationScopeV1::FullInrou;
             assert!(validate_resumable_journal(&changed, &initial).is_err());
             assert!(!valid_journal_successor(&initial, &changed));
             let report = report(&admitted, "apply", "ok", "core qualification completed");
@@ -5965,7 +6346,7 @@ mod executor_model {
                 Some("core_testnet")
             );
             let mut full_inventory = admitted.inventory.clone();
-            full_inventory.qualification_scope = QualificationScopeV1::Inrou;
+            full_inventory.qualification_scope = QualificationScopeV1::FullInrou;
             assert_eq!(
                 execution_lifetime_ms(&admitted.inventory).expect("core lease"),
                 execution_lifetime_ms(&full_inventory).expect("conservative maximum lease")
@@ -5992,7 +6373,15 @@ mod executor_model {
                 let (decoded, retained, _guard) = read_inventory(&path, "inventory")
                     .expect("read real retained inventory under ambient SORA context");
                 assert_eq!(retained, bytes);
-                assert_eq!(decoded.inrou_canary.placement_targets.len(), 4);
+                assert_eq!(
+                    decoded
+                        .inrou_canary
+                        .as_ref()
+                        .expect("full Inrou fixture")
+                        .placement_targets
+                        .len(),
+                    4
+                );
                 assert_eq!(chain_discriminant(), CHAIN_DISCRIMINANT);
             }
             assert_eq!(chain_discriminant(), 753);
@@ -6120,8 +6509,8 @@ mod executor_model {
             let root = directory.path().canonicalize().expect("artifact root");
             let mut materialized = BTreeSet::new();
             let mut materialize = |slug: &str, artifact: &mut ArtifactV1| {
-                let source_name = if artifact.role == "config" {
-                    format!("{slug}-config")
+                let source_name = if matches!(artifact.role.as_str(), "config" | "validator_unit") {
+                    format!("{slug}-{}", artifact.role)
                 } else {
                     artifact.role.clone()
                 };
@@ -6180,7 +6569,7 @@ mod executor_model {
                 pinned.len(),
                 "deduplication must retain every host/role/remote-path entry"
             );
-            assert_eq!(hash_counts.len(), 10);
+            assert_eq!(hash_counts.len(), 14);
             assert!(hash_counts.values().all(|count| *count == 1));
             let iroha3d = PathBuf::from(&inventory.validators[0].artifacts[0].local_path);
             assert_eq!(hash_counts.get(&iroha3d), Some(&1));
@@ -6372,15 +6761,20 @@ mod executor_model {
                     }
                     _ => unreachable!("closed validator-fingerprint fixture field"),
                 };
-                let error = validate_validator(&validator, VALIDATOR_SLUGS[0], &inventory.revision)
-                    .expect_err("an unmarked validator fingerprint must fail admission");
+                let error = validate_validator(
+                    &validator,
+                    VALIDATOR_SLUGS[0],
+                    &inventory.revision,
+                    inventory.qualification_scope,
+                )
+                .expect_err("an unmarked validator fingerprint must fail admission");
                 assert!(format!("{error:#}").contains(expected_label));
             }
         }
 
         #[test]
         fn inrou_canary_requires_exact_first_release_service_version_format() {
-            let canonical = sample_inventory().inrou_canary;
+            let canonical = sample_inventory().inrou_canary.expect("full Inrou fixture");
             validate_inrou(&canonical).expect("canonical artifact-version format");
 
             let mut another_canonical_digest = canonical.clone();
@@ -6408,7 +6802,7 @@ mod executor_model {
 
         #[test]
         fn inrou_canary_rejects_printable_but_noncanonical_iroha_hashes() {
-            let canonical = sample_inventory().inrou_canary;
+            let canonical = sample_inventory().inrou_canary.expect("full Inrou fixture");
             for mutate in [
                 |canary: &mut InrouCanaryV1| canary.bundle_hash = "bundle".to_owned(),
                 |canary: &mut InrouCanaryV1| {
@@ -6430,7 +6824,7 @@ mod executor_model {
 
         #[test]
         fn inrou_hash_fields_require_the_iroha_marker_bit() {
-            let canonical = sample_inventory().inrou_canary;
+            let canonical = sample_inventory().inrou_canary.expect("full Inrou fixture");
             let unmarked = unmarked_iroha_hash(b"unmarked Inrou hash fixture");
             for field in [
                 "service_revision",
@@ -6828,6 +7222,56 @@ mod executor_model {
         }
 
         #[test]
+        fn journal_lock_release_does_not_wait_for_duplicated_descriptors() {
+            for initialized in [false, true] {
+                let directory = private_tempdir();
+                let canonical = directory.path().canonicalize().expect("canonical tempdir");
+                let admitted = admitted(sample_inventory());
+                let seed = match DurableJournal::classify(&canonical, &admitted)
+                    .expect("fresh admission holds the lock")
+                {
+                    JournalOpen::Fresh(seed) => seed,
+                    JournalOpen::Resumable(_) => panic!("new directory must be fresh"),
+                };
+                let first = if initialized {
+                    JournalOpen::Resumable(
+                        DurableJournal::initialize(seed, &admitted).expect("initialize journal"),
+                    )
+                } else {
+                    JournalOpen::Fresh(seed)
+                };
+                // A duplicate retains the same open file description as a child
+                // forked by another thread before CLOEXEC takes effect.
+                let duplicate = match &first {
+                    JournalOpen::Fresh(seed) => seed._lock.file.try_clone(),
+                    JournalOpen::Resumable(journal) => journal._lock.file.try_clone(),
+                }
+                .expect("duplicate lock descriptor");
+                for _ in 0..2 {
+                    assert!(
+                        DurableJournal::classify(&canonical, &admitted).is_err(),
+                        "failed contenders must leave the active owner's lock intact"
+                    );
+                }
+                drop(first);
+                let replacement = DurableJournal::classify(&canonical, &admitted)
+                    .expect("owner release must unlock even while a duplicate remains open");
+                assert_eq!(
+                    matches!(&replacement, JournalOpen::Resumable(_)),
+                    initialized
+                );
+                drop(duplicate);
+                assert!(
+                    DurableJournal::classify(&canonical, &admitted).is_err(),
+                    "closing the old duplicate must not release the replacement owner's lock"
+                );
+                drop(replacement);
+                DurableJournal::classify(&canonical, &admitted)
+                    .expect("replacement owner releases its lock");
+            }
+        }
+
+        #[test]
         fn untouched_expiry_abort_rejects_old_replay_and_permits_new_authorization() {
             let directory = private_tempdir();
             let canonical = directory.path().canonicalize().expect("canonical tempdir");
@@ -6868,7 +7312,7 @@ mod executor_model {
                 state.status = "recovery_pending".to_owned();
                 state.phase = step.label().to_owned();
                 state.next_step = u16::try_from(
-                    EXECUTION_STEPS
+                    FULL_INROU_EXECUTION_STEPS
                         .iter()
                         .position(|candidate| *candidate == step)
                         .expect("step index"),
@@ -6959,7 +7403,7 @@ mod executor_model {
             let canonical = directory.path().canonicalize().expect("canonical tempdir");
             let mut journal = DurableJournal::open(&canonical, &admitted).expect("journal");
             let step = ExecutionStep::Canary;
-            let step_index = EXECUTION_STEPS
+            let step_index = FULL_INROU_EXECUTION_STEPS
                 .iter()
                 .position(|candidate| *candidate == step)
                 .expect("canary index");
@@ -7088,7 +7532,7 @@ mod executor_model {
             assert_eq!(journal.state.phase, "canary");
             assert_eq!(
                 usize::from(journal.state.next_step),
-                EXECUTION_STEPS
+                FULL_INROU_EXECUTION_STEPS
                     .iter()
                     .position(|step| *step == ExecutionStep::Canary)
                     .expect("canary step")
@@ -7192,7 +7636,7 @@ mod executor_model {
                     assert!(journal.state.recovery_intent.is_none());
                     assert_eq!(
                         usize::from(journal.state.next_step),
-                        EXECUTION_STEPS
+                        FULL_INROU_EXECUTION_STEPS
                             .iter()
                             .position(|candidate| *candidate == step)
                             .unwrap()
@@ -7263,7 +7707,7 @@ mod executor_model {
             journal.state.status = "recovery_pending".to_owned();
             journal.state.phase = step.label().to_owned();
             journal.state.next_step = u16::try_from(
-                EXECUTION_STEPS
+                FULL_INROU_EXECUTION_STEPS
                     .iter()
                     .position(|candidate| *candidate == step)
                     .unwrap(),
@@ -7300,7 +7744,7 @@ mod executor_model {
             journal.state.status = "recovery_pending".to_owned();
             journal.state.phase = step.label().to_owned();
             journal.state.next_step = u16::try_from(
-                EXECUTION_STEPS
+                FULL_INROU_EXECUTION_STEPS
                     .iter()
                     .position(|candidate| *candidate == step)
                     .expect("canary index"),
@@ -7327,7 +7771,7 @@ mod executor_model {
             journal.state.status = "recovery_pending".to_owned();
             journal.state.phase = step.label().to_owned();
             journal.state.next_step = u16::try_from(
-                EXECUTION_STEPS
+                FULL_INROU_EXECUTION_STEPS
                     .iter()
                     .position(|candidate| *candidate == step)
                     .expect("canary index"),
@@ -7372,9 +7816,13 @@ mod executor_model {
                     let mut state = journal.state().clone();
                     state.status = "recovery_pending".to_owned();
                     state.phase = step.label().to_owned();
-                    state.next_step =
-                        u16::try_from(EXECUTION_STEPS.iter().position(|s| *s == step).unwrap())
-                            .unwrap();
+                    state.next_step = u16::try_from(
+                        FULL_INROU_EXECUTION_STEPS
+                            .iter()
+                            .position(|s| *s == step)
+                            .unwrap(),
+                    )
+                    .unwrap();
                     state.touched_validators = VALIDATOR_SLUGS.map(str::to_owned).to_vec();
                     state.edge_touched = step == ExecutionStep::EdgeVerify;
                     state.recovery_intent = Some(intent.clone());
@@ -7452,8 +7900,13 @@ mod executor_model {
             intent.mutations[0].state = RecoveryMutationStateV1::Submitted;
             journal.state.status = "recovery_pending".to_owned();
             journal.state.phase = step.label().to_owned();
-            journal.state.next_step =
-                u16::try_from(EXECUTION_STEPS.iter().position(|s| *s == step).unwrap()).unwrap();
+            journal.state.next_step = u16::try_from(
+                FULL_INROU_EXECUTION_STEPS
+                    .iter()
+                    .position(|s| *s == step)
+                    .unwrap(),
+            )
+            .unwrap();
             journal.state.touched_validators = VALIDATOR_SLUGS.map(str::to_owned).to_vec();
             journal.state.recovery_intent = Some(intent);
             let mut observer = MockTransport::default();
@@ -7484,7 +7937,7 @@ mod executor_model {
             journal.state.status = "recovery_pending".to_owned();
             journal.state.phase = step.label().to_owned();
             journal.state.next_step = u16::try_from(
-                EXECUTION_STEPS
+                FULL_INROU_EXECUTION_STEPS
                     .iter()
                     .position(|candidate| *candidate == step)
                     .expect("canary index"),
@@ -7502,7 +7955,7 @@ mod executor_model {
             assert_eq!(transport.events, ["recover:canary"]);
             assert_eq!(journal.state.status, "recovery_pending");
             assert_eq!(
-                EXECUTION_STEPS[usize::from(journal.state.next_step)],
+                FULL_INROU_EXECUTION_STEPS[usize::from(journal.state.next_step)],
                 ExecutionStep::Canary
             );
         }
@@ -7520,7 +7973,7 @@ mod executor_model {
             assert_eq!(journal.state.phase, "seal");
             assert_eq!(
                 usize::from(journal.state.next_step),
-                EXECUTION_STEPS.len() - 2
+                FULL_INROU_EXECUTION_STEPS.len() - 2
             );
             assert!(
                 first
@@ -7641,7 +8094,7 @@ mod executor_model {
             assert_eq!(journal.state.phase, "cleanup_pending");
             assert_eq!(
                 usize::from(journal.state.next_step),
-                EXECUTION_STEPS.len() - 1
+                FULL_INROU_EXECUTION_STEPS.len() - 1
             );
             assert!(
                 transport
@@ -7666,7 +8119,8 @@ mod executor_model {
             let mut sealing = journal.state().clone();
             sealing.status = "sealing".to_owned();
             sealing.phase = "seal".to_owned();
-            sealing.next_step = u16::try_from(EXECUTION_STEPS.len() - 2).expect("bounded steps");
+            sealing.next_step =
+                u16::try_from(FULL_INROU_EXECUTION_STEPS.len() - 2).expect("bounded steps");
             sealing.touched_validators = VALIDATOR_SLUGS
                 .iter()
                 .map(|slug| (*slug).to_owned())
@@ -7684,7 +8138,7 @@ mod executor_model {
             cleanup_pending.status = "cleanup_pending".to_owned();
             cleanup_pending.phase = "cleanup_pending".to_owned();
             cleanup_pending.next_step =
-                u16::try_from(EXECUTION_STEPS.len() - 1).expect("bounded steps");
+                u16::try_from(FULL_INROU_EXECUTION_STEPS.len() - 1).expect("bounded steps");
             journal
                 .replace(cleanup_pending)
                 .expect("persist host-sealed cleanup boundary");
@@ -8373,6 +8827,64 @@ mod executor_model {
         }
 
         #[test]
+        fn validator_public_origins_require_distinct_canonical_https_roots() {
+            let mut inventory = sample_inventory();
+            validate_inventory(&inventory).expect("existing canonical HTTPS roots");
+            for (index, client) in inventory.validator_clients.iter_mut().enumerate() {
+                client.torii_origin = format!("https://test.example.org:{}/", 8443 + index);
+            }
+            validate_inventory(&inventory)
+                .expect("four authenticated peers on distinct HTTPS ports");
+            let mut duplicate = inventory.clone();
+            duplicate.validator_clients[1].torii_origin =
+                duplicate.validator_clients[0].torii_origin.clone();
+            assert!(
+                validate_inventory(&duplicate)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("origins must be distinct")
+            );
+            for field in ["account", "peer"] {
+                let mut duplicate = inventory.clone();
+                if field == "account" {
+                    duplicate.validator_clients[1].account_id =
+                        duplicate.validator_clients[0].account_id.clone();
+                } else {
+                    duplicate.validator_clients[1].peer_id =
+                        duplicate.validator_clients[0].peer_id.clone();
+                }
+                assert!(validate_inventory(&duplicate).is_err(), "{field}");
+            }
+            for origin in [
+                "http://test.example.org:8443/",
+                "https://test.example.org:0/",
+                "https://test.example.org:443/",
+                "https://test.example.org:8443",
+                "https://TEST.example.org:8443/",
+                "https://user@test.example.org:8443/",
+                "https://user:secret@test.example.org:8443/",
+                "https://test.example.org:8443/?query=1",
+                "https://test.example.org:8443/#fragment",
+                "https://test.example.org:8443/validator-1/",
+                "https://test.example.org:8443/%2f",
+                "https://127.0.0.1:8443/",
+                "https://[::1]:8443/",
+                "https://localhost:8443/",
+                "https://test.local:8443/",
+                "https://test..example.org:8443/",
+                "https://-test.example.org:8443/",
+            ] {
+                assert!(
+                    validate_validator_public_origin(origin).is_err(),
+                    "{origin}"
+                );
+                let mut invalid = inventory.clone();
+                invalid.validator_clients[0].torii_origin = origin.to_owned();
+                assert!(validate_inventory(&invalid).is_err(), "{origin}");
+            }
+        }
+
+        #[test]
         fn candidate_probe_origins_reject_cross_host_or_substituted_sockets() {
             for origin in [
                 "https://127.0.0.1:8080/",
@@ -8489,18 +9001,53 @@ mod executor_model {
                         state_root: format!("/var/lib/taira/{slug}"),
                         reset_guard: format!("/var/lib/taira/.public-reset-control-v1/{slug}"),
                         systemd_unit: format!("iroha3d-{slug}.service"),
-                        systemd_unit_sha256: "9".repeat(64),
+                        systemd_unit_sha256: sha256_hex(
+                            format!("{slug}-validator_unit").as_bytes(),
+                        ),
                         artifacts: artifacts(&service_root, &revision, &VALIDATOR_ARTIFACT_ROLES),
                         initial_state: ValidatorInitialStateV1::AdmittedRelease(
                             ValidatorAdmittedReleaseV1 {
                                 commit: "4".repeat(40),
                                 release_root: format!("{service_root}/releases/{}", "4".repeat(40)),
-                                iroha3d_sha256: "a".repeat(64),
-                                iroha_cli_sha256: "b".repeat(64),
-                                sorafs_node_sha256: "c".repeat(64),
-                                config_sha256: "d".repeat(64),
-                                genesis_sha256: "e".repeat(64),
-                                genesis_hash_sha256: "f".repeat(64),
+                                argv: vec![
+                                    format!("{service_root}/current/bin/iroha3d_taira"),
+                                    "--config".to_owned(),
+                                    format!("{service_root}/current/config/config.toml"),
+                                    "--sora".to_owned(),
+                                ],
+                                artifacts: VALIDATOR_ARTIFACT_ROLES
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, role)| {
+                                        let name = match *role {
+                                            "iroha3d" => "bin/iroha3d_taira".to_owned(),
+                                            "iroha_cli" => "bin/iroha".to_owned(),
+                                            "sorafs_node" => "bin/sorafs-node".to_owned(),
+                                            "config" => "config/config.toml".to_owned(),
+                                            "genesis" => "genesis/genesis.json".to_owned(),
+                                            "genesis_hash" => "genesis/genesis.sha256".to_owned(),
+                                            "validator_unit" => format!(
+                                                "/etc/systemd/system/iroha3d-{slug}.service"
+                                            ),
+                                            _ => unreachable!(),
+                                        };
+                                        OccupiedArtifactV1 {
+                                            role: (*role).to_owned(),
+                                            path: if name.starts_with('/') {
+                                                name
+                                            } else {
+                                                format!(
+                                                    "{service_root}/releases/{}/{name}",
+                                                    "4".repeat(40)
+                                                )
+                                            },
+                                            sha256: format!("{:x}", 9 + index).repeat(64),
+                                            size: 1,
+                                            mode: artifact_role_policy(role).unwrap().0,
+                                            source_commit: "4".repeat(40),
+                                        }
+                                    })
+                                    .collect(),
                             },
                         ),
                     }
@@ -8540,7 +9087,7 @@ mod executor_model {
             let edge_root = "/srv/taira/edge";
             let mut inventory = InventoryV1 {
                 schema: INVENTORY_SCHEMA_V1.to_owned(),
-                qualification_scope: QualificationScopeV1::Inrou,
+                qualification_scope: QualificationScopeV1::FullInrou,
                 deployment_id: "taira-public".to_owned(),
                 chain_id: CHAIN_ID.to_owned(),
                 chain_discriminant: CHAIN_DISCRIMINANT,
@@ -8577,7 +9124,7 @@ mod executor_model {
                         config_sha256: "b".repeat(64),
                     }),
                 },
-                inrou_canary: InrouCanaryV1 {
+                inrou_canary: Some(InrouCanaryV1 {
                     public_root: PUBLIC_ROOT.to_owned(),
                     service_name: "taira_inrou_canary".to_owned(),
                     service_version: format!(
@@ -8628,7 +9175,7 @@ mod executor_model {
                     guest_manifest_sha256: "0".repeat(64),
                     discovery_document_sha256: "1".repeat(64),
                     discovery_manifest_sha256: "2".repeat(64),
-                },
+                }),
                 canary_onboarding_request,
                 faucet_policy: FaucetPolicyV1 {
                     authority: AccountId::new(faucet_key_pair.public_key().clone()).to_string(),
@@ -8667,7 +9214,7 @@ mod executor_model {
                 runtime_client_config_sha256: "1".repeat(64),
                 onboarding_token_sha256: "2".repeat(64),
                 validator_client_configs_sha256: "3".repeat(64),
-                inrou_stage_tree_sha256: "a".repeat(64),
+                inrou_stage_tree_sha256: Some("a".repeat(64)),
             };
             inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
             inventory
@@ -8696,17 +9243,24 @@ mod executor_model {
                         "config" => "config/config.toml",
                         "genesis" => "genesis/genesis.json",
                         "genesis_hash" => "genesis/genesis.sha256",
+                        "validator_unit" => "systemd/unit",
                         "edge_config" => "taira.conf",
                         _ => panic!("unknown fixture artifact role"),
                     };
+                    let file_name = if *role == "validator_unit" {
+                        let slug = Path::new(root).file_name().unwrap().to_str().unwrap();
+                        format!("systemd/iroha3d-{slug}.service")
+                    } else {
+                        file_name.to_owned()
+                    };
                     // Use the same content/name projection as materialize_artifact_sources:
                     // binaries/genesis are shared, while each node's config is distinct.
-                    let source_name = if *role == "config" {
+                    let source_name = if matches!(*role, "config" | "validator_unit") {
                         let slug = Path::new(root)
                             .file_name()
                             .and_then(std::ffi::OsStr::to_str)
                             .expect("fixture service slug");
-                        format!("{slug}-config")
+                        format!("{slug}-{role}")
                     } else {
                         (*role).to_owned()
                     };

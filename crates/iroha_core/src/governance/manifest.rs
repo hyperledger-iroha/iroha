@@ -1,7 +1,7 @@
 //! Lane governance manifest loading utilities.
 //!
 //! These helpers validate that lanes which advertise a governance module in the
-//! Nexus catalog have a manifest available on disk and threads the parsed rules
+//! Nexus catalog have an authenticated frozen manifest source and thread the parsed rules
 //! into runtime enforcement (queue admission, governance telemetry, etc.).
 use crate::secure_file_metadata::{self, SecureMetadata};
 use hex::decode;
@@ -163,7 +163,7 @@ impl ManifestSourceLoadBudget {
         Ok(())
     }
 }
-/// Minimal manifest descriptor parsed from disk.
+/// Native manifest descriptor parsed from an authenticated frozen source.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
 #[norito(deny_unknown_fields)]
 struct ManifestFile {
@@ -264,7 +264,7 @@ pub struct LaneManifestStatus {
     pub storage: LaneStorageProfile,
     /// Governance module configured in the lane catalog.
     pub governance: Option<String>,
-    /// Source path of the manifest if present.
+    /// Filesystem source path; authenticated runtime manifests have no path.
     pub manifest_path: Option<PathBuf>,
     /// Parsed governance rules derived from the manifest.
     pub governance_rules: Option<GovernanceRules>,
@@ -348,8 +348,8 @@ impl LaneManifestStatusBuilder {
         self.governance = governance;
         self
     }
-    fn manifest_path(mut self, path: PathBuf) -> Self {
-        self.manifest_path = Some(path);
+    fn manifest_path(mut self, path: Option<PathBuf>) -> Self {
+        self.manifest_path = path;
         self
     }
     fn governance_rules(mut self, rules: GovernanceRules) -> Self {
@@ -361,9 +361,6 @@ impl LaneManifestStatusBuilder {
         self
     }
     fn build_ready(self) -> Result<LaneManifestStatus, LaneManifestBuilderError> {
-        let Some(path) = self.manifest_path else {
-            return Err(LaneManifestBuilderError::MissingManifestPath);
-        };
         let Some(rules) = self.governance_rules else {
             return Err(LaneManifestBuilderError::MissingGovernanceRules);
         };
@@ -374,7 +371,7 @@ impl LaneManifestStatusBuilder {
             visibility: self.visibility,
             storage: self.storage,
             governance: self.governance,
-            manifest_path: Some(path),
+            manifest_path: self.manifest_path,
             governance_rules: Some(rules),
             privacy_commitments: self.privacy_commitments,
         })
@@ -382,13 +379,11 @@ impl LaneManifestStatusBuilder {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LaneManifestBuilderError {
-    MissingManifestPath,
     MissingGovernanceRules,
 }
 impl fmt::Display for LaneManifestBuilderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingManifestPath => write!(f, "manifest path not provided"),
             Self::MissingGovernanceRules => write!(f, "governance rules not provided"),
         }
     }
@@ -642,12 +637,28 @@ impl GovernanceRules {
                     .map(str::to_owned);
                 let torii_url = match torii_url {
                     Some(url) => {
+                        // Manifests are public consensus inputs. Do not admit URL
+                        // credentials or repeat rejected values in diagnostics.
+                        if url.contains('#') {
+                            return Err("validator torii_url must not contain a fragment".into());
+                        }
                         let uri = http::Uri::from_str(&url)
-                            .map_err(|err| format!("invalid validator torii_url `{url}`: {err}"))?;
+                            .map_err(|_| "invalid validator torii_url".to_owned())?;
                         if uri.scheme().is_none() || uri.authority().is_none() {
-                            return Err(format!(
-                                "validator torii_url `{url}` must include an absolute scheme and authority"
-                            ));
+                            return Err(
+                                "validator torii_url must include an absolute scheme and authority"
+                                    .into(),
+                            );
+                        }
+                        if uri
+                            .authority()
+                            .is_some_and(|authority| authority.as_str().contains('@'))
+                            || uri.query().is_some()
+                        {
+                            return Err(
+                                "validator torii_url must not contain user information or a query"
+                                    .into(),
+                            );
                         }
                         Some(url)
                     }
@@ -706,6 +717,8 @@ impl GovernanceRules {
         })
     }
 }
+mod runtime_overlay;
+
 /// Registry of manifests keyed by lane identifier.
 #[derive(Debug)]
 pub struct LaneManifestRegistry {
@@ -715,6 +728,10 @@ pub struct LaneManifestRegistry {
     /// Test/telemetry registries assembled from statuses do not have a filesystem
     /// source and use their existing alias-bound statuses as templates instead.
     source_snapshot: Option<Arc<LaneManifestSourceSnapshot>>,
+    /// Original startup source authority, retained independently of committed additions.
+    baseline_source_snapshot: Option<Arc<LaneManifestSourceSnapshot>>,
+    /// Exact effective catalog used for the current source binding, independent of source digest.
+    bound_catalog_hash: Option<Hash>,
     /// Every manifest alias accepted for the immutable active-catalog source set.
     manifest_source_aliases: BTreeSet<String>,
     /// Digest of the effective active-catalog manifest source set.
@@ -728,6 +745,8 @@ impl Default for LaneManifestRegistry {
             manifest_source_aliases: BTreeSet::new(),
             consensus_policy_digest: source_snapshot.consensus_policy_digest(),
             source_snapshot: Some(source_snapshot),
+            baseline_source_snapshot: None,
+            bound_catalog_hash: None,
         }
     }
 }
@@ -736,21 +755,24 @@ impl Default for LaneManifestRegistry {
 /// The first bind materializes only active aliases. Catalog lifecycle rebinding then consumes the
 /// materialized snapshot and never reopens a path, so a post-startup file replacement cannot change
 /// admission semantics outside the explicit, digest-checked hot-reload path.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LaneManifestSourceSnapshot {
     manifests_by_alias: BTreeMap<String, FrozenLaneManifestSource>,
+    /// Startup catalog identity, excluded from the existing frozen-source digest.
+    bound_lanes: BTreeMap<LaneId, LaneConfig>,
     governance_overlay: Option<FrozenGovernanceOverlaySource>,
     consensus_policy_digest: [u8; 32],
     /// Deferred source configuration, consumed exactly once when the active lane catalog is known.
     pending_registry: Option<LaneRegistry>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FrozenLaneManifestSource {
-    path: PathBuf,
+    /// Absent for a manifest published through authenticated world state.
+    path: Option<PathBuf>,
     parsed: Result<ManifestFile, String>,
     content_digest: LaneManifestSourceContentDigestV1,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FrozenGovernanceOverlaySource {
     path: PathBuf,
     parsed: Result<GovernanceCatalogFile, String>,
@@ -853,6 +875,7 @@ impl LaneManifestSourceSnapshot {
     fn empty() -> Self {
         let mut snapshot = Self {
             manifests_by_alias: BTreeMap::new(),
+            bound_lanes: BTreeMap::new(),
             governance_overlay: None,
             consensus_policy_digest: [0; 32],
             pending_registry: None,
@@ -870,6 +893,7 @@ impl LaneManifestSourceSnapshot {
     pub fn load(registry_cfg: &LaneRegistry) -> Self {
         let mut snapshot = Self {
             manifests_by_alias: BTreeMap::new(),
+            bound_lanes: BTreeMap::new(),
             governance_overlay: None,
             consensus_policy_digest: [0; 32],
             pending_registry: Some(registry_cfg.clone()),
@@ -905,6 +929,11 @@ impl LaneManifestSourceSnapshot {
             .collect();
         let mut snapshot = Self {
             manifests_by_alias,
+            bound_lanes: lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| (lane.id, lane.clone()))
+                .collect(),
             governance_overlay,
             consensus_policy_digest: [0; 32],
             pending_registry: None,
@@ -1153,7 +1182,7 @@ impl LaneManifestRegistry {
         let canonical_digest = Hash::new(canonical.as_bytes()).into();
         drop(canonical);
         FrozenLaneManifestSource {
-            path,
+            path: Some(path),
             parsed: Ok(parsed),
             content_digest: LaneManifestSourceContentDigestV1 {
                 valid: true,
@@ -1241,7 +1270,7 @@ impl LaneManifestRegistry {
         digest: [u8; 32],
     ) -> FrozenLaneManifestSource {
         FrozenLaneManifestSource {
-            path,
+            path: Some(path),
             parsed: Err(reason),
             content_digest: LaneManifestSourceContentDigestV1 {
                 valid: false,
@@ -1707,6 +1736,19 @@ impl LaneManifestRegistry {
             ));
             return Self::from_source_snapshot(materialized, lane_catalog, governance_catalog);
         }
+        // An empty source authority also acquires its immutable catalog identity
+        // on the first bind, without materializing any filesystem locations.
+        let source_snapshot = if source_snapshot.bound_lanes.is_empty() {
+            let mut bound_source = (*source_snapshot).clone();
+            bound_source.bound_lanes = lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| (lane.id, lane.clone()))
+                .collect();
+            Arc::new(bound_source)
+        } else {
+            source_snapshot
+        };
         let mut statuses = BTreeMap::new();
         let mut effective_governance = governance_catalog.clone();
         source_snapshot.apply_governance_overlay(&mut effective_governance);
@@ -1762,7 +1804,7 @@ impl LaneManifestRegistry {
                     .unwrap_or_else(|err| {
                         warn!(
                             lane = %alias,
-                            path = %source.path.display(),
+                            path = ?source.path,
                             reason = %err,
                             "failed to finalize lane manifest status"
                         );
@@ -1792,7 +1834,7 @@ impl LaneManifestRegistry {
         }
         // Log governance modules lacking manifest declarations.
         for status in statuses.values() {
-            if status.governance.is_some() && status.manifest_path.is_none() {
+            if status.governance.is_some() && status.governance_rules.is_none() {
                 if let Some(gov) = status.governance.as_deref()
                     && !effective_governance.modules.contains_key(gov)
                 {
@@ -1813,6 +1855,10 @@ impl LaneManifestRegistry {
             manifest_source_aliases,
             consensus_policy_digest,
             source_snapshot: Some(source_snapshot),
+            baseline_source_snapshot: None,
+            bound_catalog_hash: Some(
+                iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(lane_catalog),
+            ),
         }
     }
     fn collect_manifest_sources(
@@ -2142,6 +2188,8 @@ impl LaneManifestRegistry {
             manifest_source_aliases,
             consensus_policy_digest,
             source_snapshot: None,
+            baseline_source_snapshot: None,
+            bound_catalog_hash: None,
         }
     }
     /// Deterministically bind the installed immutable sources to a new catalog.
@@ -2155,7 +2203,9 @@ impl LaneManifestRegistry {
         governance_catalog: &GovernanceCatalog,
     ) -> Self {
         if let Some(source_snapshot) = self.source_snapshot.as_ref() {
-            return source_snapshot.bind(lane_catalog, governance_catalog);
+            let mut rebound = source_snapshot.bind(lane_catalog, governance_catalog);
+            rebound.baseline_source_snapshot = self.baseline_source_snapshot.clone();
+            return rebound;
         }
         let templates = self
             .statuses
@@ -2204,6 +2254,8 @@ impl LaneManifestRegistry {
             manifest_source_aliases: self.manifest_source_aliases.clone(),
             consensus_policy_digest: self.consensus_policy_digest,
             source_snapshot: None,
+            baseline_source_snapshot: None,
+            bound_catalog_hash: None,
         }
     }
     /// Whether the lane is ready for traffic under its governance manifest.
@@ -2217,14 +2269,14 @@ impl LaneManifestRegistry {
             return Err(GovernanceGuardError::unknown_lane(lane_id));
         };
         if status.governance.is_some()
-            && (status.manifest_path.is_none() || status.governance_rules.is_none())
+            && (!self.has_manifest(lane_id) || status.governance_rules.is_none())
         {
             return Err(GovernanceGuardError::missing_manifest(status));
         }
         if matches!(
             status.storage,
             LaneStorageProfile::CommitmentOnly | LaneStorageProfile::SplitReplica
-        ) && (status.manifest_path.is_none() || status.privacy_commitments.is_empty())
+        ) && (!self.has_manifest(lane_id) || status.privacy_commitments.is_empty())
         {
             return Err(GovernanceGuardError::missing_privacy_commitments(status));
         }
@@ -3050,8 +3102,8 @@ mod tests {
         );
     }
     #[test]
-    fn builder_requires_manifest_components() {
-        let err = LaneManifestStatus::builder(
+    fn builder_allows_runtime_sources_but_requires_parsed_rules() {
+        let status = LaneManifestStatus::builder(
             LaneId::new(7),
             "lane".to_string(),
             DataSpaceId::new(11),
@@ -3060,8 +3112,9 @@ mod tests {
         )
         .governance_rules(GovernanceRules::default())
         .build_ready()
-        .expect_err("missing manifest path should fail");
-        assert_eq!(err, LaneManifestBuilderError::MissingManifestPath);
+        .expect("a runtime manifest needs no filesystem path");
+        assert!(status.manifest_path.is_none());
+        assert!(status.rules().is_some());
         let err = LaneManifestStatus::builder(
             LaneId::new(7),
             "lane".to_string(),
@@ -3069,7 +3122,7 @@ mod tests {
             LaneVisibility::Public,
             LaneStorageProfile::default(),
         )
-        .manifest_path(PathBuf::from("lane.manifest.json"))
+        .manifest_path(Some(PathBuf::from("lane.manifest.json")))
         .build_ready()
         .expect_err("missing governance rules should fail");
         assert_eq!(err, LaneManifestBuilderError::MissingGovernanceRules);
@@ -3203,7 +3256,7 @@ mod tests {
             LaneStorageProfile::SplitReplica,
         )
         .governance(Some("council".to_string()))
-        .manifest_path(manifest_path.clone())
+        .manifest_path(Some(manifest_path.clone()))
         .governance_rules(rules)
         .build_ready()
         .expect("builder should construct ready status");
@@ -3986,22 +4039,31 @@ mod tests {
         let path = dir.path().join("gov.manifest.json");
         let alice = account_id_literal(&ALICE_ID);
         let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
-        fs::write(
-            &path,
-            format!(
-                r#"{{"lane":"gov","governance":"parliament","validators":[{{"validator":"{alice}","peer_id":"{alice_peer}","torii_url":"not-a-url"}}],"quorum":1}}"#
-            ),
-        )
-        .expect("write manifest");
-        let err = LaneManifestRegistry::validate_manifest(
-            &path,
-            LaneId::new(0),
-            "gov",
-            Some("parliament"),
-            &governance,
-        )
-        .expect_err("invalid torii_url should fail manifest validation");
-        assert!(err.contains("torii_url"));
+        for rejected in [
+            "not-a-url-REJECTED_INPUT_MARKER",
+            "https://operator:REJECTED_INPUT_MARKER@validator.example",
+            "https://validator.example?access_token=REJECTED_INPUT_MARKER",
+            "https://validator.example#REJECTED_INPUT_MARKER",
+        ] {
+            fs::write(
+                &path,
+                format!(
+                    r#"{{"lane":"gov","governance":"parliament","validators":[{{"validator":"{alice}","peer_id":"{alice_peer}","torii_url":"{rejected}"}}],"quorum":1}}"#
+                ),
+            )
+            .expect("write synthetic rejected manifest");
+            let err = LaneManifestRegistry::validate_manifest(
+                &path,
+                LaneId::new(0),
+                "gov",
+                Some("parliament"),
+                &governance,
+            )
+            .expect_err("invalid torii_url should fail manifest validation");
+            assert!(err.contains("torii_url"));
+            assert!(!err.contains("REJECTED_INPUT_MARKER"));
+            assert!(!err.contains(rejected));
+        }
     }
     #[test]
     fn manifest_rejects_legacy_string_validator_entries() {

@@ -137,7 +137,8 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
         "Native fixture participant incarnation is non-zero"
     );
     context.nexus_amx_context_hash =
-        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state);
+        crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state)
+            .expect("valid committed catalog");
 }
 fn native_amx_receipts_for_apply_fixture(
     fixture: &ApplyFixture,

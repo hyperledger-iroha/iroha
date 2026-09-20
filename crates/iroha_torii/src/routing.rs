@@ -72959,10 +72959,17 @@ pub async fn handle_get_configuration(kiso: KisoHandle) -> Result<impl IntoRespo
 /// Return the exact current lane catalog and optimistic concurrency commitment.
 pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycleStatusV1> {
     // `State::view` retries across the state generation barrier, so catalog and
-    // active incarnations cannot be mixed across a concurrent lifecycle commit.
+    // active incarnations and the protected runtime overlay cannot be mixed across a commit.
     let view = state.view();
-    LaneLifecycleStatusV1::new(&view.nexus.lane_catalog, &view.lane_incarnations)
-        .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
+    let runtime_catalog_hash = view
+        .runtime_catalog_hash()
+        .map_err(|err| conversion_error(format!("invalid committed runtime catalog: {err}")))?;
+    LaneLifecycleStatusV1::new(
+        &view.nexus.lane_catalog,
+        &view.lane_incarnations,
+        runtime_catalog_hash,
+    )
+    .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
 }
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
@@ -73538,19 +73545,13 @@ pub async fn handle_status(
         accept = ?accept,
         "serving /status"
     );
-    ensure_status_visible(telemetry, "status")?;
+    ensure_status_visible(telemetry, "status").map_err(status_visibility_failure)?;
     // The actor owns classification, height, and routing policy in one response.
     // Do not join a pre-await State height to a later mutable metrics registry.
-    let owned =
-        telemetry
-            .status_snapshot(build)
-            .await
-            .map_err(|error| Error::AppServiceUnavailable {
-                code: "status_metrics_unavailable",
-                message: format!(
-                    "status metrics could not reach a fresh classified frontier: {error}"
-                ),
-            })?;
+    let owned = telemetry
+        .status_snapshot(build)
+        .await
+        .map_err(status_snapshot_failure)?;
     let (status, classified_height) = owned.into_parts();
     ensure_status_metrics_match_authoritative_height(&status, classified_height)?;
     iroha_logger::debug!(

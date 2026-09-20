@@ -2571,9 +2571,11 @@ fn deliver_worker_executor_wire(
 #[test]
 fn runtime_executor_publishes_actual_wal_consumer_before_same_round_enter_view_and_vote_retry() {
     let (mut service, keys) = fixture_with_block_payload();
-    service.local_validator = None;
+    // QC publication requires the same frozen-roster role at every runtime layer.
+    let local_validator = service.local_validator;
+    assert_eq!(local_validator, Some(0));
     let directory = TempDir::new().expect("full runtime consumer regression");
-    let mut wal = worker_wal_authority_fixture(&mut service, &directory, None);
+    let mut wal = worker_wal_authority_fixture(&mut service, &directory, local_validator);
     let context = service.context.clone();
     let mut body_store = V2BodyStore::open_with_policy(
         directory.path().join("body"),
@@ -2615,7 +2617,7 @@ fn runtime_executor_publishes_actual_wal_consumer_before_same_round_enter_view_a
     let (mut executor, _body_store) = V2EffectExecutor::open_with_body_store(
         runtime, body_store,
         super::super::v2_lifecycle_coordinator::RecoveredDurableValidateRetryCensusV1::empty_for_test(),
-        None, context.clone(), service.local_peer.clone(), None, Arc::clone(&output_guard),
+        None, context.clone(), service.local_peer.clone(), local_validator, Arc::clone(&output_guard),
         EffectQueueConfig::default(),
     ).expect("open actual production executor");
     service.output_guard = output_guard;
@@ -3718,7 +3720,7 @@ fn late_disjoint_observer_authenticates_retransmitted_timeout_without_voting() {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect::<BTreeSet<_>>(),
-        "non-global retransmitters do not expand to other lane observers"
+        "target fallback alone grants no observer emission authority"
     );
     let observer_directory = TempDir::new().expect("late participant global observer");
     let mut observer_wal =
@@ -3814,6 +3816,39 @@ fn late_disjoint_observer_authenticates_retransmitted_timeout_without_voting() {
             .expect("certified view entry never makes the observer a global voter");
         assert!(timeout.effects().is_empty());
         assert_eq!(observer_wal.adapter.current_tag(), after);
+        for _ in 0..2 {
+            let retry = observer_wal
+                .adapter
+                .retransmit_elapsed(after)
+                .expect("observer retries recovery without producing a global envelope");
+            assert!(!retry.effects().iter().any(|effect| matches!(
+                effect,
+                AdapterEffect::Broadcast(_) | AdapterEffect::Sign { .. }
+            )));
+            assert_eq!(observer_wal.adapter.current_tag(), after);
+        }
+        let observer_status = observer_wal.adapter.status().expect("observer status");
+        assert!(observer_status.last_timeout_certificate.is_some());
+        assert!(
+            observer_status
+                .liveness
+                .outbound_intents
+                .iter()
+                .all(|intent| { intent.stage != wire::SumeragiV2OutboundIntentStage::Retained }),
+            "observer recovery evidence has no roster-eligible retained intent"
+        );
+        let global_status = global_wal.adapter.status().expect("global sender status");
+        assert!(
+            global_status
+                .liveness
+                .outbound_intents
+                .iter()
+                .any(|intent| {
+                    intent.kind == wire::SumeragiV2OutboundIntentKind::TimeoutCertificate
+                        && intent.stage == wire::SumeragiV2OutboundIntentStage::Retained
+                }),
+            "roster-authorized TC evidence keeps its Retained status"
+        );
     }
     let current = observer_wal.adapter.current_tag();
     let stale = observer_wal
@@ -3834,4 +3869,67 @@ fn late_disjoint_observer_authenticates_retransmitted_timeout_without_voting() {
     )));
     assert!(!observer_service.output_guard.restart_required());
     assert!(!global_service.output_guard.restart_required());
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn retained_timeout_status_precedes_broadcast_and_survives_wal_replay() {
+    let (mut service, keys) = fixture();
+    let directory = TempDir::new().expect("retained status actual safety WAL");
+    let mut owner = worker_wal_authority_fixture(&mut service, &directory, Some(0));
+    let context = service.context.clone();
+    let certificate = worker_signed_timeout_certificate(&context, &keys, 0, None);
+    let authenticated = owner
+        .adapter
+        .authenticate(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+        ))
+        .expect("authenticate remote TC with actual roster BLS evidence");
+    let installed = owner
+        .adapter
+        .receive_authenticated(authenticated)
+        .expect("durably install remote certificate before any retransmission");
+    assert!(
+        !installed
+            .effects()
+            .iter()
+            .any(|effect| { matches!(effect, AdapterEffect::Broadcast(_)) })
+    );
+    let assert_retained = |adapter: &mut SumeragiV2Adapter| {
+        let status = adapter.status().expect("project retained evidence status");
+        status.validate().expect("valid complete status projection");
+        assert!(status.last_timeout_certificate.is_some());
+        let intent = status
+            .liveness
+            .outbound_intents
+            .iter()
+            .find(|intent| intent.kind == wire::SumeragiV2OutboundIntentKind::TimeoutCertificate)
+            .expect("eligible TC remains visible before transmission");
+        assert_eq!(intent.stage, wire::SumeragiV2OutboundIntentStage::Retained);
+        (status.last_timeout_certificate.clone(), *intent)
+    };
+    let original_status = assert_retained(&mut owner.adapter);
+    drop(owner);
+    let fingerprints = AdapterFingerprints {
+        node: Hash::new(b"worker actual WAL authority"),
+        build: Hash::new(b"worker authority fixture build"),
+        config: Hash::new(b"worker authority fixture config"),
+    };
+    let (mut recovered, startup) = SumeragiV2Adapter::open(
+        &directory.path().join("worker-authority.wal"),
+        VerifiedHeightContext::genesis(context, service.validator_set_pops.clone())
+            .expect("authenticate the same frozen context for replay"),
+        Some(0),
+        Generation::new(75),
+        [0xE2; 32],
+        fingerprints,
+        DeferredAdmissionOrdinalSource::new(0),
+    )
+    .expect("replay the actual certificate WAL");
+    assert!(
+        !startup
+            .iter()
+            .any(|effect| matches!(effect, AdapterEffect::Broadcast(_)))
+    );
+    assert_eq!(assert_retained(&mut recovered), original_status);
 }

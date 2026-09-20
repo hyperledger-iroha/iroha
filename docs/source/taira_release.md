@@ -9,6 +9,21 @@ Run only the early native gate:
 
     python3 scripts/taira_release.py check
 
+Before signing an immutable release, use an exact focused diagnostic in the same
+warm development lane:
+
+    python3 scripts/taira_release.py check \
+      --focus-regression core=state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay
+
+Repeat `--focus-regression HARNESS=EXACT_TEST` for more selected regressions. The
+diagnostic compiles the complete shared native harness graph, runs mandatory
+configuration checks first, then only the named tests. Names must already belong
+to the chosen `--native-check-scope`; unknown or repeated selections fail before
+Cargo starts. Independent failures are aggregated; dependent network tests run
+only after those checks pass. This mutable-source diagnostic writes no release
+qualification checkpoint. `prepare` has no focus option and still requires its
+complete immutable gate. Omit the option to run the normal development gate.
+
 Prepare binaries from an explicitly selected signed commit in the optimizations repository:
 
     python3 scripts/taira_release.py prepare \
@@ -99,6 +114,22 @@ config stops preparation with an actionable error. The captured Zig driver and
 installed sccache remain in use. No target or cache is cleaned or replaced.
 Compiler overrides, interpreter hooks and runtime credentials are not forwarded.
 The native gate receives the same source, toolchain and explicit target directory.
+
+Both scopes also verify that idle governance sweeps create no execution fragment,
+while successful and failed due sweeps retain their effects and audit records.
+
+Both native qualification scopes require certified catalog and bootstrap parameter
+commit and recovery tests, plus rejection of changed parameters or mismatched
+runtime effects after staging. The four-validator catalog test separately proves
+the committed topology and transaction history survive restart and full replay.
+
+Both scopes also require the generated validator configuration projection and
+occupied-runtime recovery tests. Prior daemon, CLI, SoraFS, configuration, genesis,
+genesis hash and service unit each have an explicit source revision, path, digest,
+size and mode. The configuration selector and exact process argv are bound
+separately. An initialized installation may therefore retain artifacts from
+different releases without treating its configuration revision as its executable
+revision. Candidate artifacts still use one canonical release directory.
 
 After verifying the complete native Cargo output set, a bounded owner-private
 ledger records only final test executables and retires recorded superseded outputs
@@ -208,6 +239,80 @@ Validate the local orchestration without Cargo or network:
 The gate's existing selection and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
 
+## Preparing validator configuration for a public reset
+
+Generate the fresh four-validator Taira bundle with the qualified native Kagami
+on the approved Linux validator host. Keep its private output outside Git at the
+same absolute path throughout installation and operation. Project each generated
+validator through the same-revision native CLI using an inherited owner-private
+descriptor:
+
+    iroha taira public-reset materialize-validator-config \
+      --config-fd 198 \
+      --localnet-dir /absolute/private/generated-network \
+      --validator taira-validator-1 \
+      --network-id REVIEWED_CHECKED_NETWORK_ID \
+      --genesis-file /srv/taira/taira-validator-1/releases/COMMIT/genesis/genesis.json \
+      --operator-public-key REVIEWED_CANONICAL_OPERATOR_PUBLIC_KEY \
+      --output /absolute/private/taira-validator-1.toml
+
+Descriptor 198 must already identify the corresponding generated peer config;
+the command does not open a private input by pathname. It verifies the generated
+public genesis identity, maps all eleven mutable paths into the validator's
+reset-managed state directories, sets explicit snapshot storage, and binds the
+installed signed genesis and operator-authentication key. It rejects inherited
+configuration, changed source paths and preexisting output. It emits no private
+configuration to stdout. The generated onboarding key, faucet key, public rANS
+table and `nexus.registry.manifest_directory` paths remain in the configuration,
+so their original directory must remain available on that host. The manifest
+directory must be exactly `lane-manifests` under the generator directory; a
+registry cache overlay is rejected. Native signing and startup bind its semantic
+policy digest to signed genesis. Retain and revalidate the generated public
+manifest receipt for exact byte custody; the reset inventory does not declare a
+separate manifest artifact.
+
+Derive the complete public identity bundle using the maintained CLI:
+
+    iroha taira public-reset prepare-public-inputs \
+      --localnet-dir /absolute/private/generated-network \
+      --canary-public-key /absolute/private/canary/public.key \
+      --output-dir /absolute/private/public-inputs
+
+The command uses native signed-genesis validation and the shared canary request
+constructor. It atomically writes `genesis.signed.nrt`, `genesis.hash`,
+`canary-onboarding-request.json` and `public-inputs.json` as 0644 public artifacts
+inside a 0700 directory. The hash file contains the native consensus genesis
+hash, not a SHA256 of the wire file; the typed record names both values explicitly.
+Repeating an identical request verifies the retained bundle; conflicting output
+is never replaced. It reads only the public generator files and canary public key.
+`public-reset assemble` and `authorize` require `--public-inputs DIR` and derive
+the next genesis hash and canary request from that validated bundle. The existing
+full execution, source, config and authorization checks remain required.
+
+Public validator client settings can reference the native-generated
+`runtime/taira-runtime-signers/peerN.private_key` sidecar through
+`account.private_key_file`. Use the exact checked `network_id_file`, account
+`chain_discriminant = 369`, and each validator's Torii origin. Extract the
+canonical public key from its generated public manifest account with the native
+`iroha tools address convert ACCOUNT --profile taira --format public-key`.
+This representation requires a single-signatory account and rejects multisig
+controllers. No private configuration parsing is needed to construct these
+public fields and file references; native loading validates the key pair.
+
+Each candidate validator includes a seventh `validator_unit` artifact at
+`systemd/<systemd_unit>` with exact mode 0644. Assembly requires its bytes to
+match the explicit validator unit input and digest. Reset execution durably
+retains the prior unit, records publication intent, atomically installs the
+candidate unit and records the exact service-manager reload. Interrupted forward
+and rollback publication resume only from that durable evidence. Rollback
+restores the old unit, selector and retained state before proving the old process
+again; cleanup protects every admitted prior artifact root.
+
+These preparation operations do not authorize replacement of shared network
+state. The reviewed inventory, explicit reset authorization, and independently
+provisioned trusted host dispatcher and reset guard remain prerequisites for
+`public-reset apply`. The candidate cannot provision its own host authority.
+
 ## Updating an initialized testnet
 
 For a routine update of the existing four-validator Taira installation, use the
@@ -223,10 +328,16 @@ network and directory identities, and the exact completed predecessor receipt.
 Keep it outside Git. The updater transfers the prepared daemon and matching CLI,
 preserves configuration, signer custody and ledger state, and verifies native
 Strict snapshot restoration and public basic health. It does not invoke Cargo.
-Every validator must reach the stopped cohort's highest committed block and agree
-on that block's hash. After the public health check, the updater repeats cohort
-readiness and verifies that the same processes are still running. An idle chain
-does not need to create another block to pass.
+All four validators must prove the candidate identity and restore their own stopped
+retained tips. Every overlapping stopped prefix is checked before startup. Two
+fresh samples must each contain at least three Ready validators agreeing on the
+stopped cohort's highest committed block hash. Every sample attempts all four
+validators and records missing, unready, and lagging peers explicitly; stale
+observations never contribute to quorum. After the public health check, the
+updater repeats both quorum samples and checks all four unchanged processes.
+Identity, hash, malformed response, and process failures stop immediately; only
+declared startup transport failures and HTTP 503 are polled. An idle chain does
+not need to create another block to pass.
 `--plan-only` writes the concrete plan locally without contacting the host.
 
 After all four stopped checkpoints are recorded, the matching candidate CLI runs

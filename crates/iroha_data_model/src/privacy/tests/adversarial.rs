@@ -1299,7 +1299,6 @@ fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
 fn lifecycle_edges_preserve_history_and_retirement_is_terminal() {
     let proposed = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
         proposed_at_height: 1,
-        activate_at_height: 3,
     });
     let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
         proposed_at_height: 1,
@@ -1332,11 +1331,6 @@ fn lifecycle_edges_preserve_history_and_retirement_is_terminal() {
         }),
         PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
             proposed_at_height: 1,
-            activated_at_height: 2,
-            state_since_height: 2,
-        }),
-        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-            proposed_at_height: 1,
             activated_at_height: 3,
             state_since_height: 4,
         }),
@@ -1357,7 +1351,7 @@ fn lifecycle_edges_preserve_history_and_retirement_is_terminal() {
         .expect("active retires");
     assert!(retired.validate_transition_to(&active).is_err());
     let invalid = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-        proposed_at_height: 3,
+        proposed_at_height: 4,
         activated_at_height: 3,
         state_since_height: 3,
     });
@@ -1405,7 +1399,7 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     invalid.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
-    invalid.proof_system_id = PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
+    invalid.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks;
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
     invalid.engine_id = PrivacyEngineIdV1::NativeJindo;
@@ -1484,4 +1478,186 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
         assert!(PrivacyEngineIdV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
         assert!(PrivacyStatementV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
     }
+}
+
+#[test]
+fn explicit_activation_accepts_same_height_and_later_governed_activation() {
+    let proposed = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+        proposed_at_height: 7,
+    });
+    proposed.validate().expect("nonzero proposal");
+    for activated_at_height in [7, 8, 700] {
+        let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 7,
+            activated_at_height,
+            state_since_height: activated_at_height,
+        });
+        proposed
+            .validate_transition_to(&active)
+            .expect("explicit initial activation preserves proposal history");
+    }
+    let before_proposal = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: 6,
+        state_since_height: 6,
+    });
+    assert!(matches!(
+        proposed.validate_transition_to(&before_proposal),
+        Err(PrivacyLifecycleTransitionError::NextState(
+            PrivacyLifecycleValidationError::HeightOrder { .. }
+        ))
+    ));
+    let rewritten_proposal = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 6,
+        activated_at_height: 7,
+        state_since_height: 7,
+    });
+    assert_eq!(
+        proposed.validate_transition_to(&rewritten_proposal),
+        Err(PrivacyLifecycleTransitionError::InvalidTransition)
+    );
+    let false_initial_interval = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: 7,
+        state_since_height: 8,
+    });
+    assert_eq!(
+        proposed.validate_transition_to(&false_initial_interval),
+        Err(PrivacyLifecycleTransitionError::InvalidTransition)
+    );
+    assert!(matches!(
+        PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+            proposed_at_height: 0,
+        })
+        .validate(),
+        Err(PrivacyLifecycleValidationError::ZeroHeight { .. })
+    ));
+}
+
+#[test]
+fn immediate_activation_preserves_strict_later_lifecycle_history() {
+    let active = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: 7,
+        state_since_height: 7,
+    });
+    for state_since_height in [6, 7] {
+        let suspended = PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
+            proposed_at_height: 7,
+            activated_at_height: 7,
+            state_since_height,
+        });
+        let retired = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
+            proposed_at_height: 7,
+            activated_at_height: Some(7),
+            state_since_height,
+        });
+        assert!(active.validate_transition_to(&suspended).is_err());
+        assert!(active.validate_transition_to(&retired).is_err());
+    }
+    let suspended = PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: 7,
+        state_since_height: 8,
+    });
+    active
+        .validate_transition_to(&suspended)
+        .expect("later suspension");
+    let resumed = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: 7,
+        state_since_height: 9,
+    });
+    suspended
+        .validate_transition_to(&resumed)
+        .expect("later resumption");
+    for state_since_height in [7, 8] {
+        let too_early = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 7,
+            activated_at_height: 7,
+            state_since_height,
+        });
+        assert!(suspended.validate_transition_to(&too_early).is_err());
+    }
+    let retired = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: Some(7),
+        state_since_height: 10,
+    });
+    resumed
+        .validate_transition_to(&retired)
+        .expect("later retirement");
+    assert_eq!(
+        retired.validate_transition_to(&resumed),
+        Err(PrivacyLifecycleTransitionError::RetiredIsTerminal)
+    );
+    let proposed = PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+        proposed_at_height: 7,
+    });
+    let retired_without_activation =
+        PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
+            proposed_at_height: 7,
+            activated_at_height: None,
+            state_since_height: 700,
+        });
+    proposed
+        .validate_transition_to(&retired_without_activation)
+        .expect("pending governance can retire without a scheduled deadline");
+    let same_height_retirement = PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
+        proposed_at_height: 7,
+        activated_at_height: None,
+        state_since_height: 7,
+    });
+    assert!(
+        proposed
+            .validate_transition_to(&same_height_retirement)
+            .is_err()
+    );
+}
+
+#[test]
+fn pending_capability_requires_explicit_activation_and_preserves_committed_height_guards() {
+    let mut snapshot = capability_snapshot();
+    let row = &mut snapshot.protocols[1];
+    row.activation.as_mut().expect("PGC activation").lifecycle =
+        PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+            proposed_at_height: 7,
+        });
+    for committed_height in [7, 700, u64::MAX] {
+        row.validate_at_committed_height(committed_height)
+            .expect("pending governance has no automatic activation deadline");
+        assert!(!row.activation.expect("activation").lifecycle.is_active());
+    }
+    assert!(matches!(
+        row.validate_at_committed_height(6),
+        Err(PrivacyCapabilityRowValidationErrorV1::ProposalAfterCommitted { .. })
+    ));
+    row.activation.as_mut().expect("PGC activation").lifecycle =
+        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 7,
+            activated_at_height: 7,
+            state_since_height: 7,
+        });
+    row.validate_at_committed_height(7)
+        .expect("same-block active snapshot");
+    row.activation.as_mut().expect("PGC activation").lifecycle =
+        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 7,
+            activated_at_height: 8,
+            state_since_height: 8,
+        });
+    assert!(matches!(
+        row.validate_at_committed_height(7),
+        Err(PrivacyCapabilityRowValidationErrorV1::ActivationAfterCommitted { .. })
+    ));
+    row.activation.as_mut().expect("PGC activation").lifecycle =
+        PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 7,
+            activated_at_height: 7,
+            state_since_height: 8,
+        });
+    assert!(matches!(
+        row.validate_at_committed_height(7),
+        Err(PrivacyCapabilityRowValidationErrorV1::LifecycleStateAfterCommitted { .. })
+    ));
 }

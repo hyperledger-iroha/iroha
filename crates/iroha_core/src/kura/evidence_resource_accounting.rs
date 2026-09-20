@@ -59,6 +59,21 @@ fn evidence_resource_kind(
     let stem = stable.strip_suffix(".norito");
 
     // Reserved namespace ownership wins over generic known marker basenames.
+    if directory == Some(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY) {
+        return match native_amx_publication_index_file_kind(name) {
+            Some(NativeAmxPublicationIndexFileKind::Stable { .. }) => {
+                singleton(NATIVE_AMX_PUBLICATION_INDEX_MAX_RECORD_BYTES as u64, false)
+            }
+            Some(NativeAmxPublicationIndexFileKind::Temporary) => Ok(Some((
+                IndexResourceFormat::TemporarySingleton(
+                    NATIVE_AMX_PUBLICATION_INDEX_MAX_RECORD_BYTES as u64,
+                ),
+                true,
+            ))),
+            None => Err(Missing::OwnerMismatch),
+        };
+    }
+
     if directory == Some(fastpq_artifact_store::DIRECTORY) {
         limits
             .fastpq_artifacts
@@ -338,6 +353,73 @@ mod evidence_resource_tests {
             native_prune_intent_bytes: 11,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         }
+    }
+
+    #[test]
+    fn native_publication_index_resource_names_and_bytes_are_exact() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let namespace = root.join(NATIVE_AMX_PUBLICATION_INDEX_DIRECTORY);
+        std::fs::create_dir(&namespace).unwrap();
+        let digest = "a1".repeat(Hash::LENGTH);
+        let main = namespace.join(format!("00000000000000000001-{digest}.norito"));
+        let temporary = namespace.join(format!("{NATIVE_AMX_PUBLICATION_INDEX_TEMP_PREFIX}A1b2C3"));
+        std::fs::write(&main, [1_u8; 13]).unwrap();
+        std::fs::write(&temporary, [2_u8; 17]).unwrap();
+        let paths = [main.clone(), temporary.clone()];
+        let observed = physical_resource_paths_usage(&paths, limits()).unwrap();
+        let evidence = observed[ResourceFamily::EvidenceKeyRecords as usize];
+        assert_eq!(evidence.persisted_entries, 2);
+        assert_eq!(evidence.index_bytes, 13);
+        assert_eq!(evidence.temporary_index_bytes, 17);
+        assert_eq!(evidence.resident_associations, 0);
+        assert_eq!(
+            observed[ResourceFamily::StorageBytes as usize].storage_bytes,
+            30
+        );
+        // A crash immediately after temporary creation retains one zero-byte
+        // physical record, without granting it any canonical publication authority.
+        std::fs::write(&temporary, []).unwrap();
+        let empty = physical_resource_paths_usage(&paths, limits()).unwrap();
+        assert_eq!(
+            empty[ResourceFamily::EvidenceKeyRecords as usize].persisted_entries,
+            2
+        );
+        assert_eq!(
+            empty[ResourceFamily::EvidenceKeyRecords as usize].temporary_index_bytes,
+            0
+        );
+        assert_eq!(
+            empty[ResourceFamily::StorageBytes as usize].storage_bytes,
+            13
+        );
+        for name in [
+            format!("1-{digest}.norito"),
+            format!("00000000000000000000-{digest}.norito"),
+            format!("00000000000000000001-{}.norito", digest.to_uppercase()),
+            format!("00000000000000000001-{digest}.norito.tmp"),
+            NATIVE_AMX_PUBLICATION_INDEX_TEMP_PREFIX.to_owned(),
+            format!("{NATIVE_AMX_PUBLICATION_INDEX_TEMP_PREFIX}unowned.bad"),
+            "blocks.hashes".to_owned(),
+        ] {
+            assert!(evidence_resource_kind(&namespace.join(name), limits()).is_err());
+        }
+        std::fs::write(
+            &temporary,
+            vec![3_u8; NATIVE_AMX_PUBLICATION_INDEX_MAX_RECORD_BYTES + 1],
+        )
+        .unwrap();
+        assert!(physical_resource_paths_usage(&paths, limits()).is_err());
+        std::fs::remove_file(temporary).unwrap();
+        let observed = physical_resource_paths_usage(&paths, limits()).unwrap();
+        assert_eq!(
+            observed[ResourceFamily::EvidenceKeyRecords as usize].persisted_entries,
+            1
+        );
+        assert_eq!(
+            observed[ResourceFamily::StorageBytes as usize].storage_bytes,
+            13
+        );
     }
 
     #[test]

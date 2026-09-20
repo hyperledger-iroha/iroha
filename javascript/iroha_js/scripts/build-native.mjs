@@ -35,6 +35,7 @@ import {
 import {
   createNativeBuildProvenance,
   invalidateNativeBuildProvenance,
+  nativeBuildProvenancePath,
   NATIVE_BUILD_CARGO_LOCK_ENV,
   readNativeBuildSourceState,
   readStableRegularFile,
@@ -320,15 +321,19 @@ function canonicalTargetRoot(repoRoot, env) {
       "Native build requires CARGO_TARGET_DIR to be an absolute canonical path.",
     );
   }
+  // The canonical generated cache is the sole admitted source descendant.
+  // Other supported targets must be disjoint from the complete source root.
+  if (configured !== join(repoRoot, "target")) {
+    assertDisjointPathAncestry(
+      repoRoot,
+      configured,
+      "Native build Cargo target",
+    );
+  }
   const target = canonicalDirectory(
     configured,
     "Native build Cargo target directory",
     { create: true },
-  );
-  assertDisjointPathAncestry(
-    repoRoot,
-    target.canonicalPath,
-    "Native build Cargo target",
   );
   return target;
 }
@@ -622,6 +627,83 @@ function sameOutputIdentity(left, right) {
   );
 }
 
+const OUTPUT_IDENTITY_FIELDS = Object.freeze([
+  "ctimeNs", "dev", "ino", "mode", "mtimeNs", "nlink", "size",
+]);
+
+function changedOutputFields(left, right, { afterRename = false } = {}) {
+  return OUTPUT_IDENTITY_FIELDS.filter(
+    (field) => !(afterRename && field === "ctimeNs") && left?.[field] !== right?.[field],
+  );
+}
+
+function sameRenamedOutputIdentity(left, right) {
+  // Our explicit rename may change ctime. Each stable read on either side
+  // still checks ctime; every other identity field must survive publication.
+  return changedOutputFields(left, right, { afterRename: true }).length === 0;
+}
+
+function artifactIdentityDiagnostic(identity) {
+  if (identity === undefined || identity === null) return null;
+  return Object.fromEntries(
+    OUTPUT_IDENTITY_FIELDS.map(
+      (field) => [field, identity[field]?.toString() ?? null],
+    ),
+  );
+}
+
+function artifactChangeError(message, phase, sourcePath, {
+  expected,
+  before,
+  openedBefore,
+  openedAfter,
+  atPath,
+  bytesRead,
+  checkByteCount = false,
+  identities = [],
+  digests = [],
+} = {}) {
+  const failedComparisons = identities.flatMap(
+    ([comparison, left, right, options]) => {
+      const changedFields = changedOutputFields(left, right, options);
+      return changedFields.length === 0 ? [] : [{
+        comparison,
+        changed_fields: changedFields,
+        expected: artifactIdentityDiagnostic(left),
+        actual: artifactIdentityDiagnostic(right),
+      }];
+    },
+  );
+  for (const [comparison, expectedDigest, actualDigest] of digests) {
+    if (expectedDigest !== actualDigest) {
+      failedComparisons.push({ comparison, expected_sha256: expectedDigest, actual_sha256: actualDigest });
+    }
+  }
+  if (checkByteCount && bytesRead !== before.size) {
+    failedComparisons.push({
+      comparison: "byte-count",
+      expected_bytes: before.size.toString(),
+      actual_bytes: bytesRead.toString(),
+    });
+  }
+  const diagnostic = Object.freeze({
+    phase,
+    path: sourcePath,
+    failed_comparisons: failedComparisons,
+    expected: artifactIdentityDiagnostic(expected),
+    before: artifactIdentityDiagnostic(before),
+    opened_before: artifactIdentityDiagnostic(openedBefore),
+    opened_after: artifactIdentityDiagnostic(openedAfter),
+    at_path: artifactIdentityDiagnostic(atPath),
+    bytes_read: bytesRead?.toString() ?? null,
+    expected_bytes: before?.size?.toString() ?? expected?.size?.toString() ?? null,
+  });
+  const error = new Error(message + " " + JSON.stringify(diagnostic));
+  error.code = "ERR_IROHA_NATIVE_ARTIFACT_CHANGED";
+  error.artifactIdentity = diagnostic;
+  return error;
+}
+
 function cargoArtifactSourceIdentity(path) {
   const metadata = lstatSync(path, { bigint: true });
   if (
@@ -661,8 +743,12 @@ function digestCargoArtifactSource(sourcePath, expectedIdentity) {
     expectedIdentity !== undefined &&
     !sameOutputIdentity(before, expectedIdentity)
   ) {
-    throw new Error(
+    throw artifactChangeError(
       "Cargo native build artifact changed before digest verification.",
+      "before-digest", sourcePath, {
+        expected: expectedIdentity, before,
+        identities: [["expected-to-before", expectedIdentity, before]],
+      },
     );
   }
   const descriptor = openSync(
@@ -673,17 +759,23 @@ function digestCargoArtifactSource(sourcePath, expectedIdentity) {
   );
   const digest = createHash("sha256");
   let total = 0n;
+  let openedBefore;
   let openedAfter;
   try {
-    const openedBefore = fstatSync(descriptor, { bigint: true });
+    openedBefore = fstatSync(descriptor, { bigint: true });
     if (
       !openedBefore.isFile() ||
       openedBefore.isSymbolicLink() ||
       openedBefore.nlink < 1n ||
       !sameOutputIdentity(before, openedBefore)
     ) {
-      throw new Error(
+      throw artifactChangeError(
         "Cargo native build artifact changed while it was opened.",
+        "opened", sourcePath,
+        {
+          expected: expectedIdentity, before, openedBefore, bytesRead: total,
+          identities: [["before-to-opened", before, openedBefore]],
+        },
       );
     }
     const buffer = Buffer.allocUnsafe(64 * 1024);
@@ -706,8 +798,17 @@ function digestCargoArtifactSource(sourcePath, expectedIdentity) {
     !sameOutputIdentity(before, openedAfter) ||
     !sameOutputIdentity(before, after)
   ) {
-    throw new Error(
+    throw artifactChangeError(
       "Cargo native build artifact changed during digest verification.",
+      "after-digest", sourcePath,
+      {
+        expected: expectedIdentity, before, openedBefore, openedAfter,
+        atPath: after, bytesRead: total, checkByteCount: true,
+        identities: [
+          ["before-to-opened-after", before, openedAfter],
+          ["before-to-path-after", before, after],
+        ],
+      },
     );
   }
   return Object.freeze({
@@ -716,8 +817,9 @@ function digestCargoArtifactSource(sourcePath, expectedIdentity) {
   });
 }
 
-function sealCargoArtifactInPlace(nativePath) {
-  const sourceBefore = digestCargoArtifactSource(nativePath);
+function sealCargoArtifactInPlace(nativePath, expectedIdentity, assertDirectories) {
+  assertDirectories();
+  const sourceBefore = digestCargoArtifactSource(nativePath, expectedIdentity);
   const temporaryPath = join(
     dirname(nativePath),
     "." +
@@ -729,7 +831,9 @@ function sealCargoArtifactInPlace(nativePath) {
   );
   let renamed = false;
   try {
+    assertDirectories();
     copyFileSync(nativePath, temporaryPath, constants.COPYFILE_EXCL);
+    assertDirectories();
     const sourceAfter = digestCargoArtifactSource(
       nativePath,
       sourceBefore.identity,
@@ -742,25 +846,69 @@ function sealCargoArtifactInPlace(nativePath) {
       sourceAfter.sha256 !== sourceBefore.sha256 ||
       temporarySeal.sha256 !== sourceBefore.sha256
     ) {
-      throw new Error(
+      throw artifactChangeError(
         "Cargo native build artifact changed while it was authenticated.",
+        "copied", nativePath,
+        {
+          expected: sourceBefore.identity, before: sourceAfter.identity,
+          atPath: temporarySeal.identity,
+          digests: [
+            ["source-before-to-after-copy", sourceBefore.sha256, sourceAfter.sha256],
+            ["source-to-staged-copy", sourceBefore.sha256, temporarySeal.sha256],
+          ],
+        },
+      );
+    }
+    assertDirectories();
+    const stagedBeforeRename = cargoArtifactSourceIdentity(temporaryPath);
+    const sourceBeforeRename = cargoArtifactSourceIdentity(nativePath);
+    if (
+      !sameOutputIdentity(temporarySeal.identity, stagedBeforeRename) ||
+      !sameOutputIdentity(sourceBefore.identity, sourceBeforeRename)
+    ) {
+      throw artifactChangeError(
+        "Native build artifact identity changed before publication.",
+        "before-rename", nativePath,
+        {
+          expected: sourceBefore.identity, before: sourceBeforeRename,
+          openedBefore: temporarySeal.identity, atPath: stagedBeforeRename,
+          identities: [
+            ["source-seal-to-before-rename", sourceBefore.identity, sourceBeforeRename],
+            ["staged-seal-to-before-rename", temporarySeal.identity, stagedBeforeRename],
+          ],
+        },
       );
     }
     renameSync(temporaryPath, nativePath);
     renamed = true;
+    assertDirectories();
     syncDirectory(dirname(nativePath));
     const finalSeal = readStableRegularFileDigest(nativePath, {
       label: "Native build authenticated output",
       requireNonempty: true,
     });
-    if (finalSeal.sha256 !== sourceBefore.sha256) {
-      throw new Error(
+    if (
+      finalSeal.sha256 !== sourceBefore.sha256 ||
+      !sameRenamedOutputIdentity(temporarySeal.identity, finalSeal.identity)
+    ) {
+      throw artifactChangeError(
         "Native build authenticated output changed during publication.",
+        "after-rename", nativePath,
+        {
+          expected: temporarySeal.identity, atPath: finalSeal.identity,
+          identities: [["staged-to-published", temporarySeal.identity, finalSeal.identity, { afterRename: true }]],
+          digests: [["source-to-published", sourceBefore.sha256, finalSeal.sha256]],
+        },
       );
     }
+    assertDirectories();
     return finalSeal;
   } finally {
-    if (!renamed) rmSync(temporaryPath, { force: true });
+    if (!renamed) {
+      // Do not follow a replaced profile directory during failure cleanup.
+      assertDirectories();
+      rmSync(temporaryPath, { force: true });
+    }
   }
 }
 
@@ -770,6 +918,52 @@ function sameSourceState(left, right) {
     left?.sourceTreeClean === right?.sourceTreeClean &&
     left?.sourceTreeSha256 === right?.sourceTreeSha256
   );
+}
+
+function readGeneratedProvenance(nativePath, expectedBytes, expectedIdentity) {
+  const receipt = readStableRegularFile(nativeBuildProvenancePath(nativePath), {
+    label: "Native build generated provenance",
+    maximumBytes: expectedBytes.length,
+    requireNonempty: true,
+  });
+  if (
+    !receipt.bytes.equals(expectedBytes) ||
+    (expectedIdentity !== undefined &&
+      !sameOutputIdentity(expectedIdentity, receipt.identity))
+  ) {
+    throw new Error("Native build generated provenance changed after publication.");
+  }
+  return receipt;
+}
+
+function verifyFinalPublication(nativePath, sealedOutput, expectedBytes, receiptIdentity, assertDirectories) {
+  assertDirectories();
+  readGeneratedProvenance(nativePath, expectedBytes, receiptIdentity);
+  assertDirectories();
+  // The saved seal is already the published inode. No rename exception applies.
+  const finalOutput = digestCargoArtifactSource(nativePath, sealedOutput.identity);
+  if (finalOutput.sha256 !== sealedOutput.sha256) {
+    throw artifactChangeError(
+      "Native build authenticated output digest changed after provenance publication.",
+      "final-publication", nativePath, {
+        expected: sealedOutput.identity, atPath: finalOutput.identity,
+        digests: [["sealed-to-final", sealedOutput.sha256, finalOutput.sha256]],
+      },
+    );
+  }
+  assertDirectories();
+  readGeneratedProvenance(nativePath, expectedBytes, receiptIdentity);
+  const finalIdentity = cargoArtifactSourceIdentity(nativePath);
+  if (!sameOutputIdentity(sealedOutput.identity, finalIdentity)) {
+    throw artifactChangeError(
+      "Native build authenticated output identity changed during the final provenance check.",
+      "final-publication", nativePath, {
+        expected: sealedOutput.identity, atPath: finalIdentity,
+        identities: [["sealed-to-final-path", sealedOutput.identity, finalIdentity]],
+      },
+    );
+  }
+  assertDirectories();
 }
 
 function releaseProfileRequiresCleanSource(cargoProfile, sourceState) {
@@ -823,6 +1017,10 @@ export function runNativeBuild({
   if (profileDirectory.canonicalPath !== dirname(nativePath)) {
     throw new Error("Native build Cargo profile directory is not canonical.");
   }
+  const assertDirectories = () => {
+    assertDirectoryIdentity(target, "Native build Cargo target directory");
+    assertDirectoryIdentity(profileDirectory, "Native build Cargo profile directory");
+  };
 
   const sourceBefore = readSourceState(root, { env });
   const suppliedRevision = env.IROHA_GIT_COMMIT_HASH;
@@ -836,6 +1034,7 @@ export function runNativeBuild({
   }
   releaseProfileRequiresCleanSource(cargoProfile, sourceBefore);
 
+  assertDirectories();
   const outputBefore = cargoArtifactIdentityOrNull(nativePath);
   invalidateProvenance(nativePath);
   const buildArgs = [
@@ -867,10 +1066,12 @@ export function runNativeBuild({
     RUSTC: executables.rustcPath,
     RUSTDOC: executables.rustdocPath,
   };
+  assertDirectories();
   const build = runCargo(executables.cargoPath, buildArgs, {
     cargoEnv,
     cwd: root,
   });
+  assertDirectories();
   forwardCargoRenderedDiagnostics(build?.stdout);
   if (build?.error !== undefined) {
     throw new Error(
@@ -896,7 +1097,10 @@ export function runNativeBuild({
     );
   }
 
-  const sealedOutput = sealCargoArtifactInPlace(nativePath);
+  const sealedOutput = sealCargoArtifactInPlace(
+    nativePath, outputAfterCargo, assertDirectories,
+  );
+  assertDirectories();
   const sourceAfter = readSourceState(root, { env });
   const provenance = createProvenance({
     cargoProfile,
@@ -909,16 +1113,25 @@ export function runNativeBuild({
       "Native build provenance does not match the authenticated output.",
     );
   }
-  assertDirectoryIdentity(target, "Native build Cargo target directory");
-  writeProvenance(nativePath, provenance);
+  const expectedReceiptBytes = Buffer.from(`${JSON.stringify(provenance, null, 2)}\n`, "utf8");
   try {
+    assertDirectories();
+    writeProvenance(nativePath, provenance);
+    assertDirectories();
+    const publishedReceipt = readGeneratedProvenance(nativePath, expectedReceiptBytes);
+    assertDirectories();
     const sourceAfterPublication = readSourceState(root, { env });
+    assertDirectories();
     if (!sameSourceState(sourceAfter, sourceAfterPublication)) {
       throw new Error(
         "Native build source changed while provenance was published.",
       );
     }
+    verifyFinalPublication(
+      nativePath, sealedOutput, expectedReceiptBytes, publishedReceipt.identity, assertDirectories,
+    );
   } catch (error) {
+    assertDirectories();
     invalidateProvenance(nativePath);
     throw error;
   }

@@ -5,6 +5,116 @@ failures. It targets the current first-release contracts. No compatibility
 decoder, obsolete instruction alias, consensus bypass, or new ignored test is
 introduced.
 
+## September 15 block-construction stack overflow
+
+The default-stack `merge_entrypoints_commit_in_canonical_carrier_membership`
+regression aborted while reserving the stack frame for
+`State::block_with_pristine_stage`, during fixture genesis construction after
+Kura stored height one. The debugger identified a 741,304-byte constructor
+frame, with large state values also retained by its callers.
+
+Four existing lifecycle transaction phases now run in separate, non-inlined
+borrowed helpers. Their execution order and transaction apply/drop boundaries
+are preserved. The measured constructor frame is now 581,496 bytes in the
+same unoptimized Linux build. The original test passes without a stack-size
+override. A new pristine-stage failure regression verifies skipped lifecycle
+work, discarded writes, released locks and rollback when a successful scope
+is dropped.
+
+Validation used `scripts/cargo_fast.sh --stable-local-metadata --incremental --
+test -p iroha_core --lib` with exact test selection. The reported case and 34
+additional checks pass, covering normal/replacement source-context ordering,
+merge membership, privacy schedules and expiry, confidential transitions,
+sponsor activation and governance sweeps. Workspace formatting and diff checks
+pass. The Parliament source-check failures found during this run are repaired
+and validated below. Full workspace tests were not run.
+
+## September 15 Parliament source/model bindings
+
+The checker now follows both sortition registration transitions into their
+shared admission helper and broker dispatch into the consensus attestation
+handler. Certificate supporter ordering tolerates Rust whitespace changes
+while still requiring strict ordering in certificate validation. Broker checks
+bind Parliament operations 124/125 and their explicit framed schema identities;
+adding unrelated operations no longer invalidates this contract.
+
+The full source/model checker passes. Its Python selection passes 80 tests and
+218 subtests, including new complete-checker coverage and mutations of ordering,
+canonical candidates, shared admission, broker operation IDs, framing, routing,
+attestation and requalification. All 134 Core tests selected by `parliament`
+pass with four test workers. These changes update structural validation only;
+four-validator network execution and a new TLC run were not part of this check.
+
+```sh
+python3 scripts/formal/check_sora_parliament_source_contract.py
+python3 -m pytest -q scripts/tests/check_sora_parliament_source_contract_test.py \
+  scripts/tests/check_sora_parliament_broker_source_contract_test.py \
+  scripts/tests/sora_parliament_lifecycle_corridor_source_test.py
+scripts/cargo_fast.sh --stable-local-metadata --incremental -- \
+  test -p iroha_core --lib parliament -- --test-threads=4
+```
+
+## September 14 privacy and lifecycle contract repair
+
+The eighteen reported failures exposed incomplete first-release protocol and
+fixture updates. The SHA3-384 outer-hash migration changed compiled manifests,
+transcript challenges, native proof vectors and private-note/PQ-MASP profile
+bindings without regenerating every pin. ZK-ACE and X.509 now pin the exact
+current manifests, independently checked with Python's SHA implementations.
+The private-note adversarial test now locates DEEP and terminal fields after
+opaque 48-byte roots and checks every extension coefficient in all five DEEP
+regions against the modulus and `u64::MAX`. Canonical field rejection remains
+enforced by the existing decoder.
+
+The P2P admission fixture derives waiter capacity from the production semantic
+classes and exercises admission, drainage and reuse at capacity one. The timeout
+test checks both validator and observer roles; the WAL-consumer worker regression
+uses one consistent frozen validator identity across its runtime layers.
+
+The live ledger fixture consumes its startup publication witness before later
+transactions, matching production owner construction. Its regression checks the
+unchanged live coordinator and exact persisted successor. Source guards now
+cover the authenticated pending-Kura terminal transfer, recovered Decision
+authority at activation and timeout-body retirement. The publication inventory
+retains an exact count and explicitly checks the added retirement path's
+authentication, cancellation, validation, publication and readback order. Ten
+negative source mutations cover these boundaries.
+
+Validation rebuilt Core and P2P with:
+
+```sh
+cargo test --locked -p iroha_core -p iroha_p2p --lib \
+  --features iroha_core/expensive-telemetry,iroha_core/iroha-core-tests,iroha_core/sumeragi-main-loop-tests \
+  --no-run
+```
+
+The rebuilt Core harness passed 790 tests in 581.72 seconds with zero failures
+and four existing diagnostic ignores (`RAYON_NUM_THREADS=2`, eight test threads).
+The selection covered the complete shared aggregate/transparent/private-note
+STARK modules, ZK-ACE engine, X.509 DER/engine/readiness modules, privacy profiles
+and lifecycle coordinator, plus the four reported X.509 proof/profile cases,
+three reported adapter/worker cases, three reducer role controls and MAIN
+assembly scrubbing. An exact-name audit confirms all eighteen reported failures
+passed. The final P2P admission-class and handle-update selection passes all
+60 tests, including capacity-one actor reuse with canonical BLS identities and
+the existing retransmittable actor payload:
+
+```sh
+cargo test --locked -p iroha_p2p --lib --features test-fixtures --no-run
+target/debug/deps/iroha_p2p-9e3318caaa99f24d \
+  network::admission_class_tests:: network::handle_update_tests:: --test-threads=8
+```
+
+The complete 55-case source-contract census and all six Python asset
+tests, including the ten new mutation controls, also pass. Workspace formatting,
+diff checks, codec-retirement guards and historical archive verification pass.
+The builds retain warnings in unchanged code; full Core/workspace tests were
+not rerun.
+
+The current protocol is the sole accepted V1 path. These corrections do not
+qualify ZK-ACE or X.509 activation, full-size proofs, hardware parity or a full
+workspace release.
+
 ## Follow-up from the 27-failure admission run
 
 The reported full Core run passed 14,951 tests, failed 27 and ignored 32.
@@ -42,6 +152,64 @@ the renamed height-expiry case. The filters also cover related transaction
 history and runtime tests. Changed Rust sources remained byte-identical throughout
 execution. Scoped Rust formatting, diff checks and historical-archive verification
 pass. Full Core/workspace execution was not rerun.
+
+## Group 03 mandatory transfers and IVM fixtures
+
+The reported group passed 157 tests, failed seven and ignored two. The numeric
+movement planner selected typed mandatory-debit exceptions for outbound controls,
+but its later balance precheck reapplied ordinary outgoing availability. That
+precheck now receives the same typed control policy. Retained mandatory debits
+preserve their outgoing exceptions; receiver availability and holding limits
+remain enforced except for the existing finality-owned staking/moderation custody
+exceptions. Scope, source authority, custody, usage, privacy, precision and checked
+balance arithmetic retain their separate admission checks.
+
+The other six failures were fixtures asserting or constructing obsolete inputs:
+
+- ZK referendum guards receive exact ballot grants and check absent, proposed,
+  closed, too-early and too-late referenda without mutating election state.
+- Composite state keys decode as canonical `NoritoBytes(StatePath)`, including
+  a key exceeding the `Name` size bound.
+- CoreHost rejects low-level polynomial-opening envelopes at decode admission.
+  A real registered Pallas proof checks successful verification and curve-policy
+  rejection; Goldilocks cannot be admitted as an IPA registry group.
+- Host asset definitions carry explicit owning domains. Shadow/native parity
+  initializes incarnations at genesis and asserts the actual minted balance;
+  insufficient transfers assert the precise balance error and unchanged funds.
+
+Regressions exercise every typed movement policy's outgoing availability,
+incoming availability, holding limit and insufficient-balance behavior. Oracle
+integration controls distinguish mandatory penalties from ordinary transfers and
+preserve receiver restrictions.
+
+A related Group 02 parallel rerun exposed direct slash/restitution fixture writes
+entering another test's global FASTPQ witness capture. Those fixtures now hold
+the existing execution-witness guard through direct execution and transcript
+draining. The mixed direct/signed-block test releases that non-reentrant guard
+before signed validation acquires its own. Runtime recording policy is unchanged.
+
+Validation rebuilt the shared Core feature graph:
+
+```sh
+cargo test --locked -p iroha_core --lib \
+  --test iroha_core_group_02 --test iroha_core_group_03 \
+  --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run
+target/debug/deps/iroha_core_group_02-d19bd85425b1bbb1
+target/debug/deps/iroha_core_group_03-eed19256d2d47a07
+target/debug/deps/iroha_core-cb6ba39648f33023 \
+  smartcontracts::isi::asset:: smartcontracts::isi::oracle:: \
+  smartcontracts::isi::world::isi::tests::direct_zk_ballot \
+  smartcontracts::isi::world::isi::tests::direct_plain_and_low_level_zk_ballots_require_exact_scoped_permission
+```
+
+The complete Group 03 run passes 165 tests with two existing ignores, including
+all seven repaired cases (the invalid disabled-Goldilocks fixture is replaced by
+`core_host_enforces_registered_ipa_curve_policy`). After witness isolation, Group
+02 passes all 27 tests in three consecutive runs with normal parallel execution;
+the focused Core selection passes all 105 tests, for 297 distinct passing tests.
+Workspace formatting, diff checks, codec-retirement guards and historical-archive
+verification pass. The builds retain warnings in unchanged code. Full Core and
+workspace runtime suites were not rerun.
 
 ## Group 01 integration fixtures
 

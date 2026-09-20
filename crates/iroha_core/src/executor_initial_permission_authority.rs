@@ -1280,16 +1280,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Privacy activation remains governance-bound in Core, while proof
-    // submission consumes the rollback-safe signed transaction-intent binding
-    // and runs the exhaustive native verifier before any persistent world,
-    // ledger, or budget mutation.
-    if is_any!(
-        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1,
-        iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
-    ) {
-        return true;
-    }
     // Kagemusha V1 execution is guarded by exact native checks in Core.
     if is_any!(
         iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1,
@@ -1363,10 +1353,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     // `zk::SubmitBallot` vendor instruction remains IVM-latch-only below.
     if is_any!(
         iroha_data_model::isi::settlement::SettlementInstructionBox,
-        iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
-        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
-        iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
-        iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
         iroha_data_model::isi::bridge::ApplySccpRouteGovernance,

@@ -18,7 +18,8 @@ BN254 and FFT/LDE arithmetic retain their separate owners.
 The report contains `rows`, `padded_rows`, `column_count`, `iterations` and
 `warmups`. Counts are native u64 integers, never booleans. Rows are in
 1..=65,536; padding is exactly the next power of two, iterations are positive,
-and warmups may be zero. For trace commitments, exactly `column_count` columns
+and warmups may be zero. Their sum must also fit u64 in every execution mode.
+For trace commitments, exactly `column_count` columns
 named `bench_00`, `bench_01`, … contain `padded_rows` canonical Goldilocks values
 each. For pairs, exactly `rows` ordered pairs contain two complete six-lane
 children each. The benchmark hashes actual canonical frames for the selected
@@ -45,7 +46,9 @@ An optional tag in `benchmarks` must match the outer tag.
 
 Every flattened operation contains `cpu_mean_ms`, `gpu_mean_ms`,
 `speedup_ratio` and `speedup_delta_ms`. Absent optional metrics are explicit
-JSON nulls. Raw absent GPU metrics are omitted. Header, operation order, counts,
+JSON nulls only when GPU execution is absent. GPU captures require numeric
+values for all three GPU/speedup fields. Ratios are nonnegative; time deltas may
+be negative. Raw absent GPU metrics are omitted. Header, operation order, counts,
 projected timings and full six-lane evidence agree exactly across copies.
 JSON booleans, integers and floating-point values do not alias one another.
 The GPU identities are `metal_flat`/`metal` and `cuda_nested`/`cuda`.
@@ -80,7 +83,9 @@ length/order disagreement or any lane mismatch aborts the operation.
 
 Actual FFT/LDE `column_staging` remains: aggregate batches/flatten/wait metrics,
 `phases` and `samples`, each containing exactly `fft` and `lde`. Aggregate
-staging includes only those two phases. Six-lane work uses its own dispatch
+staging includes only those two phases. Each aggregate, phase and sample has
+exact fields, bounded u64 counters and finite nonnegative timing values; wait
+ratios lie in 0..=1. Six-lane work uses its own dispatch
 counters. Scalar microbench, scalar comparison/profile, scalar queue and
 unused scalar scheduling projections are rejected. The optional Prometheus
 scrape retains its distinct runtime telemetry meaning; it cannot establish
@@ -90,8 +95,8 @@ six-lane dispatch or parity.
 
 Use `--require-gpu` for Metal qualification captures and run CUDA captures on
 a CUDA host. `launch_geometry_sweep.py` always requires GPU execution and
-accepts FFT/LDE/queue geometry only. A complete geometry matrix requires FFT,
-LDE and both six-lane operations with valid evidence. A focused capture remains
+accepts FFT/LDE/queue geometry only. A complete geometry matrix requires the full six-operation inventory and GPU
+timings for FFT, LDE and both six-lane operations. A focused capture remains
 identified by its exact operation filter.
 
 Wrap actual captures with `scripts/fastpq/wrap_benchmark.py` and retain the raw

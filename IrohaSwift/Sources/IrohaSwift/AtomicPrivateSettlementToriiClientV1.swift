@@ -560,6 +560,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         )
     }
 
+    /// Pending means this node has no public terminal outcome; local lifecycle is a separate query.
     public func getBundleReceipt(
         bundleId: AtomicPrivateSettlementIdentifierV1
     ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
@@ -999,8 +1000,24 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
             guard let expectedIdentifier,
                   let status = object["status"] as? String,
                   ["pending", "finalized", "aborted"].contains(status),
-                  let value = object["value"] as? [String: Any],
-                  value["bundle_id"] as? String == expectedIdentifier.jsonLiteral else {
+                  let value = object["value"] as? [String: Any] else {
+                throw AtomicPrivateSettlementClientErrorV1.responseSubstitution
+            }
+            let receivedBundleId: String?
+            if status == "finalized" {
+                guard Set(value.keys) == [
+                    "version", "manifest", "authority_catalog", "legs", "finalized_height",
+                ], let manifest = value["manifest"] as? [String: Any] else {
+                    throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+                }
+                receivedBundleId = manifest["bundle_id"] as? String
+            } else {
+                if status == "pending", Set(value.keys) != ["bundle_id"] {
+                    throw AtomicPrivateSettlementClientErrorV1.invalidResponse
+                }
+                receivedBundleId = value["bundle_id"] as? String
+            }
+            guard receivedBundleId == expectedIdentifier.jsonLiteral else {
                 throw AtomicPrivateSettlementClientErrorV1.responseSubstitution
             }
         } else if route.contains("/bundles/"),

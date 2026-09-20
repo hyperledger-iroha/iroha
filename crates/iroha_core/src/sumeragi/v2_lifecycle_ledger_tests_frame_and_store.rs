@@ -102,6 +102,42 @@ fn owner(first: u128) -> OwnerId {
 fn distinct_owner(marker: u8, first: u128) -> OwnerId {
     OwnerId::new(CausalRoot::new(digest(marker)), first)
 }
+
+#[test]
+fn attached_test_ledger_finishes_owner_open_before_live_publication() {
+    let directory = tempfile::TempDir::new().expect("temporary live lifecycle ledger");
+    let mut coordinator = LifecycleCoordinator::new(
+        context(),
+        0,
+        super::super::CapacityGeometry::new(
+            super::super::CapacityClass::ALL.map(|class| (class, 8)),
+        ),
+    );
+    coordinator
+        .attach_empty_test_ledger(directory.path())
+        .expect("attach live ledger");
+    let store = coordinator.ledger_store.as_ref().expect("attached store");
+    assert!(store.owner_open_publications.lock().unwrap().is_none());
+    let before = format!("{coordinator:?}");
+    let mut staged = coordinator.stage_durable_transaction();
+    staged.high_water = 2;
+    coordinator
+        .persist_exact_staged_successor(&staged)
+        .expect("publish a live successor with a retained ordinal gap");
+    assert_eq!(format!("{coordinator:?}"), before);
+    assert_eq!(
+        store.load().expect("read published successor"),
+        LifecycleLedgerV1::from_coordinator(&staged).expect("project staged successor"),
+    );
+    assert!(store.take_owner_open_successor().is_none());
+    assert!(
+        coordinator
+            .attach_empty_test_ledger(directory.path())
+            .is_err()
+    );
+    assert_eq!(format!("{coordinator:?}"), before);
+}
+
 fn body_key(phase: LifecyclePhase, _execution_commitment: Option<LifecycleDigest>) -> LifecycleKey {
     let stage = match phase {
         LifecyclePhase::Fetch => LifecycleStageKind::FetchBody,

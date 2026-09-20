@@ -11897,6 +11897,7 @@ impl Nexus {
             configured_lane_catalog: lane_catalog.clone(),
             lane_catalog,
             lane_config,
+            configured_dataspace_catalog: dataspace_catalog.clone(),
             dataspace_catalog,
             dataspace_fee_sponsor_program_ids,
             routing_policy,

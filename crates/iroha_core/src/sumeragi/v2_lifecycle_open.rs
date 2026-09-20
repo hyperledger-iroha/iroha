@@ -872,12 +872,12 @@ impl AuthenticatedLifecycleRecoveryCut {
                             return false;
                         };
                         ledger.records().iter().any(|record| {
-                            claim.exactly_matches_ledger_record(record)
-                                && record.authenticates_retired_terminal_validate_source(
-                                    pipeline.verified(),
-                                    frontier,
-                                    body_store,
-                                )
+                            record.authenticates_retired_terminal_validate_source(
+                                claim,
+                                pipeline.verified(),
+                                frontier,
+                                body_store,
+                            )
                         })
                     })
             })

@@ -2101,6 +2101,15 @@ mod kagemusha_finality_boundary {
 #[cfg(feature = "bls")]
 #[test]
 fn timeout_vote_installs_embedded_qc_before_forming_tc() {
+    for local_validator in [None, Some(3)] {
+        assert_timeout_vote_installs_embedded_qc_before_forming_tc(local_validator);
+    }
+}
+
+#[cfg(feature = "bls")]
+fn assert_timeout_vote_installs_embedded_qc_before_forming_tc(
+    local_validator: Option<wire::ValidatorIndex>,
+) {
     let directory = TempDir::new().expect("temporary directory");
     let (context, keys, pops) = authenticated_context();
     let verified_context =
@@ -2108,14 +2117,14 @@ fn timeout_vote_installs_embedded_qc_before_forming_tc() {
     let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
         directory.path().join("timeout-safety.wal"),
         verified_context,
-        None,
+        local_validator,
         reducer::Generation::new(1),
         [0x33; 32],
         fingerprints(),
         Box::new(TestAggregator),
         deferred_admission_ordinals(),
     )
-    .expect("open observing adapter");
+    .expect("open adapter with its exact roster role");
     assert!(startup.is_empty());
     let round = wire::ConsensusRound {
         context_id: context.id(),
@@ -2214,13 +2223,21 @@ fn timeout_vote_installs_embedded_qc_before_forming_tc() {
     let final_effects = all_effects.pop().expect("three timeout outcomes");
     assert_eq!(adapter.reducer.durable_state().current_view(), 1);
     assert!(adapter.reducer.durable_state().highest_prepare().is_some());
-    assert!(final_effects.iter().any(|effect| matches!(
-        effect,
-        AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
-            payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(_),
-            ..
-        })
-    )));
+    assert_eq!(
+        final_effects
+            .iter()
+            .filter(|effect| matches!(
+                effect,
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(_),
+                    ..
+                })
+            ))
+            .count(),
+        usize::from(local_validator.is_some()),
+        "both roles install the TC, but only roster validators may broadcast it"
+    );
+    assert!(adapter.reducer.durable_state().last_timeout().is_some());
     assert!(
         final_effects
             .iter()

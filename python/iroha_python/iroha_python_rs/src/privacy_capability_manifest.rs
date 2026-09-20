@@ -409,9 +409,7 @@ fn unavailable_reason_label(value: PrivacyCapabilityUnavailableReasonV1) -> &'st
 }
 fn proof_system_label(value: PrivacyProofSystemIdV1) -> &'static str {
     match value {
-        PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64 => {
-            "stark-fri-poseidon-x7-goldilocks-6x64-v1"
-        }
+        PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks => "stark-fri-sha3-384-goldilocks-v1",
         PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512 => {
             "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512"
         }
@@ -430,8 +428,8 @@ fn proof_system_label(value: PrivacyProofSystemIdV1) -> &'static str {
 }
 fn engine_label(value: PrivacyEngineIdV1) -> &'static str {
     match value {
-        PrivacyEngineIdV1::NativeGoldilocksPoseidonX7StarkFri6x64 => {
-            "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"
+        PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri => {
+            "native-goldilocks-sha3-384-stark-fri-v1"
         }
         PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255 => {
             "native-zk-ams-masked-relaxed-spartan-t256-ristretto255"

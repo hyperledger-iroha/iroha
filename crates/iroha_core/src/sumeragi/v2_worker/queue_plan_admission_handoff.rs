@@ -216,8 +216,8 @@ impl ProductionV2Services {
     }
 
     fn remote_timeout_certificate_targets(&self) -> Vec<PeerId> {
-        // Only global-roster origins may emit productive global envelopes.
-        // Observers keep existing global-only retries, not observer-to-observer fanout.
+        // The reducer grants productive emission only to frozen global-roster
+        // origins. This target fallback does not grant an observer emission authority.
         if !self
             .context
             .roster

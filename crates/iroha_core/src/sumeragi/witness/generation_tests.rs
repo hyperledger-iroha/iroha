@@ -1,4 +1,4 @@
-//! Recorder generations isolate stale overlays without changing successful witness bytes.
+//! Guard ownership and recorder generations isolate unrelated work and stale overlays.
 
 use super::*;
 use iroha_data_model::fastpq::{TransferDeltaTranscript, TransferSmtWitness};
@@ -92,12 +92,16 @@ fn assert_capture(expected: ExecWitness) {
     assert_inactive_generation_removed();
 }
 
-fn seed_from_joined_thread(seed: u8) {
-    // The caller deliberately keeps an old TLS overlay. Seed real global records on
-    // a thread without that overlay, and join before examining or draining them.
-    thread::spawn(move || record(seed, TranscriptMode::Append))
-        .join()
-        .unwrap();
+fn seed_current_capture_outside_stale_overlay(seed: u8) {
+    // Build the fresh capture fixture directly while the owner deliberately retains
+    // a stale TLS overlay. Production recording must reject that stale overlay.
+    assert!(owns_exec_witness());
+    let transcripts = transcript_map(seed);
+    let mut witness = lock_slot();
+    assert!(witness.active);
+    witness.reads.insert(vec![0x11], vec![seed]);
+    witness.writes.insert(vec![0x22], vec![seed]);
+    witness.fastpq_transcripts.extend(transcripts);
 }
 
 #[test]
@@ -110,7 +114,7 @@ fn stale_overlay_cannot_append_replace_or_clear_restarted_capture() {
         assert!(drain_exec_witness_checked(|_| Ok(())).is_err());
         assert_inactive_generation_removed();
         start_block();
-        seed_from_joined_thread(2);
+        seed_current_capture_outside_stale_overlay(2);
 
         let mut called = false;
         with_active_slot(|_| called = true);
@@ -147,7 +151,7 @@ fn stale_nested_guards_and_new_children_preserve_lifo_without_rebinding() {
                 record(2, TranscriptMode::ReplaceEmpty);
                 assert!(drain_exec_witness_checked(|_| Ok(())).is_err());
                 start_block();
-                seed_from_joined_thread(3);
+                seed_current_capture_outside_stale_overlay(3);
                 let child = begin_exec_witness_overlay();
                 {
                     let global = lock_slot();
@@ -191,7 +195,7 @@ fn overlay_opened_inactive_and_its_child_never_attach_to_a_later_capture() {
     let old = begin_exec_witness_overlay();
     record(1, TranscriptMode::Append);
     start_block();
-    seed_from_joined_thread(2);
+    seed_current_capture_outside_stale_overlay(2);
     let child = begin_exec_witness_overlay();
     EXEC_WITNESS_OVERLAYS.with(|overlays| {
         for overlay in overlays.borrow().iter() {
@@ -217,7 +221,7 @@ enum Invalidation {
 }
 
 #[test]
-fn every_capture_lifecycle_boundary_discards_cross_thread_stale_commits() {
+fn every_capture_lifecycle_boundary_preserves_unowned_overlay_isolation() {
     for invalidation in [
         Invalidation::Restart,
         Invalidation::Clear,
@@ -235,16 +239,29 @@ fn every_capture_lifecycle_boundary_discards_cross_thread_stale_commits() {
             let (ready_tx, ready_rx) = mpsc::sync_channel(0);
             let (resume_tx, resume_rx) = mpsc::sync_channel(0);
             let worker = thread::spawn(move || {
+                assert!(!owns_exec_witness());
                 let old = begin_exec_witness_overlay();
+                EXEC_WITNESS_OVERLAYS.with(|overlays| {
+                    assert!(
+                        overlays
+                            .borrow()
+                            .last()
+                            .unwrap()
+                            .witness
+                            .generation
+                            .is_none()
+                    );
+                });
                 record(2, mode);
                 ready_tx.send(()).unwrap();
                 resume_rx.recv().unwrap();
                 record(4, mode);
                 old.commit();
+                assert!(!owns_exec_witness());
             });
             ready_rx.recv().unwrap();
-            // Deliberately violate the caller's join-before-drain rule to test isolation
-            // of a scoped stale worker. Direct unscoped worker writes remain caller-owned.
+            // An unrelated thread cannot acquire this capture's identity, including
+            // when its overlay outlives a restart or release of the owner's guard.
             match invalidation {
                 Invalidation::Restart => start_block(),
                 Invalidation::Clear => clear_block(),
@@ -285,6 +302,89 @@ fn every_capture_lifecycle_boundary_discards_cross_thread_stale_commits() {
             drop(guard);
         }
     }
+}
+
+#[test]
+fn ownerless_lifecycle_calls_cannot_change_or_validate_an_owned_capture() {
+    let _guard = exec_witness_guard();
+    start_block();
+    record(1, TranscriptMode::Append);
+    let generation = lock_slot().generation.clone().unwrap();
+    thread::spawn(|| {
+        assert!(!owns_exec_witness());
+        start_block();
+        clear_block();
+        assert_eq!(drain_exec_witness(), ExecWitness::default());
+        let mut validator_called = false;
+        assert_eq!(
+            drain_exec_witness_checked(|_| {
+                validator_called = true;
+                Ok(())
+            }),
+            Err("ordinary witness capture requires the execution-witness guard".to_owned()),
+        );
+        assert!(!validator_called);
+        assert_eq!(
+            finish_cached_exec_witness_capture(),
+            Err("cached witness capture requires the execution-witness guard".to_owned()),
+        );
+    })
+    .join()
+    .unwrap();
+    assert!(Arc::ptr_eq(
+        lock_slot().generation.as_ref().unwrap(),
+        &generation,
+    ));
+    assert_capture(expected(1));
+}
+
+#[test]
+fn ownerless_snapshot_reads_preserve_the_owned_capture() {
+    let _guard = exec_witness_guard();
+    start_block();
+    record(1, TranscriptMode::Append);
+    let observed = thread::spawn(|| {
+        assert!(!owns_exec_witness());
+        snapshot_exec_witness()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(observed, expected(1));
+    assert_capture(expected(1));
+}
+
+#[test]
+fn guard_ownership_releases_and_reacquires_across_threads() {
+    assert!(!owns_exec_witness());
+    let guard = exec_witness_guard();
+    assert!(owns_exec_witness());
+    start_block();
+    record(1, TranscriptMode::Append);
+    let (ready_tx, ready_rx) = mpsc::sync_channel(0);
+    let worker = thread::spawn(move || {
+        assert!(!owns_exec_witness());
+        ready_tx.send(()).unwrap();
+        let guard = exec_witness_guard();
+        assert!(owns_exec_witness());
+        assert_inactive_generation_removed();
+        start_block();
+        record(2, TranscriptMode::Append);
+        assert_capture(expected(2));
+        drop(guard);
+        assert!(!owns_exec_witness());
+    });
+    ready_rx.recv().unwrap();
+    drop(guard);
+    assert!(!owns_exec_witness());
+    worker.join().unwrap();
+    let guard = exec_witness_guard();
+    assert!(owns_exec_witness());
+    assert_inactive_generation_removed();
+    start_block();
+    record(3, TranscriptMode::Append);
+    assert_capture(expected(3));
+    drop(guard);
+    assert!(!owns_exec_witness());
 }
 
 #[test]

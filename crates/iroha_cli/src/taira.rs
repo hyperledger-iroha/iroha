@@ -163,6 +163,9 @@ pub enum Command {
     /// Prepare, submit, or recover ordinary account onboarding and faucet transactions.
     #[command(subcommand)]
     Account(onboarding::AccountCommand),
+    /// Plan, apply, resume, or inspect an exact dataspace and namespace deployment.
+    #[command(subcommand)]
+    DataspaceDeploy(crate::taira_dataspace_deploy::Command),
     /// Check Taira read-side health and MCP route posture.
     Doctor(Doctor),
     /// Preflight or execute the strictly authorized compiled public reset.
@@ -184,6 +187,7 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Account(cmd) => cmd.run(context),
+            Self::DataspaceDeploy(cmd) => cmd.run(context),
             Self::Doctor(cmd) => cmd.run(context),
             Self::PublicReset(_) => eyre::bail!(
                 "`taira public-reset` must be dispatched before client configuration is loaded"
@@ -11951,16 +11955,23 @@ mod tests {
         status_config.key_pair = key_pair;
         status_config.torii_api_url = Url::parse(&format!("{}/", status_server.base_url))
             .expect("selected validator Torii URL");
+        // This checks origin separation, not latency. Give the twelve local requests
+        // and four-replica polling cadence bounded time on a loaded build host.
         let report = verify_inrou_check_from_selected_status_origin(
             &public_server.base_url,
             &status_config,
             &stage,
-            2,
+            30,
             InrouProbeScope::Public,
         )
         .expect("status and route probes use their distinct configured origins");
         crate::taira_public_reset::validate_inrou_checks_for_test(&report, InrouProbeScope::Public)
-            .expect("active public probe output satisfies the host receipt contract");
+            .unwrap_or_else(|error| {
+                panic!(
+                    "active public probe output must satisfy the host receipt contract: \
+                     {error:?}; report: {report:?}"
+                )
+            });
         assert_eq!(report_status(&report), Some("ok"));
         assert_eq!(route_index.load(Ordering::Acquire), 4);
 

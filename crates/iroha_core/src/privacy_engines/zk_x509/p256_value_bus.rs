@@ -3137,7 +3137,7 @@ mod tests {
         ZkX509P256ArithmeticKindV1, build_zk_x509_p256_arithmetic_trace_v1,
     };
     use super::*;
-    use crate::privacy_engines::transparent_stark::GoldilocksDigest384V1;
+    use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
     use crate::privacy_engines::zk_x509::credential_pre_aux::{
         ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,
         derive_zk_x509_credential_pre_aux_binding_v1,
@@ -4972,8 +4972,8 @@ mod tests {
         let mut transcript = TransparentTranscriptV1::new(
             super::super::stark::ZK_X509_DIGEST_CONTEXT_V1,
             b"p256-value-bus-test",
-            &GoldilocksDigest384V1::new([0x51; 6]).expect("profile digest"),
-            &GoldilocksDigest384V1::new([0xa7; 6]).expect("public digest"),
+            &PrivacyOuterDigestV1::from_bytes([0x51; 48]),
+            &PrivacyOuterDigestV1::from_bytes([0xa7; 48]),
         )
         .expect("test transcript");
         let derived = derive_zk_x509_p256_value_bus_challenges_v1(&mut transcript)

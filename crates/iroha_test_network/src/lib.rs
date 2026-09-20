@@ -3234,16 +3234,60 @@ pub struct Network {
     // Cache a single, deterministic genesis block per network instance to ensure
     // all peers that submit genesis use byte-for-byte identical content.
     cached_genesis: OnceLock<GenesisBlock>,
-    // When a custom genesis block is supplied, we may need to augment it with
-    // consensus metadata (handshake meta + parameters) so `irohad` can validate
-    // startup settings. Cache that derived block separately.
-    cached_genesis_augmented: OnceLock<GenesisBlock>,
+    // Only immutable, file-free policy inputs may reuse pre-execution validation.
+    // File-backed policies retain the ordinary fresh-validation path.
+    validated_genesis: Option<OnceLock<ValidatedNetworkGenesis>>,
     config_layers: Vec<Table>,
     topology_entries: Vec<GenesisTopologyEntry>,
     auto_populate_trusted_peer_pops: bool,
     max_validator_capacity: usize,
     _permit: NetworkPermit,
 }
+/// A block admitted by exact native staging against this network's signed policy.
+/// Keeping the block and its returned hashes together prevents a cache marker from
+/// accidentally authenticating a different raw/custom block.
+#[derive(Clone)]
+struct ValidatedNetworkGenesis {
+    block: GenesisBlock,
+    staged_hashes: config::StagedGenesisPolicyHashes,
+}
+impl ValidatedNetworkGenesis {
+    fn new(
+        block: GenesisBlock,
+        staged_hashes: config::StagedGenesisPolicyHashes,
+        profile: &ConsensusBootstrapProfile,
+        topology: &[PeerId],
+    ) -> Self {
+        let validated = Self {
+            block,
+            staged_hashes,
+        };
+        validated.assert_matches(profile, topology);
+        validated
+    }
+
+    fn assert_matches(&self, profile: &ConsensusBootstrapProfile, topology: &[PeerId]) {
+        assert_genesis_voting_roster_matches_network(&self.block, topology);
+        assert!(
+            genesis_has_exactly_one_consensus_handshake(
+                &self.block,
+                &consensus_handshake_parameter(profile),
+            ),
+            "cached genesis must retain exactly the signed network handshake"
+        );
+        assert_eq!(
+            self.staged_hashes.nexus_amx,
+            CryptoHash::prehashed(profile.params.v2_context.nexus_amx_context_hash),
+            "signed test-network Nexus/AMX context must match exact genesis pre-execution"
+        );
+        assert_eq!(
+            self.staged_hashes.execution_policy,
+            CryptoHash::prehashed(profile.params.v2_context.execution_policy_hash),
+            "signed test-network execution policy must match exact genesis pre-execution"
+        );
+    }
+}
+
 impl Drop for Network {
     fn drop(&mut self) {
         if let Some(relays) = &self.observer_slow_reader_relays {
@@ -4145,10 +4189,17 @@ impl Network {
     /// topology before any cached or newly generated block is returned.
     pub fn genesis(&self) -> GenesisBlock {
         let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
-        if let Some(augmented) = self.cached_genesis_augmented.get() {
-            assert_genesis_voting_roster_matches_network(augmented, &peer_topology);
-            return augmented.clone();
+        if let Some(cache) = &self.validated_genesis {
+            // `get_or_init` publishes only after every native validation succeeds;
+            // a panic leaves the cell empty and concurrent readers share one result.
+            let validated = cache.get_or_init(|| self.prepare_validated_genesis(&peer_topology));
+            validated.assert_matches(&self.consensus_profile, &peer_topology);
+            return validated.block.clone();
         }
+        self.prepare_validated_genesis(&peer_topology).block
+    }
+
+    fn prepare_validated_genesis(&self, peer_topology: &[PeerId]) -> ValidatedNetworkGenesis {
         let config_layers: Vec<Table> = self.config_layers().map(Cow::into_owned).collect();
         let actual_config = Some(resolve_final_actual_config(
             self.peers
@@ -4184,36 +4235,18 @@ impl Network {
             )
             .expect("signed test-network genesis must stage without synthetic results")
         };
-        let assert_signed_staged_hashes = |staged_hashes: config::StagedGenesisPolicyHashes| {
-            let signed_nexus_amx = CryptoHash::prehashed(
-                self.consensus_profile
-                    .params
-                    .v2_context
-                    .nexus_amx_context_hash,
-            );
-            let signed_execution_policy = CryptoHash::prehashed(
-                self.consensus_profile
-                    .params
-                    .v2_context
-                    .execution_policy_hash,
-            );
-            assert_eq!(
-                staged_hashes.nexus_amx, signed_nexus_amx,
-                "signed test-network Nexus/AMX context must match exact genesis pre-execution"
-            );
-            assert_eq!(
-                staged_hashes.execution_policy, signed_execution_policy,
-                "signed test-network execution policy must match exact genesis pre-execution"
-            );
-        };
         if let Some(cached_genesis) = self.cached_genesis.get() {
             if genesis_has_exactly_one_consensus_handshake(
                 cached_genesis,
                 &consensus_handshake_meta,
             ) {
-                assert_genesis_voting_roster_matches_network(cached_genesis, &peer_topology);
-                assert_signed_staged_hashes(recompute_staged_hashes(cached_genesis));
-                return cached_genesis.clone();
+                let staged_hashes = recompute_staged_hashes(cached_genesis);
+                return ValidatedNetworkGenesis::new(
+                    cached_genesis.clone(),
+                    staged_hashes,
+                    &self.consensus_profile,
+                    peer_topology,
+                );
             }
             if genesis_contains_any_consensus_handshake(cached_genesis) {
                 debug!(
@@ -4240,10 +4273,14 @@ impl Network {
                 zk_config.as_ref(),
                 actual_config.as_ref(),
             );
-            assert_genesis_voting_roster_matches_network(&augmented, &peer_topology);
-            assert_signed_staged_hashes(recompute_staged_hashes(&augmented));
-            let _ = self.cached_genesis_augmented.set(augmented.clone());
-            return augmented;
+            let staged_hashes = recompute_staged_hashes(&augmented);
+            let validated = ValidatedNetworkGenesis::new(
+                augmented,
+                staged_hashes,
+                &self.consensus_profile,
+                peer_topology,
+            );
+            return validated;
         }
         let (genesis, staged_hash) =
             config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
@@ -4263,10 +4300,14 @@ impl Network {
                 None,
                 confidential_policy_hash,
             );
-        assert_genesis_voting_roster_matches_network(&genesis, &peer_topology);
-        assert_signed_staged_hashes(staged_hash);
-        let _ = self.cached_genesis.set(genesis.clone());
-        genesis
+        let validated = ValidatedNetworkGenesis::new(
+            genesis,
+            staged_hash,
+            &self.consensus_profile,
+            peer_topology,
+        );
+        let _ = self.cached_genesis.set(validated.block.clone());
+        validated
     }
     /// Genesis block instructions grouped by transaction
     pub fn genesis_isi(&self) -> &Vec<Vec<InstructionBox>> {
@@ -6351,6 +6392,106 @@ fn apply_identity_defaults_for_detection(merged: &mut Table) {
         ),
     );
 }
+/// Materialize only omitted harness-owned account literals for the selected config profile.
+/// The global defaults retain their stable Sora literals; explicit user values remain exact.
+fn materialize_profile_account_defaults(config_layers: &mut Vec<Table>) -> Result<u16> {
+    use iroha_config::parameters::defaults;
+
+    fn missing(table: &Table, path: &[&str]) -> bool {
+        let mut table = table;
+        for (index, key) in path.iter().enumerate() {
+            match table.get(*key) {
+                None => return true,
+                Some(_) if index + 1 == path.len() => return false,
+                Some(Value::Table(next)) => table = next,
+                // Do not repair an explicitly malformed user table either.
+                Some(_) => return false,
+            }
+        }
+        false
+    }
+    fn account<const N: usize>(
+        merged: &Table,
+        layer: &mut Table,
+        path: [&'static str; N],
+        identity: AccountId,
+        discriminant: u16,
+    ) -> Result<()> {
+        if missing(merged, &path) {
+            let literal = identity
+                .to_i105_for_discriminant(discriminant)
+                .map_err(|error| eyre!("cannot render harness profile account: {error}"))?;
+            TomlWriter::new(layer).write(path, literal);
+        }
+        Ok(())
+    }
+
+    let mut merged = Table::new();
+    for layer in config_layers.iter() {
+        merge_tables(&mut merged, layer);
+    }
+    let discriminant = match merged.get("chain_discriminant") {
+        None => defaults::common::chain_discriminant(),
+        Some(value) => u16::try_from(
+            value
+                .as_integer()
+                .ok_or_else(|| eyre!("test-network chain_discriminant must be an integer"))?,
+        )
+        .map_err(|_| eyre!("test-network chain_discriminant must fit u16"))?,
+    };
+    let mut layer = Table::new();
+    for (field, identity) in [
+        (
+            "citizenship_escrow_account",
+            defaults::governance::citizenship_escrow_account_id(),
+        ),
+        (
+            "bond_escrow_account",
+            defaults::governance::bond_escrow_account_id(),
+        ),
+        (
+            "slash_receiver_account",
+            defaults::governance::slash_receiver_account_id(),
+        ),
+        (
+            "viral_incentive_pool_account",
+            defaults::governance::slash_receiver_account_id(),
+        ),
+        (
+            "viral_escrow_account",
+            defaults::governance::slash_receiver_account_id(),
+        ),
+        (
+            "sorafs_pin_fee_treasury_account",
+            defaults::governance::sorafs_pin_fee::treasury_account_id(),
+        ),
+    ] {
+        account(&merged, &mut layer, ["gov", field], identity, discriminant)?;
+    }
+    // The disabled VPN profile still parses its account. Preserve the default identity,
+    // rendered for this profile, without enabling VPN or installing a signer.
+    account(
+        &merged,
+        &mut layer,
+        ["network", "soranet_vpn", "operator_account_id"],
+        defaults::governance::bond_escrow_account_id(),
+        discriminant,
+    )?;
+    account(
+        &merged,
+        &mut layer,
+        ["nexus", "fees", "sponsor_vault_custody_account_id"],
+        defaults::nexus::fees::sponsor_vault_custody_account_id(),
+        discriminant,
+    )?;
+    // Telemetry submitter/provider-owner defaults are empty. Explicit entries are
+    // deliberately left to the strict selected-chain parser, never translated here.
+    if !layer.is_empty() {
+        config_layers.push(layer);
+    }
+    Ok(discriminant)
+}
+
 fn merged_sora_profile_detection_config(config_layers: &[Table]) -> Table {
     let mut merged = sora_profile_detection_defaults();
     for layer in config_layers {
@@ -7674,6 +7815,12 @@ impl NetworkBuilder {
             parliament_test_signers,
             initial_consensus_message_control,
         } = self;
+        let chain_discriminant = materialize_profile_account_defaults(&mut config_layers)
+            .unwrap_or_else(|error| panic!("invalid test-network profile defaults: {error:#}"));
+        // Builder-owned instruction generation and custom genesis callbacks use the
+        // selected configuration profile, including when preparation runs on a worker.
+        let _profile =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
         let max_validator_capacity = max_validator_capacity.unwrap_or(n_peers);
         let ingress_validator_capacity = authenticated_validator_capacity(
             max_validator_capacity,
@@ -7724,7 +7871,9 @@ impl NetworkBuilder {
         let env = Environment::new();
         // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
         // when callers don't provide explicit nexus account overrides.
-        let genesis_account_literal = ALICE_ID.to_string();
+        let genesis_account_literal = ALICE_ID
+            .to_i105_for_discriminant(chain_discriminant)
+            .expect("harness genesis account renders for selected profile");
         let has_fee_sink_override = config_layers.iter().any(|layer| {
             get_nested_value(layer, &["nexus", "fees", "fee_sink_account_id"]).is_some()
         });
@@ -7937,7 +8086,6 @@ impl NetworkBuilder {
             assert_genesis_voting_roster_matches_network(custom, &peer_topology);
         }
         let cached_genesis = OnceLock::new();
-        let cached_genesis_augmented = OnceLock::new();
         let block_cadence = block_cadence.unwrap_or(DEFAULT_BLOCK_CADENCE);
         let set_ivm_fuel = match ivm_fuel {
             IvmFuelConfig::Unset => None,
@@ -8150,7 +8298,9 @@ impl NetworkBuilder {
             }
         };
         if let Some(stake_amount) = lane_validator_bootstrap.clone() {
-            let gas_account_str = gas_account_id.to_string();
+            let gas_account_str = gas_account_id
+                .to_i105_for_discriminant(chain_discriminant)
+                .expect("harness bootstrap custody renders for selected profile");
             let mut bootstrap_layer = Table::new();
             let mut writer = TomlWriter::new(&mut bootstrap_layer);
             writer
@@ -8612,7 +8762,12 @@ impl NetworkBuilder {
             genesis_isi,
             genesis_post_topology_isi,
             cached_genesis,
-            cached_genesis_augmented,
+            validated_genesis: resolved_genesis_config.as_ref().and_then(|config| {
+                (config.nexus.registry.manifest_directory.is_none()
+                    && config.nexus.registry.cache_directory.is_none()
+                    && !config.nexus.compliance.enabled)
+                    .then(OnceLock::new)
+            }),
             config_layers: Some(base_layer).into_iter().chain(config_layers).collect(),
             topology_entries,
             auto_populate_trusted_peer_pops,
@@ -8621,10 +8776,15 @@ impl NetworkBuilder {
         };
         let exact_genesis_hash = network.genesis().0.hash();
         let network_id = NetworkId::from_genesis_hash(exact_genesis_hash);
+        let client_identity = PeerClientIdentity {
+            chain: network.chain_id(),
+            network_id,
+            chain_discriminant,
+        };
         for peer in network.all_peers() {
-            peer.network_id
-                .set(network_id)
-                .expect("test-network peer lineage must be initialized exactly once");
+            peer.client_identity
+                .set(client_identity.clone())
+                .expect("test-network peer client identity must be initialized exactly once");
         }
         // The test-network generator is the operator provisioning both the
         // signed in-memory genesis and its independent runtime trust anchor.
@@ -8794,6 +8954,15 @@ fn start_checked_storage_fallback_ready(
 ) -> bool {
     has_genesis && elapsed >= START_CHECKED_STORAGE_FALLBACK_GRACE && is_running && has_block_1
 }
+/// Exact generated network and account profile shared by all clients for one peer.
+/// One immutable binding prevents a client from combining identities from different networks.
+#[derive(Clone, Debug)]
+struct PeerClientIdentity {
+    chain: ChainId,
+    network_id: NetworkId,
+    chain_discriminant: u16,
+}
+
 /// Controls execution of an `iroha3d` child process.
 ///
 /// While exists, allocates socket ports and a temporary directory (not cleared automatically).
@@ -8807,7 +8976,7 @@ pub struct NetworkPeer {
     mnemonic: String,
     span: tracing::Span,
     key_pair: KeyPair,
-    network_id: Arc<OnceLock<NetworkId>>,
+    client_identity: Arc<OnceLock<PeerClientIdentity>>,
     streaming_key_pair: KeyPair,
     soranet_transport_key_pair: KeyPair,
     bls_key_pair: Option<KeyPair>,
@@ -9917,18 +10086,21 @@ impl NetworkPeer {
             iroha_model_base::domain::DomainId::try_new("default", "universal")
                 .expect("explicit client convenience domain")
                 .to_string();
-        let network_id = self
-            .network_id
+        let identity = self
+            .client_identity
             .get()
-            .copied()
             .expect("peer must be attached to a network before creating clients");
         let config = ConfigReader::new()
             .without_env()
             .with_toml_source(TomlSource::inline(
                 Table::new()
-                    .write("chain", config::chain_id().to_string())
-                    .write("network_id", network_id.to_string())
+                    .write("chain", identity.chain.to_string())
+                    .write("network_id", identity.network_id.to_string())
                     .write(["account", "domain"], default_account_domain)
+                    .write(
+                        ["account", "chain_discriminant"],
+                        i64::from(identity.chain_discriminant),
+                    )
                     .write(
                         ["account", "public_key"],
                         account_id.expect_single_signatory().to_string(),
@@ -10416,7 +10588,7 @@ impl NetworkPeerBuilder {
             mnemonic,
             span,
             key_pair,
-            network_id: Arc::new(OnceLock::new()),
+            client_identity: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair,
@@ -10813,6 +10985,10 @@ pub async fn once_blocks_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("genesis_validation_cache_tests.rs");
+    include!("profile_account_defaults_tests.rs");
+    include!("peer_client_profile_tests.rs");
+    include!("genesis_profile_tests.rs");
     use iroha_config::parameters::defaults;
     use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
     use iroha_crypto::Algorithm;
@@ -11298,7 +11474,7 @@ mod tests {
             mnemonic: "once-block-fallback".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate once-block fallback peer key"),
-            network_id: Arc::new(OnceLock::new()),
+            client_identity: Arc::new(OnceLock::new()),
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11352,21 +11528,25 @@ mod tests {
             .expect("generate watchdog streaming key");
         let soranet_transport_key_pair =
             random_soranet_transport_key_pair_distinct_from(&streaming_key_pair);
-        let network_id = Arc::new(OnceLock::new());
+        let client_identity = Arc::new(OnceLock::new());
         assert!(
-            network_id
-                .set(NetworkId::from_genesis_hash(HashOf::<
-                    iroha_data_model::block::BlockHeader,
-                >::from_untyped_unchecked(
-                    CryptoHash::prehashed([0xA5; CryptoHash::LENGTH],)
-                )))
+            client_identity
+                .set(PeerClientIdentity {
+                    chain: config::chain_id(),
+                    network_id: NetworkId::from_genesis_hash(HashOf::<
+                        iroha_data_model::block::BlockHeader,
+                    >::from_untyped_unchecked(
+                        CryptoHash::prehashed([0xA5; CryptoHash::LENGTH]),
+                    )),
+                    chain_discriminant: defaults::common::chain_discriminant(),
+                })
                 .is_ok()
         );
         let peer = NetworkPeer {
             mnemonic: "wait-block-authority-barrier".to_string(),
             span: tracing::Span::none(),
             key_pair: KeyPair::try_random().expect("generate watchdog peer key"),
-            network_id,
+            client_identity,
             streaming_key_pair,
             soranet_transport_key_pair,
             bls_key_pair: None,
@@ -11766,7 +11946,15 @@ mod tests {
                 CryptoHash::prehashed([0xA5; CryptoHash::LENGTH]),
             ),
         );
-        assert!(peer.network_id.set(network_id).is_ok());
+        assert!(
+            peer.client_identity
+                .set(PeerClientIdentity {
+                    chain: config::chain_id(),
+                    network_id,
+                    chain_discriminant: defaults::common::chain_discriminant(),
+                })
+                .is_ok()
+        );
         let _overrides = [
             EnvVarRestore::set("CHAIN", "foreign-client-chain"),
             EnvVarRestore::set("NETWORK_ID", "invalid-ambient-network"),
@@ -11774,9 +11962,15 @@ mod tests {
             EnvVarRestore::set("ACCOUNT_PUBLIC_KEY", "invalid-ambient-public-key"),
             EnvVarRestore::set("ACCOUNT_PRIVATE_KEY", "invalid-ambient-private-key"),
             EnvVarRestore::set("ACCOUNT_PRIVATE_KEY_FILE", "nonexistent-ambient-key-file"),
+            EnvVarRestore::set("ACCOUNT_PROFILE", "unknown-ambient-profile"),
+            EnvVarRestore::set("ACCOUNT_CHAIN_DISCRIMINANT", "777"),
         ];
         let client = peer.client();
         assert_eq!(client.client().chain(), &config::chain_id());
+        assert_eq!(
+            client.client().account_chain_discriminant(),
+            defaults::common::chain_discriminant(),
+        );
         assert_eq!(client.client().network_id(), &network_id);
         assert_eq!(client.client().account(), &*ALICE_ID);
         assert_eq!(

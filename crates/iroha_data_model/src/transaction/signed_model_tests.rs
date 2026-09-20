@@ -662,8 +662,7 @@ fn draft_zk_ace_privacy_payload() -> TransactionPayload {
         let context = *submission.envelope.statement.context();
         let authority = privacy_test_authority();
         submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
-        submission.envelope.proof_system_id =
-            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
+        submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks;
         submission.envelope.engine_id =
             PrivacyProtocolIdV1::ZkAcePqAuthorizationV1.expected_engine();
         submission.envelope.statement =
@@ -741,8 +740,7 @@ fn draft_ivm_private_note_privacy_payload() -> TransactionPayload {
         let context = *submission.envelope.statement.context();
         let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         submission.envelope.protocol_id = protocol_id;
-        submission.envelope.proof_system_id =
-            PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
+        submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks;
         submission.envelope.engine_id = protocol_id.expected_engine();
         let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
             context,
@@ -1641,7 +1639,7 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
         "proof-system tag",
         |submission: &mut SubmitPrivacyProofV1| {
             submission.envelope.proof_system_id =
-                PrivacyProofSystemIdV1::StarkFriPoseidonX7Goldilocks6x64;
+                PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks;
         }
     );
     assert_submission_bound!("engine tag", |submission: &mut SubmitPrivacyProofV1| {

@@ -6,7 +6,7 @@
             SoraProfile::PrivateCbuae,
             SoraProfile::Nexus,
         ] {
-            let (_, lanes) = localnet_lane_catalog(Some(profile))
+            let (_, lanes) = localnet_lane_catalog(Some(profile), false)
                 .expect("Sora localnet profile should define a lane catalog");
             for lane in lanes {
                 let lane = lane.as_table().expect("lane catalog entry");

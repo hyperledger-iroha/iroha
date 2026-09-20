@@ -43,9 +43,8 @@ export const PRIVACY_PROTOCOL_IDS_V1 = Object.freeze([
 
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U32 = 0xffff_ffff;
-const POLICY_DELAY_BLOCKS_V1 = 300n;
 const PROTOCOL_BINDINGS = Object.freeze({
-  "zk-ace-pq-authorization-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  "zk-ace-pq-authorization-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   "anonymous-pgc-k-out-of-n-v1": ["anonymous-pgc-p256", "native-anonymous-pgc-p256"],
   "verange-transparent-range-v1": ["iroha-verange-p256", "native-verange-p256"],
   "iroha-zk-ams-v1": [
@@ -53,13 +52,13 @@ const PROTOCOL_BINDINGS = Object.freeze({
     "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
   ],
   "vega-existing-credential-zk-v1": ["vega-neutron-nova-spartan-hyrax-t256", "native-vega"],
-  "iroha-zk-x509-stark-p256-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  "iroha-zk-x509-stark-p256-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
   "iroha-jindo-polynomial-commitment-v1": ["jindo-polynomial-commitment", "native-jindo"],
   "iroha-bootle-lantern-anoncred-v1": ["lantern-lnp22-module-linear-norm", "native-lantern-lnp22"],
   "orchard-halo2-actions-v1": ["halo2-ipa-pasta", "native-halo2-orchard"],
   "monero-fcmp-plus-plus-v1": ["fcmp-plus-plus-curve-tree-bulletproofs", "native-fcmp-plus-plus"],
-  "iroha-ivm-private-note-stark-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
-  "pq-masp-stark-v1": ["stark-fri-poseidon-x7-goldilocks-6x64-v1", "native-goldilocks-poseidon-x7-stark-fri-6x64-v1"],
+  "iroha-ivm-private-note-stark-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
+  "pq-masp-stark-v1": ["stark-fri-sha3-384-goldilocks-v1", "native-goldilocks-sha3-384-stark-fri-v1"],
 });
 const CONSENSUS_LIMIT_KEYS = Object.freeze([
   "max_actions_per_transaction",
@@ -95,7 +94,7 @@ function parseConsensusPolicy(value, committedHeight, path) {
     const tightening = objectWithExactKeys(policy.pending_tightening, ["scheduled_at_height", "effective_at_height", "next_limits"], pendingPath);
     const scheduled = positiveU64(tightening.scheduled_at_height, `${pendingPath}.scheduled_at_height`);
     const effective = positiveU64(tightening.effective_at_height, `${pendingPath}.effective_at_height`);
-    if (scheduled > MAX_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) {
+    if (effective <= scheduled || scheduled > committedHeight || effective <= committedHeight) {
       fail("has invalid committed-height schedule", pendingPath);
     }
     const nextLimits = parseConsensusLimits(tightening.next_limits, `${pendingPath}.next_limits`);
@@ -244,20 +243,19 @@ function parseLifecycle(value, committedHeight, path) {
   const state = lifecycle.state;
   if (!new Set(["proposed", "active", "suspended", "retired"]).has(state)) fail("unknown lifecycle state", `${path}.state`);
   const keys = state === "proposed"
-    ? ["proposed_at_height", "activate_at_height"]
+    ? ["proposed_at_height"]
     : ["proposed_at_height", "activated_at_height", "state_since_height"];
   const record = objectWithExactKeys(lifecycle.record, keys, `${path}.record`);
   const proposed = positiveU64(record.proposed_at_height, `${path}.record.proposed_at_height`);
   let normalized;
   if (state === "proposed") {
-    const activate = positiveU64(record.activate_at_height, `${path}.record.activate_at_height`);
-    if (activate <= proposed || proposed > committedHeight || activate <= committedHeight) fail("has invalid proposed lifecycle heights", path);
-    normalized = { proposed_at_height: proposed, activate_at_height: activate };
+    if (proposed > committedHeight) fail("claims a proposal after committed height", path);
+    normalized = { proposed_at_height: proposed };
   } else {
     const activated = state === "retired" && record.activated_at_height === null ? null : positiveU64(record.activated_at_height, `${path}.record.activated_at_height`);
     const since = positiveU64(record.state_since_height, `${path}.record.state_since_height`);
     if (proposed > committedHeight || since > committedHeight || (activated !== null && activated > committedHeight)) fail("claims a state after committed height", path);
-    if (activated === null ? state !== "retired" || since <= proposed : activated <= proposed || (state === "active" ? since < activated : since <= activated)) fail("has invalid lifecycle ordering", path);
+    if (activated === null ? state !== "retired" || since <= proposed : activated < proposed || (state === "active" ? since < activated : since <= activated)) fail("has invalid lifecycle ordering", path);
     normalized = { proposed_at_height: proposed, activated_at_height: activated, state_since_height: since };
   }
   return { state, record: normalized };
@@ -268,7 +266,7 @@ function parseProtocolTightening(value, current, committedHeight, path) {
   const tightening = objectWithExactKeys(value, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
   const scheduled = positiveU64(tightening.scheduled_at_height, `${path}.scheduled_at_height`);
   const effective = positiveU64(tightening.effective_at_height, `${path}.effective_at_height`);
-  if (scheduled > MAX_U64 - POLICY_DELAY_BLOCKS_V1 || effective <= scheduled || effective < scheduled + POLICY_DELAY_BLOCKS_V1 || scheduled > committedHeight || effective <= committedHeight) fail("has invalid committed-height schedule", path);
+  if (effective <= scheduled || scheduled > committedHeight || effective <= committedHeight) fail("has invalid committed-height schedule", path);
   const next = parseProtocolLimits(tightening.next_limits, current.protocol, `${path}.next_limits`);
   assertLimitsAtMost(next, current, `${path}.next_limits`);
   if (sameJson(next, current)) fail("must be a strict tightening", path);

@@ -80,6 +80,7 @@ iroha_primitives = { workspace = true }
 ivm = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["sm"] }
 iroha_core = { workspace = true, default-features = false }
+iroha_genesis = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }

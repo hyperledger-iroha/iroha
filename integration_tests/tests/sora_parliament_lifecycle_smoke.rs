@@ -1,6 +1,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Four-validator modern SORA Parliament and mandatory timed-OVN lifecycle corridor.
 
+use iroha::query::QueryError;
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
+};
 use std::{
     collections::BTreeMap,
     num::NonZeroU64,
@@ -19,7 +24,6 @@ use iroha::{
     },
     crypto::{Algorithm, Hash, KeyPair, Signature},
     data_model::{
-        ValidationFail,
         account::AccountId,
         block::{
             SignedBlock,
@@ -71,17 +75,12 @@ use iroha::{
         },
         permission::Permission,
         prelude::{
-            Account, AssetId, FeePaymentIntent, FindAssetById, FindAssets, FindBlocks, Grant,
+            Account, AssetId, FeePaymentIntent, FindAssetById, FindBlocks, Grant,
             Identifiable as _, Level, QueryBuilderExt as _, Register, SetParameter,
         },
-        query::{
-            builder::SingleQueryError,
-            dsl::IntoPredicate as _,
-            error::{FindError, QueryExecutionFail},
-        },
+        query::dsl::IntoPredicate as _,
         smart_contract::ContractAddress,
     },
-    query::QueryError,
 };
 use iroha_core::{
     beacon::{
@@ -516,41 +515,18 @@ fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> R
     assert_eq!(
         query.asset_id(),
         asset_id,
-        "{label}: singular asset query must remain bound to the exact requested identifier"
+        "{label}: bind the exact requested asset"
     );
-    match client.query_single(query) {
-        Ok(_) => Err(eyre!(
-            "{label}: expected asset `{asset_id}` to be absent, but the query returned it"
-        )),
+    match client.client().query_single(query) {
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
             FindError::Asset(missing),
         )))) if missing.as_ref() == asset_id => Ok(()),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
-            let exact_match = match client
-                .query(FindAssets::new())
-                .filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())
-                .execute_single_opt()
-            {
-                Ok(exact_match) => exact_match,
-                Err(SingleQueryError::QueryError(QueryError::Validation(
-                    ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
-                ))) => None,
-                Err(error) => {
-                    return Err(eyre!(
-                        "{label}: exact-ID asset query failed after a generic not-found response: {error}"
-                    ));
-                }
-            };
-            match exact_match {
-                None => Ok(()),
-                Some(asset) => Err(eyre!(
-                    "{label}: generic not-found contradicted by exact-ID query returning asset `{}`",
-                    asset.id()
-                )),
-            }
-        }
+        Ok(asset) => Err(eyre!(
+            "{label}: expected asset `{asset_id}` to be absent, but the query returned `{}`",
+            asset.id()
+        )),
         Err(error) => Err(eyre!(
-            "{label}: expected an exact asset-not-found result for `{asset_id}`, got {error:?}"
+            "{label}: expected typed absence of exact asset `{asset_id}`, got {error:?}"
         )),
     }
 }

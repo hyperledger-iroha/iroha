@@ -549,13 +549,18 @@ def lifecycle_status() -> dict[str, object]:
         "lane_count": 1,
         "lanes": [lane_config()],
         "catalog_hash": canonical_hash(0xA1),
+        "runtime_catalog_hash": None,
         "incarnations": [{"lane_id": 0, "incarnation": canonical_hash(0xB3)}],
         "incarnation_root": canonical_hash(0xC3),
     }
 
 
-def test_nexus_lane_lifecycle_status_fetches_exact_json_snapshot() -> None:
+@pytest.mark.parametrize("runtime_catalog_hash", (None, canonical_hash(0xD5)))
+def test_nexus_lane_lifecycle_status_fetches_exact_json_snapshot(
+    runtime_catalog_hash: str | None,
+) -> None:
     status = lifecycle_status()
+    status["runtime_catalog_hash"] = runtime_catalog_hash
     session = FakeSession([response(200, status)])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
@@ -564,6 +569,57 @@ def test_nexus_lane_lifecycle_status_fetches_exact_json_snapshot() -> None:
     assert session.calls[0]["method"] == "GET"
     assert session.calls[0]["path"] == "/v1/nexus/lifecycle"
     assert session.calls[0]["headers"]["Accept"] == "application/json"
+
+
+def test_nexus_lane_lifecycle_status_requires_explicit_runtime_catalog_hash() -> None:
+    status = lifecycle_status()
+    del status["runtime_catalog_hash"]
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([response(200, status)]),
+        max_retries=0,
+    )
+
+    with pytest.raises(TypeError, match="missing required `runtime_catalog_hash`"):
+        client.nexus_lane_lifecycle_status()
+
+
+@pytest.mark.parametrize("first", (None, canonical_hash(0xD5)))
+@pytest.mark.parametrize("second", (None, canonical_hash(0xD7)))
+def test_nexus_lane_lifecycle_status_rejects_duplicate_runtime_catalog_hash(
+    first: str | None, second: str | None,
+) -> None:
+    status = lifecycle_status()
+    status["runtime_catalog_hash"] = first
+    duplicate = response(200, status)
+    duplicate._content = (
+        duplicate.content[:-1]
+        + b', "runtime_catalog_hash": '
+        + json.dumps(second).encode("utf-8")
+        + b"}"
+    )
+    client = ToriiClient(
+        "http://torii.example", session=FakeSession([duplicate]), max_retries=0
+    )
+
+    with pytest.raises(ValueError, match="duplicate field `runtime_catalog_hash`"):
+        client.nexus_lane_lifecycle_status()
+
+
+@pytest.mark.parametrize("value", (False, True, 0, 1, [], {}))
+def test_nexus_lane_lifecycle_status_rejects_nonstring_runtime_catalog_hash(
+    value: object,
+) -> None:
+    status = lifecycle_status()
+    status["runtime_catalog_hash"] = value
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([response(200, status)]),
+        max_retries=0,
+    )
+
+    with pytest.raises(TypeError, match="`runtime_catalog_hash` must be a canonical hash"):
+        client.nexus_lane_lifecycle_status()
 
 
 def test_nexus_lane_lifecycle_status_rejects_removed_enablement_field() -> None:
@@ -579,10 +635,14 @@ def test_nexus_lane_lifecycle_status_rejects_removed_enablement_field() -> None:
         client.nexus_lane_lifecycle_status()
 
 
-def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("runtime_catalog_hash", (None, canonical_hash(0xD5)))
+def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(
+    monkeypatch: pytest.MonkeyPatch, runtime_catalog_hash: str | None,
+) -> None:
     import iroha_python.client as client_module
 
     status = lifecycle_status()
+    status["runtime_catalog_hash"] = runtime_catalog_hash
     session = FakeSession([response(200, status)])
     client = ToriiClient("http://torii.example", session=session, max_retries=3)
     addition = lane_config(lane_id=5, shard_id=9, dataspace_id=42, alias="is")
@@ -1103,6 +1163,13 @@ def test_nexus_lane_lifecycle_status_requires_explicit_shard_id() -> None:
         ("catalog_hash", "A1" * 32, "canonical.*uppercase hex.*CRC16"),
         ("catalog_hash", canonical_hash(0xA1).lower(), "canonical.*uppercase hex.*CRC16"),
         ("catalog_hash", "hash:" + "A1" * 32 + "#0000", "checksum mismatch"),
+        ("runtime_catalog_hash", "", "canonical.*uppercase hex.*CRC16"),
+        ("runtime_catalog_hash", "D5" * 32, "canonical.*uppercase hex.*CRC16"),
+        ("runtime_catalog_hash", canonical_hash(0xD5).lower(), "canonical.*uppercase hex.*CRC16"),
+        ("runtime_catalog_hash", "hash:" + "D5" * 32 + "#0000", "checksum mismatch"),
+        ("runtime_catalog_hash", "hash:" + "00" * 32 + "#D52F", "invalid Iroha hash marker bit"),
+        ("runtime_catalog_hash", "hash:" + "A2" * 32 + "#873F", "invalid Iroha hash marker bit"),
+        ("runtime_catalog_hash", "hash:" + "00" * 31 + "01#C50E", "empty Iroha hash"),
         ("incarnation", "B3" * 32, "canonical.*uppercase hex.*CRC16"),
         ("incarnation_root", "C3" * 32, "canonical.*uppercase hex.*CRC16"),
     ),

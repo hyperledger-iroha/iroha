@@ -1,34 +1,33 @@
-//! Shared aggregate six-lane Poseidon/Goldilocks STARK commitment and opening core.
+//! Shared aggregate SHA3-384 byte/Goldilocks STARK commitment and opening core.
 //!
 //! Relation modules supply their exact transcript suite, profile digest,
 //! public-input digest, trace columns, constraint-composition values, and an
 //! [`AggregateOpenedRowEvaluatorV1`]. This module owns the canonical ordered
-//! trace-group layout, exact proof codec, six-lane Poseidon vector-row commitments,
+//! trace-group layout, exact proof codec, SHA3-384 byte vector-row commitments,
 //! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
+use super::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
+#[cfg(any(test, feature = "privacy-release-evidence"))]
+use super::privacy_outer_hash::PrivacyOuterLastFieldStreamV1;
 use super::transparent_stark::{
-    ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
-    GoldilocksFp4V1 as E, GoldilocksMerkleTreeV1, TransparentStarkDigestContextV1,
+    ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E,
+    PrivacyOuterDigestV1, PrivacyOuterMerkleTreeV1, TransparentStarkDigestContextV1,
     TransparentStarkErrorV1, TransparentTranscriptV1, append_u16_v1, append_u32_v1, append_u64_v1,
     derive_unique_query_indices_v1, ensure_fri_terminal_degree_fp4_v1, fri_fold_pair_fp4_v1,
-    fri_fold_pair_with_inverse_x_fp4_v1, goldilocks_digest384_frame_v1,
-    goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_merkle_node_v1,
-    goldilocks_primitive_root_v1, random_goldilocks_fp4_v1,
+    fri_fold_pair_with_inverse_x_fp4_v1, goldilocks_batch_invert_v1,
+    goldilocks_fp4_evaluate_coset_v1, goldilocks_fp4_ifft_v1, goldilocks_primitive_root_v1,
+    privacy_outer_digest_frame_v1, privacy_outer_merkle_node_v1, random_goldilocks_fp4_v1,
 };
 #[cfg(test)]
-use super::transparent_stark::{
-    ReplayableTraceMaskV1, goldilocks_batch_invert_v1, masked_trace_lde_column_with_mask_v1,
-};
+use super::transparent_stark::{ReplayableTraceMaskV1, masked_trace_lde_column_with_mask_v1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use super::transparent_stark::{
-    goldilocks_digest384_last_field_stream_v1, goldilocks_ifft_v1, map_digest_stream_error_v1,
-    masked_trace_coefficients_on_coset_v1, masked_trace_coefficients_with_mask_v1,
+    goldilocks_ifft_v1, map_digest_stream_error_v1, masked_trace_coefficients_on_coset_v1,
+    masked_trace_coefficients_with_mask_v1, privacy_outer_last_field_stream_v1,
     sample_trace_mask_v1,
 };
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use fastpq_isi::GoldilocksDigest384LastFieldStreamV1;
-use fastpq_isi::{FASTPQ_QUERY_COUNT_V1, GOLDILOCKS_DIGEST384_BYTES_V1};
+use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 #[cfg(test)]
 use iroha_data_model::privacy::PrivacyProtocolIdV1;
 use rand::TryRngCore;
@@ -119,13 +118,9 @@ pub(crate) enum AggregateStarkErrorV1 {
     /// A checked implementation invariant failed.
     #[error("aggregate STARK internal invariant failed")]
     InternalInvariant,
-    /// The selected digest executor failed without backend substitution.
-    #[error("aggregate STARK digest execution failed")]
-    DigestExecution,
 }
 fn map_transparent_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
     match error {
-        TransparentStarkErrorV1::DigestExecution => AggregateStarkErrorV1::DigestExecution,
         TransparentStarkErrorV1::RandomnessUnavailable => {
             AggregateStarkErrorV1::RandomnessUnavailable
         }
@@ -225,7 +220,7 @@ impl AggregateStarkParametersV1 {
         Ok(())
     }
 }
-/// Poseidon and transcript domains supplied by one relation profile.
+/// SHA3-384 Merkle and transcript domains supplied by one relation profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateStarkDomainsV1 {
     /// Exact final catalog/protocol/profile digest context.
@@ -752,6 +747,8 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
     if !query_numerator.strictly_less_than(query_denominator) {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
+    // These are interactive FRI algebraic errors; they do not include outer-hash
+    // collision or Fiat--Shamir/QROM composition reductions.
     // Exact canonical constants conservatively bound the first commitment
     // term by `7^7 * |D|^2 / 2^252 < 2^-(252-2log|D|-20)`.
     // The second is below
@@ -779,13 +776,13 @@ pub(crate) fn validate_affine_batched_fri_theorem2_v1(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateTraceGroupProofV1 {
     /// Base vector-row Merkle root.
-    pub(crate) base_root: GoldilocksDigest384V1,
+    pub(crate) base_root: PrivacyOuterDigestV1,
     /// Auxiliary vector-row Merkle root.
-    pub(crate) aux_root: GoldilocksDigest384V1,
+    pub(crate) aux_root: PrivacyOuterDigestV1,
     /// Minimal base-tree multiproof frontier.
-    pub(crate) base_frontier: Vec<GoldilocksDigest384V1>,
+    pub(crate) base_frontier: Vec<PrivacyOuterDigestV1>,
     /// Minimal auxiliary-tree multiproof frontier.
-    pub(crate) aux_frontier: Vec<GoldilocksDigest384V1>,
+    pub(crate) aux_frontier: Vec<PrivacyOuterDigestV1>,
 }
 /// One FRI round's low/high opening pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -831,11 +828,11 @@ pub(crate) struct AggregateQueryProofV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateFriLaneProofV1 {
     /// Layer roots, including the terminal layer.
-    pub(crate) roots: Vec<GoldilocksDigest384V1>,
+    pub(crate) roots: Vec<PrivacyOuterDigestV1>,
     /// Exact terminal evaluations.
     pub(crate) terminal_values: Vec<[u64; 4]>,
     /// Minimal multiproof frontier for each non-terminal layer.
-    pub(crate) round_frontiers: Vec<Vec<GoldilocksDigest384V1>>,
+    pub(crate) round_frontiers: Vec<Vec<PrivacyOuterDigestV1>>,
 }
 /// Exact aggregate proof object before/after canonical encoding.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -845,13 +842,13 @@ pub(crate) struct AggregateStarkProofV1 {
     /// Ordered trace-group roots/frontiers.
     pub(crate) trace_groups: Vec<AggregateTraceGroupProofV1>,
     /// Aggregate composition roots.
-    pub(crate) composition_roots: Vec<GoldilocksDigest384V1>,
+    pub(crate) composition_roots: Vec<PrivacyOuterDigestV1>,
     /// Aggregate composition multiproof frontiers.
-    pub(crate) composition_frontiers: Vec<Vec<GoldilocksDigest384V1>>,
+    pub(crate) composition_frontiers: Vec<Vec<PrivacyOuterDigestV1>>,
     /// Independent low-degree FRI-mask-oracle roots in lane order.
-    pub(crate) fri_mask_roots: Vec<GoldilocksDigest384V1>,
+    pub(crate) fri_mask_roots: Vec<PrivacyOuterDigestV1>,
     /// Canonical FRI-mask-oracle multiproof frontiers in lane order.
-    pub(crate) fri_mask_frontiers: Vec<Vec<GoldilocksDigest384V1>>,
+    pub(crate) fri_mask_frontiers: Vec<Vec<PrivacyOuterDigestV1>>,
     /// Shared FRI lanes.
     pub(crate) fri_lanes: Vec<AggregateFriLaneProofV1>,
     /// Shared post-grinding queries.
@@ -1160,7 +1157,7 @@ pub(crate) fn row_leaf_hash_v1(
     group: usize,
     row_index: usize,
     values: &[F],
-) -> Result<GoldilocksDigest384V1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1> {
     let group = u16::try_from(group)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
         .to_be_bytes();
@@ -1179,7 +1176,7 @@ pub(crate) fn row_leaf_hash_v1(
     for value in values {
         fields.extend_from_slice(&value.0.to_be_bytes());
     }
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         context,
         role,
         b"vector-row-leaf",
@@ -1195,7 +1192,7 @@ fn composition_leaf_hash_unchecked_v1(
     lane: usize,
     row_index: usize,
     values: &[E],
-) -> Result<GoldilocksDigest384V1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1> {
     if values.is_empty() {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
@@ -1217,7 +1214,7 @@ fn composition_leaf_hash_unchecked_v1(
     for value in values {
         fields.extend_from_slice(&value.to_be_bytes());
     }
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         domains.digest_context,
         domains.composition_leaf,
         b"composition-vector-leaf",
@@ -1236,7 +1233,7 @@ pub(crate) struct AggregateFriMaskOracleMaterialV1 {
     /// Coset evaluations on the common LDE domain.
     pub(crate) evaluations: Vec<E>,
     /// Authenticated oracle commitment.
-    pub(crate) tree: GoldilocksMerkleTreeV1,
+    pub(crate) tree: PrivacyOuterMerkleTreeV1,
 }
 impl Drop for AggregateFriMaskOracleMaterialV1 {
     fn drop(&mut self) {
@@ -1248,11 +1245,11 @@ fn fri_mask_leaf_hash_v1(
     lane: usize,
     row_index: usize,
     value: E,
-) -> Result<GoldilocksDigest384V1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1> {
     let lane = u16::try_from(lane)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
         .to_be_bytes();
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         domains.digest_context,
         FRI_MASK_LEAF_DOMAIN_V1,
         b"fri-mask-leaf",
@@ -1264,16 +1261,14 @@ fn fri_mask_leaf_hash_v1(
     .map_err(map_transparent_error_v1)
 }
 fn fri_mask_tree_v1(
-    execution: fastpq_prover::DigestExecutionV1,
     domains: AggregateStarkDomainsV1,
     lane: usize,
     evaluations: &[E],
-) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterMerkleTreeV1, AggregateStarkErrorV1> {
     let lane = u16::try_from(lane)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
         .to_be_bytes();
     commit_serialized_rows_v1(
-        execution,
         domains.digest_context,
         FRI_MASK_LEAF_DOMAIN_V1,
         FRI_MASK_NODE_DOMAIN_V1,
@@ -1294,7 +1289,6 @@ fn fri_mask_tree_v1(
 /// transcript-bound before any challenge that batches the lane's trace and
 /// composition polynomials.
 pub(crate) fn build_fri_mask_oracles_v1<R: TryRngCore>(
-    execution: fastpq_prover::DigestExecutionV1,
     parameters: AggregateStarkParametersV1,
     domains: AggregateStarkDomainsV1,
     layout: &AggregateProofLayoutV1,
@@ -1331,7 +1325,7 @@ pub(crate) fn build_fri_mask_oracles_v1<R: TryRngCore>(
             )
             .map_err(map_transparent_error_v1)?,
         );
-        let tree = fri_mask_tree_v1(execution, domains, lane, &evaluations)?;
+        let tree = fri_mask_tree_v1(domains, lane, &evaluations)?;
         oracles.push(AggregateFriMaskOracleMaterialV1 {
             evaluations: evaluations.into_vec_v1(),
             tree,
@@ -1358,14 +1352,14 @@ fn fri_leaf_hash_unchecked_v1(
     round: usize,
     row_index: usize,
     value: E,
-) -> Result<GoldilocksDigest384V1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1> {
     let lane = u16::try_from(lane)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
         .to_be_bytes();
     let round = u16::try_from(round)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
         .to_be_bytes();
-    goldilocks_digest384_frame_v1(
+    privacy_outer_digest_frame_v1(
         domains.digest_context,
         domains.fri_leaf,
         b"fri-layer-leaf",
@@ -1380,14 +1374,15 @@ fn fri_leaf_hash_unchecked_v1(
 const PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1: usize = 32 * 1024 * 1024;
 
 fn private_row_preparation_rows_v1(
-    domain: fastpq_isi::GoldilocksDigestDomainV1<'_>,
+    domain: crate::privacy_engines::privacy_outer_hash::PrivacyOuterDomainV1<'_>,
     prefix_fields: &[&[u8]],
     payload_bytes: usize,
     frame_limit: usize,
 ) -> Result<usize, AggregateStarkErrorV1> {
     if payload_bytes == 0
         || frame_limit == 0
-        || frame_limit > fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1
+        || frame_limit
+            > crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1
     {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
@@ -1402,24 +1397,24 @@ fn private_row_preparation_rows_v1(
     lengths.extend(prefix_fields.iter().map(|field| field.len()));
     lengths.push(payload_bytes);
     let words =
-        fastpq_isi::GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(domain, &lengths)
+        crate::privacy_engines::privacy_outer_hash::PrivacyOuterFrameV1::byte_count_for_field_lengths_v1(domain, &lengths)
             .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    let word_rows = fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1
-        .checked_div(words)
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let framed_byte_rows =
+        crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_BYTES_V1
+            .checked_div(words)
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
     let rows = (PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1 / payload_bytes)
         .min(frame_limit)
-        .min(word_rows);
+        .min(framed_byte_rows);
     if rows == 0 {
         return Err(AggregateStarkErrorV1::AllocationFailure);
     }
     Ok(rows)
 }
 
-/// Serialize bounded private rows into canonical frames and use one explicit executor.
+/// Serialize bounded private rows into canonical frames and hash them in ordered CPU batches.
 /// The caller fixes the exact ordered non-payload fields; this helper appends one payload.
 fn commit_serialized_rows_v1(
-    execution: fastpq_prover::DigestExecutionV1,
     context: TransparentStarkDigestContextV1,
     leaf_role: &[u8],
     node_role: &'static [u8],
@@ -1430,9 +1425,8 @@ fn commit_serialized_rows_v1(
     rows: usize,
     payload_bytes: usize,
     serialize_row: impl FnMut(usize, &mut Vec<u8>),
-) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterMerkleTreeV1, AggregateStarkErrorV1> {
     commit_serialized_rows_with_preparation_limit_v1(
-        execution,
         context,
         leaf_role,
         node_role,
@@ -1442,13 +1436,12 @@ fn commit_serialized_rows_v1(
         prefix_fields,
         rows,
         payload_bytes,
-        fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1,
+        crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1,
         serialize_row,
     )
 }
 
 fn commit_serialized_rows_with_preparation_limit_v1(
-    execution: fastpq_prover::DigestExecutionV1,
     context: TransparentStarkDigestContextV1,
     leaf_role: &[u8],
     node_role: &'static [u8],
@@ -1460,7 +1453,7 @@ fn commit_serialized_rows_with_preparation_limit_v1(
     payload_bytes: usize,
     preparation_frame_limit: usize,
     mut serialize_row: impl FnMut(usize, &mut Vec<u8>),
-) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterMerkleTreeV1, AggregateStarkErrorV1> {
     if rows == 0 || !rows.is_power_of_two() || payload_bytes == 0 {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
@@ -1531,29 +1524,32 @@ fn commit_serialized_rows_with_preparation_limit_v1(
                 )
                 .map_err(map_transparent_error_v1)?;
             frames.push(
-                fastpq_isi::GoldilocksDigest384FrameV1::new(domain, row_fields)
-                    .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
+                crate::privacy_engines::privacy_outer_hash::PrivacyOuterFrameV1::new(
+                    domain, row_fields,
+                )
+                .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
             );
         }
         leaves.extend(
-            fastpq_prover::execute_digest384_frames_v1(&frames, execution)
-                .map_err(|_| AggregateStarkErrorV1::DigestExecution)?,
+            frames
+                .par_iter()
+                .map(|frame| frame.hash())
+                .collect::<Vec<_>>(),
         );
     }
-    GoldilocksMerkleTreeV1::from_leaves(execution, leaves, context, node_role)
+    PrivacyOuterMerkleTreeV1::from_leaves(leaves, context, node_role)
         .map_err(map_transparent_error_v1)
 }
 
 /// Commit vector-row columns on a common power-of-two domain.
 pub(crate) fn row_tree_v1(
-    execution: fastpq_prover::DigestExecutionV1,
     context: TransparentStarkDigestContextV1,
     leaf_role: &[u8],
     node_role: &'static [u8],
     group: usize,
     columns: &[Vec<F>],
     rows: usize,
-) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterMerkleTreeV1, AggregateStarkErrorV1> {
     if rows == 0
         || !rows.is_power_of_two()
         || columns.is_empty()
@@ -1572,7 +1568,6 @@ pub(crate) fn row_tree_v1(
         .checked_mul(8)
         .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
     commit_serialized_rows_v1(
-        execution,
         context,
         leaf_role,
         node_role,
@@ -1594,9 +1589,9 @@ pub(crate) fn row_tree_v1(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StreamingMerkleCommitmentV1 {
     /// Root of the complete power-of-two leaf stream.
-    pub(crate) root: GoldilocksDigest384V1,
+    pub(crate) root: PrivacyOuterDigestV1,
     /// Canonically ordered minimal frontier for the requested leaves.
-    pub(crate) frontier: Vec<GoldilocksDigest384V1>,
+    pub(crate) frontier: Vec<PrivacyOuterDigestV1>,
 }
 /// Incremental binary Merkle accumulator with a query-aware frontier plan.
 ///
@@ -1610,9 +1605,9 @@ pub(crate) struct StreamingMerkleAccumulatorV1 {
     node_role: &'static [u8],
     leaf_count: usize,
     next_leaf: usize,
-    pending: Vec<Option<GoldilocksDigest384V1>>,
+    pending: Vec<Option<PrivacyOuterDigestV1>>,
     frontier_positions: BTreeMap<(usize, usize), usize>,
-    frontier: Vec<Option<GoldilocksDigest384V1>>,
+    frontier: Vec<Option<PrivacyOuterDigestV1>>,
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl StreamingMerkleAccumulatorV1 {
@@ -1697,7 +1692,7 @@ impl StreamingMerkleAccumulatorV1 {
         &mut self,
         level: usize,
         index: usize,
-        node: GoldilocksDigest384V1,
+        node: PrivacyOuterDigestV1,
     ) -> Result<(), AggregateStarkErrorV1> {
         let Some(position) = self.frontier_positions.get(&(level, index)).copied() else {
             return Ok(());
@@ -1714,7 +1709,7 @@ impl StreamingMerkleAccumulatorV1 {
     /// Append the next leaf digest.
     pub(crate) fn append_leaf(
         &mut self,
-        mut node: GoldilocksDigest384V1,
+        mut node: PrivacyOuterDigestV1,
     ) -> Result<(), AggregateStarkErrorV1> {
         if self.next_leaf >= self.leaf_count {
             return Err(AggregateStarkErrorV1::InvalidProofShape);
@@ -1737,7 +1732,7 @@ impl StreamingMerkleAccumulatorV1 {
                 .take()
                 .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
             let parent_index = index >> 1;
-            node = goldilocks_merkle_node_v1(
+            node = privacy_outer_merkle_node_v1(
                 self.context,
                 self.node_role,
                 u64::try_from(level + 1).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
@@ -1787,7 +1782,7 @@ pub(crate) fn streaming_merkle_commitment_v1<I>(
     leaves: I,
 ) -> Result<StreamingMerkleCommitmentV1, AggregateStarkErrorV1>
 where
-    I: IntoIterator<Item = Result<GoldilocksDigest384V1, AggregateStarkErrorV1>>,
+    I: IntoIterator<Item = Result<PrivacyOuterDigestV1, AggregateStarkErrorV1>>,
 {
     let mut accumulator =
         StreamingMerkleAccumulatorV1::new(context, node_role, leaf_count, opening_indices)?;
@@ -1808,7 +1803,7 @@ pub(crate) struct StreamingRowCommitmentResultV1 {
 /// Column-at-a-time vector-row commitment builder.
 ///
 /// This is the bounded-memory replacement for retaining every LDE column.
-/// Each row owns one incremental six-lane Poseidon state while columns are supplied in
+/// Each row owns one incremental SHA3-384 byte state while columns are supplied in
 /// canonical order. The final leaf digests are immediately consumed by
 /// [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels are
 /// retained. A second deterministic pass after Fiat–Shamir query derivation
@@ -1820,7 +1815,7 @@ pub(crate) struct StreamingRowCommitmentV1 {
     received_columns: usize,
     context: TransparentStarkDigestContextV1,
     node_role: &'static [u8],
-    digest_streams: Vec<GoldilocksDigest384LastFieldStreamV1>,
+    digest_streams: Vec<PrivacyOuterLastFieldStreamV1>,
     opening_indices: Vec<usize>,
     opened_rows: BTreeMap<usize, Vec<F>>,
 }
@@ -1864,7 +1859,7 @@ impl StreamingRowCommitmentV1 {
             .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
         for row_index in 0..rows {
             digest_streams.push(
-                goldilocks_digest384_last_field_stream_v1(
+                privacy_outer_last_field_stream_v1(
                     context,
                     leaf_role,
                     b"vector-row-leaf",
@@ -2437,11 +2432,10 @@ pub(crate) fn replay_masked_trace_polynomial_columns_v1(
 }
 /// Commit one aggregate composition lane.
 pub(crate) fn composition_tree_v1(
-    execution: fastpq_prover::DigestExecutionV1,
     domains: AggregateStarkDomainsV1,
     lane: usize,
     chunks: &[Vec<E>],
-) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterMerkleTreeV1, AggregateStarkErrorV1> {
     domains.validate()?;
     let rows = chunks
         .first()
@@ -2462,7 +2456,6 @@ pub(crate) fn composition_tree_v1(
         .checked_mul(32)
         .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
     commit_serialized_rows_v1(
-        execution,
         domains.digest_context,
         domains.composition_leaf,
         domains.composition_node,
@@ -2630,6 +2623,47 @@ pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
     }
     Ok(core::mem::take(&mut quotient.0))
 }
+/// Inverses of `X^n - 1` over one period of a shifted power-of-two coset.
+///
+/// For `x_i = shift * root^i`, `x_i^n` repeats every `coset_size / n` rows.
+/// Reject malformed geometry and shifts in either evaluation subgroup before
+/// allocation; one shared batch inversion then serves every repeated period.
+pub(crate) fn trace_vanishing_inverse_period_v1(
+    trace_log2: u8,
+    coset_log2: u8,
+    shift: F,
+) -> Result<Vec<F>, AggregateStarkErrorV1> {
+    let trace_size = checked_domain_size_v1(trace_log2)?;
+    let coset_size = checked_domain_size_v1(coset_log2)?;
+    if trace_size >= coset_size || shift == F::ZERO {
+        return Err(AggregateStarkErrorV1::InvalidLayout);
+    }
+    if F::canonical(shift.0).is_none() {
+        return Err(AggregateStarkErrorV1::NonCanonicalField);
+    }
+    let root = goldilocks_primitive_root_v1(coset_log2)
+        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+    let shift_to_trace_size = shift.pow(trace_size as u128);
+    if shift_to_trace_size == F::ONE || shift.pow(coset_size as u128) == F::ONE {
+        return Err(AggregateStarkErrorV1::InvalidLayout);
+    }
+    let period = coset_size
+        .checked_div(trace_size)
+        .filter(|period| *period != 0)
+        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let step = root.pow(trace_size as u128);
+    let mut inverses = Vec::new();
+    inverses
+        .try_reserve_exact(period)
+        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+    let mut point_to_trace_size = shift_to_trace_size;
+    for _ in 0..period {
+        inverses.push(point_to_trace_size.sub(F::ONE));
+        point_to_trace_size = point_to_trace_size.mul(step);
+    }
+    goldilocks_batch_invert_v1(&mut inverses).map_err(map_transparent_error_v1)?;
+    Ok(inverses)
+}
 /// Divide a constraint-numerator codeword by `X^n - 1` on a quotient coset.
 ///
 /// The generator shift is checked to be disjoint from both the native trace
@@ -2654,43 +2688,25 @@ pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
     {
         return Err(AggregateStarkErrorV1::NonCanonicalField);
     }
+    let shift = F(GOLDILOCKS_GENERATOR_V1);
+    let inverses = trace_vanishing_inverse_period_v1(trace_log2, quotient_coset_log2, shift)?;
     let quotient_root = goldilocks_primitive_root_v1(quotient_coset_log2)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
-    let shift = F(GOLDILOCKS_GENERATOR_V1);
-    if shift.pow(trace_size as u128) == F::ONE || shift.pow(quotient_size as u128) == F::ONE {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let denominator_period = quotient_size
-        .checked_div(trace_size)
-        .filter(|period| *period != 0)
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    let step = quotient_root.pow(trace_size as u128);
-    let mut denominators = Vec::new();
-    denominators
-        .try_reserve_exact(denominator_period)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    let mut point_to_trace_size = shift.pow(trace_size as u128);
-    for _ in 0..denominator_period {
-        denominators.push(point_to_trace_size.sub(F::ONE));
-        point_to_trace_size = point_to_trace_size.mul(step);
-    }
-    let mut original_denominators = Vec::new();
-    original_denominators
-        .try_reserve_exact(denominator_period)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    original_denominators.extend_from_slice(&denominators);
-    goldilocks_batch_invert_v1(&mut denominators).map_err(map_transparent_error_v1)?;
+    let mut point = shift;
     let mut quotient = Vec::new();
     quotient
         .try_reserve_exact(quotient_size)
         .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
     for (index, numerator) in numerator_evaluations.iter().copied().enumerate() {
-        let period_index = index % denominator_period;
-        let value = numerator.mul_base(denominators[period_index]);
-        if value.mul_base(original_denominators[period_index]) != numerator {
+        let value = numerator.mul_base(inverses[index % inverses.len()]);
+        // Independent scalar evaluation keeps the test-only multiply-back
+        // invariant separate from the shared periodic-table construction.
+        let denominator = point.pow(trace_size as u128).sub(F::ONE);
+        if value.mul_base(denominator) != numerator {
             return Err(AggregateStarkErrorV1::InternalInvariant);
         }
         quotient.push(value);
+        point = point.mul(quotient_root);
     }
     Ok(quotient)
 }
@@ -3228,12 +3244,11 @@ pub(crate) fn deep_ali_mixed_opening_v1(
 }
 /// Commit one shared FRI layer.
 pub(crate) fn fri_tree_v1(
-    execution: fastpq_prover::DigestExecutionV1,
     domains: AggregateStarkDomainsV1,
     lane: usize,
     round: usize,
     values: &[E],
-) -> Result<GoldilocksMerkleTreeV1, AggregateStarkErrorV1> {
+) -> Result<PrivacyOuterMerkleTreeV1, AggregateStarkErrorV1> {
     domains.validate()?;
     let lane = u16::try_from(lane)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
@@ -3242,7 +3257,6 @@ pub(crate) fn fri_tree_v1(
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
         .to_be_bytes();
     commit_serialized_rows_v1(
-        execution,
         domains.digest_context,
         domains.fri_leaf,
         domains.fri_node,
@@ -3364,7 +3378,7 @@ fn absorb_group_roots_v1(
         } else {
             proof.aux_root
         };
-        let root = root.to_le_bytes();
+        let root = root.to_bytes();
         transcript
             .absorb(label, &[&group, &root])
             .map_err(map_transparent_error_v1)?;
@@ -3376,7 +3390,7 @@ pub(crate) fn absorb_composition_roots_v1(
     transcript: &mut TransparentTranscriptV1,
     parameters: AggregateStarkParametersV1,
     domains: AggregateStarkDomainsV1,
-    roots: &[GoldilocksDigest384V1],
+    roots: &[PrivacyOuterDigestV1],
 ) -> Result<(), AggregateStarkErrorV1> {
     parameters.validate()?;
     ensure_transcript_context_v1(transcript, domains)?;
@@ -3387,7 +3401,7 @@ pub(crate) fn absorb_composition_roots_v1(
         let lane = u16::try_from(lane)
             .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
             .to_be_bytes();
-        let root = root.to_le_bytes();
+        let root = root.to_bytes();
         transcript
             .absorb(domains.composition_root_label, &[&lane, &root])
             .map_err(map_transparent_error_v1)?;
@@ -3399,7 +3413,7 @@ pub(crate) fn absorb_fri_mask_roots_v1(
     transcript: &mut TransparentTranscriptV1,
     parameters: AggregateStarkParametersV1,
     domains: AggregateStarkDomainsV1,
-    roots: &[GoldilocksDigest384V1],
+    roots: &[PrivacyOuterDigestV1],
 ) -> Result<(), AggregateStarkErrorV1> {
     parameters.validate()?;
     ensure_transcript_context_v1(transcript, domains)?;
@@ -3410,7 +3424,7 @@ pub(crate) fn absorb_fri_mask_roots_v1(
         let lane = u16::try_from(lane)
             .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
             .to_be_bytes();
-        let root = root.to_le_bytes();
+        let root = root.to_bytes();
         transcript
             .absorb(FRI_MASK_ROOT_LABEL_V1, &[&lane, &root])
             .map_err(map_transparent_error_v1)?;
@@ -3423,7 +3437,7 @@ pub(crate) fn absorb_fri_root_v1(
     domains: AggregateStarkDomainsV1,
     lane: usize,
     round: usize,
-    root: &GoldilocksDigest384V1,
+    root: &PrivacyOuterDigestV1,
 ) -> Result<(), AggregateStarkErrorV1> {
     ensure_transcript_context_v1(transcript, domains)?;
     let lane = u16::try_from(lane)
@@ -3432,7 +3446,7 @@ pub(crate) fn absorb_fri_root_v1(
     let round = u16::try_from(round)
         .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?
         .to_be_bytes();
-    let root = root.to_le_bytes();
+    let root = root.to_bytes();
     transcript
         .absorb(domains.fri_root_label, &[&lane, &round, &root])
         .map_err(map_transparent_error_v1)
@@ -3446,14 +3460,14 @@ pub(crate) fn query_indices_v1(
 ) -> Result<Vec<usize>, AggregateStarkErrorV1> {
     layout.validate(parameters)?;
     ensure_transcript_context_v1(transcript, domains)?;
-    let seed = goldilocks_digest384_frame_v1(
+    let seed = privacy_outer_digest_frame_v1(
         domains.digest_context,
         domains.query_seed,
         b"post-grinding-query-seed",
         0,
         u64::from(layout.common_lde_log2),
         0,
-        &[&transcript.state().to_le_bytes()],
+        &[&transcript.state().to_bytes()],
     )
     .map_err(map_transparent_error_v1)?;
     derive_unique_query_indices_v1(
@@ -3565,10 +3579,10 @@ pub(crate) fn multiproof_frontier_len_v1(
 }
 /// Construct the unique sorted minimal batched Merkle frontier.
 pub(crate) fn canonical_multiproof_frontier_v1(
-    tree: &GoldilocksMerkleTreeV1,
+    tree: &PrivacyOuterMerkleTreeV1,
     leaf_count: usize,
     indices: &[usize],
-) -> Result<Vec<GoldilocksDigest384V1>, AggregateStarkErrorV1> {
+) -> Result<Vec<PrivacyOuterDigestV1>, AggregateStarkErrorV1> {
     validate_canonical_index_set_v1(leaf_count, indices)?;
     let expected_len = multiproof_frontier_len_v1(leaf_count, indices)?;
     let mut frontier = Vec::new();
@@ -3610,10 +3624,10 @@ pub(crate) fn canonical_multiproof_frontier_v1(
 pub(crate) fn verify_canonical_multiproof_v1(
     context: TransparentStarkDigestContextV1,
     node_role: &[u8],
-    root: &GoldilocksDigest384V1,
+    root: &PrivacyOuterDigestV1,
     leaf_count: usize,
-    leaves: &BTreeMap<usize, GoldilocksDigest384V1>,
-    frontier: &[GoldilocksDigest384V1],
+    leaves: &BTreeMap<usize, PrivacyOuterDigestV1>,
+    frontier: &[PrivacyOuterDigestV1],
 ) -> Result<(), AggregateStarkErrorV1> {
     context.validate().map_err(map_transparent_error_v1)?;
     if node_role.is_empty() || u16::try_from(node_role.len()).is_err() {
@@ -3649,7 +3663,7 @@ pub(crate) fn verify_canonical_multiproof_v1(
             consumed.insert(index);
             let parent_index = index >> 1;
             let parent = if index & 1 == 0 {
-                goldilocks_merkle_node_v1(
+                privacy_outer_merkle_node_v1(
                     context,
                     node_role,
                     u64::try_from(level + 1).map_err(|_| AggregateStarkErrorV1::TraceOpening)?,
@@ -3658,7 +3672,7 @@ pub(crate) fn verify_canonical_multiproof_v1(
                     sibling,
                 )
             } else {
-                goldilocks_merkle_node_v1(
+                privacy_outer_merkle_node_v1(
                     context,
                     node_role,
                     u64::try_from(level + 1).map_err(|_| AggregateStarkErrorV1::TraceOpening)?,
@@ -3682,9 +3696,9 @@ pub(crate) fn verify_canonical_multiproof_v1(
     Ok(())
 }
 fn insert_opened_leaf_v1(
-    leaves: &mut BTreeMap<usize, GoldilocksDigest384V1>,
+    leaves: &mut BTreeMap<usize, PrivacyOuterDigestV1>,
     index: usize,
-    leaf: GoldilocksDigest384V1,
+    leaf: PrivacyOuterDigestV1,
 ) -> Result<(), AggregateStarkErrorV1> {
     if leaves
         .insert(index, leaf)
@@ -3856,10 +3870,10 @@ pub(crate) fn validate_proof_shape_v1(
     }
     Ok(())
 }
-fn append_hash_v1(bytes: &mut Vec<u8>, hash: &GoldilocksDigest384V1) {
-    bytes.extend_from_slice(&hash.to_le_bytes());
+fn append_hash_v1(bytes: &mut Vec<u8>, hash: &PrivacyOuterDigestV1) {
+    bytes.extend_from_slice(&hash.to_bytes());
 }
-fn append_hashes_v1(bytes: &mut Vec<u8>, hashes: &[GoldilocksDigest384V1]) {
+fn append_hashes_v1(bytes: &mut Vec<u8>, hashes: &[PrivacyOuterDigestV1]) {
     for hash in hashes {
         append_hash_v1(bytes, hash);
     }
@@ -3922,7 +3936,7 @@ fn deep_insertion_offset_v1(
     header_bytes
         .checked_add(
             roots
-                .checked_mul(GOLDILOCKS_DIGEST384_BYTES_V1)
+                .checked_mul(PRIVACY_OUTER_DIGEST_BYTES_V1)
                 .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
         )
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
@@ -3990,7 +4004,7 @@ fn encoded_non_frontier_bytes_v1(
 ) -> Result<usize, AggregateStarkErrorV1> {
     layout.validate(parameters)?;
     let terminal_size = parameters.terminal_size()?;
-    let hash_bytes = GOLDILOCKS_DIGEST384_BYTES_V1;
+    let hash_bytes = PRIVACY_OUTER_DIGEST_BYTES_V1;
     let base_field_bytes = core::mem::size_of::<u64>();
     let extension_field_bytes = core::mem::size_of::<[u64; 4]>();
     let mut bytes = parameters
@@ -4130,7 +4144,7 @@ fn minimal_encoded_proof_bytes_v1(
     encoded_non_frontier_bytes_v1(parameters, layout)?
         .checked_add(
             frontier_hashes
-                .checked_mul(GOLDILOCKS_DIGEST384_BYTES_V1)
+                .checked_mul(PRIVACY_OUTER_DIGEST_BYTES_V1)
                 .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
         )
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
@@ -4217,7 +4231,7 @@ pub(crate) fn maximum_encoded_proof_bytes_v1(
     non_frontier
         .checked_add(
             frontier_hashes
-                .checked_mul(GOLDILOCKS_DIGEST384_BYTES_V1)
+                .checked_mul(PRIVACY_OUTER_DIGEST_BYTES_V1)
                 .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
         )
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
@@ -4344,14 +4358,14 @@ fn reader_error_v1(error: TransparentStarkErrorV1) -> AggregateStarkErrorV1 {
 }
 fn take_hash_v1(
     reader: &mut ExactProofReaderV1<'_>,
-) -> Result<GoldilocksDigest384V1, AggregateStarkErrorV1> {
-    let bytes: [u8; GOLDILOCKS_DIGEST384_BYTES_V1] = reader.take().map_err(reader_error_v1)?;
-    GoldilocksDigest384V1::from_le_bytes(bytes).ok_or(AggregateStarkErrorV1::NonCanonicalField)
+) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1> {
+    let bytes: [u8; PRIVACY_OUTER_DIGEST_BYTES_V1] = reader.take().map_err(reader_error_v1)?;
+    Ok(PrivacyOuterDigestV1::from_bytes(bytes))
 }
 fn take_hashes_v1(
     reader: &mut ExactProofReaderV1<'_>,
     count: usize,
-) -> Result<Vec<GoldilocksDigest384V1>, AggregateStarkErrorV1> {
+) -> Result<Vec<PrivacyOuterDigestV1>, AggregateStarkErrorV1> {
     (0..count).map(|_| take_hash_v1(reader)).collect()
 }
 fn take_base_fields_v1(
@@ -4577,9 +4591,9 @@ pub(crate) struct AggregateTraceGroupMaterialV1 {
     /// Masked auxiliary LDE columns.
     pub(crate) aux_lde: Vec<Vec<F>>,
     /// Base vector-row Merkle tree.
-    pub(crate) base_tree: GoldilocksMerkleTreeV1,
+    pub(crate) base_tree: PrivacyOuterMerkleTreeV1,
     /// Auxiliary vector-row Merkle tree.
-    pub(crate) aux_tree: GoldilocksMerkleTreeV1,
+    pub(crate) aux_tree: PrivacyOuterMerkleTreeV1,
 }
 impl Drop for AggregateTraceGroupMaterialV1 {
     fn drop(&mut self) {
@@ -4597,9 +4611,9 @@ pub(crate) struct AggregateFriLaneMaterialV1 {
     /// Every FRI layer including the terminal vector.
     pub(crate) layers: ZeroizingExtensionFieldMatrixV1,
     /// Merkle tree for every layer including the terminal vector.
-    pub(crate) trees: Vec<GoldilocksMerkleTreeV1>,
+    pub(crate) trees: Vec<PrivacyOuterMerkleTreeV1>,
     /// Root for every layer including the terminal vector.
-    pub(crate) roots: Vec<GoldilocksDigest384V1>,
+    pub(crate) roots: Vec<PrivacyOuterDigestV1>,
     /// Exact terminal evaluations.
     pub(crate) terminal_values: Vec<E>,
 }
@@ -4658,7 +4672,6 @@ fn fold_fri_layer_v1(
 }
 /// Build and transcript-bind one complete shared binary-FRI lane.
 pub(crate) fn build_fri_lane_v1(
-    execution: fastpq_prover::DigestExecutionV1,
     parameters: AggregateStarkParametersV1,
     domains: AggregateStarkDomainsV1,
     layout: &AggregateProofLayoutV1,
@@ -4691,7 +4704,7 @@ pub(crate) fn build_fri_lane_v1(
         let current = layers
             .last()
             .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
-        let tree = fri_tree_v1(execution, domains, lane, round, current)?;
+        let tree = fri_tree_v1(domains, lane, round, current)?;
         let root = tree.root();
         absorb_fri_root_v1(transcript, domains, lane, round, &root)?;
         let beta = transcript
@@ -4722,7 +4735,7 @@ pub(crate) fn build_fri_lane_v1(
         parameters.terminal_degree_bound,
     )
     .map_err(map_transparent_error_v1)?;
-    let terminal_tree = fri_tree_v1(execution, domains, lane, fri_rounds, &terminal_values)?;
+    let terminal_tree = fri_tree_v1(domains, lane, fri_rounds, &terminal_values)?;
     let terminal_root = terminal_tree.root();
     absorb_fri_root_v1(transcript, domains, lane, fri_rounds, &terminal_root)?;
     roots.push(terminal_root);
@@ -4739,7 +4752,7 @@ pub(crate) fn build_fri_lane_v1(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateStreamingFriLaneMaterialV1 {
     /// Layer roots, including the terminal layer.
-    pub(crate) roots: Vec<GoldilocksDigest384V1>,
+    pub(crate) roots: Vec<PrivacyOuterDigestV1>,
     /// Fiat–Shamir folding challenge for each non-terminal layer.
     pub(crate) betas: Vec<E>,
     /// Exact terminal evaluations.
@@ -4752,7 +4765,7 @@ pub(crate) struct AggregateStreamingFriLaneOpeningsV1 {
     /// Openings in the caller's canonical transcript-query order.
     pub(crate) queries: Vec<AggregateFriLaneQueryV1>,
     /// Canonical minimal frontier for each non-terminal layer.
-    pub(crate) round_frontiers: Vec<Vec<GoldilocksDigest384V1>>,
+    pub(crate) round_frontiers: Vec<Vec<PrivacyOuterDigestV1>>,
 }
 /// Commit and transcript-bind a complete FRI lane while retaining only one
 /// current layer and one half-sized successor layer.
@@ -5029,15 +5042,15 @@ pub(crate) fn build_all_frontiers_v1(
     layout: &AggregateProofLayoutV1,
     queries: &[AggregateQueryProofV1],
     trace_groups: &[AggregateTraceGroupMaterialV1],
-    composition_trees: &[GoldilocksMerkleTreeV1],
+    composition_trees: &[PrivacyOuterMerkleTreeV1],
     fri_masks: &[AggregateFriMaskOracleMaterialV1],
     fri_lanes: &[AggregateFriLaneMaterialV1],
 ) -> Result<
     (
-        Vec<(Vec<GoldilocksDigest384V1>, Vec<GoldilocksDigest384V1>)>,
-        Vec<Vec<GoldilocksDigest384V1>>,
-        Vec<Vec<GoldilocksDigest384V1>>,
-        Vec<Vec<Vec<GoldilocksDigest384V1>>>,
+        Vec<(Vec<PrivacyOuterDigestV1>, Vec<PrivacyOuterDigestV1>)>,
+        Vec<Vec<PrivacyOuterDigestV1>>,
+        Vec<Vec<PrivacyOuterDigestV1>>,
+        Vec<Vec<Vec<PrivacyOuterDigestV1>>>,
     ),
     AggregateStarkErrorV1,
 > {
@@ -5122,7 +5135,7 @@ enum OpenedLeafTargetV1 {
 struct OpenedQueryLeafV1 {
     target: OpenedLeafTargetV1,
     index: usize,
-    digest: GoldilocksDigest384V1,
+    digest: PrivacyOuterDigestV1,
 }
 /// Only disclosed proof openings and public hashes enter this package.
 /// Earlier leaf events survive a later hash/validation error so ordered map
@@ -5397,10 +5410,10 @@ pub(crate) fn verify_all_merkle_openings_v1(
 /// One independently checkable canonical Merkle multiproof.
 struct MerkleVerificationJobV1<'a> {
     node_role: &'a [u8],
-    root: &'a GoldilocksDigest384V1,
+    root: &'a PrivacyOuterDigestV1,
     leaf_count: usize,
-    leaves: &'a BTreeMap<usize, GoldilocksDigest384V1>,
-    frontier: &'a [GoldilocksDigest384V1],
+    leaves: &'a BTreeMap<usize, PrivacyOuterDigestV1>,
+    frontier: &'a [PrivacyOuterDigestV1],
     error_mapping: Option<AggregateStarkErrorV1>,
 }
 /// Bound concurrent cloned frontier maps independently of the host worker count.
@@ -5449,13 +5462,7 @@ pub(crate) fn verify_fri_commitments_v1(
         let lane_proof = &proof.fri_lanes[lane];
         let terminal =
             canonical_fp4_fields_v1(&lane_proof.terminal_values, parameters.terminal_size()?)?;
-        let terminal_tree = fri_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
-            domains,
-            lane,
-            fri_rounds,
-            &terminal,
-        )?;
+        let terminal_tree = fri_tree_v1(domains, lane, fri_rounds, &terminal)?;
         if terminal_tree.root() != lane_proof.roots[fri_rounds] {
             return Err(AggregateStarkErrorV1::FriOpening);
         }
@@ -5763,17 +5770,12 @@ mod tests {
         query_seed: b"aggregate-test-query-seed",
     };
     fn assert_scalar_commitment_parity_v1(
-        tree: GoldilocksMerkleTreeV1,
-        leaves: Vec<GoldilocksDigest384V1>,
+        tree: PrivacyOuterMerkleTreeV1,
+        leaves: Vec<PrivacyOuterDigestV1>,
         node: &'static [u8],
     ) {
-        let expected = GoldilocksMerkleTreeV1::from_leaves(
-            fastpq_prover::DigestExecutionV1::Cpu,
-            leaves,
-            DOMAINS.digest_context,
-            node,
-        )
-        .expect("scalar leaf tree");
+        let expected = PrivacyOuterMerkleTreeV1::from_leaves(leaves, DOMAINS.digest_context, node)
+            .expect("scalar leaf tree");
         assert_eq!(tree.root(), expected.root());
         for row in [0, 4095, 4096, 8191] {
             assert_eq!(
@@ -5784,7 +5786,7 @@ mod tests {
     }
     #[test]
     fn explicit_commitment_preparation_geometry_retains_payload_and_frame_bounds() {
-        let limit = fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1;
+        let limit = crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1;
         let budget = PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1;
         let catalog = DOMAINS.digest_context.catalog_v1();
         let domain = DOMAINS
@@ -5792,7 +5794,7 @@ mod tests {
             .domain_v1(&catalog, DOMAINS.base_leaf, b"vector-row-leaf", 0, 0, 0)
             .unwrap();
         for payload in [1, 512, 513, 4448] {
-            let words = fastpq_isi::GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(
+            let words = crate::privacy_engines::privacy_outer_hash::PrivacyOuterFrameV1::byte_count_for_field_lengths_v1(
                 domain,
                 &[payload],
             )
@@ -5800,12 +5802,16 @@ mod tests {
             let rows = private_row_preparation_rows_v1(domain, &[], payload, limit).unwrap();
             assert_eq!(
                 rows,
-                (budget / payload)
-                    .min(limit)
-                    .min(fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1 / words)
+                (budget / payload).min(limit).min(
+                    crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_BYTES_V1
+                        / words
+                )
             );
             assert!(rows * payload <= budget);
-            assert!(rows * words <= fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1);
+            assert!(
+                rows * words
+                    <= crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_BYTES_V1
+            );
         }
         assert_eq!(private_row_preparation_rows_v1(domain, &[], 8, 3), Ok(3));
         for payload in [budget, budget + 1] {
@@ -5823,7 +5829,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_commitment_556_column_geometry_aligns_host_and_device_batches() {
+    fn explicit_commitment_556_column_geometry_bounds_cpu_preparation() {
         let context = TransparentStarkDigestContextV1::new(
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             b"atomic-private-settlement-stark-profile-v1",
@@ -5842,29 +5848,34 @@ mod tests {
         let group = 0_u16.to_be_bytes();
         let width = 556_u16.to_be_bytes();
         let payload_bytes = 556 * 8;
-        let words = fastpq_isi::GoldilocksDigest384FrameV1::word_count_for_field_lengths_v1(
+        let words = crate::privacy_engines::privacy_outer_hash::PrivacyOuterFrameV1::byte_count_for_field_lengths_v1(
             domain,
             &[group.len(), width.len(), payload_bytes],
         )
         .unwrap();
-        assert_eq!(words, 712, "actual APS domain/prefix/payload geometry");
+        assert_eq!(words, 4730, "actual APS byte-frame geometry");
         let rows = private_row_preparation_rows_v1(
             domain,
             &[&group, &width],
             payload_bytes,
-            fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1,
+            crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1,
         )
         .unwrap();
-        assert_eq!(rows, 5890);
-        assert_eq!(131_072_usize.div_ceil(rows), 23);
+        assert_eq!(rows, 4096);
+        assert_eq!(131_072_usize.div_ceil(rows), 32);
         assert!(rows * payload_bytes <= PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1);
-        assert!(rows * words <= fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1);
-        assert!((rows + 1) * words > fastpq_prover::MAX_DIGEST384_BATCH_WORDS_V1);
+        assert!(
+            rows * words
+                <= crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_BYTES_V1
+        );
+        assert!(
+            rows + 1
+                > crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1
+        );
     }
 
     #[test]
     fn explicit_commitment_small_preparation_chunks_preserve_scalar_root_and_paths() {
-        let cpu = fastpq_prover::DigestExecutionV1::Cpu;
         let columns: Vec<Vec<F>> = (0..3)
             .map(|column| (0..8).map(|row| F(column * 101 + row * 17)).collect())
             .collect();
@@ -5880,8 +5891,7 @@ mod tests {
                 .unwrap()
             })
             .collect();
-        let expected = GoldilocksMerkleTreeV1::from_leaves(
-            cpu,
+        let expected = PrivacyOuterMerkleTreeV1::from_leaves(
             leaves,
             DOMAINS.digest_context,
             DOMAINS.base_node,
@@ -5889,10 +5899,13 @@ mod tests {
         .unwrap();
         let group = 7_u16.to_be_bytes();
         let width = 3_u16.to_be_bytes();
-        for cap in [1, 3, fastpq_prover::MAX_DIGEST384_BATCH_FRAMES_V1] {
+        for cap in [
+            1,
+            3,
+            crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1,
+        ] {
             let mut serialized = Vec::new();
             let tree = commit_serialized_rows_with_preparation_limit_v1(
-                cpu,
                 DOMAINS.digest_context,
                 DOMAINS.base_leaf,
                 DOMAINS.base_node,
@@ -5929,7 +5942,6 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let tree = row_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             DOMAINS.base_leaf,
             DOMAINS.base_node,
@@ -5962,8 +5974,7 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let tree = composition_tree_v1(fastpq_prover::DigestExecutionV1::Cpu, DOMAINS, 3, &chunks)
-            .expect("batched composition");
+        let tree = composition_tree_v1(DOMAINS, 3, &chunks).expect("batched composition");
         let leaves = (0..8192)
             .into_par_iter()
             .map(|row| {
@@ -5979,14 +5990,7 @@ mod tests {
         let values = (0..8192)
             .map(|row| E::canonical([row, 2, 3, 7]).expect("field"))
             .collect::<Vec<_>>();
-        let tree = fri_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
-            DOMAINS,
-            3,
-            5,
-            &values,
-        )
-        .expect("batched FRI");
+        let tree = fri_tree_v1(DOMAINS, 3, 5, &values).expect("batched FRI");
         let leaves = values
             .par_iter()
             .enumerate()
@@ -5995,8 +5999,7 @@ mod tests {
             })
             .collect();
         assert_scalar_commitment_parity_v1(tree, leaves, DOMAINS.fri_node);
-        let tree = fri_mask_tree_v1(fastpq_prover::DigestExecutionV1::Cpu, DOMAINS, 3, &values)
-            .expect("batched mask");
+        let tree = fri_mask_tree_v1(DOMAINS, 3, &values).expect("batched mask");
         let leaves = values
             .par_iter()
             .enumerate()
@@ -6008,11 +6011,9 @@ mod tests {
     }
     #[test]
     fn explicit_commitment_staging_rejects_invalid_geometry_and_payload_before_hashing() {
-        let cpu = fastpq_prover::DigestExecutionV1::Cpu;
         for rows in [0, 3] {
             assert!(
                 commit_serialized_rows_v1(
-                    cpu,
                     DOMAINS.digest_context,
                     DOMAINS.base_leaf,
                     DOMAINS.base_node,
@@ -6030,7 +6031,6 @@ mod tests {
         for bytes in [0, 32 * 1024 * 1024 + 1] {
             assert!(
                 commit_serialized_rows_v1(
-                    cpu,
                     DOMAINS.digest_context,
                     DOMAINS.base_leaf,
                     DOMAINS.base_node,
@@ -6047,7 +6047,6 @@ mod tests {
         }
         assert!(
             commit_serialized_rows_v1(
-                cpu,
                 DOMAINS.digest_context,
                 DOMAINS.base_leaf,
                 DOMAINS.base_node,
@@ -6061,14 +6060,14 @@ mod tests {
             )
             .is_err()
         );
-        assert!(composition_tree_v1(cpu, DOMAINS, usize::MAX, &[vec![E::ZERO; 2]]).is_err());
-        assert!(fri_tree_v1(cpu, DOMAINS, 0, usize::MAX, &[E::ZERO; 2]).is_err());
-        assert!(fri_mask_tree_v1(cpu, DOMAINS, 0, &[]).is_err());
+        assert!(composition_tree_v1(DOMAINS, usize::MAX, &[vec![E::ZERO; 2]]).is_err());
+        assert!(fri_tree_v1(DOMAINS, 0, usize::MAX, &[E::ZERO; 2]).is_err());
+        assert!(fri_mask_tree_v1(DOMAINS, 0, &[]).is_err());
     }
 
     fn transcript() -> TransparentTranscriptV1 {
-        let profile = GoldilocksDigest384V1::new([7; 6]).expect("profile digest");
-        let public = GoldilocksDigest384V1::new([9; 6]).expect("public digest");
+        let profile = PrivacyOuterDigestV1::from_bytes([7; 48]);
+        let public = PrivacyOuterDigestV1::from_bytes([9; 48]);
         TransparentTranscriptV1::new(
             DOMAINS.digest_context,
             b"aggregate-test-suite",
@@ -6077,15 +6076,10 @@ mod tests {
         )
         .expect("transcript")
     }
-    fn mutate_digest_v1(digest: GoldilocksDigest384V1) -> GoldilocksDigest384V1 {
-        let mut words = digest.words();
-        words[0] =
-            if words[0] + 1 == crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1 {
-                0
-            } else {
-                words[0] + 1
-            };
-        GoldilocksDigest384V1::new(words).expect("mutated digest remains canonical")
+    fn mutate_digest_v1(digest: PrivacyOuterDigestV1) -> PrivacyOuterDigestV1 {
+        let mut words = digest.to_bytes();
+        words[0] ^= 1;
+        PrivacyOuterDigestV1::from_bytes(words)
     }
     #[test]
     fn aggregate_domains_cannot_alias_fixed_core_roles() {
@@ -6106,8 +6100,8 @@ mod tests {
                 b"aggregate-test-profile-v1",
             ),
             b"aggregate-test-suite",
-            &GoldilocksDigest384V1::new([7; 6]).expect("profile digest"),
-            &GoldilocksDigest384V1::new([9; 6]).expect("public digest"),
+            &PrivacyOuterDigestV1::from_bytes([7; 48]),
+            &PrivacyOuterDigestV1::from_bytes([9; 48]),
         )
         .expect("substituted transcript");
         assert_eq!(
@@ -6296,7 +6290,6 @@ mod tests {
                 .collect(),
         ];
         let base_tree = row_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             DOMAINS.base_leaf,
             DOMAINS.base_node,
@@ -6306,7 +6299,6 @@ mod tests {
         )
         .expect("base tree");
         let aux_tree = row_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             DOMAINS.aux_leaf,
             DOMAINS.aux_node,
@@ -6326,29 +6318,16 @@ mod tests {
             PARAMETERS.security_lanes
         ];
         let composition_trees = (0..PARAMETERS.security_lanes)
-            .map(|lane| {
-                composition_tree_v1(
-                    fastpq_prover::DigestExecutionV1::Cpu,
-                    DOMAINS,
-                    lane,
-                    &compositions[lane],
-                )
-            })
+            .map(|lane| composition_tree_v1(DOMAINS, lane, &compositions[lane]))
             .collect::<Result<Vec<_>, _>>()
             .expect("composition trees");
         let composition_roots = composition_trees
             .iter()
-            .map(GoldilocksMerkleTreeV1::root)
+            .map(PrivacyOuterMerkleTreeV1::root)
             .collect::<Vec<_>>();
         let mut fri_mask_rng = StdRng::seed_from_u64(0x4652_494d_4153_4b31);
-        let fri_masks = build_fri_mask_oracles_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
-            PARAMETERS,
-            DOMAINS,
-            &layout,
-            &mut fri_mask_rng,
-        )
-        .expect("FRI mask oracles");
+        let fri_masks = build_fri_mask_oracles_v1(PARAMETERS, DOMAINS, &layout, &mut fri_mask_rng)
+            .expect("FRI mask oracles");
         let fri_mask_roots = fri_masks
             .iter()
             .map(|mask| mask.tree.root())
@@ -6380,7 +6359,6 @@ mod tests {
                 let mut fri_base = vec![E::ZERO; rows];
                 add_fri_mask_oracle_v1(&mut fri_base, &fri_masks[lane]).expect("add FRI mask");
                 build_fri_lane_v1(
-                    fastpq_prover::DigestExecutionV1::Cpu,
                     PARAMETERS,
                     DOMAINS,
                     &layout,
@@ -6661,7 +6639,7 @@ mod tests {
     fn streaming_merkle_matches_materialized_tree_and_canonical_frontier() {
         let leaves = (0_u64..64)
             .map(|index| {
-                goldilocks_digest384_frame_v1(
+                privacy_outer_digest_frame_v1(
                     DOMAINS.digest_context,
                     b"aggregate-streaming-leaf",
                     b"test-leaf",
@@ -6673,8 +6651,7 @@ mod tests {
                 .expect("leaf")
             })
             .collect::<Vec<_>>();
-        let tree = GoldilocksMerkleTreeV1::from_leaves(
-            fastpq_prover::DigestExecutionV1::Cpu,
+        let tree = PrivacyOuterMerkleTreeV1::from_leaves(
             leaves.clone(),
             DOMAINS.digest_context,
             b"aggregate-streaming-node",
@@ -6727,7 +6704,7 @@ mod tests {
     fn streaming_merkle_rejects_noncanonical_or_inexact_streams() {
         let leaves = (0_u64..8)
             .map(|index| {
-                goldilocks_digest384_frame_v1(
+                privacy_outer_digest_frame_v1(
                     DOMAINS.digest_context,
                     b"aggregate-streaming-hostile-leaf",
                     b"test-leaf",
@@ -6796,7 +6773,6 @@ mod tests {
             .collect::<Vec<_>>();
         let indices = vec![0, 1, 7, 31, 63];
         let tree = row_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             b"aggregate-streaming-row-leaf",
             b"aggregate-streaming-row-node",
@@ -6946,7 +6922,6 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let tree = row_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             DOMAINS.digest_context,
             b"aggregate-streaming-masked-leaf",
             b"aggregate-streaming-masked-node",
@@ -7187,6 +7162,56 @@ mod tests {
         ];
         zeroize_extension_field_column_v1(&mut extension_values);
         assert!(extension_values.iter().all(|value| *value == E::ZERO));
+    }
+    #[test]
+    fn trace_vanishing_period_matches_every_scalar_coset_inverse() {
+        for (trace_log2, coset_log2) in [(0, 1), (3, 5), (8, 11), (14, 17)] {
+            let trace_size = 1_usize << trace_log2;
+            let coset_size = 1_usize << coset_log2;
+            let shift = F(GOLDILOCKS_GENERATOR_V1);
+            let inverses = trace_vanishing_inverse_period_v1(trace_log2, coset_log2, shift)
+                .expect("disjoint quotient coset");
+            assert_eq!(inverses.len(), coset_size / trace_size);
+            let root = goldilocks_primitive_root_v1(coset_log2).expect("coset root");
+            let mut point = shift;
+            for index in 0..coset_size {
+                let denominator = point.pow(trace_size as u128).sub(F::ONE);
+                let inverse = inverses[index % inverses.len()];
+                assert_eq!(Some(inverse), denominator.inv(), "row {index}");
+                assert_eq!(denominator.mul(inverse), F::ONE, "row {index}");
+                point = point.mul(root);
+            }
+            assert_eq!(point, shift);
+        }
+    }
+    #[test]
+    fn trace_vanishing_period_rejects_invalid_geometry_and_cosets() {
+        for (trace_log2, coset_log2) in [(3, 3), (4, 3), (0, 33), (33, 34), (255, 255)] {
+            assert_eq!(
+                trace_vanishing_inverse_period_v1(
+                    trace_log2,
+                    coset_log2,
+                    F(GOLDILOCKS_GENERATOR_V1)
+                ),
+                Err(AggregateStarkErrorV1::InvalidLayout)
+            );
+        }
+        for shift in [
+            F::ZERO,
+            F::ONE,
+            goldilocks_primitive_root_v1(3).expect("trace subgroup"),
+            goldilocks_primitive_root_v1(5).expect("expanded subgroup"),
+        ] {
+            assert_eq!(
+                trace_vanishing_inverse_period_v1(3, 5, shift),
+                Err(AggregateStarkErrorV1::InvalidLayout)
+            );
+        }
+        let noncanonical = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+        assert_eq!(
+            trace_vanishing_inverse_period_v1(3, 5, noncanonical),
+            Err(AggregateStarkErrorV1::NonCanonicalField)
+        );
     }
     #[test]
     fn reduced_quotient_coset_chunks_match_common_domain_and_exact_division() {
@@ -7505,13 +7530,8 @@ mod tests {
             .map(|index| index * 3 + 1)
             .collect::<Vec<_>>();
         let composition_chunks = vec![values.clone()];
-        let composition_tree = composition_tree_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
-            DOMAINS,
-            0,
-            &composition_chunks,
-        )
-        .expect("composition tree");
+        let composition_tree =
+            composition_tree_v1(DOMAINS, 0, &composition_chunks).expect("composition tree");
         let streamed_composition =
             streaming_composition_commitment_v1(DOMAINS, 0, &composition_chunks, &indices)
                 .expect("streaming composition");
@@ -7523,7 +7543,6 @@ mod tests {
         );
         let mut materialized_transcript = transcript();
         let materialized = build_fri_lane_v1(
-            fastpq_prover::DigestExecutionV1::Cpu,
             PARAMETERS,
             DOMAINS,
             &layout,
@@ -8105,8 +8124,8 @@ mod tests {
             );
         }
         let mut changed = proof.clone();
-        changed.trace_groups[0].base_root = GoldilocksDigest384V1::default();
-        changed.composition_roots[0] = GoldilocksDigest384V1::default();
+        changed.trace_groups[0].base_root = PrivacyOuterDigestV1::default();
+        changed.composition_roots[0] = PrivacyOuterDigestV1::default();
         for pool in &pools {
             assert_eq!(
                 pool.install(|| verify_all_merkle_openings_v1(
@@ -8116,8 +8135,8 @@ mod tests {
             );
         }
         changed = proof.clone();
-        changed.composition_roots[0] = GoldilocksDigest384V1::default();
-        changed.fri_mask_roots[0] = GoldilocksDigest384V1::default();
+        changed.composition_roots[0] = PrivacyOuterDigestV1::default();
+        changed.fri_mask_roots[0] = PrivacyOuterDigestV1::default();
         for pool in &pools {
             assert_eq!(
                 pool.install(|| verify_all_merkle_openings_v1(
@@ -8127,7 +8146,7 @@ mod tests {
             );
         }
         changed = proof;
-        changed.fri_mask_roots[0] = GoldilocksDigest384V1::default();
+        changed.fri_mask_roots[0] = PrivacyOuterDigestV1::default();
         for pool in &pools {
             assert_eq!(
                 pool.install(|| verify_all_merkle_openings_v1(
@@ -8312,7 +8331,7 @@ mod tests {
         let rounds = layout.fri_rounds(PARAMETERS).unwrap();
         let roots = layout.trace_groups.len() * 2 + PARAMETERS.security_lanes * (2 + rounds + 1);
         let first_query = 8
-            + roots * GOLDILOCKS_DIGEST384_BYTES_V1
+            + roots * PRIVACY_OUTER_DIGEST_BYTES_V1
             + PARAMETERS.security_lanes * PARAMETERS.terminal_size().unwrap() * 32
             + 8;
         let stride = (encoded_non_frontier_bytes_v1(PARAMETERS, &layout).unwrap() - first_query)
@@ -8475,23 +8494,25 @@ mod tests {
         assert!(decode_proof_v1(&trailing, PARAMETERS, &layout).is_err());
     }
     #[test]
-    fn exact_codec_rejects_old_width_and_noncanonical_digest_roots() {
+    fn exact_codec_accepts_opaque_digest_roots_and_rejects_short_width() {
         let (layout, proof, _, _) = fixture();
         let encoded = encode_proof_v1(&proof, PARAMETERS, &layout).expect("encode");
         let root_offset = PARAMETERS.proof_magic.len() + core::mem::size_of::<u16>() * 2;
         let mut old_width = encoded.clone();
-        old_width.drain(root_offset + 32..root_offset + GOLDILOCKS_DIGEST384_BYTES_V1);
+        old_width.drain(root_offset + 32..root_offset + PRIVACY_OUTER_DIGEST_BYTES_V1);
         assert!(
             decode_proof_v1(&old_width, PARAMETERS, &layout).is_err(),
-            "an old 32-byte root cannot decode as a six-field-element root"
+            "a truncated 32-byte root cannot decode as an exact 48-byte root"
         );
         let mut noncanonical = encoded;
         noncanonical[root_offset..root_offset + 8].copy_from_slice(
             &crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1.to_le_bytes(),
         );
+        let decoded = decode_proof_v1(&noncanonical, PARAMETERS, &layout)
+            .expect("opaque outer root is not a field");
         assert_eq!(
-            decode_proof_v1(&noncanonical, PARAMETERS, &layout),
-            Err(AggregateStarkErrorV1::NonCanonicalField)
+            decoded.trace_groups[0].base_root.to_bytes()[..8],
+            crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1.to_le_bytes()
         );
     }
     #[test]
@@ -8582,9 +8603,9 @@ mod tests {
             verify_canonical_multiproof_v1(
                 DOMAINS.digest_context,
                 oversized_domain,
-                &GoldilocksDigest384V1::default(),
+                &PrivacyOuterDigestV1::default(),
                 1,
-                &BTreeMap::from([(0, GoldilocksDigest384V1::default())]),
+                &BTreeMap::from([(0, PrivacyOuterDigestV1::default())]),
                 &[],
             ),
             Err(AggregateStarkErrorV1::TraceOpening)

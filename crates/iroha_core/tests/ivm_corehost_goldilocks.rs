@@ -1,4 +1,4 @@
-//! Core host rejection tests for using the Goldilocks field as an IPA group.
+//! Core host rejection of polynomial-opening payloads and registered IPA curve policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 mod goldilocks {
     use iroha_config::parameters::defaults;
@@ -34,15 +34,14 @@ mod goldilocks {
         envelope.public.curve_id = ZkCurveId::Goldilocks.as_u16();
         envelope
     }
-    fn tlv_from_env(env: &iroha_zkp_halo2::OpenVerifyEnvelope) -> Vec<u8> {
-        let payload = norito::to_bytes(env).expect("encode envelope");
+    fn envelope_tlv(payload: &[u8]) -> Vec<u8> {
         let mut tlv = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
         tlv.extend_from_slice(&u16::to_be_bytes(ivm::PointerType::NoritoBytes as u16));
         tlv.push(1);
         let payload_len = u32::try_from(payload.len()).expect("payload length fits in u32");
         tlv.extend_from_slice(&payload_len.to_be_bytes());
-        tlv.extend_from_slice(&payload);
-        let hash: [u8; 32] = iroha_crypto::Hash::new(&payload).into();
+        tlv.extend_from_slice(payload);
+        let hash: [u8; 32] = iroha_crypto::Hash::new(payload).into();
         tlv.extend_from_slice(&hash);
         tlv
     }
@@ -68,10 +67,6 @@ mod goldilocks {
     }
     #[test]
     fn core_host_rejects_non_binding_goldilocks_commitments() {
-        let authority: AccountId = ALICE_ID.clone();
-        let mut host =
-            CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
-        host.set_halo2_config(&base_config());
         let env = make_goldilocks_envelope();
         let raw = norito::to_bytes(&env).expect("encode Goldilocks envelope");
         assert!(matches!(
@@ -80,35 +75,90 @@ mod goldilocks {
                 backend: iroha_zkp_halo2::ZkCurveId::Goldilocks
             })
         ));
-        let tlv = tlv_from_env(&env);
-        let mut vm = ivm::IVM::new(1_000_000);
-        let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
-        vm.set_register(10, ptr);
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
-            .expect("syscall ok");
-        assert!(gas > 0);
-        assert_eq!(vm.register(10), 0);
-        assert_ne!(vm.register(11), 0);
+        let tlv = envelope_tlv(&raw);
+        for curve in [
+            iroha_config::parameters::actual::ZkCurve::Pallas,
+            iroha_config::parameters::actual::ZkCurve::Goldilocks,
+        ] {
+            let authority: AccountId = ALICE_ID.clone();
+            let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
+            let mut cfg = base_config();
+            cfg.curve = curve;
+            host.set_halo2_config(&cfg);
+            let mut vm = ivm::IVM::new(1_000_000);
+            let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
+            vm.set_register(10, ptr);
+            let gas = host
+                .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
+                .expect("syscall ok");
+            assert!(gas > 0);
+            assert_eq!(vm.register(10), 0);
+            // Production accepts only the registry-bound data-model envelope;
+            // a polynomial opening cannot reach curve policy or arm a ballot latch.
+            assert_eq!(vm.register(11), ivm::host::ERR_DECODE);
+        }
     }
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
-    fn core_host_goldilocks_rejected_when_curve_disabled() {
+    fn core_host_enforces_registered_ipa_curve_policy() {
+        use iroha_core::zk;
+        use iroha_data_model::proof::VerifyingKeyId;
+        use std::collections::BTreeMap;
+
         let authority: AccountId = ALICE_ID.clone();
-        let mut host =
-            CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority.clone()]));
-        let mut cfg = base_config();
-        cfg.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
-        host.set_halo2_config(&cfg);
-        let env = make_goldilocks_envelope();
-        let tlv = tlv_from_env(&env);
-        let mut vm = ivm::IVM::new(1_000_000);
-        let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
-        vm.set_register(10, ptr);
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
-            .expect("syscall ok");
-        assert!(gas > 0);
-        assert_eq!(vm.register(10), 0);
-        assert_eq!(vm.register(11), 3);
+        let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
+        let record = zk::halo2_ipa_ivm_execution_vk_record("ballot", 1)
+            .expect("canonical registered Pallas key");
+        let id = VerifyingKeyId::new(zk::ZK_BACKEND_HALO2_IPA, "curve_policy");
+        let proof = zk::prove_halo2_ipa_ivm_execution_envelope(
+            zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            record.key.as_ref().expect("inline verifier key"),
+            iroha_crypto::Hash::new(b"curve-policy-code"),
+            iroha_crypto::Hash::new(b"curve-policy-overlay"),
+            iroha_crypto::Hash::new(b"curve-policy-events"),
+            iroha_crypto::Hash::new(b"curve-policy-gas"),
+            None,
+        )
+        .expect("valid registered Pallas proof");
+        let tlv = envelope_tlv(&proof.bytes);
+
+        let mut unsupported_record = record.clone();
+        unsupported_record.curve = "goldilocks".to_owned();
+        assert_eq!(
+            host.set_verifying_keys(BTreeMap::from([(id.clone(), unsupported_record)])),
+            Err(ivm::VMError::NoritoInvalid),
+            "Goldilocks is not an admissible IPA group in the verifier registry"
+        );
+        host.set_verifying_keys(BTreeMap::from([(id, record)]))
+            .expect("install canonical Pallas key");
+
+        for (curve, result, status) in [
+            (iroha_config::parameters::actual::ZkCurve::Pallas, 1, 0),
+            (
+                iroha_config::parameters::actual::ZkCurve::Goldilocks,
+                0,
+                ivm::host::ERR_CURVE,
+            ),
+            (
+                iroha_config::parameters::actual::ZkCurve::Bn254,
+                0,
+                ivm::host::ERR_CURVE,
+            ),
+        ] {
+            let mut cfg = base_config();
+            cfg.curve = curve;
+            host.set_halo2_config(&cfg);
+            let mut vm = ivm::IVM::new(1_000_000);
+            let ptr = vm
+                .alloc_input_tlv(&tlv)
+                .expect("alloc canonical envelope tlv");
+            vm.set_register(10, ptr);
+            let gas = host
+                .syscall(ivm_sys::SYSCALL_ZK_VOTE_VERIFY_BALLOT, &mut vm)
+                .expect("curve-policy syscall");
+            assert!(gas > 0);
+            assert_eq!(vm.register(10), result);
+            assert_eq!(vm.register(11), status);
+        }
     }
 }

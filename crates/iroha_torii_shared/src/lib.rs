@@ -1,7 +1,7 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
-    asset::AssetDefinitionId,
+    asset::{AssetDefinitionId, AssetId},
     nexus::{FeeDebitSource, FeeSponsorProgramId, UniversalAccountId},
     prelude::Quantity,
     query::CommittedTransaction,
@@ -34,6 +34,8 @@ pub mod private_settlement_api;
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
+/// Typed absence response for authoritative SNS registration lookups.
+pub mod sns;
 /// Canonical wire types for the authenticated SoraFS hedging and billing API.
 pub mod sorafs_hedging_billing_api;
 /// Canonical wire types for externally signed SoraFS moderation recovery.
@@ -725,6 +727,17 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fee: Option<FeeErrorDetails>,
+    /// Exact missing SNS registration selector for `sns_registration_not_found` HTTP 404.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub sns_registration_not_found: Option<sns::SnsRegistrationNotFoundV1>,
+    /// Exact missing asset selector for `query_asset_not_found` HTTP 404.
+    ///
+    /// This reports a completed authoritative lookup, not a cryptographic proof.
+    /// Clients must check the status, error code, and requested asset identity together.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub query_asset_not_found: Option<AssetId>,
 }
 impl ErrorDetails {
     /// Return whether this details payload carries any structured fields.
@@ -746,6 +759,8 @@ impl ErrorDetails {
             && self.hint.is_none()
             && self.axt.is_none()
             && self.fee.is_none()
+            && self.sns_registration_not_found.is_none()
+            && self.query_asset_not_found.is_none()
     }
 }
 /// Stable public network profile metadata used by clients and Torii helpers.
@@ -1238,7 +1253,7 @@ mod tests {
         NetworkId,
         account::{AccountAlias, AccountAliasDomain, AccountId},
         alias_setup::AccountAliasName,
-        asset::AssetDefinitionId,
+        asset::{AssetDefinitionId, AssetId},
         block::BlockHeader,
         nexus::{FeeDebitSource, FeeSponsorProgramId},
         prelude::Quantity,
@@ -2141,6 +2156,66 @@ mod tests {
         assert_eq!(fee.observation_height, Some(42));
     }
     #[test]
+    fn error_envelope_roundtrip_preserves_exact_asset_absence() {
+        let account = AccountId::new(checked_test_keypair(0x38).public_key().clone());
+        let asset = AssetId::new(fee_quote_test_asset("missing"), account);
+        let envelope =
+            ErrorEnvelope::new("query_asset_not_found", "The requested asset is absent.")
+                .with_details(ErrorDetails {
+                    query_asset_not_found: Some(asset.clone()),
+                    ..Default::default()
+                });
+        let native = norito::to_bytes(&envelope).expect("encode asset absence envelope");
+        let json = norito::json::to_vec(&envelope).expect("encode asset absence JSON");
+        for decoded in [
+            norito::decode_canonical_with_limits::<ErrorEnvelope>(
+                &native,
+                norito::canonical_decode_limits(native.len()),
+            )
+            .expect("decode canonical asset absence envelope"),
+            norito::json::from_slice::<ErrorEnvelope>(&json).expect("decode asset absence JSON"),
+        ] {
+            assert_eq!(decoded.code(), "query_asset_not_found");
+            let details = decoded.details.expect("required exact asset selector");
+            assert!(!details.is_empty());
+            assert_eq!(details.query_asset_not_found, Some(asset.clone()));
+        }
+        let value = norito::json::from_slice::<norito::json::Value>(&json)
+            .expect("inspect declared absence JSON schema");
+        let details = value
+            .get("details")
+            .and_then(norito::json::Value::as_object)
+            .expect("details object");
+        assert_eq!(details.len(), 1);
+        assert_eq!(
+            details.get("query_asset_not_found"),
+            Some(&norito::json::to_value(&asset).expect("typed AssetId JSON")),
+        );
+        let mut trailing = native;
+        trailing.push(0);
+        assert!(
+            norito::decode_canonical_with_limits::<ErrorEnvelope>(
+                &trailing,
+                norito::canonical_decode_limits(trailing.len()),
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn error_envelope_asset_absence_json_rejects_untyped_and_duplicate_selectors() {
+        for selector in ["{}", "[]", "0", "true", "\"not-an-asset\""] {
+            let json = format!(
+                r#"{{"code":"query_asset_not_found","message":"absent","details":{{"query_asset_not_found":{selector}}}}}"#
+            );
+            assert!(
+                norito::json::from_str::<ErrorEnvelope>(&json).is_err(),
+                "{json}"
+            );
+        }
+        let json = r#"{"code":"query_asset_not_found","message":"absent","details":{"query_asset_not_found":null,"query_asset_not_found":null}}"#;
+        assert!(norito::json::from_str::<ErrorEnvelope>(json).is_err());
+    }
+    #[test]
     fn error_envelope_json_rejects_unknown_members_and_duplicates() {
         let decoded: ErrorEnvelope = norito::json::from_str(
             r#"{"code":"bad_request","message":"invalid","details":{"field":"amount"}}"#,
@@ -2192,6 +2267,7 @@ mod tests {
             r#"{"code":"bad_request","message":"invalid","retired":null}"#,
             r#"{"code":"bad_request","message":"invalid","details":{"retired":null}}"#,
             r#"{"code":"bad_request","message":"invalid","details":{"fee":{"retired":null}}}"#,
+            r#"{"code":"sns_registration_not_found","message":"missing","details":{"sns_registration_not_found":{"suffix_id":4099,"label":"dpn","retired":null}}}"#,
         ] {
             norito::json::from_str::<ErrorEnvelope>(json)
                 .expect_err("error envelopes must reject unknown members at every owned boundary");
@@ -2220,6 +2296,20 @@ mod tests {
             ..Default::default()
         });
         assert!(!details.is_empty());
+        details = ErrorDetails::default();
+        details.sns_registration_not_found = Some(crate::sns::SnsRegistrationNotFoundV1::new(
+            iroha_data_model::sns::DATASPACE_ALIAS_SUFFIX_ID,
+            "dpn".to_owned(),
+        ));
+        assert!(!details.is_empty());
+        details.sns_registration_not_found = None;
+        assert!(details.is_empty());
+        let account = AccountId::new(checked_test_keypair(0x39).public_key().clone());
+        details.query_asset_not_found =
+            Some(AssetId::new(fee_quote_test_asset("missing"), account));
+        assert!(!details.is_empty());
+        details.query_asset_not_found = None;
+        assert!(details.is_empty());
     }
     #[test]
     fn network_profile_registry_resolves_public_discriminants() {
