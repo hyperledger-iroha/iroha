@@ -595,9 +595,24 @@ RELEASE_BOOTSTRAP_COMPONENT_FILES = (
 
 
 def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[Path, ...]:
-    """Expand reviewed Rust parents to their exact include-component closure."""
+    """Copy exact reviewed Rust and fixed-preflight source closures for mutation checks."""
 
+    preflight_inventory = Path("pytests/scripts/scaling_preflight/inventory.json")
+    inventory = json.loads((ROOT_DIR / preflight_inventory).read_bytes())
+    preflight_sources = tuple(Path(name) for name in inventory["sources"])
+    assert all(
+        not path.is_absolute() and ".." not in path.parts and path.as_posix() == name
+        for name, path in zip(inventory["sources"], preflight_sources)
+    )
     reviewed_paths = [
+        Path("scripts/copy_sumeragi_v2_release_cargo_cache.py"),
+        Path("scripts/nexus/scaling_release_record.py"),
+        Path("scripts/nexus/scaling_release_preflight.py"),
+        Path("scripts/nexus/scaling_preflight_archive.py"),
+        Path("pytests/scripts/run_scaling_collector_preflight.py"),
+        preflight_inventory,
+        Path("pytests/scripts/scaling_preflight/phase_nodes.json"),
+        *preflight_sources,
         Path("ci/run_native_amx_v2_grouped_sdk_parity.sh"),
         Path("ci/run_sumeragi_v2_sdk_diagnostics.sh"),
         Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
@@ -1797,9 +1812,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=84",
-            "  readonly expected_corridor_leg_count=83",
-            "sealed at 84 legs",
+            "  readonly expected_corridor_leg_count=88",
+            "  readonly expected_corridor_leg_count=87",
+            "sealed at 88 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),

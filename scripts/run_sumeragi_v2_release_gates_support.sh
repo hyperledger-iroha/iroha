@@ -197,11 +197,6 @@ verify_release_identity() {
     || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" \
     || -z "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" \
     || -z "${IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SCALING_CONFIGURATION_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST:-}" \
-    || -z "${IROHA_RELEASE_SCALING_IROHAD_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SCALING_IROHA_CLI_SHA256:-}" \
-    || -z "${IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256:-}" \
     || -z "${IROHA_RELEASE_PYTHON_BIN:-}" \
     || -z "${IROHA_RELEASE_SDK_INPUT_ROOT:-}" \
     || -z "${IROHA_RELEASE_SDK_INPUT_INVENTORY:-}" \
@@ -231,8 +226,6 @@ verify_release_identity() {
     || "${TEMP:-}" != "$IROHA_RELEASE_HOST_ROOT/tmp" \
     || "${XDG_CACHE_HOME:-}" != "$IROHA_RELEASE_HOST_ROOT/cache" \
     || ! -f "$IROHA_RELEASE_EXPECTED_IDENTITY_PATH" \
-    || ! -f "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-    || -L "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
     || ! -f "$IROHA_RELEASE_SDK_INPUT_INVENTORY" \
     || -L "$IROHA_RELEASE_SDK_INPUT_INVENTORY" \
     || ! -d "$IROHA_RELEASE_SDK_INPUT_ROOT" \
@@ -278,27 +271,22 @@ verify_release_identity() {
       return 1
     fi
   done
-  local scaling_digest_name
-  for scaling_digest_name in \
+  local scaling_input_name
+  for scaling_input_name in \
+    IROHA_RELEASE_SCALING_GATE_FD \
+    IROHA_RELEASE_SCALING_INVOCATION_SHA256 \
+    IROHA_RELEASE_SCALING_CHALLENGE \
+    IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256 \
     IROHA_RELEASE_SCALING_CONFIGURATION_SHA256 \
+    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST \
     IROHA_RELEASE_SCALING_IROHAD_SHA256 \
     IROHA_RELEASE_SCALING_IROHA_CLI_SHA256 \
     IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256; do
-    if [[ ! "${!scaling_digest_name}" =~ ^[0-9a-f]{64}$ ]]; then
-      echo "scaling trust anchor ${scaling_digest_name} changed at ${checkpoint}" >&2
+    if [[ -n "${!scaling_input_name+x}" ]]; then
+      echo "outer-only or retired scaling input reached the sealed child at ${checkpoint}" >&2
       return 1
     fi
   done
-  local observed_scaling_manifest
-  if ! observed_scaling_manifest="$(
-    canonical_path "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
-  )" \
-    || [[ "$observed_scaling_manifest" \
-        != "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-      || "${observed_scaling_manifest##*/}" != scaling_evidence.json ]]; then
-    echo "G-SCALE evidence path changed or became noncanonical at ${checkpoint}" >&2
-    return 1
-  fi
   local observed_target expected_target
   if [[ -e "$repo_root/target" || -L "$repo_root/target" ]]; then
     echo "sealed source unexpectedly contains a target path at ${checkpoint}" >&2

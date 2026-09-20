@@ -481,7 +481,7 @@ def test_relative_trusted_path_never_launches(release_fixture: Fixture) -> None:
 
 def test_nonisolated_python_startup_never_launches(release_fixture: Fixture) -> None:
     arguments = release_fixture.arguments()
-    del arguments[1:3]
+    del arguments[1:4]
     result = release_fixture.run(arguments)
     _assert_never_launched(release_fixture, result)
 
@@ -528,7 +528,7 @@ def test_bootstrap_copy_inside_candidate_is_rejected(release_fixture: Fixture) -
         release_fixture.candidate / "bootstrap.py", BOOTSTRAP.read_bytes(), 0o500
     )
     arguments = release_fixture.arguments()
-    arguments[3] = str(copied)
+    arguments[4] = str(copied)
     arguments = _replace_flag(arguments, "--expected-bootstrap-sha256", _sha256(copied))
     result = release_fixture.run(arguments)
     _assert_never_launched(release_fixture, result)
@@ -1236,13 +1236,13 @@ receipt_arguments=( \
     --repository-root {shlex.quote(str(release_root))} \
     --output {shlex.quote(str(terminal_output))} \
 )
-python3 -I -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" \
+python3 -I -B -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" \
     "${{receipt_arguments[@]}}"
 source_manifest_sha256="$(python3 -I -S -c 'import json,sys;print(json.load(open(sys.argv[1], encoding="utf-8"))["workspace_source_manifest_sha256"])' "$release_runner/sealed-identity.json")"
 python3 -I -S -c 'import os,sys;[os.chmod(path, 0o400) for path in sys.argv[1:]]' \
     "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/runner-stdout.log" \
     "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/runner-stderr.log"
-python3 -I -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" \
+python3 -I -B -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" \
     "${{receipt_arguments[@]}}" \
     --verify-existing \
     --validation-ack "$release_runner/receipt-validation-ack.json" \
@@ -1416,7 +1416,7 @@ def test_protected_receipt_validator_extended_value_source_mutations_fail_closed
     for component in BOOTSTRAP_COMPONENTS:
         _write(mutated.parent / component.name, component.read_bytes(), 0o400)
     arguments = release_fixture.arguments()
-    arguments[3] = str(mutated)
+    arguments[4] = str(mutated)
     arguments = _replace_flag(
         arguments, "--expected-bootstrap-sha256", _sha256(mutated)
     )

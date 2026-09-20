@@ -506,6 +506,8 @@ PREPARATION_OWNER_BINDINGS = (
         "if publication.record.carrier != carrier", "plan.index_record = Some(publication.record.clone())",
         "plan.index_additional_bytes = publication.additional_bytes", "let created = !reservations.contains_key(&carrier)",
         "for (route, old) in &existing.routes", "old.component_bytes != new.component_bytes",
+        "old.participant_height != new.participant_height", "old.proposal_hash != new.proposal_hash",
+        "old.settlement_hash != new.settlement_hash",
         ".is_subset(&old.outstanding_components)", "new.prune_journal_bytes > old.prune_journal_bytes",
         "for (other_carrier, other) in reservations.iter()", "other.routes.contains_key(route)",
         "reservations.insert(carrier, plan)", "rollback_new_reservation: created",

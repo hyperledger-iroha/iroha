@@ -282,20 +282,24 @@ NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS = (('crates/iroha_data_model/src/block/c
    'include_lane_payload,', 'include_projection_policies,',
    'include_lane_lifecycle,', 'include_native_lane,', 'blocks_in_memory,',
    'seed_genesis_domain,', 'None,')),
- ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
-  'method',
-  'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
-  ('(1_u8..=4)',
-   'Algorithm::BlsNormal',
-   'if let Some(kura) = archival_kura {',
-   'assert!(include_native_lane && include_lane_lifecycle);',
-   'else if include_lane_lifecycle {',
-   'locked_lane_work_test_kura(blocks_in_memory)',
-   'State::new_with_chain_and_network_id_for_testing(',
-   'context.network_id,',
-   'install_fixture_validator_authority(&state, &context, &validator_set_pops);',
-   'if include_native_lane {',
-   'install_fixture_native_lane(&mut state, &mut context);')),
+('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+ 'method',
+ 'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura',
+ ('(1_u8..=4)',
+  'Algorithm::BlsNormal',
+  'if let Some(kura) = archival_kura {',
+  'assert!(include_native_lane && include_lane_lifecycle);',
+  'else if include_lane_lifecycle {',
+  'locked_lane_work_test_kura(blocks_in_memory)',
+  'State::new_with_chain_and_network_id_for_testing(',
+  'context.network_id,',
+  'install_fixture_validator_authority(&state, &context, &validator_set_pops);',
+  'if include_native_lane {',
+  'install_fixture_native_lane(&mut state, &mut context);',
+  'if include_lane_lifecycle {',
+  'quorum: wire::DualQuorum::from_roster(&roster)',
+  'da_layout: wire::recommended_data_availability_layout()',
+  'context.validate().expect("valid fixture context");')),
  ('crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs',
   'struct',
   'NativeAmxParticipantReceiptLatestIndexV2',
@@ -311,7 +315,8 @@ NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS = (('crates/iroha_data_model/src/block/c
    'application_block_hash: HashOf<BlockHeader>',
    'executed_block_wire_hash: Hash',
    'finality_artifact_hash: HashOf<V2FinalityArtifact>',
-   'manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>')))
+   'manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>')),
+)
 
 NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS = (('crates/iroha_data_model/src/block/consensus.rs',
   'struct',
@@ -640,7 +645,19 @@ NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS = (('crates/iroha_data_model/src/bl
   'sources"\n'
   '                        .to_owned(),\n'
   '                );\n'
-  '            }\n'))
+  '            }\n'),
+    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+ 'method',
+ 'ApplyFixture::new_with_options_and_retention',
+ 'Self::new_with_options_and_retention_and_genesis(\n'
+ '            include_lane_payload,\n'
+ '            include_projection_policies,\n'
+ '            include_lane_lifecycle,\n'
+ '            include_native_lane,\n'
+ '            blocks_in_memory,\n'
+ '            false,\n'
+ '        )'),
+)
 
 NATIVE_MERGE_SOURCE_BINDINGS = (
     *NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS,
@@ -1054,7 +1071,7 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
   '                    .iter()\n'
   '                    .all(|hash| !fixture.state.has_committed_entrypoint(*hash))\n'
   '            );',
-  'fixture\n            .kura\n            .durable_autonomous_lane_merge_source(',
+  'fixture\n                    .kura\n                    .durable_autonomous_lane_merge_source(',
   'assert!(queue.has_durable_plan_claim_for_test(key.entrypoint_hash));',
   'assert_cold_merge_registry_replay_boundary(',
   'return;')),
@@ -1151,6 +1168,42 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
             "native_amx_participant_receipt_matches_manifest_leaf",
         ),
     ),
+
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards',
+ ('let used = self.kura_disk_usage_bytes()?;',
+  'let lane = self.lane_publication_budget_reserved_bytes()?;',
+  'let required = [\n'
+  '            pending,\n'
+  '            lane,\n'
+  '            certified,\n'
+  '            terminal,',
+  '.try_fold(used, |total, bytes| total.checked_add(bytes))',
+  'if required > self.max_disk_usage_bytes')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::ensure_native_amx_publication_capacity_under_publication_guard',
+ ('self.ensure_durable_block_at_height(block.header().height().get(), block.hash())?;',
+  'self.admit_native_amx_publication_capacity_plan(carrier, plan, None, publication)?',
+  'self.check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards()?;',
+  'guard.publish_pending_index()?;')),
+
+
+    ('crates/iroha_core/src/kura.rs',
+ 'method',
+ 'Kura::replace_top_block',
+ ('.begin_native_amx_store_capacity_under_prune_and_canonical_guards(\n'
+  '                &block,\n'
+  '                None,\n'
+  '                retired_native_block.as_deref(),',
+  'self.check_replace_storage_budget(block.as_ref())?;',
+  'owner.publish_pending_index()?;')),
+    ('crates/iroha_core/src/kura.rs',
+ 'method',
+ 'Kura::check_replace_storage_budget',
+ ('let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;',
+  '.saturating_add(lane_publication_reservations)')),
 )
 
 NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
@@ -1380,6 +1433,28 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "summary.merge_carriers = kura .apply_finalized_merge_carrier_repairs( "
         "&plan.merge_carriers, plan.merge_carrier_repair_authorizations, )",
     ),
+
+    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs',
+ 'fn',
+ 'run_autonomous_merge_frontier_fixture',
+ 'let fixture = if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries { '
+ 'ApplyFixture::new_for_cold_merge_registry_replay() } else { '
+ 'ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle() };'),
+
+    ('crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs',
+ 'method',
+ 'Kura::store_block_durable',
+ 'let mut native_capacity = '
+ 'self.begin_native_amx_store_capacity_under_prune_and_canonical_guards(block, merge_entry, '
+ 'None)?; self.check_storage_budget(block, merge_entry)?; if let Some(owner) = &mut '
+ 'native_capacity { owner.publish_pending_index()?; }'),
+    ('crates/iroha_core/src/kura.rs',
+ 'method',
+ 'Kura::replace_top_block',
+ 'let mut native_capacity = '
+ 'self.begin_native_amx_store_capacity_under_prune_and_canonical_guards(&block, None, '
+ 'retired_native_block.as_deref())?; self.check_replace_storage_budget(block.as_ref())?; if let '
+ 'Some(owner) = &mut native_capacity { owner.publish_pending_index()?; }'),
 )
 
 NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
@@ -1467,6 +1542,8 @@ NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
             ".repair_native_amx_participant_application_evidence_for_markers(",
         ),
     ),
+
+    NATIVE_MERGE_MANIFEST_CALLER_BINDINGS[0],
 )
 
 NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (

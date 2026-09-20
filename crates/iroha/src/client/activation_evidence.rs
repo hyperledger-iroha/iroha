@@ -5,13 +5,29 @@ use crate::data_model::block::{
 };
 use iroha_data_model::{
     bridge::{
-        BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof, BridgeFinalityVerifier,
-        verify_bridge_finality_proof,
+        BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityAttestationV1, BridgeFinalityProof,
+        BridgeFinalityVerifier, verify_bridge_finality_proof,
     },
     query::CommittedTransaction,
 };
 
 const BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
+// A strict envelope cap, not a promise to accept two maximum-size independent proofs.
+const GENESIS_FINALITY_ATTESTATION_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
+const GENESIS_FINALITY_CHALLENGE_HEADER: &str = "x-iroha-finality-challenge";
+
+/// One authenticated-ready result or an unsigned non-success observation.
+#[derive(Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "The attestation is already boxed; keep the small failure reason allocation-free."
+)]
+pub enum GenesisFinalityReadiness {
+    /// The original genesis and node independently authenticate this fresh statement.
+    Ready(Box<iroha_data_model::bridge::BridgeFinalityAttestationV1>),
+    /// A closed failure reason. Only explicit startup reasons permit bounded retries.
+    NotReady(iroha_torii_shared::bridge_attestation::FinalityAttestationFailureReason),
+}
 
 /// A request-bound observation that the selected finality tip is still changing.
 ///
@@ -97,49 +113,28 @@ impl Client {
             BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES,
             Some(challenge),
         )?;
-        if response.status() == StatusCode::CONFLICT {
-            use iroha_torii_shared::bridge_finality::{
-                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
-                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES,
-            };
-            if response.body().len() > BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES {
-                return Err(eyre!("finality tip progress exceeds its response bound"));
-            }
-            let content_type = exact_single_response_header(&response, "content-type")?;
-            if !content_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
-                return Err(eyre!("finality tip progress requires application/x-norito"));
-            }
-            let envelope: iroha_torii_shared::ErrorEnvelope = norito::decode_canonical_with_limits(
-                response.body(),
-                norito::canonical_decode_limits(response.body().len()),
-            )
-            .wrap_err("failed to decode canonical finality tip progress envelope")?;
-            if envelope.code() != BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE {
-                return Err(eyre!(
-                    "finality attestation HTTP 409 code `{}` does not establish tip progress",
-                    envelope.code()
-                ));
-            }
-            let mut details = envelope
-                .details
-                .ok_or_else(|| eyre!("finality tip progress omitted exact request bindings"))?;
-            let progress = details
-                .bridge_finality_attestation_tip_mismatch
-                .take()
-                .ok_or_else(|| eyre!("finality tip progress omitted exact request bindings"))?;
-            if !details.is_empty() {
-                return Err(eyre!(
-                    "finality tip progress carries conflicting error details"
-                ));
-            }
-            return Err(BridgeFinalityAttestationTipMismatch::from_response(
-                progress,
-                height,
+        if response.status() != StatusCode::OK {
+            let failure = Self::decode_finality_attestation_failure(
+                &response,
+                height.get(),
                 challenge,
                 expected_node,
                 self.network_id,
-            )?
-            .into());
+            )?;
+            if let Some(progress) = failure.tip_mismatch {
+                return Err(BridgeFinalityAttestationTipMismatch::from_response(
+                    progress,
+                    height,
+                    challenge,
+                    expected_node,
+                    self.network_id,
+                )?
+                .into());
+            }
+            return Err(eyre!(
+                "finality attestation unavailable: {}",
+                failure.reason.as_str()
+            ));
         }
         let attestation: iroha_data_model::bridge::BridgeFinalityAttestationV1 =
             Self::decode_canonical_norito_response(
@@ -163,8 +158,73 @@ impl Client {
         Ok(attestation)
     }
 
+    /// Decode the sole bounded failure schema with exact HTTP and request bindings.
+    fn decode_finality_attestation_failure(
+        response: &Response<Vec<u8>>,
+        height: u64,
+        challenge: [u8; 32],
+        expected_node: &iroha_model_base::peer::PeerId,
+        network_id: NetworkId,
+    ) -> Result<iroha_torii_shared::bridge_attestation::FinalityAttestationFailure> {
+        use iroha_torii_shared::bridge_attestation::{
+            FINALITY_ATTESTATION_FAILURE_CODE, FINALITY_ATTESTATION_FAILURE_MAX_BYTES,
+        };
+        let status = response.status();
+        if !matches!(
+            status,
+            StatusCode::CONFLICT
+                | StatusCode::SERVICE_UNAVAILABLE
+                | StatusCode::INTERNAL_SERVER_ERROR
+        ) {
+            return Err(eyre!(
+                "unexpected finality attestation HTTP status {status}"
+            ));
+        }
+        let content_type = exact_single_response_header(response, "content-type")?;
+        if !content_type.eq_ignore_ascii_case(APPLICATION_NORITO) {
+            return Err(eyre!(
+                "finality failure requires exact application/x-norito"
+            ));
+        }
+        let bytes = Self::bounded_norito_response_body(
+            response,
+            status,
+            FINALITY_ATTESTATION_FAILURE_MAX_BYTES,
+            "Failed to get finality attestation",
+        )?;
+        let envelope: iroha_torii_shared::ErrorEnvelope = norito::decode_canonical_with_limits(
+            bytes,
+            norito::canonical_decode_limits(bytes.len()),
+        )
+        .wrap_err("failed to decode canonical finality failure envelope")?;
+        if envelope.code() != FINALITY_ATTESTATION_FAILURE_CODE {
+            return Err(eyre!(
+                "finality error code does not establish a typed observation"
+            ));
+        }
+        let mut details = envelope
+            .details
+            .ok_or_else(|| eyre!("finality failure omitted its detail"))?;
+        let failure = details
+            .finality_attestation_failure
+            .take()
+            .ok_or_else(|| eyre!("finality failure omitted its exact request bindings"))?;
+        if !details.is_empty() {
+            return Err(eyre!("finality failure carries conflicting error details"));
+        }
+        if failure.reason.http_status_code() != status.as_u16()
+            || !failure.matches(height, challenge, expected_node, network_id)
+        {
+            return Err(eyre!(
+                "finality failure differs from exact request/status bindings"
+            ));
+        }
+        Ok(failure)
+    }
+
     fn bounded_norito_response_body<'a>(
         response: &'a Response<Vec<u8>>,
+        expected_status: StatusCode,
         maximum: usize,
         context: &'static str,
     ) -> Result<&'a [u8]> {
@@ -173,7 +233,7 @@ impl Client {
                 "{context}: response exceeds the {maximum}-byte limit"
             ));
         }
-        if response.status() != StatusCode::OK {
+        if response.status() != expected_status {
             return Err(ResponseReport::with_msg(context, response)
                 .unwrap_or_else(core::convert::identity)
                 .into());
@@ -210,7 +270,7 @@ impl Client {
         T: norito::core::NoritoSerialize,
         for<'de> T: norito::core::NoritoDeserialize<'de>,
     {
-        let body = Self::bounded_norito_response_body(response, maximum, context)?;
+        let body = Self::bounded_norito_response_body(response, StatusCode::OK, maximum, context)?;
         norito::decode_canonical_with_limits(body, norito::canonical_decode_limits(body.len()))
             .map_err(|error| eyre!("{context}: failed to decode canonical Norito payload: {error}"))
     }
@@ -331,6 +391,7 @@ impl Client {
         )?;
         let body = Self::bounded_norito_response_body(
             &response,
+            StatusCode::OK,
             AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
             "Failed to get canonical executed block wire",
         )?;
@@ -419,6 +480,134 @@ impl Client {
             ));
         }
         Ok(proof)
+    }
+
+    fn ensure_genesis_readiness_deadline(deadline: std::time::Instant) -> Result<()> {
+        if std::time::Instant::now() >= deadline {
+            return Err(eyre!("genesis readiness deadline elapsed"));
+        }
+        Ok(())
+    }
+
+    /// Poll once for a fresh node statement whose exact durable tip is the original genesis.
+    ///
+    /// Only `Ready` authenticates readiness. `NotReady` is an unsigned bounded observation;
+    /// only the explicit uninitialized/uncommitted reasons permit retries under a caller-owned
+    /// deadline. Restart, wrong tip, conflicting state and absent evidence never mean pending.
+    /// Unknown statuses, malformed/oversized errors and transport failures return errors.
+    /// The absolute deadline bounds compatibility waiting and all HTTP requests together;
+    /// it can only shorten a deadline already attached to this client. Results completing
+    /// after it expire. The caller must separately bound CPU work in its process owner.
+    ///
+    /// All expected identities must come from independently retained generated inputs. The
+    /// caller supplies a fresh unpredictable nonzero challenge and the original role's consensus
+    /// key. This checks that node's signature and the complete genesis certificate under the
+    /// original context; it never selects an anchor from the response. A node already beyond
+    /// height one is rejected. The reducer's active height may be greater than one.
+    ///
+    /// The canonical response is capped at 16 MiB and decoded under the existing cumulative
+    /// Norito limits. The caller still owns the overall retry deadline and original input/process
+    /// custody. This statement does not prove runtime-provider readiness or future progress.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before any request for a zero challenge, a non-BLS expected node key,
+    /// or inconsistent client/network/genesis expectations. Transport, canonical framing,
+    /// independent identity binding, tip, node signature or anchored finality failures also fail.
+    pub fn poll_genesis_finality_attestation(
+        &self,
+        challenge: [u8; 32],
+        expected_peer: &iroha_model_base::peer::PeerId,
+        expected_network_id: NetworkId,
+        expected_genesis_hash: HashOf<BlockHeader>,
+        expected_context_id: iroha_data_model::block::consensus_v2::HeightContextId,
+        deadline: std::time::Instant,
+    ) -> Result<GenesisFinalityReadiness> {
+        if challenge.iter().all(|byte| *byte == 0) {
+            return Err(eyre!("genesis finality challenge must be non-zero"));
+        }
+        if !matches!(
+            expected_peer.public_key().try_algorithm(),
+            Ok(iroha_crypto::Algorithm::BlsNormal)
+        ) {
+            return Err(eyre!("expected genesis node key must be BLS-normal"));
+        }
+        if expected_network_id != self.network_id
+            || expected_network_id.as_genesis_hash() != &expected_genesis_hash
+        {
+            return Err(eyre!("inconsistent client/network/genesis expectations"));
+        }
+        let deadline = self
+            .http_transport
+            .deadline()
+            .map_or(deadline, |existing| existing.min(deadline));
+        Self::ensure_genesis_readiness_deadline(deadline)?;
+        let client = self.with_request_deadline(deadline);
+        norito::with_decode_limits_scope(
+            norito::canonical_decode_limits(GENESIS_FINALITY_ATTESTATION_RESPONSE_MAX_BYTES),
+            || {
+                client.ensure_data_model_compatibility()?;
+                let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
+                    .path()
+                    .replace("{height}", "1");
+                let response = client.send_builder(
+                    client
+                        .canonical_norito_get_request(
+                            &path,
+                            GENESIS_FINALITY_ATTESTATION_RESPONSE_MAX_BYTES,
+                        )
+                        .replace_header(GENESIS_FINALITY_CHALLENGE_HEADER, &hex::encode(challenge)),
+                )?;
+                Self::ensure_genesis_readiness_deadline(deadline)?;
+                if response.status() != StatusCode::OK {
+                    let failure = Self::decode_finality_attestation_failure(
+                        &response,
+                        1,
+                        challenge,
+                        expected_peer,
+                        expected_network_id,
+                    )?;
+                    Self::ensure_genesis_readiness_deadline(deadline)?;
+                    return Ok(GenesisFinalityReadiness::NotReady(failure.reason));
+                }
+                let attestation: BridgeFinalityAttestationV1 =
+                    Self::decode_canonical_norito_response(
+                        &response,
+                        GENESIS_FINALITY_ATTESTATION_RESPONSE_MAX_BYTES,
+                        "Failed to get genesis finality attestation",
+                    )?;
+                let body = &attestation.body;
+                if body.challenge != challenge {
+                    return Err(eyre!("genesis attestation challenge mismatch"));
+                }
+                if &body.node_id != expected_peer {
+                    return Err(eyre!("genesis attestation node mismatch"));
+                }
+                if body.network_id != expected_network_id
+                    || body.genesis_block_hash != expected_genesis_hash
+                {
+                    return Err(eyre!("genesis attestation network/genesis mismatch"));
+                }
+                if body.finality_proof.finality_artifact.height != 1
+                    || body.status.last_committed_height != 1
+                    || body.genesis_finality_proof != body.finality_proof
+                {
+                    return Err(eyre!(
+                        "genesis attestation is not the exact height-one durable tip"
+                    ));
+                }
+                attestation
+                    .verify()
+                    .map_err(|error| eyre!("genesis attestation verification failed: {error}"))?;
+                let mut verifier =
+                    BridgeFinalityVerifier::with_context(expected_network_id, expected_context_id);
+                verifier
+                    .verify(&body.genesis_finality_proof)
+                    .map_err(|error| eyre!("genesis finality verification failed: {error}"))?;
+                Self::ensure_genesis_readiness_deadline(deadline)?;
+                Ok(GenesisFinalityReadiness::Ready(Box::new(attestation)))
+            },
+        )
     }
 
     /// Fetch and independently verify a bridge-finality checkpoint candidate.

@@ -8,6 +8,88 @@ from pathlib import Path
 from typing import Any
 
 from sumeragi_v2_multilane_geometry_evidence_contract import _code
+from sumeragi_v2_multilane_reviewed_rust_source import _mask_rust_comments
+
+
+# The retry and capacity gates share this physical deadline owner. Keep its
+# entire reviewed ledger tuple identical in both gates: neither may replace the
+# other's predicates when they bind the same production symbol.
+QUEUE_PLAN_PROXY_DEADLINE_BINDING = (
+    "crates/iroha_torii/src/lib.rs",
+    "fn",
+    "execute_incoming_torii_proxy_request_with_admission",
+    (
+        "let budget_observed_at = tokio::time::Instant::now();",
+        "validate_torii_proxy_deadline(proxy_request.deadline_unix_ms)",
+        ".checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)",
+        ".filter(|budget| !budget.is_zero())",
+        "return queue_plan_capacity_wait::deadline_response(&proxy_request.request, error);",
+        "let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);",
+        "let deadline = budget_observed_at + remaining_budget;",
+        "match tokio::time::timeout_at(\n"
+        "        deadline,\n"
+        "        execute_incoming_torii_proxy_request_with_admission_inner(\n"
+        "            app,\n"
+        "            proxy_request,\n"
+        "            immediate_sender_peer_id,\n"
+        "            pre_admitted_fanout,\n"
+        "            proxy_memory,\n"
+        "            deadline,\n"
+        "        ),\n"
+        "    )",
+    ),
+)
+
+
+# Both canonical checks around the capacity wait consume this exact deadline.
+QUEUE_PLAN_PROXY_CANONICAL_RESPONSE = (
+    "if let Some(response) = canonical_queue_plan_synced_response(\n"
+    "                app,\n"
+    "                &authenticated,\n"
+    "                &admission_binding,\n"
+    "                ingress_plan.coordinator_route(),\n"
+    "                proxy_memory.as_ref(),\n"
+    "                execution_deadline,\n"
+    "            ) {\n"
+    "                return response;\n"
+    "            }"
+)
+
+
+def validate_queue_plan_proxy_deadline_owner(item: str, errors: list[str]) -> None:
+    """Both gates retain one clock observation before validation and hashing."""
+    symbol = QUEUE_PLAN_PROXY_DEADLINE_BINDING[2]
+    code = _code(item)
+    cursor = 0
+    for relation in (
+        "let budget_observed_at = tokio::time::Instant::now();",
+        "validate_torii_proxy_deadline(",
+        "checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)",
+        ".filter(|budget| !budget.is_zero())",
+        "let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);",
+        "let deadline = budget_observed_at + remaining_budget;",
+        "timeout_at(",
+    ):
+        normalized = _code(relation)
+        found = code.find(normalized, cursor)
+        if found < 0:
+            errors.append(f"{symbol}: canonical QueuePlan deadline order changed: {relation!r}")
+            break
+        cursor = found + len(normalized)
+    observation = code.find(_code("let budget_observed_at = tokio::time::Instant::now();"))
+    for setup in ("let request_id = proxy_request.request_id.clone();", "let queue_plan_identity ="):
+        position = code.find(_code(setup))
+        if observation < 0 or position <= observation:
+            errors.append(f"{symbol}: canonical QueuePlan deadline order changed: {setup!r}")
+    # Retain whitespace for Rust identifier boundaries. Compact-token counting
+    # misses valid typed or mutable shadows that keep the original declaration.
+    masked = _mask_rust_comments(item)
+    for original in ("budget_observed_at", "absolute_budget", "remaining_budget", "deadline"):
+        declarations = re.findall(
+            rf"\blet\s+(?:(?:ref|mut)\s+)*(?:r#)?{original}\b", masked
+        )
+        if len(declarations) != 1:
+            errors.append(f"{symbol}: canonical QueuePlan deadline owner is rebound: {original}")
 
 
 def validate_queue_plan_autonomous_only_contract(
@@ -274,17 +356,23 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
      ('if context != &self.context',
       'match self.refresh_merge_candidates(view)',
       'let reserved_routes = self',
+      '.pending_autonomous_anchor_payloads',
+      '.map(|key| (key.lane_id, key.dataspace_id))',
       'let reserved_entrypoints = self',
-      '(candidate.transaction().entrypoint().admission_intent()',
+      '.flat_map(|payload| payload.entrypoint_hashes.iter().copied())',
+      'candidate.transaction().entrypoint().admission_intent()',
       '== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)',
       '.then_some(index)',
       'if !unavailable.is_empty()',
-      '"QueuePlanSynced work requires its globally admitted autonomous reservation"',
+      'QueuePlanSynced work requires its globally admitted autonomous reservation',
+      'let route_conflict = candidate.routing_plan().legs().iter().any(|leg| {',
       'reserved_routes.contains(&(leg.route.lane_id, leg.route.dataspace_id))',
       '(reserved_entrypoints.contains(&entrypoint) || route_conflict).then_some(index)',
-      '"ordinary work conflicts with an already-reserved autonomous lane slot"',
-      'let autonomous_lane_payloads = self',
-      'CandidateWorkUnavailable::new(')),
+      'ordinary work conflicts with an already-reserved autonomous lane slot',
+      'let overflow = lane_session_overflow_indices(',
+      'autonomous_lane_payloads.len(),',
+      'self.limits.session_capacity.get(),',
+      'ordinary lane routes exceed capacity after reserved autonomous work')),
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "method",
@@ -360,16 +448,20 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
       'match self.refresh_merge_candidates(view)',
       'let reserved_routes = self',
       'let reserved_entrypoints = self',
-      '(candidate.transaction().entrypoint().admission_intent()',
+      'candidate.transaction().entrypoint().admission_intent()',
       '== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)',
       '.then_some(index)',
       'if !unavailable.is_empty()',
-      '"QueuePlanSynced work requires its globally admitted autonomous reservation"',
+      'QueuePlanSynced work requires its globally admitted autonomous reservation',
+      'let route_conflict = candidate.routing_plan().legs().iter().any(|leg| {',
       'reserved_routes.contains(&(leg.route.lane_id, leg.route.dataspace_id))',
       '(reserved_entrypoints.contains(&entrypoint) || route_conflict).then_some(index)',
       'if !unavailable.is_empty()',
-      '"ordinary work conflicts with an already-reserved autonomous lane slot"',
-      'let autonomous_lane_payloads = self')),
+      'ordinary work conflicts with an already-reserved autonomous lane slot',
+      'let overflow = lane_session_overflow_indices(',
+      'if !overflow.is_empty()',
+      'ordinary lane routes exceed capacity after reserved autonomous work',
+      'let lane_plan = prepare_v2_lane_payload_plan(')),
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "method",
@@ -387,6 +479,20 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
 )
 
 QUEUE_PLAN_AUTONOMOUS_ONLY_TEST_BINDINGS = (
+    ('crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+     'candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced',
+     ('assert!(proposal_lookahead_enabled(',
+      '(LaneId::SINGLE, DataSpaceId::UNIVERSAL)',
+      '.expect("ordinary work cannot wait for an unavailable autonomous reservation")',
+      'assert_eq!(prepared.lane_payload_ownerships.len(), 1)',
+      'assert!(prepared.autonomous_lane_payloads.is_empty())',
+      '.expect_err("QueuePlanSynced cannot bypass its autonomous ownership corridor")',
+      'assert_eq!(unavailable.indices(), &BTreeSet::from([0]))')),
+    ('crates/iroha_core/src/sumeragi/v2_lane_work_autonomous_ready_durability_tests.rs',
+     'repeated_non_empty_retries_never_make_queue_plan_synced_work_ordinary_eligible',
+     ('TransactionAdmissionIntent::QueuePlanSynced',
+      '.expect_err("autonomous route must remain unavailable to ordinary execution")',
+      'QueuePlanSynced work requires its globally admitted autonomous reservation')),
     (
         "crates/iroha_core/src/sumeragi/v2_candidate.rs",
         "queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding",
@@ -2492,16 +2598,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
  '                &ingress_plan,\n'
  '            )',
  '.route_plan_with_state(&accepted_tx, app.state.as_ref())',
- 'if let Some(response) = canonical_queue_plan_synced_response(\n'
- '                app,\n'
- '                &authenticated,\n'
- '                &admission_binding,\n'
- '                ingress_plan.coordinator_route(),\n'
- '                proxy_memory.as_ref(),\n'
- '                execution_deadline,\n'
- '            ) {\n'
- '                return response;\n'
- '            }',
+ QUEUE_PLAN_PROXY_CANONICAL_RESPONSE,
  'execution_deadline: tokio::time::Instant',
  'let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint(',
  'authenticated.entrypoint_hash()')),
@@ -2609,24 +2706,7 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    'kura.max_total_elements()\n                .checked_add(one_elements.checked_mul(2)?)?',
    'kura.max_total_allocated_bytes()\n'
    '                .checked_add(one_allocated.checked_mul(2)?)?')),
- ('crates/iroha_torii/src/lib.rs',
-  'fn',
-  'execute_incoming_torii_proxy_request_with_admission',
-  ('validate_torii_proxy_deadline(proxy_request.deadline_unix_ms)',
-   '.checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)',
-   'let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);',
-   'let deadline = tokio::time::Instant::now() + remaining_budget;',
-   'match tokio::time::timeout_at(\n'
-   '        deadline,\n'
-   '        execute_incoming_torii_proxy_request_with_admission_inner(\n'
-   '            app,\n'
-   '            proxy_request,\n'
-   '            immediate_sender_peer_id,\n'
-   '            pre_admitted_fanout,\n'
-   '            proxy_memory,\n'
-   '            deadline,\n'
-   '        ),\n'
-   '    )')),
+ QUEUE_PLAN_PROXY_DEADLINE_BINDING,
  ('crates/iroha_torii/src/queue_plan_retry_authentication.rs',
   'struct',
   'AuthenticatedQueuePlanRetry',
@@ -2778,11 +2858,16 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
     ordered("execute_incoming_torii_proxy_request_with_admission_inner",
             "AuthenticatedQueuePlanRetry::from_entrypoint(",
             "if admission_binding.request_id != request_head.request_id", "if admission_binding.request_id != canonical_request_id",
-            "validate_queue_plan_binding_for_request(", "canonical_queue_plan_synced_response(",
-            "return response;", "queue_plan_service_input_capacity_error(",
-            "canonical_queue_plan_synced_response(", "let accepted_tx = match routing::accept_transaction_for_ingress(",
+            "validate_queue_plan_binding_for_request(", QUEUE_PLAN_PROXY_CANONICAL_RESPONSE,
+            "queue_plan_service_input_capacity_error(", QUEUE_PLAN_PROXY_CANONICAL_RESPONSE,
+            "let accepted_tx = match routing::accept_transaction_for_ingress(",
             ".route_plan_with_state(",
             "push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(")
+    inner = code_items.get("execute_incoming_torii_proxy_request_with_admission_inner", "")
+    if (inner.count("canonical_queue_plan_synced_response(") != 2
+            or inner.count(_code(QUEUE_PLAN_PROXY_CANONICAL_RESPONSE)) != 2):
+        errors.append("execute_incoming_torii_proxy_request_with_admission_inner: "
+                      "canonical QueuePlan retry must retain both original deadline handoffs")
     ordered("AuthenticatedQueuePlanRetry::from_signed", "Self::check_network(network_id, signed)?;",
             "signed.verify_signature()", "Ok(Some(Self {")
     ordered("AuthenticatedQueuePlanRetry::from_entrypoint", "Self::from_signed(network_id, signed)?",
@@ -2827,10 +2912,9 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
             "validate_v2_finality_record_at(", "retained_block_record_at_without_live_body(",
             "validate_v2_finality_wire_bindings(", "verify_v2_finality_artifact_at(",
             "drop(read_identity);", "read_block_body_under_prune_and_canonical_guards(height)")
-    ordered("execute_incoming_torii_proxy_request_with_admission",
-            "validate_torii_proxy_deadline(", "checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)",
-            "let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);",
-            "let deadline = tokio::time::Instant::now() + remaining_budget;", "timeout_at(")
+    validate_queue_plan_proxy_deadline_owner(
+        items.get(QUEUE_PLAN_PROXY_DEADLINE_BINDING[:3], ""), errors
+    )
 
 
 # Replay-terminal cleanup retains canonical evidence on the original claim.

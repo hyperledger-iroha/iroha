@@ -7,6 +7,10 @@ from pathlib import Path
 import re
 from sumeragi_v2_multilane_reviewed_rust_source import _mask_rust_comments
 from sumeragi_v2_multilane_geometry_evidence_contract import _code
+from sumeragi_v2_multilane_queue_plan_contract import (
+    QUEUE_PLAN_PROXY_DEADLINE_BINDING,
+    validate_queue_plan_proxy_deadline_owner,
+)
 
 MODEL = "SumeragiV2QueuePlanAdmissionRegistry"
 CAPACITY = "crates/iroha_core/src/sumeragi/admission_capacity.rs"
@@ -233,11 +237,7 @@ BINDINGS = (
 )
 
 BINDINGS += (
-    (TORII, "fn", "execute_incoming_torii_proxy_request_with_admission", (
-        "let budget_observed_at = tokio::time::Instant::now()",
-        "queue_plan_capacity_wait::deadline_response(&proxy_request.request, error)",
-        "let deadline = budget_observed_at + remaining_budget",
-    )),
+    QUEUE_PLAN_PROXY_DEADLINE_BINDING,
     ("crates/iroha_torii/src/queue_plan_capacity_wait.rs", "fn", "deadline_response", (
         "admission: super::ToriiProxyTransactionAdmissionV1::QueuePlanSynced",
         'super::queue_plan_outcome_unknown_response(\n            transaction.hash(),\n            super::signed_transaction_hash_for_entrypoint(transaction),\n            reason,\n        )',
@@ -258,6 +258,19 @@ BINDINGS += (
         ".filter(|remaining| !remaining.is_zero())",
         "Ok(absolute.min(local))",
     )),
+)
+
+# Capacity admission and canonical retry share this exact production owner.
+from sumeragi_v2_multilane_queue_plan_contract import QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS
+
+_QUEUE_RETRY_OWNER = "execute_incoming_torii_proxy_request_with_admission"
+_QUEUE_RETRY_TOKENS = next(
+    tokens for path, kind, symbol, tokens in QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS
+    if (path, kind, symbol) == (TORII, "fn", _QUEUE_RETRY_OWNER)
+)
+BINDINGS = tuple(
+    (path, kind, symbol, _QUEUE_RETRY_TOKENS if symbol == _QUEUE_RETRY_OWNER else tokens)
+    for path, kind, symbol, tokens in BINDINGS
 )
 
 # Existing registry bindings retain this owner's full persistence obligations.
@@ -303,6 +316,8 @@ def validate_owners(root, models, errors, rust_binding_item):
         for token in tokens:
             if _code(token) not in items[symbol]:
                 errors.append(f"Admission capacity {symbol} missing relation {token!r}")
+        if (path, kind, symbol) == QUEUE_PLAN_PROXY_DEADLINE_BINDING[:3]:
+            validate_queue_plan_proxy_deadline_owner(raw, errors)
     for path, kind, symbol in EXTRA_ITEMS:
         raw = rust_binding_item(root, path, kind, symbol, "Admission capacity", errors)
         if raw is not None:

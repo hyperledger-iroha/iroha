@@ -1944,3 +1944,203 @@ fn historical_prepare_rejection_retains_exact_report_authority() {
         "historical rejection reporting still requires Prepare authority"
     );
 }
+
+#[test]
+fn live_decision_apply_pending_matches_the_complete_cold_fetch_lineage() {
+    let (context, keys) = authenticated_runtime_context();
+    // A Decision may name a future view before this reducer installs it.
+    for decision_view in [0, 3] {
+        let certificate = signed_runtime_quorum_certificate_for_phase_at_view(
+            &context,
+            &keys,
+            0x76,
+            wire::GlobalPhase::Commit,
+            decision_view,
+        );
+        let tag = EventTag::new(context.height, 0, Generation::new(9));
+        let apply = AdapterEffect::Apply {
+            tag,
+            subject: certificate.subject,
+            certificate: certificate.clone(),
+        };
+        let identity = LiveWalFrameIdentity::for_test(17, 18, [0x76; 32]);
+        let live = PendingRuntimeEffectBinding::from_exact_live_wal_decision_apply(
+            &identity, &apply, &context,
+        )
+        .expect("the exact Decision owns one deferred Apply");
+        let fetch = AdapterEffect::FetchBody {
+            tag,
+            round: certificate.proposal_round,
+            subject: certificate.subject,
+            manifest: None,
+            certified_sources: context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate.clone()),
+        };
+        let cold_fetch = PendingRuntimeEffectBinding::from_exact_recovered_wal_decision_fetch(
+            RecoveredWalDecisionFetchPendingMintPermit::new(),
+            RecoveredWalFrameIdentity::for_test(17, 18, [0x76; 32]),
+            &fetch,
+        )
+        .expect("the same recovered Decision owns its canonical Fetch");
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: certificate.proposal_round,
+            subject: certificate.subject,
+        };
+        let validate = AdapterEffect::ValidateBody {
+            tag,
+            round: certificate.proposal_round,
+            subject: certificate.subject,
+        };
+        let cold_store = cold_fetch
+            .project_certified_fetch_store_successor(&fetch, &store)
+            .expect("the actual cold Fetch derives Store");
+        let cold_validate = cold_store
+            .project_store_validate_successor(&store, &validate)
+            .expect("the actual cold Store derives Validate");
+        let cold_apply = cold_validate
+            .project_validate_apply_successor(&validate, &apply)
+            .expect("the actual cold Validate derives Apply");
+        let direct_cold_apply = cold_fetch
+            .project_decision_fetch_apply_source(&fetch, &apply)
+            .expect("the independent recovered Apply role retains the Fetch root");
+        assert_eq!(
+            live, cold_apply,
+            "live and cold Apply must have the same complete binding"
+        );
+        assert_eq!(live, direct_cold_apply);
+        assert_eq!(
+            live.causal_lifecycle_key(),
+            cold_fetch.causal_lifecycle_key()
+        );
+        assert!(live.exactly_binds_adapter_effect(&apply));
+
+        // Distinct genuine-shaped WAL origins must not collapse to one owner.
+        for other_frame in [
+            LiveWalFrameIdentity::for_test(18, 19, [0x76; 32]),
+            LiveWalFrameIdentity::for_test(17, 18, [0x77; 32]),
+        ] {
+            let other = PendingRuntimeEffectBinding::from_exact_live_wal_decision_apply(
+                &other_frame,
+                &apply,
+                &context,
+            )
+            .expect("a distinct exact frame derives a distinct owner");
+            assert_ne!(live.causal_lifecycle_key(), other.causal_lifecycle_key());
+        }
+        let changed_tag = EventTag::new(context.height, 0, Generation::new(10));
+        let changed_apply = AdapterEffect::Apply {
+            tag: changed_tag,
+            subject: certificate.subject,
+            certificate: certificate.clone(),
+        };
+        let changed = PendingRuntimeEffectBinding::from_exact_live_wal_decision_apply(
+            &identity,
+            &changed_apply,
+            &context,
+        )
+        .expect("a new generation is a distinct semantic occurrence");
+        assert_ne!(live.causal_lifecycle_key(), changed.causal_lifecycle_key());
+        assert!(
+            cold_fetch
+                .project_decision_fetch_apply_source(&fetch, &changed_apply)
+                .is_none()
+        );
+        let mut other_certificate = certificate;
+        other_certificate.aggregate_signature[0] ^= 1;
+        let foreign_apply = AdapterEffect::Apply {
+            tag,
+            subject: other_certificate.subject,
+            certificate: other_certificate,
+        };
+        assert!(
+            cold_fetch
+                .project_decision_fetch_apply_source(&fetch, &foreign_apply)
+                .is_none(),
+            "matching coordinates cannot substitute the complete retained CommitQC"
+        );
+    }
+}
+
+#[test]
+fn live_decision_apply_pending_rejects_wrong_frame_phase_context_height_and_subject() {
+    let (context, keys) = authenticated_runtime_context();
+    let certificate = signed_runtime_quorum_certificate(&context, &keys, 0x78);
+    let tag = EventTag::new(context.height, 0, Generation::new(9));
+    let apply = AdapterEffect::Apply {
+        tag,
+        subject: certificate.subject,
+        certificate: certificate.clone(),
+    };
+    for invalid in [
+        LiveWalFrameIdentity::for_test(17, 17, [0x78; 32]),
+        LiveWalFrameIdentity::for_test(u64::MAX, 0, [0x78; 32]),
+    ] {
+        assert!(
+            PendingRuntimeEffectBinding::from_exact_live_wal_decision_apply(
+                &invalid, &apply, &context,
+            )
+            .is_none()
+        );
+    }
+    let identity = LiveWalFrameIdentity::for_test(17, 18, [0x78; 32]);
+    let mut prepare = certificate.clone();
+    prepare.phase = wire::GlobalPhase::Prepare;
+    let mut wrong_round = certificate.clone();
+    wrong_round.round.height += 1;
+    let mut wrong_proposal = certificate.clone();
+    wrong_proposal.proposal_round.height += 1;
+    let mut foreign_context = context.clone();
+    foreign_context.epoch += 1;
+    let mut wrong_context = certificate.clone();
+    wrong_context.round.context_id = foreign_context.id();
+    let mut wrong_proposal_context = certificate.clone();
+    wrong_proposal_context.proposal_round.context_id = foreign_context.id();
+    for invalid in [
+        prepare,
+        wrong_round,
+        wrong_proposal,
+        wrong_context,
+        wrong_proposal_context,
+    ] {
+        let invalid = AdapterEffect::Apply {
+            tag,
+            subject: invalid.subject,
+            certificate: invalid,
+        };
+        assert!(
+            PendingRuntimeEffectBinding::from_exact_live_wal_decision_apply(
+                &identity, &invalid, &context,
+            )
+            .is_none()
+        );
+    }
+    let other = signed_runtime_quorum_certificate(&context, &keys, 0x79);
+    let invalid_subject = AdapterEffect::Apply {
+        tag,
+        subject: other.subject,
+        certificate: certificate.clone(),
+    };
+    let invalid_tag = AdapterEffect::Apply {
+        tag: EventTag::new(context.height + 1, 0, Generation::new(9)),
+        subject: certificate.subject,
+        certificate,
+    };
+    let not_apply = AdapterEffect::ValidateBody {
+        tag,
+        round: other.proposal_round,
+        subject: other.subject,
+    };
+    for invalid in [invalid_subject, invalid_tag, not_apply] {
+        assert!(
+            PendingRuntimeEffectBinding::from_exact_live_wal_decision_apply(
+                &identity, &invalid, &context,
+            )
+            .is_none()
+        );
+    }
+}

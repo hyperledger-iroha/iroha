@@ -3540,7 +3540,9 @@ pub(crate) struct V2ApplyService {
 }
 impl V2ApplyService {
     /// Borrow this service's original State/Queue pair for synchronous publication.
-    pub(crate) fn carrier_queue_source(&self) -> carrier_queue_retirement::OriginalCarrierQueue<'_> {
+    pub(crate) fn carrier_queue_source(
+        &self,
+    ) -> carrier_queue_retirement::OriginalCarrierQueue<'_> {
         carrier_queue_retirement::OriginalCarrierQueue::new(&self.state, &self.queue)
     }
 }

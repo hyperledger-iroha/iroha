@@ -303,7 +303,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
     grouped_record_lines = grouped_records.stdout.splitlines()
-    assert len(grouped_record_lines) == 895
+    assert len(grouped_record_lines) == 914
     diagnostics_records = _run_resolver(
         ROOT,
         "--suite",
@@ -311,7 +311,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert diagnostics_records.returncode == 0, diagnostics_records.stderr
-    assert len(diagnostics_records.stdout.splitlines()) == 899
+    assert len(diagnostics_records.stdout.splitlines()) == 918
     assert sum(
         line.startswith("ci/check_openapi_spec.sh\t")
         for line in grouped_record_lines
@@ -649,6 +649,29 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
         for path in paths
     }
     required_omissions_closed = {
+        "IrohaSwift/Sources/IrohaSwift/KagemushaReserveFinalityV1.swift",
+        "IrohaSwift/Sources/IrohaSwift/KagemushaTopUpSubmissionV1.swift",
+        "javascript/iroha_js/src/addressErrors.js",
+        "javascript/iroha_js/src/addressPrimitives.js",
+        "javascript/iroha_js/src/contractErrorTypes.js",
+        "javascript/iroha_js/src/contractManifestNormalizer.js",
+        "javascript/iroha_js/src/networkPrefix.js",
+        "javascript/iroha_js/src/noritoGameEngine.js",
+        "javascript/iroha_js/src/noritoGameInstructionCodecs.js",
+        "javascript/iroha_js/src/noritoGameRegistry.js",
+        "javascript/iroha_js/src/noritoGameResourceEngine.js",
+        "javascript/iroha_js/src/noritoRecordDecoder.js",
+        "javascript/iroha_js/src/noritoReplicationOrderValidator.js",
+        "javascript/iroha_js/src/public/kagemusha.js",
+        "javascript/iroha_js/src/sorafsAliasResponses.js",
+        "javascript/iroha_js/src/sorafsPinDetail.js",
+        "javascript/iroha_js/src/sorafsReplicationProfiles.js",
+        "javascript/iroha_js/src/sorafsReplicationResponses.js",
+        "javascript/iroha_js/src/validationThrow.js",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddressNative.kt",
+        "python/iroha_native/pyproject.toml",
+        "python/iroha_native/src/iroha_native/__init__.py",
+        "python/iroha_native/src/iroha_native/_loader.py",
         "python/iroha_torii_client/client_status_models.py",
         "python/iroha_torii_client/kaigi_relay_client.py",
         "python/iroha_torii_client/connect_session.py",
@@ -677,6 +700,8 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
         "SumeragiDiagnosticsJavaConsumerTest.java",
     }
     assert required_omissions_closed <= all_paths
+    assert "python/iroha_python/src/iroha_python/_native.py" not in all_paths
+    assert "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/CurveSupportConfig.kt" not in all_paths
     # Both source languages compile and execute against Kotlin's production SDK.
     assert not any(path.startswith("java/") for path in all_paths)
     for harness in module.EXPECTED_HARNESSES.values():

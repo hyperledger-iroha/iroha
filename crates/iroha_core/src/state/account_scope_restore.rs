@@ -153,11 +153,11 @@ pub(super) fn rebuild(world: &mut World) -> Result<(), String> {
         )
         .map_err(|error| format!("invalid predecessor account scope: {error}"))?;
         let mut touched: BTreeSet<_> = accounts.revert_map().keys().cloned().collect();
-        for (alias, prior) in aliases.revert_map() {
+        for (alias, prior) in aliases.revert_map().iter() {
             touched.extend(prior.iter().cloned());
             touched.extend(aliases.current().get(alias).cloned());
         }
-        for (uaid, prior) in bindings.revert_map() {
+        for (uaid, prior) in bindings.revert_map().iter() {
             for value in [prior.as_ref(), bindings.current().get(uaid)]
                 .into_iter()
                 .flatten()

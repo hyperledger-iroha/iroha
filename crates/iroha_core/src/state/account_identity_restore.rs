@@ -48,7 +48,7 @@ pub(super) fn rebuild(world: &mut World) -> Result<(), String> {
         let previous = derive(history.iter_before_block())?;
         let mut touched_uaids = BTreeSet::new();
         let mut touched_opaque = BTreeSet::new();
-        for (key, prior) in history.revert_map() {
+        for (key, prior) in history.revert_map().iter() {
             for value in [prior.as_ref(), history.current().get(key)]
                 .into_iter()
                 .flatten()

@@ -61,8 +61,10 @@ Attached abort releases the lock before private work destruction while retaining
 its base; construction unwind releases the poisoned lock before shell refunds.
 Commit publishes and unlocks before invoking cursor-charge destruction. This
 permits synchronous refund wakeups to reenter the original writer safely.
-The initial root Arc and native mutexes are outside the shell charge. The async
-linear cell shares the explicit writer-input contract below; it has no charged
+The initial synchronous root uses the same charged strong-only allocation as
+its reader. Both exact layouts are admitted before initial construction; owned
+writers retain that original root. Native mutex backing remains outside those
+charges. The async linear cell shares the explicit writer-input contract below; it has no charged
 shell path and is not enabled by Iroha's dependency features.
 
 Final B+tree destruction uses original child pointers and a fixed stack bounded
@@ -91,10 +93,9 @@ the former bound. The same cursor now carries its mode's funding and node charge
 tracking buffers own exact admitted backing storage and move intact into retired
 readers. Structural preflight refuses before node allocation when either buffer
 lacks room. Shared reads and original clone probes use immutable references;
-thread traits include the actual charges and writer provider. Public maps still
-select Untracked pending closed node/payload admission, initial control storage
-and MV undo funding. The private fixed-buffer constructor retains one narrow non-test
-dead-code expectation for that explicit unfinished integration.
+thread traits include the actual charges and writer provider. Fixed-buffer
+construction is now connected to closed public insertion; its temporary
+non-test dead-code expectation has been removed.
 
 
 Every node-owned key/value copy now requires an explicit `NodeCloning` policy
@@ -106,6 +107,37 @@ prepay each concrete nested allocation and retain its original owner in the
 returned payload until actual free. Slot transfers keep existing payload owners.
 Concrete regression payloads reject ordinary Clone and observe original nested
 allocation frees/refunds and partial-construction unwind. This supplies the
-engine boundary, not complete operation admission: shipped map types still use
-Untracked, and complete demand planning and actual MV payload policies remain
-required before enabling funded production edits.
+engine boundary. The same public map/read/snapshot/owned wrappers now carry a
+sealed mode: Untracked retains ordinary mutation; Prepaid<P> permits closed
+admitted insertion and immutable handoff/publication. Its allocation-free planner
+counts actual padded nodes, both fixed buffers, original shells and policy-declared
+nested copies, including separator candidates from every child minimum along the
+path. No second map engine or dynamic registry is introduced. Unused provider
+remainder returns before handoff; original allocated charges remain attached.
+A retained closed edit authenticates the original root/base, plans from the
+private tree, and retains the exact cursor and publication shell. It reserves
+replacement bookkeeping alongside the complete edit, grows geometrically only
+when needed, copies existing pointers and frees the old buffer before refund.
+Refusal returns the same successor/input before mutation. Panic aborts the whole
+private successor. The constructor admits exact initial node/root/reader storage;
+native mutex/runtime storage, actual model payload policies and MV undo/global
+State admission remain required before production cutover.
+
+An attached prepaid writer now lends exclusive nested checkpoints. Fresh private
+generation tags preserve parent nodes; the first buffer growth retains each
+original ancestor allocation. Apply transfers both saved buffers before dropping
+excess charges. Abort restores root/tag/length and original buffers, then pops
+each child-owned pointer before nonrecursive destruction. A cleanup guard drains
+remaining child nodes during unwind. No rollback reservation or allocation is
+needed, and Rust borrows prevent parent publication or reference escape while a
+child is live. A logical failed-edit flag prevents use after a caught mutation or
+cleanup panic, even before the physical mutex unwinds. Public commit and detach
+check this flag before consuming their original shells. The original writer and
+all checkpoint lifetimes must remain inside the original refund-deferral scope.
+
+Detached map owners expose borrowed ordered iteration directly from their retained
+cursor. The full-tree iterator tracks its remaining length through both forward
+and reverse consumption and implements `ExactSizeIterator`; its old size hint
+incorrectly kept the original length after consumption. Range iteration retains
+its separate conservative upper-bound contract. These operations support native
+Storage undo ownership without cloning a separate standard-map read image.

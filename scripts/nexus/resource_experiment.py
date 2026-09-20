@@ -1,26 +1,31 @@
-"""Ten-run resource replay under one retained physical bundle admission.
+"""Borrow ten resource replays from the original completed fixed experiment.
 
-The trusted launcher supplies expected process lifetimes, executable identity,
-timing, allocations and control hashes. This owner never learns those expected
-values from captures. Keep the context open through transaction, canonical lane
-and effect validation, then verify its final census before accepting the bundle.
+Only the originating FixedExperimentCustody creates and registers this reader.
+Original physical files, controls, deadlines and native proof authority remain
+with that owner. This borrower never creates a replacement bundle admission and
+retains no signed request body after a run joins its original native authority.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from fractions import Fraction
 import math
 import os
 from pathlib import Path
 import re
 
-from resource_bundle import (
-    MAX_ROOT_BYTES, MAX_ROOT_COMPONENTS, BudgetedBundle, ControlBinding,
+from resource_bundle import MAX_ROOT_BYTES, MAX_ROOT_COMPONENTS
+from resource_evidence_budget import (
+    PerRunResourceBudget, canonical_run_budget_bytes, parse_run_budget,
+    run_budget_inputs, select_run_budget,
 )
-from resource_evidence_budget import EvidenceBudget, select_run_budget
+from resource_process import ProcessIdentity
 from resource_replay import (
     CaptureReduction, ExpectedPeer, ReplayGeometry, ReplayResult, replay,
     validate_replay_scope,
+)
+from scaling_completed_authority import (
+    PublicRunProjection, ResourceSnapshot, _Freeze, _PUBLIC_RECORDS, _RESOURCE_FIELDS,
 )
 
 _RUNS = tuple((pair, variant) for pair in range(1, 6) for variant in ('one_lane', 'four_lane'))
@@ -28,7 +33,7 @@ _DIGEST = re.compile(r'[0-9a-f]{64}')
 
 
 class ExperimentError(ValueError):
-    """A bounded resource experiment has incomplete or inconsistent authority."""
+    """An original resource borrower failed; a fresh reader cannot rescue it."""
 
 
 def _require(condition, code):
@@ -36,14 +41,242 @@ def _require(condition, code):
         raise ExperimentError(code)
 
 
-@dataclass(frozen=True, slots=True)
-class RunReplayInput:
-    """One launcher-authenticated run scope, never derived from captured rows."""
+def _failure(error):
+    if isinstance(error, KeyboardInterrupt): raise KeyboardInterrupt() from None
+    if isinstance(error, SystemExit): raise SystemExit(1) from None
+    if isinstance(error, GeneratorExit): raise GeneratorExit() from None
+    raise ExperimentError('resource_experiment_failed') from None
 
+
+@dataclass(frozen=True, slots=True)
+class RunReplayScope:
+    """One exact original completed run, supplied only by its fixed owner."""
     pair_index: int
     variant: str
+    capture_directory: Path
+    journal_path: Path
+    journal_sha256: str
     peers: tuple[ExpectedPeer, ...]
     geometry: ReplayGeometry
+    allocation: PerRunResourceBudget
+
+
+@dataclass(frozen=True, slots=True)
+class RunResourceResult:
+    """Immutable resource reductions joined to the original native proof."""
+    pair_index: int
+    variant: str
+    resources: ResourceSnapshot
+    maxima: ResourceMaxima
+
+
+def _path(value):
+    _require(type(value) is type(Path('/')) and value.is_absolute()
+             and str(value) == os.path.abspath(value)
+             and len(os.fsencode(value)) <= MAX_ROOT_BYTES
+             and len(value.parts) - 1 <= MAX_ROOT_COMPONENTS, 'resource_path_invalid')
+    return str(value)
+
+
+def _same_public(value, expected):
+    """Compare only the exact bounded primitive tree of a trusted projection."""
+    if type(value) is not type(expected): return False
+    if type(expected) in (int, str, bytes): return value == expected
+    if isinstance(expected, tuple):
+        return len(value) == len(expected) and all(_same_public(a, b) for a, b in zip(value, expected, strict=True))
+    return False
+
+
+def _resource_snapshot(reduced):
+    _require(type(reduced) is ReplayResult and type(reduced.samples) is tuple
+             and len(reduced.samples) <= 100_000, 'resource_result_invalid')
+    freeze = _Freeze(0, len(reduced.samples), 1)
+    return ResourceSnapshot(*(freeze(getattr(reduced, name)) for name in _RESOURCE_FIELDS))
+
+
+class ResourceExperiment:
+    """Single-use borrower; completed native authority stays with its origin."""
+    def __init__(self, *args, **kwargs):
+        raise ExperimentError('completed_experiment_required')
+
+    @classmethod
+    def from_completed(cls, owner):
+        """Ask only the exact fixed owner to create and register its borrower."""
+        from scaling_experiment_custody import FixedExperimentCustody
+        value = None
+        try:
+            _require(cls is ResourceExperiment and type(owner) is FixedExperimentCustody,
+                     'completed_experiment_required')
+            value = owner._create_replay()
+            _require(type(value) is ResourceExperiment, 'original_borrower_required')
+            value._validate(('admitted',))
+            _require(value._owner is owner, 'original_borrower_required')
+            return value
+        except BaseException as error:
+            if type(owner) is FixedExperimentCustody:
+                try: owner._reject_replay(value, getattr(value, '_token', None))
+                except BaseException: pass
+            _failure(error)
+
+    def _initialize(self, owner, token, scopes):
+        """Pure internal initialization; only the owner can register this instance."""
+        from scaling_experiment_custody import FixedExperimentCustody
+        try:
+            _require(type(self) is ResourceExperiment and not hasattr(self, '_origin')
+                     and type(owner) is FixedExperimentCustody and type(token) is object,
+                     'original_borrower_required')
+            self._origin = (owner, token)
+            self._owner, self._token = owner, token
+            self._scopes = scopes
+            initial = self._scope_identity()
+            self._scopes = tuple(RunReplayScope(row.pair_index, row.variant,
+                Path(str(row.capture_directory)), Path(str(row.journal_path)), row.journal_sha256,
+                tuple(ExpectedPeer(peer.peer_id, ProcessIdentity(**{field.name: getattr(peer.identity, field.name)
+                    for field in fields(ProcessIdentity)})) for peer in row.peers),
+                ReplayGeometry(**{field.name: getattr(row.geometry, field.name) for field in fields(ReplayGeometry)}),
+                parse_run_budget(run_budget_inputs(row.allocation))) for row in scopes)
+            self._scope_pin = self._scope_identity()
+            _require(initial == self._scope_pin, 'resource_scope_changed')
+            self._phase, self._busy = 'admitted', False
+            self._results, self._results_pin = (), ()
+        except BaseException as error:
+            self._reject(error)
+
+    def _scope_identity(self):
+        """Pure bounded current scope values, for both borrower and origin guards."""
+        _require(type(self._scopes) is tuple and len(self._scopes) == 10
+                 and all(type(row) is RunReplayScope for row in self._scopes), 'exact_ten_run_scopes_required')
+        values = []
+        common = None
+        for index, row in enumerate(self._scopes):
+            pair, variant = _RUNS[index]
+            _require(type(row.pair_index) is int and type(row.variant) is str
+                     and (row.pair_index, row.variant) == (pair, variant), 'run_scope_order_invalid')
+            capture, journal = _path(row.capture_directory), _path(row.journal_path)
+            _require(type(row.journal_sha256) is str and _DIGEST.fullmatch(row.journal_sha256), 'journal_digest_invalid')
+            _require(type(row.allocation) is PerRunResourceBudget, 'resource_allocation_invalid')
+            validate_replay_scope(row.peers, row.geometry, expected_policy=row.allocation.policy, allocation=row.allocation)
+            _require((row.allocation.run.pair_index, row.allocation.run.variant) == (pair, variant), 'resource_allocation_invalid')
+            _require(row.capture_directory.parts[-3:] == ('resources', f'pair-{pair:02}', variant)
+                     and row.journal_path.parts[-4:] == ('runs', f'pair-{pair:02}', variant, 'collector.jsonl')
+                     and row.capture_directory.parents[2] == row.journal_path.parents[3], 'resource_fixed_paths_required')
+            peers = tuple((peer.peer_id, tuple(getattr(peer.identity, field.name) for field in fields(ProcessIdentity)))
+                          for peer in row.peers)
+            geometry = tuple(getattr(row.geometry, field.name) for field in fields(ReplayGeometry))
+            allocation = canonical_run_budget_bytes(row.allocation)
+            shared = (str(row.capture_directory.parents[2]), geometry, tuple(peer.peer_id for peer in row.peers),
+                      tuple(peer.identity.executable_sha256 for peer in row.peers),
+                      canonical_run_budget_bytes(select_run_budget(row.allocation.experiment, 1, 'one_lane')))
+            if common is None: common = shared
+            _require(shared == common and len(set(shared[3])) == 1, 'experiment_scope_mismatch')
+            values.append((pair, variant, capture, journal, row.journal_sha256, peers, geometry, allocation))
+        return tuple(values)
+
+    def _validate(self, phases):
+        _require(type(self) is ResourceExperiment and self._owner is self._origin[0]
+                 and self._token is self._origin[1] and type(self._token) is object
+                 and type(self._phase) is str and self._phase in phases
+                 and self._scope_identity() == self._scope_pin,
+                 'resource_borrower_invalid')
+        if self._phase in ('finishing', 'complete'):
+            _require(type(self._results_pin) is tuple and len(self._results_pin) == 10
+                     and self._result_identity() == self._results_pin, 'resource_results_changed')
+        else:
+            _require(type(self._results) is tuple and self._results == ()
+                     and type(self._results_pin) is tuple and self._results_pin == (),
+                     'resource_results_changed')
+
+    def _result_identity(self):
+        _require(type(self._results) is tuple and len(self._results) == 10, 'resource_replay_incomplete')
+        values = []
+        for index, row in enumerate(self._results):
+            _require(type(row) is RunResourceResult and type(row.pair_index) is int
+                     and type(row.variant) is str and (row.pair_index, row.variant) == _RUNS[index]
+                     and type(row.resources) is ResourceSnapshot and type(row.maxima) is ResourceMaxima,
+                     'resource_result_invalid')
+            maxima = tuple(getattr(row.maxima, field.name) for field in fields(ResourceMaxima))
+            _require(all(type(value) is int and 0 <= value < 1 << 128 for value in maxima), 'resource_result_invalid')
+            if self._results_pin:
+                _require(_same_public(row.resources, self._results_pin[index][2]), 'resource_results_changed')
+            values.append((row.pair_index, row.variant, row.resources, maxima))
+        return tuple(values)
+
+    def _reject(self, error):
+        self._phase, self._busy = 'failed', False
+        self._results, self._results_pin = (), ()
+        origin = getattr(self, '_origin', None)
+        if origin is not None and not getattr(self, '_rejecting', False):
+            self._rejecting = True
+            try: origin[0]._reject_replay(self, origin[1])
+            except BaseException: pass
+            finally: self._rejecting = False
+        self._phase, self._busy = 'failed', False
+        self._results, self._results_pin = (), ()
+        _failure(error)
+
+    def collect_replay(self) -> tuple[RunResourceResult, ...]:
+        """Replay each original scope and discard bodies after its native join."""
+        reduced = projected = None
+        try:
+            self._validate(('admitted',)); _require(not self._busy, 'resource_replay_reentrant')
+            self._phase, self._busy = 'replaying', True
+            self._owner._replay_before(self, self._token)
+            results = []
+            for index, row in enumerate(self._scopes):
+                self._validate(('replaying',)); _require(self._busy, 'resource_replay_reentrant')
+                reduced = replay(row.capture_directory, row.journal_path, row.journal_sha256,
+                                 row.peers, row.geometry, expected_policy=row.allocation.policy, allocation=row.allocation)
+                resources = _resource_snapshot(reduced)
+                maxima = _maxima((reduced.preflight, *(item.capture for item in reduced.samples)))
+                projected = self._owner._replay_accept(self, self._token, index, reduced)
+                _require(type(projected) is PublicRunProjection and type(projected.pair_index) is int
+                         and type(projected.variant) is str and (projected.pair_index, projected.variant) == (row.pair_index, row.variant)
+                         and type(projected.budget) is bytes and projected.budget == self._scope_pin[index][7]
+                         and _same_public(projected.geometry, _PUBLIC_RECORDS[ReplayGeometry](*self._scope_pin[index][6]))
+                         and _same_public(projected.resources, resources), 'resource_authority_join_invalid')
+                self._validate(('replaying',)); _require(self._busy, 'resource_replay_reentrant')
+                results.append(RunResourceResult(row.pair_index, row.variant, projected.resources, maxima))
+                reduced = projected = None
+            self._results = tuple(results)
+            self._results_pin = self._result_identity()
+            self._phase = 'finishing'
+            self._owner._replay_finish(self, self._token, self._results)
+            self._validate(('finishing',)); _require(self._busy, 'resource_replay_reentrant')
+            self._phase, self._busy = 'complete', False
+            return self._results
+        except BaseException as error:
+            reduced = projected = None
+            self._reject(error)
+
+    def verify(self) -> tuple[RunResourceResult, ...]:
+        """Verify through the same original experiment; never reopen a bundle."""
+        try:
+            self._validate(('complete',)); _require(not self._busy, 'resource_replay_reentrant')
+            self._busy = True
+            self._owner._verify_replay(self, self._token)
+            self._validate(('complete',)); _require(self._busy, 'resource_replay_reentrant')
+            self._busy = False
+            return self._results
+        except BaseException as error: self._reject(error)
+
+    def close(self):
+        """Release this borrower once; close none of the original FD owners."""
+        if getattr(self, '_phase', None) == 'closed': return
+        try:
+            self._validate(('admitted', 'complete')); _require(not self._busy, 'resource_replay_reentrant')
+            self._busy = True
+            self._owner._release_replay(self, self._token)
+            self._validate(('admitted', 'complete')); _require(self._busy, 'resource_replay_reentrant')
+            self._phase, self._busy = 'closed', False
+        except BaseException as error: self._reject(error)
+
+    def __enter__(self):
+        try: self._validate(('admitted', 'complete')); return self
+        except BaseException as error: self._reject(error)
+
+    def __exit__(self, kind, error, traceback):
+        if error is not None: self._reject(error)
+        self.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,16 +287,6 @@ class ResourceMaxima:
     index_entries_max: int
     memory_bytes_max: int
     disk_bytes_max: int
-
-
-@dataclass(frozen=True, slots=True)
-class RunResourceResult:
-    """Independently reduced raw observations for one exact pair and variant."""
-
-    pair_index: int
-    variant: str
-    replay: ReplayResult
-    maxima: ResourceMaxima
 
 
 def _maxima(captures: tuple[CaptureReduction, ...]) -> ResourceMaxima:
@@ -86,172 +309,9 @@ def interval_maxima(result: RunResourceResult, start_ns: int, end_ns: int) -> Re
     _require(type(result) is RunResourceResult and type(start_ns) is int
              and type(end_ns) is int and 0 <= start_ns < end_ns < 1 << 63,
              'resource_window_invalid')
-    captures = tuple(row.capture for row in result.replay.samples
+    captures = tuple(row.capture for row in result.resources.samples
                      if row.start_offset_ns <= end_ns and row.end_offset_ns >= start_ns)
     return _maxima(captures)
-
-
-class ResourceExperiment:
-    """Bracket all ten resource replays and the caller's other semantic checks.
-
-    Successful resource replay establishes neither useful lane execution nor
-    throughput. Callers must still verify those authorities before ``verify``.
-    Failed or repeated replay cannot be promoted by finishing the physical scan.
-    """
-
-    def __init__(self, root: Path, budget: EvidenceBudget,
-                 controls: tuple[ControlBinding, ...], runs: tuple[RunReplayInput, ...], *,
-                 expected_executable_sha256: str, reported: bool):
-        self._root = root
-        self._budget = budget
-        self._controls = controls
-        self._runs = runs
-        self._expected_executable_sha256 = expected_executable_sha256
-        self._reported = reported
-        self._attempted = False
-        self._failed = False
-        self._results = ()
-        self._closed = False
-        self._bundle = None
-        self._scope_pin = self._scope_identity()
-        self._bundle = BudgetedBundle(root, budget, controls, reported=reported)
-
-    def _scope_identity(self):
-        _require(type(self._root) is type(Path('/')) and self._root.is_absolute()
-                 and str(self._root) == os.path.abspath(self._root)
-                 and len(os.fsencode(self._root)) <= MAX_ROOT_BYTES
-                 and len(self._root.parts) - 1 <= MAX_ROOT_COMPONENTS, 'root_scope_invalid')
-        _require(type(self._reported) is bool and type(self._controls) is tuple
-                 and len(self._controls) <= 256
-                 and all(type(item) is ControlBinding for item in self._controls), 'control_scope_invalid')
-        for item in self._controls:
-            item.__post_init__()
-        _require(type(self._expected_executable_sha256) is str
-                 and _DIGEST.fullmatch(self._expected_executable_sha256), 'executable_digest_invalid')
-        _require(type(self._runs) is tuple and len(self._runs) == 10
-                 and all(type(row) is RunReplayInput for row in self._runs), 'exact_ten_run_scopes_required')
-        _require(tuple((row.pair_index, row.variant) for row in self._runs) == _RUNS,
-                 'run_scope_order_invalid')
-        first = None
-        peer_labels = None
-        for row in self._runs:
-            allocation = select_run_budget(self._budget, row.pair_index, row.variant)
-            validate_replay_scope(row.peers, row.geometry,
-                                  expected_policy=allocation.policy, allocation=allocation)
-            labels = tuple(peer.peer_id for peer in row.peers)
-            _require(all(peer.identity.executable_sha256 == self._expected_executable_sha256
-                         for peer in row.peers), 'run_executable_scope_mismatch')
-            if first is None:
-                first, peer_labels = row.geometry, labels
-            else:
-                _require(row.geometry == first and labels == peer_labels, 'experiment_scope_mismatch')
-        # Scope objects are type/size checked above before their immutable pin.
-        # Budget/control/root pins are independently retained by BudgetedBundle.
-        return repr((self._runs, self._expected_executable_sha256, allocation.experiment,
-                     self._controls, self._reported, str(self._root)))
-
-    def _validate_scope(self):
-        _require(not self._closed, 'experiment_closed')
-        _require(not self._failed, 'experiment_failed')
-        _require(self._scope_identity() == self._scope_pin, 'experiment_scope_changed')
-
-    def collect_replay(self) -> tuple[RunResourceResult, ...]:
-        """Recompute every raw resource observation under its own expected lifetime."""
-        try:
-            self._validate_scope()
-            _require(not self._attempted, 'resource_replay_already_attempted')
-            self._attempted = True
-            by_label = {item.label: item for item in self._controls}
-            results = []
-            for row in self._runs:
-                self._validate_scope()
-                allocation = select_run_budget(self._budget, row.pair_index, row.variant)
-                journal = by_label[allocation.journal.label]
-                captures = self._root / 'resources' / f'pair-{row.pair_index:02}' / row.variant
-                reduced = replay(captures, self._root / journal.path, journal.sha256,
-                                 row.peers, row.geometry, expected_policy=allocation.policy,
-                                 allocation=allocation)
-                maxima = _maxima((reduced.preflight, *(item.capture for item in reduced.samples)))
-                results.append(RunResourceResult(row.pair_index, row.variant, reduced, maxima))
-            self._validate_scope()
-            self._results = tuple(results)
-            return self._results
-        except BaseException:
-            # A caught error or interrupted replay cannot later publish a prefix
-            # or previously successful result through a fresh physical scan.
-            self._failed = True
-            self._results = ()
-            raise
-
-    def verify(self) -> tuple[RunResourceResult, ...]:
-        """Require ten successful replays and reject physical or scope changes.
-
-        Any failed check permanently invalidates this context. A caller must
-        open a new context and repeat all semantic checks after repairing input.
-        """
-        try:
-            self._validate_scope()
-            _require(len(self._results) == 10, 'resource_replay_incomplete')
-            self._bundle.verify()
-            self._validate_scope()
-            return self._results
-        except BaseException:
-            self._failed = True
-            self._results = ()
-            raise
-
-    def reconcile_run(self, pair_index: int, variant: str, raw: dict,
-                      budgets: dict) -> ResourceMaxima:
-        """Reconcile one report inside its originating retained experiment scope.
-
-        Geometry and replay results come only from this context. Any rejection
-        permanently poisons the context, including a caught or interrupted check.
-        Reconciliation must precede final verification and context closure.
-        """
-        try:
-            self._validate_scope()
-            _require(len(self._results) == 10, 'resource_replay_incomplete')
-            select_run_budget(self._budget, pair_index, variant)
-            index = _RUNS.index((pair_index, variant))
-            value = _reconcile_run_resources(self._results[index], self._runs[index].geometry,
-                                             raw, budgets)
-            self._validate_scope()
-            return value
-        except BaseException:
-            self._failed = True
-            self._results = ()
-            raise
-
-    def read_control(self, binding: ControlBinding, *, max_bytes: int) -> bytes:
-        """Read one admitted control while retaining the full experiment scope.
-
-        The semantic parser supplies its independent byte cap. The exact
-        original binding and physical identities are enforced by the retained
-        bundle reader; failures invalidate every prior replay result.
-        """
-        try:
-            self._validate_scope()
-            value = self._bundle.read_control(binding, max_bytes=max_bytes)
-            self._validate_scope()
-            return value
-        except BaseException:
-            self._failed = True
-            self._results = ()
-            raise
-
-
-    def close(self):
-        """Release only retained reader descriptors; preserve every evidence file."""
-        if not self._closed:
-            self._closed = True
-            if self._bundle is not None:
-                self._bundle.close()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        self.close()
 
 
 def _report_offset_ns(value):
@@ -279,8 +339,8 @@ def _reconcile_run_resources(result: RunResourceResult, geometry: ReplayGeometry
                              raw: dict, budgets: dict) -> ResourceMaxima:
     """Require report values to equal actual all-peer capture reductions.
 
-    Internal reduction for ``ResourceExperiment.reconcile_run``, which owns the
-    exact geometry and result. It does not replace canonical routing, transaction
+    Pure reduction for the originating experiment report owner, which supplies
+    the exact retained geometry and joined immutable resource result. It does not replace canonical routing, transaction
     or effect validation. A summary never substitutes for raw observations.
 
     Measurement and drain intervals use inclusive capture-bracket overlap. Both
@@ -299,21 +359,21 @@ def _reconcile_run_resources(result: RunResourceResult, geometry: ReplayGeometry
     _require(all(value > 0 for value in (limits.queue_depth_max, limits.index_entries_max,
                                         limits.memory_bytes_max, limits.disk_bytes_max)),
              'resource_budget_invalid')
-    _require(type(result.replay) is ReplayResult and type(result.replay.samples) is tuple
-             and len(result.replay.samples) == geometry.samples, 'resource_replay_geometry_mismatch')
-    _require(tuple(row.scheduled_offset_ns for row in result.replay.samples)
+    _require(type(result.resources) is ResourceSnapshot and type(result.resources.samples) is tuple
+             and len(result.resources.samples) == geometry.samples, 'resource_replay_geometry_mismatch')
+    _require(tuple(row.scheduled_offset_ns for row in result.resources.samples)
              == tuple(index * geometry.interval_ns for index in range(geometry.samples)),
              'resource_replay_geometry_mismatch')
     # Replay already enforces these bounds. Recheck the geometry used by the
     # cursor so no malformed internal bracket can cause overlapping full scans.
-    for row in result.replay.samples:
+    for row in result.resources.samples:
         _require(row.scheduled_offset_ns <= row.start_offset_ns
                  <= row.scheduled_offset_ns + geometry.max_start_lag_ns
                  and row.start_offset_ns <= row.end_offset_ns
                  < row.start_offset_ns + geometry.response_deadline_ns,
                  'resource_replay_bracket_invalid')
     cursor = 0
-    samples = result.replay.samples
+    samples = result.resources.samples
     for phase, begin, finish in (
             (raw, 0, geometry.measurement_ns),
             (raw.get('drain'), geometry.measurement_ns, geometry.final)):
@@ -351,7 +411,7 @@ def _reconcile_run_resources(result: RunResourceResult, geometry: ReplayGeometry
         _require(previous == finish, 'resource_report_phase_incomplete')
         _require(_reported_maxima(phase.get('summary')) == summary,
                  'resource_report_summary_mismatch')
-    observed = _maxima((result.replay.preflight, *(row.capture for row in result.replay.samples)))
+    observed = _maxima((result.resources.preflight, *(row.capture for row in result.resources.samples)))
     _require(observed == result.maxima, 'resource_replay_maxima_mismatch')
     _require(all(getattr(observed, name) <= getattr(limits, name) for name in
                  ('queue_depth_max', 'index_entries_max', 'memory_bytes_max', 'disk_bytes_max')),

@@ -9717,14 +9717,19 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, decoding fails, or any
     /// diagnostics evidence fails verification.
-    pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus> {
+    pub async fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/diagnostics");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", ACCEPT_NORITO_PREFERRED),
-        )?;
+        let request = self
+            .operator_signed_request(HttpMethod::GET, url, Vec::new())?
+            .header("Accept", ACCEPT_NORITO_PREFERRED)
+            .build()?;
+        let resp = self.dispatch_request(request).await?;
+        Self::decode_sumeragi_diagnostics(&resp)
+    }
+
+    fn decode_sumeragi_diagnostics(resp: &Response<Vec<u8>>) -> Result<SumeragiDiagnosticsStatus> {
         Self::ensure_response_status(
-            &resp,
+            resp,
             StatusCode::OK,
             "Failed to get sumeragi diagnostics",
             " ",
@@ -9772,8 +9777,8 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the status request fails or if relay envelopes fail validation or deduplication.
-    pub fn get_cross_lane_transfer_proofs(&self) -> Result<Vec<CrossLaneTransferProof>> {
-        let status = self.get_sumeragi_diagnostics()?;
+    pub async fn get_cross_lane_transfer_proofs(&self) -> Result<Vec<CrossLaneTransferProof>> {
+        let status = self.get_sumeragi_diagnostics().await?;
         verify_lane_relay_envelopes(&status.lane_relay_envelopes)?;
         Ok(status
             .lane_relay_envelopes
@@ -14862,6 +14867,7 @@ mod evidence_http_tests {
         Local,
         Global,
         AsyncGlobal,
+        AsyncLocal,
     }
     fn typed_status_response_snapshot(
         seed: u8,
@@ -14897,6 +14903,13 @@ mod evidence_http_tests {
                     }
                     StatusResponseRequest::Global => {
                         client.get_transaction_status_response_global(hash)
+                    }
+                    StatusResponseRequest::AsyncLocal => {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("status runtime")
+                            .block_on(client.fetch_transaction_status_response_local(hash))
                     }
                     StatusResponseRequest::AsyncGlobal => {
                         tokio::runtime::Builder::new_current_thread()
@@ -15101,6 +15114,88 @@ mod evidence_http_tests {
         );
         assert_status_scope(&snapshot, "global");
         assert_eq!(snapshot.url.path(), "/v1/pipeline/transactions/status");
+    }
+    #[test]
+    fn fetch_transaction_status_response_local_uses_exact_bounded_local_decoder() {
+        let snapshot = typed_status_response_snapshot(
+            0x49,
+            "Applied",
+            Some(8),
+            "local",
+            "state",
+            StatusResponseRequest::AsyncLocal,
+        );
+        assert_status_scope(&snapshot, "local");
+        assert_eq!(snapshot.url.path(), "/v1/pipeline/transactions/status");
+        assert!(
+            snapshot
+                .url
+                .query_pairs()
+                .any(|(name, value)| name == "hash" && value == transaction_hash(0x49).to_string())
+        );
+    }
+    #[test]
+    fn async_local_status_rejects_global_and_other_hash_without_fallback() {
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
+        for wrong_hash in [false, true] {
+            let expected = transaction_hash(0x49);
+            let payload = PipelineTransactionStatusResponse::new(
+                if wrong_hash {
+                    transaction_hash(0x4b)
+                } else {
+                    expected
+                }
+                .to_string(),
+                PipelineTransactionStatus {
+                    kind: "Applied".to_owned(),
+                    block_height: Some(8),
+                },
+                if wrong_hash { "local" } else { "global" }.to_owned(),
+                "state".to_owned(),
+            );
+            let body = norito::json::to_string(&payload).expect("typed status JSON");
+            let (decoded, snapshot) =
+                capture_request(json_response(StatusCode::OK, &body), |transport| {
+                    let client = client_with_base_url(base_url())
+                        .with_test_http_transport(transport.clone());
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(client.fetch_transaction_status_response_local(expected))
+                });
+            assert!(decoded.is_err());
+            assert_status_scope(&snapshot, "local");
+            assert_eq!(
+                snapshot.max_response_bytes,
+                PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES
+            );
+        }
+    }
+    #[test]
+    fn async_local_status_missing_stays_missing_without_global_fallback() {
+        let (decoded, snapshot) =
+            capture_request(json_response(StatusCode::NOT_FOUND, "{}"), |transport| {
+                let client =
+                    client_with_base_url(base_url()).with_test_http_transport(transport.clone());
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(
+                        client.fetch_transaction_status_response_local(transaction_hash(0x49)),
+                    )
+            });
+        assert!(
+            decoded
+                .expect("local absence is not transport failure")
+                .is_none()
+        );
+        assert_status_scope(&snapshot, "local");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES
+        );
     }
     #[test]
     fn get_account_read_signs_request_and_decodes_typed_payload() {
@@ -16774,6 +16869,11 @@ impl Client {
             .unwrap_or_else(|| Err(eyre!("capability probe produced no compatibility decision")))
     }
 
+    pub(crate) async fn ensure_query_compatibility(&self) -> Result<()> {
+        self.ensure_compatibility(CompatibilityRequirement::DataModel, false)
+            .await
+    }
+
     pub(crate) fn ensure_data_model_compatibility(&self) -> Result<()> {
         self.ensure_compatibility_blocking(CompatibilityRequirement::DataModel, false)
     }
@@ -16784,7 +16884,7 @@ impl Client {
 }
 
 impl AccountClient {
-    fn client(&self) -> &Client {
+    pub(crate) fn client(&self) -> &Client {
         &self.context
     }
 
@@ -17714,6 +17814,23 @@ impl Client {
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
         self.get_transaction_status_response_with_scope(hash, Some("global"))
+    }
+
+    /// Fetch exact typed peer-local transaction status with the asynchronous transport.
+    ///
+    /// The bounded canonical decoder validates the signed hash and explicit local
+    /// scope. This lookup uses only this client's configured peer; callers must
+    /// require state-resolved `Applied` when proving that peer has applied a hash.
+    /// It never submits a transaction or falls back to global status.
+    ///
+    /// # Errors
+    /// Returns transport, content-type, bounded-decoding, hash, or scope errors.
+    pub async fn fetch_transaction_status_response_local(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        self.fetch_transaction_status_response_with_scope(hash, Some("local"))
+            .await
     }
 
     /// Fetch exact typed global transaction status with the asynchronous transport.
@@ -30980,7 +31097,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_diagnostics()
+                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
             },
         )
         .0
@@ -30997,7 +31114,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_cross_lane_transfer_proofs()
+                crate::blocking::Client::from_client(client)?.get_cross_lane_transfer_proofs()
             },
         )
         .0
@@ -35383,7 +35500,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_diagnostics()
+                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
             },
         );
         assert!(result.is_err(), "malformed json should be rejected");
@@ -35408,7 +35525,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_diagnostics()
+                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
             },
         );
         assert!(result.is_err(), "unknown nested fields must be rejected");
@@ -35443,7 +35560,7 @@ mod tests {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_diagnostics()
+                crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
             },
         );
         let decoded = decoded.expect("decode declared current diagnostics JSON");
@@ -35462,7 +35579,7 @@ mod tests {
                     let client = client
                         .clone()
                         .with_test_http_transport(mock_transport.clone());
-                    client.get_sumeragi_diagnostics()
+                    crate::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()
                 },
             )
             .expect_err("undeclared or noncanonical diagnostics media must fail closed");

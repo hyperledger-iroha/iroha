@@ -141,7 +141,6 @@ is a closed record whose optional members have these meanings:
 | `profile`, `chain_discriminant` | selected network-profile context |
 | `entrypoint_hash` | canonical transaction-entrypoint identity for admission and durability outcomes |
 | `tx_hash`, `last_status` | signed-transaction/finality context |
-| `bridge_finality_attestation_tip_mismatch` | exact requested/applied/status heights and challenge/node/network bindings for finality snapshot progress |
 | `hint` | human-readable remediation hint, not a stable SDK discriminator |
 | `axt` | typed AXT rejection record |
 
@@ -425,20 +424,32 @@ with code `route_unavailable`; generic, malformed, or selector-mismatched
 status must also bind the exact hash and requested scope. Cache and queue
 observations are progress hints, not proof of Applied execution.
 
-`GET /v1/bridge/finality/attestation/{height}` returns HTTP `409` only for
-an exact requested/applied tip mismatch or an exact independently sampled
-status-height mismatch. Its negotiated JSON or canonical Norito `ErrorEnvelope`
-has code `bridge_finality_attestation_tip_mismatch` and the sole details member
-`bridge_finality_attestation_tip_mismatch`. That closed record carries positive
-`requested_height`, `applied_height`, and `status_height` values which are not
-all equal, the exact nonzero `challenge`, configured `node_id`, and genesis-derived
-`network_id`. A client must validate every selector binding before retrying a
-fresh attestation within its existing deadline. This unsigned progress observation
-never authenticates finality. Missing or corrupt genesis/tip proofs, invalid
-identity/network/signature bindings, and status subject or CommitQC mismatches
-remain fixed failures. Generic `404`/`409`, malformed payloads, or mixed error
-details do not establish progress. Every response is `no-store`, carries `X-Content-Type-Options: nosniff`,
-and varies by `X-Iroha-Finality-Challenge, Accept`.
+`GET /v1/bridge/finality/attestation/{height}` uses one negotiated JSON or
+canonical Norito `ErrorEnvelope` with code `bridge_finality_attestation_failure`
+and the sole detail `finality_attestation_failure`. Its closed
+`FinalityAttestationFailure` record binds
+the exact nonzero `challenge` and requested `height`, with a closed `reason` and
+`tip_mismatch` payload. In JSON, `reason` is exactly one case-sensitive scalar
+string naming a variant below, for example `"GenesisUncommitted"`; tagged objects,
+numeric values and alternate spellings are invalid. Norito uses the closed enum.
+The CLI report's lower-snake-case `reason` is a separate presentation field.
+`TipChanged` requires the `tip_mismatch` payload; every other reason
+requires null. The payload carries positive `requested_height`, `applied_height`,
+and `status_height` values which are not all equal, plus the exact challenge,
+configured `node_id`, and genesis-derived `network_id`.
+
+HTTP `409` reports `TipChanged` or `ConflictingState`. General finality callers
+may retry only `TipChanged` after validating every selector against their
+independently retained request, node and network, within the existing deadline.
+Genesis scaling treats `TipChanged` as non-retryable conflict. HTTP `503` reports
+`ConsensusUninitialized`, `GenesisUncommitted`, `RestartRequired`, or
+`FinalityUnavailable`; only the first two permit bounded startup retries. HTTP
+`500` reports `InternalFailure`. Missing/corrupt proofs and identity, signature,
+subject or CommitQC failures never grant retryable progress. Generic HTTP errors,
+malformed payloads, and mismatched reason/status/payload combinations are errors.
+These unsigned observations never authenticate readiness or finality. Every
+response is `no-store`, carries `X-Content-Type-Options: nosniff`, and varies by
+`X-Iroha-Finality-Challenge, Accept`.
 
 Exact committed details use `POST /v1/pipeline/transactions/details`. The body
 is a canonical `SignedQuery` containing `FindTransactions` with exactly one

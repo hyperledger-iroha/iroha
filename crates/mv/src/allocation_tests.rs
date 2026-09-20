@@ -602,11 +602,19 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
         }
     }
     let layouts = Owner::writer_allocation_layouts();
-    let budget = AllocationBudget::new(3 * layouts.reader.size() + layouts.cursor.size());
-    let mut initial = budget.try_reserve(layouts.reader).unwrap();
+    let initial_layouts = Owner::initial_allocation_layouts();
+    let budget = AllocationBudget::new(
+        initial_layouts.root.size() + 3 * layouts.reader.size() + layouts.cursor.size(),
+    );
+    let mut initial = budget
+        .try_reserve_layouts([initial_layouts.root, initial_layouts.reader])
+        .unwrap();
     let owner = Arc::new(Owner::new_charged(
         Data(7),
-        initial.try_split(layouts.reader).unwrap(),
+        concread::internals::lincowcell::InitialCharges {
+            root: initial.try_split(initial_layouts.root).unwrap(),
+            reader: initial.try_split(initial_layouts.reader).unwrap(),
+        },
     ));
     drop(initial);
     let oldest = owner.read();
@@ -638,11 +646,14 @@ fn actual_retired_reader_refund_under_a_new_writer_waits_for_its_scope_to_unlock
         drop(oldest);
         assert_eq!(
             budget.reserved_bytes(),
-            2 * layouts.reader.size() + layouts.cursor.size()
+            initial_layouts.root.size() + 2 * layouts.reader.size() + layouts.cursor.size()
         );
         assert_eq!(wake.wakes.load(SeqCst), 0);
         drop(held);
-        assert_eq!(budget.reserved_bytes(), layouts.reader.size());
+        assert_eq!(
+            budget.reserved_bytes(),
+            initial_layouts.root.size() + layouts.reader.size()
+        );
         assert_eq!(wake.wakes.load(SeqCst), 0);
     });
     assert_eq!(wake.wakes.load(SeqCst), 1);

@@ -33,21 +33,46 @@ field instantiations still use the explicit untracked mode pending exhaustive
 admission. Storage also retains its original B+tree cursor and undo allocation,
 without an after-value vector or installation replay. Its tree keeps both the
 original base reader and actual shared root alive; foreign or changed bases refuse
-without replacing the owner. Remaining dependency work must attach charges to each
-actual node through commit/abort to the real free boundary. Charge node layouts inside Concread, where the concrete cache-padded
-allocation types are known; do not estimate them from MV entry counts. Account
-for cursor vectors and reader-chain allocations at their own owners as well.
+without replacing the owner. The dependency now attaches original typed charges
+to actual padded nodes, fixed bookkeeping buffers and reader/cursor shells. The
+public `Prepaid<P>` map mode plans one closed insertion under its original writer
+lock, using exact storage layouts and an explicit nested payload policy before
+constructing its successor. A further closed operation authenticates the same
+root/base and admits an edit against its actual private tree. It retains the
+original cursor and publication shell, grows only exhausted tracking buffers
+under the new reservation, and publishes no intermediate generation. Refusal
+returns the original successor and input unchanged. Unrestricted mutation stays
+unavailable. Unused prepaid remainder returns before each handoff while allocated
+charges remain in their owners.
 
-Pass a complete prepaid operation into the original map before `create_writer`.
-The linear cell now accepts opaque move-only charges, allocates its original
-cursor and next-reader shells, then invokes `create_writer`, which already
-allocates both tracking vectors. The generic charged cell exposes no untracked
-writer path. Actual maps still use explicit `Untracked` shells until complete
-node/vector/payload admission can fund the whole operation without acquiring
-more pool credits partway through mutation. Initial root allocations, vector
-growth, iterator stacks and removal-key buffers still require allocation owners.
-Final-tree teardown now walks original child pointers with a bounded stack and
-allocates nothing; it no longer builds an auxiliary node vector during release.
+An attached prepaid writer can lend an exclusive transaction checkpoint. A new
+private generation tag forces edits to copy parent nodes; nested guards resolve
+in LIFO order. The checkpoint retains the parent's original tracking allocations
+when they grow. Abort restores the exact root, length, generation and buffers,
+then frees only child allocations, without allocating or reserving rollback
+credit. Apply transfers saved buffer ownership to its parent and keeps the edits
+private until the original writer commits. Caught mutation or cleanup panic
+makes that cursor unusable, including for reading, detaching and publishing.
+Borrowed values and snapshots cannot outlive or mutate their checkpoint.
+This engine operation still needs integration with Storage's transaction owner.
+
+Production Storage now retains both current and block-undo maps in this same
+B+tree engine. Block opening clears a private undo root without deep-cloning the
+previous undo values. Snapshots retain their original reader generation; detached
+publication retains both original cursors and authenticates both bases on retry.
+Replacing the previous block copies its required preimages from the retained
+undo reader before clearing the new undo writer. Snapshot/history/JSON consumers
+borrow native entries directly instead of constructing a compatibility image.
+The transaction-local standard map and its inverse-edit abort remain separate
+unfinished allocation boundaries; replacing the block-undo owner does not fund
+the current/undo edit pair or permit production prepaid mutation.
+
+Current production MV Storage still instantiates Untracked maps. Initial root
+and reader control blocks now carry exact original charges; native mutex/runtime
+storage remains explicitly outside constructor admission. Real model payload
+policies, MV undo/transaction storage, iterator stacks and removal admission
+remain unfinished. Final-tree teardown walks original child pointers with a
+bounded stack and allocates nothing.
 
 Extract node charges before destroying their cache-padded Box and refund only
 after deallocation returns. Dropping an ordinary charge field happens too early.
@@ -75,8 +100,8 @@ destruction/node free, not at view release. Existing Concread node-ID checks and
 EBR drop-observer tests identify useful instrumentation points but are test-only.
 
 The in-repository dependency patch starts at the EBR allocation boundary.
-Exhaustive State integration, B+tree node and nested cursor custody, nested payload
-accounting, and a configured aggregate resource policy remain required. Registry-cache
+Exhaustive State integration, actual model payload policies, initial/undo
+ownership, and a configured aggregate resource policy remain required. Registry-cache
 edits and a carrier-only reservation wrapper cannot supply this ownership.
 
 The existing `NexusStorage::max_wsv_memory_bytes` policy bounds estimated hot-tier
@@ -100,8 +125,9 @@ returns credits immediately but coalesces this thread's notifications for the
 original pool until the scope exits, including unwind. Borrowed stack records
 provide allocation-free nesting; unrelated pools and other threads keep their
 normal progress. Detached allocation owners may escape after unlocking, but
-physical guards must not escape. The eventual closed map-operation API must
-enforce that boundary and admit every participating nested payload pool.
+physical guards must not escape. The closed map insertion returns a detached
+owner after unlocking; its MV caller encloses admission and execution in this
+exact scope and must fund every participating nested payload pool.
 
 Notification retains the original waiter cohort through callback unwind. If a
 wake or consumed-waker destructor panics, the remaining registrations are still
@@ -208,10 +234,26 @@ original charge in the returned key/value until actual free. Moving initialized
 slots preserves their existing owners. The production Untracked policy delegates
 to ordinary Clone; tests separately exercise concrete charged payload copies.
 
-Public maps still select explicit Untracked custody. Closed map admission,
-complete payload demand planning, actual MV payload policies, initial control
-storage and MV undo funding remain required. Real callback-bearing charges need
-their original notification-deferral scope around physical guards and destruction.
-The [cursor/retirement record](../../docs/history/2026-09-20/charged-cursor-retirement.md)
-and [payload-cloning record](../../docs/history/2026-09-20/prepaid-payload-cloning.md)
-identify allocator tests, source joins and unfinished production integration.
+The existing public map, read, snapshot and detached-owner types now carry their
+concrete mode. `Prepaid<P>` admits one insertion using a checked bound for cloned
+nodes, possible siblings/root, original fixed buffers, both shells and all
+possible nested payload copies, including child minima outside the insertion
+path that a split can promote. Planning allocates nothing. Admission refusal
+returns the original input; a post-mutation panic aborts the private cursor.
+Completed insertion drops only unused prepaid remainder before detaching.
+`try_insert_owned_admitted` authenticates and extends that same cursor under one
+new complete reservation. Existing pointer bookkeeping moves into a prepaid
+geometrically grown buffer only when needed; old backing storage is freed before
+its charge returns. Capacity refusal keeps the original buffers and entries.
+Abort destroys the entire private successor without obtaining more capacity.
+
+`AllocationBudget::try_reserve_bytes` accepts this already checked layout sum
+without fabricating one aggregate Layout. Actual allocations still split exact
+layouts and retain their own charges through physical free. Initial node, root
+and reader custody is explicit; native mutex/runtime ownership, real model
+payload policies, MV undo storage and configured aggregate State integration
+remain open.
+Real callback-bearing charges need their original notification-deferral scope
+around physical guards and destruction. The [closed insertion record](../../docs/history/2026-09-20/closed-admitted-insertion.md)
+records the initial operation. The [retained edit record](../../docs/history/2026-09-20/retained-admitted-edits.md)
+records its multi-edit and root-ownership extension with separate validation.

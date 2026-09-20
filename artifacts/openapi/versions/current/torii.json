@@ -9113,9 +9113,6 @@
           "axt": {
             "$ref": "#/components/schemas/AxtErrorDetails"
           },
-          "bridge_finality_attestation_tip_mismatch": {
-            "$ref": "#/components/schemas/BridgeFinalityAttestationTipMismatchV1"
-          },
           "chain_discriminant": {
             "description": "I105 chain discriminant involved in the error.",
             "maximum": 65535,
@@ -9152,6 +9149,9 @@
             "minLength": 1,
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
+          },
+          "finality_attestation_failure": {
+            "$ref": "#/components/schemas/FinalityAttestationFailure"
           },
           "hint": {
             "description": "Actionable debugging hint for callers.",
@@ -10470,6 +10470,53 @@
           "bootstrap_count"
         ],
         "type": "object"
+      },
+      "FinalityAttestationFailure": {
+        "additionalProperties": false,
+        "description": "Unsigned request-bound failure; never authenticates readiness or finality. TipChanged requires tip_mismatch; every other reason requires null. All nested selectors must match the outer request and independently retained node/network. Carried only in ErrorEnvelope details.finality_attestation_failure under code bridge_finality_attestation_failure; other error details must be absent.",
+        "properties": {
+          "challenge": {
+            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/FinalityAttestationFailureReason"
+          },
+          "tip_mismatch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BridgeFinalityAttestationTipMismatchV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "challenge",
+          "height",
+          "reason",
+          "tip_mismatch"
+        ],
+        "type": "object"
+      },
+      "FinalityAttestationFailureReason": {
+        "description": "One case-sensitive scalar JSON string naming the failure variant, for example GenesisUncommitted. Tagged objects and alternate spellings are invalid. Only ConsensusUninitialized and GenesisUncommitted permit genesis-readiness retries. TipChanged is general snapshot progress only with an exact bound tip_mismatch payload; scaling genesis readiness treats it as conflict.",
+        "enum": [
+          "ConsensusUninitialized",
+          "GenesisUncommitted",
+          "RestartRequired",
+          "TipChanged",
+          "ConflictingState",
+          "FinalityUnavailable",
+          "InternalFailure"
+        ],
+        "type": "string"
       },
       "GoldilocksDigest384V1": {
         "description": "Six canonical little-endian Goldilocks field elements (48 bytes total).",
@@ -57265,7 +57312,7 @@
                 }
               }
             },
-            "description": "Committed genesis or requested finality proof is missing, or the state has no applied genesis. This is a fixed failure; HTTP 404 alone never means snapshot progress.",
+            "description": "HTTP routing or endpoint absence is a fixed failure and does not establish startup or finality snapshot progress.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -57336,7 +57383,45 @@
                 }
               }
             },
-            "description": "Exact requested/applied tip mismatch or exact status-height mismatch. ErrorEnvelope code bridge_finality_attestation_tip_mismatch carries only details.bridge_finality_attestation_tip_mismatch, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. All heights must be positive and not all equal; the challenge must be nonzero. Clients require the exact requested height, challenge, configured node identity and network before retrying a fresh attestation within the existing deadline. This unsigned observation is not finality proof. Generic 409 or 404 responses, missing/corrupt proofs, and identity, subject, CommitQC or signature failures are fixed errors.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason InternalFailure. Signing or representation failed; this fixed failure grants neither readiness nor snapshot progress.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",
@@ -57367,9 +57452,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
                 }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             },
-            "description": "Authoritative Sumeragi-v2 status is unavailable or restart is required.",
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
             "headers": {
               "Cache-Control": {
                 "description": "Finality-attestation responses must never be cached.",

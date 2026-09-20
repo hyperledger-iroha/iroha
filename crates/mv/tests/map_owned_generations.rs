@@ -458,6 +458,12 @@ fn detached_owner_keeps_shared_nodes_after_source_drop_and_cross_thread_transfer
         assert!(owner.get(&1_u64).is_none());
         assert_eq!(*owner.get(&255_u64).unwrap().data, 2550);
         assert_eq!(owner.to_snapshot().len(), 255);
+        let mut entries = owner.iter();
+        assert_eq!(entries.len(), 255);
+        assert_eq!(*entries.next().unwrap().1.data, 999);
+        assert_eq!(*entries.next_back().unwrap().1.data, 2550);
+        assert_eq!(entries.len(), 253);
+        assert_eq!(entries.count(), 253);
         owner
     })
     .join()

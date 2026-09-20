@@ -12,10 +12,8 @@ use crate::{
     },
 };
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    block::BlockHeader,
-    nexus::{DataSpaceId, LaneId},
-};
+use iroha_data_model::block::BlockHeader;
+use iroha_model_base::topology::{DataSpaceId, LaneId};
 use std::sync::Arc;
 
 /// Local retirement refusal; no variant is a consensus-invalidity verdict.
@@ -25,6 +23,8 @@ pub(in crate::state) enum CarrierQueueRetirementError {
     Missing,
     /// The service capability belongs to another original State.
     ForeignState,
+    /// An otherwise empty cut belongs to a different Queue allocation.
+    ForeignQueue,
     /// The original Queue is physically held by independent work.
     Busy {
         field: &'static str,
@@ -62,11 +62,11 @@ impl<'queue> CarrierQueueRetirement<'queue> {
         source: &crate::sumeragi::v2_apply::carrier_queue_retirement::OriginalCarrierQueue<'queue>,
         cut: QueueLaneRetirementCut<'queue>,
     ) -> Result<Self, CarrierQueueRetirementError> {
-        if !source.belongs_to(target)
-            || !source.owns_cut(&cut)
-            || !geometry.matches_publication_target(target, header)
-        {
+        if !source.belongs_to(target) || !geometry.matches_publication_target(target, header) {
             return Err(CarrierQueueRetirementError::ForeignState);
+        }
+        if !source.owns_cut(&cut) {
+            return Err(CarrierQueueRetirementError::ForeignQueue);
         }
         let mut routes = Vec::new();
         geometry

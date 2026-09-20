@@ -146,7 +146,7 @@ def invoke(fixture: tuple[Path, dict], runner: str, mode: str = "valid"):
 
 
 @pytest.mark.parametrize("runner,count,mutations", [
-    ("multilane_mutations", 106, 106), ("inflight_first_release", 23, 22)])
+    ("multilane_mutations", 106, 106), ("inflight_first_release", 26, 25)])
 def test_complete_corpus_retains_exact_executed_inputs_and_raw_results(
     fixture, runner: str, count: int, mutations: int
 ) -> None:
@@ -185,6 +185,30 @@ def test_complete_corpus_retains_exact_executed_inputs_and_raw_results(
         else:
             assert actual["returncode"] == 0
     assert negatives == mutations
+    if runner == "inflight_first_release":
+        # A complete real recorder invocation must reject either count drift,
+        # even when every controlled process and original shell assertion passes.
+        repo, _ = fixture
+        runner_path = repo / "scripts/formal/run_sumeragi_v2_inflight_first_release.sh"
+        runner_source = runner_path.read_text()
+        count_argument = "--expected-cases 26"
+        assert runner_source.count(count_argument) == 1
+        try:
+            for declared_count in (25, 27):
+                runner_path.write_text(runner_source.replace(
+                    count_argument, f"--expected-cases {declared_count}", 1))
+                rejected, rejected_root = invoke(fixture, runner)
+                assert rejected.returncode == 1, rejected.stderr
+                rejected_terminal = read_json(rejected_root / "finished.json")
+                assert rejected_terminal["runner_body_exit_status"] == 0
+                assert rejected_terminal["runner_exit_status"] == 1
+                assert rejected_terminal["all_expected_cases_accepted"] is False
+                assert rejected_terminal["consistency_errors"] == []
+                assert len(rejected_terminal["accepted_cases"]) == count
+                assert read_json(rejected_root / "invocation.json")["expected_cases"] == declared_count
+                assert "successful runner lacks consistent acceptance for every expected case" in rejected.stderr
+        finally:
+            runner_path.write_text(runner_source)
 
 
 @pytest.mark.parametrize("runner", RUNNERS)
@@ -221,7 +245,7 @@ def test_standalone_setup_failure_reports_fresh_retained_paths(fixture) -> None:
     assert first.parent == Path(environment["TMPDIR"]).resolve()
     for root in (first, second):
         assert read_json(root / "finished.json")["all_expected_cases_accepted"] is False
-        assert read_json(root / "invocation.json")["expected_cases"] == 23
+        assert read_json(root / "invocation.json")["expected_cases"] == 26
 
 
 def test_recorded_raw_output_cannot_be_changed_before_acceptance(fixture) -> None:
@@ -258,6 +282,6 @@ def test_result_cannot_be_changed_between_acceptance_and_completion(fixture) -> 
     terminal = read_json(root / "finished.json")
     assert terminal["runner_body_exit_status"] == 0
     assert terminal["runner_exit_status"] == result.returncode == 1
-    assert len(terminal["accepted_cases"]) == 23
+    assert len(terminal["accepted_cases"]) == 26
     assert terminal["all_expected_cases_accepted"] is False
     assert any("accepted result changed: fixed" in error for error in terminal["consistency_errors"])

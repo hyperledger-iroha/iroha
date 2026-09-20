@@ -27,6 +27,18 @@ pub trait TrackingBuffer<T: Copy>: sealed::Sealed {
     /// A fixed buffer rejects exhausted admission before writing any entry.
     fn push(&mut self, value: T);
 
+    /// Remove the last initialized entry before returning its bookkeeping value.
+    ///
+    /// This never allocates or releases the backing allocation or its charge.
+    fn pop(&mut self) -> Option<T>;
+
+    /// Shorten the initialized prefix without growing it or allocating.
+    ///
+    /// A length at least as large as the current length leaves it unchanged.
+    /// Copy bookkeeping entries have no destructors; their targets remain owned
+    /// by the cursor or reader, including when their entries are forgotten.
+    fn truncate(&mut self, len: usize);
+
     /// Borrow only the initialized entries in their original order.
     fn as_slice(&self) -> &[T];
 
@@ -44,6 +56,14 @@ impl<T: Copy> TrackingBuffer<T> for Vec<T> {
 
     fn push(&mut self, value: T) {
         Vec::push(self, value);
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        Vec::pop(self)
+    }
+
+    fn truncate(&mut self, len: usize) {
+        Vec::truncate(self, len);
     }
 
     fn as_slice(&self) -> &[T] {
@@ -96,7 +116,7 @@ impl<T: Copy, Charge> FixedTrackingBuffer<T, Charge> {
         })
     }
 
-    /// Original admitted entry capacity, unchanged by push or clear.
+    /// Original admitted entry capacity, unchanged by bookkeeping operations.
     pub(crate) fn capacity(&self) -> usize {
         self.entries.len()
     }
@@ -121,9 +141,21 @@ impl<T: Copy, Charge> TrackingBuffer<T> for FixedTrackingBuffer<T, Charge> {
         self.initialized += 1;
     }
 
+    fn pop(&mut self) -> Option<T> {
+        self.initialized = self.initialized.checked_sub(1)?;
+        // SAFETY: the old prefix included this initialized entry. Shortening
+        // the prefix first removes its custody before returning the Copy value.
+        Some(unsafe { self.entries[self.initialized].assume_init_read() })
+    }
+
+    fn truncate(&mut self, len: usize) {
+        self.initialized = self.initialized.min(len);
+    }
+
     fn as_slice(&self) -> &[T] {
         // SAFETY: push initializes exactly this prefix before increasing its
-        // length. clear resets its length; no method can expose spare slots.
+        // length. pop, truncate and clear only shorten that initialized prefix;
+        // no method can expose spare slots.
         // Box supplies a non-null, aligned address even for an empty/ZST slice.
         unsafe { slice::from_raw_parts(self.as_ptr(), self.initialized) }
     }

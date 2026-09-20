@@ -876,6 +876,8 @@ mod unix {
         }
         Ok(raw)
     }
+    include!("secure_fs/retained.rs");
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1173,8 +1175,8 @@ mod unix {
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
 ))]
 pub use unix::{
-    harden_private_tree_with_owner_executables, prepare_empty_private_directory, read_private_file,
-    write_private_file_atomic,
+    RetainedPrivateFiles, harden_private_tree_with_owner_executables,
+    prepare_empty_private_directory, read_private_file, write_private_file_atomic,
 };
 #[cfg(any(
     not(unix),
@@ -1225,4 +1227,92 @@ pub fn write_private_file_atomic(_path: &Path, _raw: &[u8]) -> Result<()> {
 ))]
 pub fn read_private_file(_path: &Path) -> Result<Vec<u8>> {
     unsupported()
+}
+
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
+/// Retained original-file custody is unavailable on this platform.
+pub struct RetainedPrivateFiles;
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
+impl RetainedPrivateFiles {
+    /// Reject unsupported original-file custody.
+    pub fn new(_: &Path) -> Result<Self> {
+        unsupported()
+    }
+    /// Reject unsupported original directory custody.
+    pub fn capture_directory(&mut self, _: &str) -> Result<()> {
+        unsupported()
+    }
+    /// Reject unsupported exact namespace custody.
+    pub fn seal_namespace(&mut self) -> Result<()> {
+        unsupported()
+    }
+    /// Reject unsupported original-file custody.
+    pub fn capture(&mut self, _: &str, _: u64, _: Option<&[u8]>) -> Result<usize> {
+        unsupported()
+    }
+    /// Reject unsupported original-file custody.
+    pub fn bytes(&self, _: usize) -> Result<&[u8]> {
+        unsupported()
+    }
+    /// An unsupported owner cannot hold any file identity.
+    pub fn identities(&self) -> impl Iterator<Item = (&str, [u8; 32], u64)> {
+        std::iter::empty()
+    }
+    /// Reject unsupported original-file custody.
+    pub fn check(&self) -> Result<()> {
+        unsupported()
+    }
+    /// Reject unsupported original-file custody.
+    pub fn write_new(&mut self, _: &str, _: &[u8], _: u64) -> Result<()> {
+        unsupported()
+    }
+}
+
+/// Claim one inherited pipe read descriptor and protect it from further inheritance.
+///
+/// The CLI caller transfers unique ownership. Payload geometry and readiness
+/// remain with the consumer; the epoch derivation keeps its existing policy.
+#[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "the CLI explicitly transfers one validated inherited descriptor"
+)]
+pub(crate) fn take_seed_pipe(fd: i32) -> color_eyre::Result<std::fs::File> {
+    use color_eyre::eyre::{bail, eyre};
+    use std::{fs::File, os::fd::FromRawFd};
+    if fd < 3 {
+        bail!("seed-fd must be an inherited descriptor greater than stderr");
+    }
+    // SAFETY: F_GETFD accepts an arbitrary integer and does not dereference memory. Probe before
+    // constructing an owned descriptor; this CLI owns the transferred FD and has no competing
+    // closer. No path is opened and no secret bytes pass through this boundary.
+    if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+        bail!("seed-fd is not an open inherited descriptor");
+    }
+    // SAFETY: the preceding probe established validity; the caller transfers unique ownership.
+    // File closes it on all subsequent success/error paths. Never duplicate or retain this FD.
+    let input = unsafe { File::from_raw_fd(fd) };
+    let flags = rustix::io::fcntl_getfd(&input)
+        .map_err(|_| eyre!("cannot inspect seed-fd ownership flags"))?;
+    rustix::io::fcntl_setfd(&input, flags | rustix::io::FdFlags::CLOEXEC)
+        .map_err(|_| eyre!("cannot protect seed-fd from inheritance"))?;
+    let stat = rustix::fs::fstat(&input).map_err(|_| eyre!("cannot inspect seed-fd type"))?;
+    let mode =
+        rustix::fs::fcntl_getfl(&input).map_err(|_| eyre!("cannot inspect seed-fd access mode"))?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Fifo
+        || mode & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
+    {
+        bail!("seed-fd must be the read end of an inherited pipe");
+    }
+    Ok(input)
 }

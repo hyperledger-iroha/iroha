@@ -366,6 +366,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'state/deserialize_world.rs',
         'state/default_oracle.rs',
     ),
+    'crates/iroha_core/src/state/runtime_catalog_tests.rs': (
+        'runtime_catalog_commit_tests.rs',
+    ),
     'crates/iroha_core/src/snapshot.rs': (
         'snapshot/support_policy_tests.rs',
         'snapshot/write_roundtrip_tests.rs',

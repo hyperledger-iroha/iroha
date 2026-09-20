@@ -199,12 +199,13 @@ The ordered operation inventories are exact:
   `formal-tlc-positive-and-mutations`, `formal-apalache-refinement`,
   `formal-production-trace-replay`, `formal-rust-verus-correspondence`,
   `formal-verus-evidence-validation`, `formal-cross-tool-evidence`.
-- `network-scale-soak` (7; plan SHA-256
-  `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`):
+- `network-scale-soak` (8; plan SHA-256
+  `9df5a8d32471bd8cdecc654a8146f380597a1ca3c1824942aadbbbc8a1be2388`):
   `network-release-seed-matrix`,
   `network-g4p-mandatory-cases`, `network-g12p-ten-seeds`,
-  `network-g12p-rotating-fault-soak`, `scale-five-paired-trials`,
-  `scale-evidence-validation`, `network-chaos-100000-height`.
+  `network-g12p-rotating-fault-soak`, `scale-complete-parent-preflight`,
+  `scale-five-paired-trials`, `scale-retained-verification-and-publication`,
+  `network-chaos-100000-height`.
 - `final-bootstrap-publication` (8; plan SHA-256
   `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`):
   `final-protected-bootstrap`,
@@ -215,11 +216,27 @@ The ordered operation inventories are exact:
   `final-bootstrap-independent-authentication`,
   `final-external-completion-publication`.
 
-The standalone validator and receipt writer derive the exact 23/38/7/8
+The standalone validator and receipt writer derive the exact 23/38/8/8
 cardinalities from these candidate-bound plans. In particular, an unplanned
-eighth `network-scale-soak` operation is rejected; the seven-operation plan
-and its `a72659ea6af739910412dfe36687d8f512cc699b63c566f941089f2fcb028663`
+ninth `network-scale-soak` operation is rejected; the eight-operation plan
+and its `9df5a8d32471bd8cdecc654a8146f380597a1ca3c1824942aadbbbc8a1be2388`
 digest are authoritative.
+
+The three scaling records name `release-bootstrap` obligations in execution
+order. `scale-complete-parent-preflight` requires the complete canonical
+preflight against the selected source and retains its archive before collector
+provisioning. `scale-five-paired-trials` binds that preflight, the current plan
+and budget, and the original parent's launch-input descriptor and runtime seed
+ownership. The parent launches the fixed collector with Python `-I -B -S` and
+the inherited launch-input descriptor, its SHA-256, and the separate seed pipe.
+`scale-retained-verification-and-publication` requires complete archive
+inspection, all three measured criteria, ten native archive replay checks, and
+publication of the retained parent join as `scaling-execution.json`. The
+semantic archive IDs identify these parent-owned roles; their concrete bytes
+and process observations are authenticated by the bootstrap execution record.
+Approval arguments do not contain live descriptor numbers, seed bytes, or
+caller-selected harness/validator commands. The normalized operation records
+are exact authorization expectations; the fixed parent owns actual execution.
 
 The command records contain only path-free protected tool IDs, canonical
 relative arguments, and stable archive/evidence IDs. These approvals are

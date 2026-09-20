@@ -2,7 +2,7 @@
 
 use super::{Storage, View};
 use crate::{Key, Value};
-use concread::ebrcell::{EbrCell, EbrCellReadTxn};
+use concread::bptree::BptreeMapReadTxn;
 use std::collections::BTreeMap;
 
 /// Read guards retaining both serialized maps without consuming undo history.
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 /// with its publication generation and discard it if that generation changes.
 pub struct Snapshot<'a, K: Key, V: Value> {
     current: View<'a, K, V>,
-    revert: EbrCellReadTxn<BTreeMap<K, Option<V>>>,
+    revert: BptreeMapReadTxn<'a, K, Option<V>>,
 }
 
 impl<K: Key, V: Value> Storage<K, V> {
@@ -33,7 +33,7 @@ impl<K: Key, V: Value> Storage<K, V> {
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
             blocks: current.into_iter().collect(),
-            revert: EbrCell::new(revert),
+            revert: revert.into_iter().collect(),
         }
     }
 }
@@ -45,7 +45,7 @@ impl<'a, K: Key, V: Value> Snapshot<'a, K, V> {
     }
 
     /// Borrow exact touched keys, including deleted values and prior absence.
-    pub fn revert_map(&self) -> &BTreeMap<K, Option<V>> {
+    pub fn revert_map(&self) -> &BptreeMapReadTxn<'a, K, Option<V>> {
         &self.revert
     }
 }
@@ -65,15 +65,28 @@ mod tests {
         block.remove(4);
         block.commit();
         let snapshot = storage.snapshot();
+        let preimages: BTreeMap<_, _> = snapshot
+            .revert_map()
+            .iter()
+            .map(|(key, value)| (*key, *value))
+            .collect();
         assert_eq!(
-            snapshot.revert_map(),
-            &BTreeMap::from([(1, Some(10)), (2, Some(20)), (3, None), (4, None),])
+            preimages,
+            BTreeMap::from([(1, Some(10)), (2, Some(20)), (3, None), (4, None),])
         );
         let restored = Storage::from_snapshot_parts(
             snapshot.current().iter().map(|(k, v)| (*k, *v)).collect(),
-            snapshot.revert_map().clone(),
+            preimages.clone(),
         );
-        assert_eq!(restored.snapshot().revert_map(), snapshot.revert_map());
+        assert_eq!(
+            restored
+                .snapshot()
+                .revert_map()
+                .iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<BTreeMap<_, _>>(),
+            preimages
+        );
         let previous = restored.block_and_revert();
         assert_eq!(
             previous.iter().map(|(k, v)| (*k, *v)).collect::<Vec<_>>(),

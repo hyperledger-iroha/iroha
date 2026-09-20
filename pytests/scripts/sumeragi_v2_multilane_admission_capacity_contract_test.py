@@ -53,6 +53,156 @@ def test_admission_capacity_accepts_actual_sources(captured):
     assert validate(captured) == []
 
 
+@pytest.fixture(scope="module")
+def proxy_deadline(captured):
+    helper = support()
+    helper.load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    return captured, contract, helper.canonical_queue_plan_retry_items()
+
+
+def test_proxy_deadline_retry_and_capacity_share_the_complete_reviewed_owner(proxy_deadline):
+    """Neither gate may overwrite the other's tokens for this one physical owner."""
+    captured, contract, retry_items = proxy_deadline
+    _, checker, models, _ = captured
+    binding = contract.QUEUE_PLAN_PROXY_DEADLINE_BINDING
+    assert binding in contract.QUEUE_PLAN_CANONICAL_RETRY_BINDINGS
+    assert binding in checker.admission_capacity_contract.BINDINGS
+    model, = [m for m in models if m["module"] == checker.admission_capacity_contract.MODEL]
+    owner, = [r for r in model["production_symbols"]
+              if (r["path"], r["kind"], r["symbol"]) == binding[:3]]
+    assert tuple(owner["required_tokens"]) == binding[3]
+    assert validate(captured) == []
+    errors = []
+    contract.validate_canonical_queue_plan_retry(retry_items, errors)
+    assert errors == [], errors
+
+
+@pytest.mark.parametrize("old,new", [
+    ("let deadline = budget_observed_at + remaining_budget;",
+     "let deadline = tokio::time::Instant::now() + remaining_budget;"),
+    (".checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)", ".checked_sub(Duration::ZERO)"),
+    (".filter(|budget| !budget.is_zero())", ".filter(|_| true)"),
+    ("absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET)", "absolute_budget.max(TORII_PROXY_EXECUTION_BUDGET)"),
+    ("queue_plan_capacity_wait::deadline_response(&proxy_request.request, error)", "generic_deadline_response(error)"),
+    ("match tokio::time::timeout_at(\n        deadline,",
+     "match tokio::time::timeout_at(\n        tokio::time::Instant::now(),"),
+    ("            proxy_memory,\n            deadline,",
+     "            proxy_memory,\n            tokio::time::Instant::now(),"),
+    ("    let deadline = budget_observed_at + remaining_budget;",
+     "    let budget_observed_at = tokio::time::Instant::now();\n"
+     "    let deadline = budget_observed_at + remaining_budget;"),
+    ("    let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);",
+     "    let absolute_budget = TORII_PROXY_EXECUTION_BUDGET;\n"
+     "    let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);"),
+    ("    let deadline = budget_observed_at + remaining_budget;",
+     "    let remaining_budget = TORII_PROXY_EXECUTION_BUDGET;\n"
+     "    let deadline = budget_observed_at + remaining_budget;"),
+    ("    match tokio::time::timeout_at(",
+     "    let deadline = tokio::time::Instant::now() + remaining_budget;\n"
+     "    match tokio::time::timeout_at("),
+], ids=[
+    "no-clock-rebase", "reserve-egress", "reject-exhausted-budget", "cap-execution",
+    "retain-queue-plan-ambiguity", "outer-original-deadline", "inner-original-deadline",
+    "no-clock-shadow", "no-absolute-budget-shadow", "no-budget-shadow", "no-deadline-shadow",
+])
+def test_proxy_deadline_both_gates_reject_timeout_mutation(proxy_deadline, old, new):
+    """Independent consumers enforce the same original absolute-deadline cut."""
+    captured, contract, retry_items = proxy_deadline
+    key = contract.QUEUE_PLAN_PROXY_DEADLINE_BINDING[:3]
+    source = retry_items[key]
+    assert source.count(old) == 1
+    mutated = source.replace(old, new, 1)
+    altered_retry = retry_items.copy()
+    altered_retry[key] = mutated
+    retry_errors = []
+    contract.validate_canonical_queue_plan_retry(altered_retry, retry_errors)
+    altered_capacity = captured[3].copy()
+    altered_capacity[key] = mutated
+    capacity_errors = validate(captured, altered=altered_capacity)
+    assert any(key[2] in error for error in retry_errors), retry_errors
+    assert any(key[2] in error for error in capacity_errors), capacity_errors
+
+
+@pytest.mark.parametrize("statement,anchor", [
+    ("    let budget_observed_at = tokio::time::Instant::now();\n", "    let remaining_budget ="),
+    ("    let budget_observed_at = tokio::time::Instant::now();\n", "    let deadline ="),
+    ("    let request_id = proxy_request.request_id.clone();\n", "    let budget_observed_at ="),
+], ids=["observe-before-validation", "observe-before-hashing", "observe-before-setup"])
+def test_proxy_deadline_both_gates_reject_late_original_observation(proxy_deadline, statement, anchor):
+    """All literal tokens remain; their ordering must still bind the original cut."""
+    captured, contract, retry_items = proxy_deadline
+    key = contract.QUEUE_PLAN_PROXY_DEADLINE_BINDING[:3]
+    source = retry_items[key]
+    assert source.count(statement) == source.count(anchor) == 1
+    mutated = source.replace(statement, "", 1).replace(anchor, statement + anchor, 1)
+    altered_retry = retry_items.copy()
+    altered_retry[key] = mutated
+    retry_errors = []
+    contract.validate_canonical_queue_plan_retry(altered_retry, retry_errors)
+    altered_capacity = captured[3].copy()
+    altered_capacity[key] = mutated
+    capacity_errors = validate(captured, altered=altered_capacity)
+    assert any(key[2] in error and "order" in error for error in retry_errors), retry_errors
+    assert any(key[2] in error and "order" in error for error in capacity_errors), capacity_errors
+
+
+def test_proxy_deadline_both_gates_allow_independent_setup_order(proxy_deadline):
+    """Request-id copying and QueuePlan hashing need only follow the same clock."""
+    captured, contract, retry_items = proxy_deadline
+    key = contract.QUEUE_PLAN_PROXY_DEADLINE_BINDING[:3]
+    source = retry_items[key]
+    statement = "    let request_id = proxy_request.request_id.clone();\n"
+    anchor = "    let deadline ="
+    assert source.count(statement) == source.count(anchor) == 1
+    mutated = source.replace(statement, "", 1).replace(anchor, statement + anchor, 1)
+    altered_retry = retry_items.copy()
+    altered_retry[key] = mutated
+    retry_errors = []
+    contract.validate_canonical_queue_plan_retry(altered_retry, retry_errors)
+    altered_capacity = captured[3].copy()
+    altered_capacity[key] = mutated
+    assert retry_errors == [], retry_errors
+    assert validate(captured, altered=altered_capacity) == []
+
+
+@pytest.mark.parametrize("name,rust_type,value", [
+    ("budget_observed_at", "tokio::time::Instant", "tokio::time::Instant::now()"),
+    ("absolute_budget", "Duration", "TORII_PROXY_EXECUTION_BUDGET"),
+    ("remaining_budget", "Duration", "TORII_PROXY_EXECUTION_BUDGET"),
+    ("deadline", "tokio::time::Instant", "tokio::time::Instant::now() + remaining_budget"),
+])
+@pytest.mark.parametrize("declaration", ["let {name}: {rust_type}", "let mut {name}", "let mut {name}: {rust_type}"])
+def test_proxy_deadline_both_gates_reject_typed_or_mutable_shadow(
+    proxy_deadline, name, rust_type, value, declaration
+):
+    """Valid Rust shadow declarations cannot retain tokens while replacing authority."""
+    captured, contract, retry_items = proxy_deadline
+    key = contract.QUEUE_PLAN_PROXY_DEADLINE_BINDING[:3]
+    source = retry_items[key]
+    anchors = {
+        "budget_observed_at": "    let deadline =",
+        "absolute_budget": "    let remaining_budget =",
+        "remaining_budget": "    let deadline =",
+        "deadline": "    match tokio::time::timeout_at(",
+    }
+    anchor = anchors[name]
+    assert source.count(anchor) == 1
+    shadow = declaration.format(name=name, rust_type=rust_type)
+    mutated = source.replace(anchor, f"    {shadow} = {value};\n" + anchor, 1)
+    altered_retry = retry_items.copy()
+    altered_retry[key] = mutated
+    retry_errors = []
+    contract.validate_canonical_queue_plan_retry(altered_retry, retry_errors)
+    altered_capacity = captured[3].copy()
+    altered_capacity[key] = mutated
+    capacity_errors = validate(captured, altered=altered_capacity)
+    expected = f"canonical QueuePlan deadline owner is rebound: {name}"
+    assert any(expected in error for error in retry_errors), retry_errors
+    assert any(expected in error for error in capacity_errors), capacity_errors
+
+
 def test_admission_capacity_gate_and_source_closure_are_connected():
     checker = support().load_checker()
     tree = ast.parse(Path(checker.__file__).read_text())

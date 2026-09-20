@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts' / 'nexus'))
 from resource_evidence_budget import (
-    BudgetError, CaptureGeometry, CapturePolicy, FileBudget, RunBudget, StaticFile, admit_experiment,
+    BudgetError, CaptureGeometry, CapturePolicy, FileBudget, RunBudget, RUN_FILE_FIELDS, StaticFile, admit_experiment,
 )
 from resource_bundle import BudgetedBundle, BundleError, ControlBinding
 
@@ -25,7 +25,7 @@ def budget():
     geometry = CaptureGeometry(4, 2_000_000, 40_000_000, 2_000_000)
     runs = tuple(RunBudget(pair, variant, geometry,
                           *(FileBudget(f'p{pair}.{variant}.{role}', 64)
-                            for role in ('journal', 'trace', 'proof', 'log', 'raw')), ())
+                            for role in ('journal', 'trace', 'proof', 'receipt', 'raw', *RUN_FILE_FIELDS[5:])))
                  for pair in range(1, 6) for variant in ('one_lane', 'four_lane'))
     return admit_experiment(policy=CapturePolicy(128, 256), runs=runs,
                             static_files=(StaticFile('source', 1),),
@@ -75,8 +75,8 @@ def test_complete_fanout_is_scanned_twice_without_relaxing_control_count(valid):
     with BudgetedBundle(root, admitted, controls, reported=False) as capture:
         first = capture.snapshot
         assert first.resource_files == 2070 > 256
-        assert first.control_files == 52
-        assert first.total_bytes == 2122
+        assert first.control_files == 152
+        assert first.total_bytes == 2222
         assert first.resource_bytes == 2070
         assert len(first.census_sha256) == 64
         assert capture.verify() == first
@@ -219,7 +219,7 @@ def test_report_allocation_is_reserved_but_stage_requires_exact_presence(valid):
     with pytest.raises(BundleError):
         BudgetedBundle(root, admitted, controls, reported=False)
     with BudgetedBundle(root, admitted, (*controls, report), reported=True) as captured:
-        assert captured.verify().control_files == 53
+        assert captured.verify().control_files == 153
 
 
 def test_parent_symlink_is_rejected(valid):
@@ -271,7 +271,7 @@ def test_actual_read_boundary_rechecks_named_and_held_file(valid, kind):
 
 def test_full_control_budget_remains_independent_of_raw_fanout(valid):
     root, old, controls = valid
-    extras = tuple(FileBudget(f'extra{i}', 1) for i in range(203))
+    extras = tuple(FileBudget(f'extra{i}', 1) for i in range(103))
     admitted = admit_experiment(policy=old.policy, runs=old.runs, static_files=old.static_files,
                                 manifest=old.control_budgets[0], report=old.control_budgets[1],
                                 other_control=extras)
@@ -391,7 +391,7 @@ def test_read_control_returns_exact_bytes_for_every_admitted_binding_and_keeps_f
         for control in controls:
             raw = captured.read_control(control, max_bytes=1)
             assert type(raw) is bytes and raw == b'x'
-        assert len(captured._control_read_admission[0]) == 52
+        assert len(captured._control_read_admission[0]) == 152
         assert len(captured._control_read_admission[1]) == 3
         assert captured.verify() == initial
     with pytest.raises(BundleError, match='bundle_closed'):
@@ -451,7 +451,7 @@ def test_control_semantic_cap_precedes_open_allocation_and_actual_multichunk_rea
         with patch('resource_bundle.os.pread', reading):
             assert captured.read_control(bound, max_bytes=size) == raw
         assert calls == [(65536, 0), (65536, 65536), (1, 131072)]
-        assert captured.verify().control_bytes == 51 + size
+        assert captured.verify().control_bytes == 151 + size
 
 
 def test_read_empty_exact_static_control_allows_only_zero_admitted_cap(valid):
@@ -466,7 +466,7 @@ def test_read_empty_exact_static_control_allows_only_zero_admitted_cap(valid):
     with BudgetedBundle(root, admitted, controls, reported=False) as captured:
         with patch('resource_bundle.os.pread', side_effect=AssertionError('empty read is exact')):
             assert captured.read_control(empty, max_bytes=0) == b''
-        assert captured.verify().control_bytes == 51
+        assert captured.verify().control_bytes == 151
     with BudgetedBundle(root, admitted, controls, reported=False) as captured:
         with pytest.raises(BundleError, match='control_read_cap_invalid'):
             captured.read_control(empty, max_bytes=1)
@@ -486,7 +486,7 @@ def test_read_control_walks_only_the_admitted_namespace_including_depth_boundary
     controls = (selected, *controls[1:])
     with BudgetedBundle(root, admitted, controls, reported=False) as captured:
         assert captured.read_control(selected, max_bytes=1) == b'x'
-        assert captured.verify().control_files == 52
+        assert captured.verify().control_files == 152
 
 
 @pytest.mark.parametrize('change', ['symlink', 'hardlink', 'fifo', 'directory', 'inode',

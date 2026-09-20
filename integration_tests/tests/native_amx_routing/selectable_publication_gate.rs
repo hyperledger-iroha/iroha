@@ -51,7 +51,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                 &peer.client(),
                 &fixture,
                 &format!("{context}: pre-cut peer {index}"),
-            )?;
+            ).await?;
             if let Some(expected) = pre_cut_snapshot.as_ref() {
                 ensure!(
                     &snapshot == expected,
@@ -65,7 +65,7 @@ async fn run_selectable_musubi_publication_phase_cut(
         // deterministic autonomous coordinator-lane author. Derive that peer
         // from the exact durable universal-lane frontier and its embedded
         // authority committee; the global Sumeragi leader is unrelated.
-        let target_index = next_universal_autonomous_lane_author_peer(&peers, &context)?;
+        let target_index = next_universal_autonomous_lane_author_peer(&peers, &context).await?;
         let target = peers[target_index].clone();
         let live_submitter = peers
             .iter()
@@ -80,7 +80,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                 .status()
                 .await
                 .wrap_err_with(|| format!("{context}: query pre-cut status from peer {index}"))?;
-            let blocks = peer.client().client().query(FindBlocks).execute_all()?;
+            let blocks = peer.client().account_client().query(FindBlocks).execute_all().await?;
             let latest = blocks
                 .first()
                 .ok_or_else(|| eyre!("{context}: pre-cut peer {index} returned an empty chain"))?;
@@ -136,11 +136,10 @@ async fn run_selectable_musubi_publication_phase_cut(
         let revision = target_control
             .arm_native_amx_fault(phase, source_id)
             .wrap_err_with(|| format!("{context}: arm exact phase cut"))?;
-        let transaction_for_submit = fixture.transaction.clone();
-        let submitter_for_submit = live_submitter.clone();
-        spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
+        live_submitter
+            .account_client()
+            .submit_transaction(&fixture.transaction)
             .await
-            .map_err(|error| eyre!("{context}: publication submit task failed: {error}"))?
             .wrap_err_with(|| format!("{context}: submit exact publication"))?;
         let ack = target_control
             .wait_for_native_amx_fault(revision, phase, source_id, STATUS_WAIT_TIMEOUT)
@@ -186,7 +185,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                     &peer.client(),
                     &fixture,
                     &format!("{context}: live peer {index} before restart"),
-                )?;
+                ).await?;
             }
             Some(live_block)
         } else {
@@ -203,7 +202,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                     &peer.client(),
                     &fixture,
                     &format!("{context}: live peer {index} before author restart"),
-                )?;
+                ).await?;
             }
             // Keep the author down for ten signed cadences, two retransmission
             // intervals, and two DA commit-quorum windows. A bounded recovery
@@ -216,7 +215,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                     .enumerate()
                     .filter(|(index, _)| *index != target_index)
                 {
-                    let blocks = peer.client().client().query(FindBlocks).execute_all()?;
+                    let blocks = peer.client().account_client().query(FindBlocks).execute_all().await?;
                     let latest = blocks.first().ok_or_else(|| {
                         eyre!("{context}: live peer {index} returned an empty chain")
                     })?;
@@ -311,7 +310,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                 &client,
                 &fixture,
                 &format!("{context}: post-replay peer {index}"),
-            )?;
+            ).await?;
             if let Some(expected) = canonical_snapshot.as_ref() {
                 ensure!(
                     &snapshot == expected,
@@ -320,7 +319,7 @@ async fn run_selectable_musubi_publication_phase_cut(
             } else {
                 canonical_snapshot = Some(snapshot);
             }
-            let blocks = client.client().query(FindBlocks).execute_all()?;
+            let blocks = client.account_client().query(FindBlocks).execute_all().await?;
             let empty_successors = blocks
                 .iter()
                 .filter(|block| {

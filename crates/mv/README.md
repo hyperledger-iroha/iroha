@@ -74,14 +74,25 @@ and wake retries after their physical guards are released. Other threads and
 pools keep notifying normally. Notification also preserves the remaining
 original waiters when one callback unwinds, without suppressing its panic.
 
-Writer admission now carries explicit move-only constructor input alongside both
-shell charges. The B+tree's original padded node allocations can retain typed
-charges through clone/split/unwind and actual free, with the untracked map using
-the same implementation. The same cursor now carries fixed charged tracking buffers through retirement
-and checks their complete structural insertion bound before mutation. Closed map
-admission still requires complete payload demand planning, concrete MV payload
-policies and initial/undo ownership. Node payload copies now require an explicit
-funding-provider policy; node credits alone cannot authorize ordinary Clone.
+Writer admission carries original move-only input alongside exact shell charges.
+The existing B+tree wrappers also expose `Prepaid<P>` for closed insertions:
+under the original writer lock, it plans node/buffer/shell layouts and an explicit
+nested payload bound, reserves once, then returns its completed detached owner.
+Unused admission returns before handoff; actual allocation charges remain until
+physical free. Further admitted edits retain that same private cursor and
+publication shell, replacing exhausted bookkeeping only after complete admission.
+Refusal returns the original owner and input; intermediate edits stay private.
+Initial root and reader blocks retain their exact charges through reclamation.
+An exclusive prepaid checkpoint can abort child edits back to the original
+parent root and tracking buffers without allocating, including at full capacity.
+Nested apply keeps edits private; only the original writer can publish. A caught
+edit or cleanup panic forbids further use of that cursor.
+Real MV budget regressions exercise this public boundary. Production Storage
+now uses the same B+tree engine for current and block-undo data, retaining both
+original generations through snapshots and publication retries. Ordinary block
+opening no longer deep-clones prior undo values before clearing them. These maps
+remain Untracked pending native lock/runtime, joint edit and transaction admission,
+concrete model payload policies and configured aggregate integration.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.

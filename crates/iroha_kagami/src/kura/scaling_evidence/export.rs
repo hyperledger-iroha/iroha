@@ -3,11 +3,15 @@
 //! This typed owner accepts an independently retained launch plan and separately
 //! supplied input digests. It returns no artifact until both consuming owners
 //! finish. No exported field, digest, roster or boolean can supply launch trust.
-//! TODO: connect secure retained input handles, pre-submit signed-byte retention,
-//! the pinned executable invocation and a descriptor-owned atomic output sink.
+//! The filesystem and command modules retain secure inputs and atomically publish
+//! under their original descriptors. Launch facts consume the original collector
+//! journal, including signed bytes retained before submission. The parent owns
+//! executable/runtime admission, terminal status and release qualification.
 
+pub(crate) mod facts_command;
 pub(crate) mod filesystem;
 pub(crate) mod launcher;
+pub(crate) mod stopped_tip_command;
 
 use super::*;
 use iroha_core::kura::{
@@ -97,7 +101,13 @@ impl VerifiedExport {
     /// pinned verifier, retain the canonical artifact, and join every row to its
     /// independently admitted schedule/trace. Hashes use canonical lowercase hex;
     /// authority uses canonical domainless I105; lane and dataspace are integers.
-    pub fn json_projection(&self) -> Result<Vec<u8>> {
+    /// The independently supplied maximum must be nonzero and at most 256 MiB.
+    /// It includes array delimiters and commas; failure returns no partial rows.
+    pub fn json_projection(&self, maximum: u64) -> Result<Vec<u8>> {
+        ensure!(
+            maximum > 0 && maximum <= MAX_PROOF_BYTES,
+            "projection maximum must be between 1 byte and 256 MiB"
+        );
         // Bound all row temporaries before constructing JSON values. The bounded
         // serializer counts before allocating each <=1 KiB row destination.
         let reserve = u64::try_from(self.rows.len())?
@@ -110,10 +120,22 @@ impl VerifiedExport {
                 .is_some_and(|n| n <= self.output_limit),
             "projection output reservation exceeded"
         );
-        let mut output = Vec::with_capacity(usize::try_from(reserve)?);
+        let allocation = usize::try_from(reserve.min(maximum))?;
+        ensure!(allocation >= 2, "projection exceeds independent maximum");
+        let mut output = Vec::with_capacity(allocation);
         output.push(b'[');
         for (index, row) in self.rows.iter().enumerate() {
             let bytes = projection_row(row)?;
+            let prospective = output
+                .len()
+                .checked_add(usize::from(index > 0))
+                .and_then(|n| n.checked_add(bytes.len()))
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(|| eyre!("projection length overflow"))?;
+            ensure!(
+                prospective <= allocation,
+                "projection exceeds independent maximum"
+            );
             if index > 0 {
                 output.push(b',');
             }
@@ -571,3 +593,11 @@ fn seal(
 #[cfg(test)]
 #[path = "export/tests.rs"]
 mod tests;
+
+#[cfg(all(
+    test,
+    unix,
+    any(target_vendor = "apple", target_os = "linux", target_os = "android")
+))]
+#[path = "export/prepare_command_tests.rs"]
+mod prepare_command_tests;

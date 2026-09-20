@@ -59,3 +59,7 @@ path = "tests/map_owned_generations.rs"
 [[test]]
 name = "linear_allocation_custody"
 path = "tests/linear_allocation_custody.rs"
+
+[[test]]
+name = "admitted_map_custody"
+path = "tests/admitted_map_custody.rs"

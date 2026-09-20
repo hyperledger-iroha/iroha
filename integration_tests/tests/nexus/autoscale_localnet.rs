@@ -124,12 +124,13 @@ fn public_profile_lane_catalog() -> TomlValue {
         TomlValue::Table(lane_descriptor(2, "zk")),
     ])
 }
+// Ordinary lifecycle and recovery cases exercise the production daemon.
+// Scenarios that control authenticated votes opt in at their call site.
 fn autoscale_localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
-        .with_consensus_message_control()
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "autoscale", "enabled"], true)
@@ -1992,7 +1993,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                     committed: lane.committed,
                 })
                 .collect::<Vec<_>>();
-            let sumeragi_status = client.client().get_sumeragi_diagnostics().ok();
+            let sumeragi_status = client.get_sumeragi_diagnostics().ok();
             let lane_commitments = sumeragi_status
                 .as_ref()
                 .map(|sumeragi_status| {
@@ -4832,7 +4833,7 @@ fn wait_for_certified_elastic_lane(
         last_observed = 0;
         last_errors.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.client().get_sumeragi_diagnostics() {
+            match client.get_sumeragi_diagnostics() {
                 Ok(status)
                     if status.committed_lane_blocks.iter().any(|block| {
                         block.lane_id == lane_id
@@ -5048,6 +5049,13 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
     ensure!(
         network.peers().len() == TOTAL_PEERS,
         "two-phase drain regression requires exactly {TOTAL_PEERS} peers"
+    );
+    ensure!(
+        network
+            .peers()
+            .iter()
+            .all(|peer| peer.consensus_message_control().is_none()),
+        "two-phase drain recovery must use the production daemon without message control"
     );
     wait_for_storage_lane_count(
         &network,

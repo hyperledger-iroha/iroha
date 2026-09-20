@@ -1,5 +1,26 @@
 # Lexically loaded by check_sumeragi_v2_multilane_models.py.
 
+def _validate_inflight_recorder_inventory(
+    runner_path: Path, runner_source: str, errors: list[str]
+) -> None:
+    """Bind the retained recorder init to the complete current case inventory."""
+
+    recorder_case_count = 1 + len(INFLIGHT_LAYOUT_MUTATIONS)
+    recorder_init_command = (
+        'run_dir="$(python3 -I -S "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_artifacts.py" init \\\n  --parent "${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:-${TMPDIR:-/tmp}}" \\\n  --runner "${BASH_SOURCE[0]}" --expected-cases '
+        + str(recorder_case_count)
+        + ' \\\n  --support "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh" \\\n  --support "${REPO_ROOT}/scripts/formal/resolve_java.sh")"'
+    )
+    if (
+        runner_source.count("--expected-cases") != 1
+        or runner_source.count("\n" + recorder_init_command + "\n") != 1
+    ):
+        errors.append(
+            f"{runner_path}: recorder must declare exactly {recorder_case_count} "
+            "cases for the single positive and complete mutation inventory"
+        )
+
+
 def _validate_inflight_binding_inventory(contract: Any, errors: list[str]) -> None:
     """Compare exact current declarations without substituting owner names or tokens."""
 
@@ -391,6 +412,7 @@ def _validate_inflight_layout_contract(
         compact_runner_source = " ".join(
             runner_source.replace("\\\n", " ").split()
         )
+        _validate_inflight_recorder_inventory(runner_path, runner_source, errors)
         for token in (
             'source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"',
             '[[ "$status" -ne 12 ]]',

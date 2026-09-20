@@ -1318,6 +1318,102 @@ fn released_lifecycle_validated_marker_stages_current_decision_apply_and_consume
         .exact_pending_adapter_effect_binding(&validate_effect)
         .expect("the released Validate retains one exact pending binding");
 
+    let apply = AdapterEffect::Apply {
+        tag: current_tag,
+        subject: decision.subject,
+        certificate: decision.clone(),
+    };
+    let foreign_validate = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&certified_fetch),
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                current_tag,
+                0xB5_02,
+                b"different current Commit Fetch owner",
+            ),
+        ],
+    )
+    .expect("bind a distinct Validate owner with identical coordinates")
+    .pop()
+    .expect("one different owner")
+    .rebind_as_inherited_adapter_effect(&validate_effect)
+    .expect("retain the same complete Commit authority")
+    .exact_pending_adapter_effect_binding(&validate_effect)
+    .expect("seal the different predecessor binding");
+    assert_ne!(
+        validate_pending.causal_lifecycle_key(),
+        foreign_validate.causal_lifecycle_key()
+    );
+    let wrong_receipt = DurableBodyReceipt::for_test(
+        adapter.wire_context.id(),
+        manifest.round,
+        subject(0xB6),
+        HashOf::new(&manifest),
+    );
+    let wal_bytes_before = std::fs::read(directory.path().join("safety.wal"))
+        .expect("read the actual Decision WAL before rejected completion");
+    for mismatch in 0..3 {
+        let predecessor = if mismatch == 1 {
+            &foreign_validate
+        } else {
+            &validate_pending
+        };
+        let child_owner = if mismatch == 0 {
+            &foreign_validate
+        } else {
+            &validate_pending
+        };
+        let child = child_owner
+            .project_validate_apply_successor(&validate_effect, &apply)
+            .expect("both candidate children have the exact effect but different origins");
+        let child_root = *child.causal_lifecycle_key();
+        let child_identity = *child.exact_effect_identity();
+        let receipt = if mismatch == 2 {
+            &wrong_receipt
+        } else {
+            &durable
+        };
+        let sealed = adapter
+            .pending_live_decision_apply
+            .take()
+            .expect("retain original Decision seal");
+        let (sealed, child) = match sealed.complete_exact_released_apply(
+            &validate_effect,
+            predecessor,
+            child,
+            receipt,
+        ) {
+            Err(returned) => returned,
+            Ok(_) => panic!(
+                "foreign child, foreign predecessor or foreign body receipt must be rejected"
+            ),
+        };
+        assert_eq!(*child.causal_lifecycle_key(), child_root);
+        assert_eq!(*child.exact_effect_identity(), child_identity);
+        assert!(
+            sealed.exactly_binds_pending_apply_decision(
+                current_tag,
+                decision.round,
+                decision.proposal_round,
+                decision.subject,
+                decision.execution_commitment,
+            ),
+            "failure must return the original source-only Decision seal"
+        );
+        assert!(!sealed.exactly_binds_completed_apply(&durable));
+        adapter.pending_live_decision_apply = Some(sealed);
+        assert_eq!(
+            std::fs::read(directory.path().join("safety.wal"))
+                .expect("read Decision WAL after rejected completion"),
+            wal_bytes_before
+        );
+        assert_eq!(
+            adapter.reducer.body_state(core_round, core_subject),
+            reducer::BodyState::Durable
+        );
+        assert!(!adapter.fail_closed);
+    }
+
     let marker = DeferredReleasedLifecycleValidatedMarkerV1::for_test(
         current_tag,
         &manifest,

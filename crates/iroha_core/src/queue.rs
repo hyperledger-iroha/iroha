@@ -26072,7 +26072,10 @@ pub mod tests {
     }
     /// Latch the real pending-plan recovery failure for the carrier-cut control.
     pub(crate) fn fault_carrier_retirement_queue_fixture(queue: &Queue) {
-        queue.mark_plan_journal_durability_fault(&std::io::Error::other("carrier cut fixture fault"), None);
+        queue.mark_plan_journal_durability_fault(
+            &std::io::Error::other("carrier cut fixture fault"),
+            None,
+        );
     }
 
     /// Enqueue actual lane-one work for the carrier retirement integration controls.
@@ -26084,9 +26087,12 @@ pub mod tests {
         queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
         let transaction = accepted_tx_by_someone(&time);
         register_accepted_tx_authority_for_queue_test(state, &transaction);
-        let route = queue.route_plan_with_state(&transaction, state).expect("fixture route");
+        let route = queue
+            .route_plan_with_state(&transaction, state)
+            .expect("fixture route");
         assert_eq!(route.coordinator_route().lane_id, LaneId::new(1));
-        queue.push_with_lane_with_state_and_routing_plan(transaction, state, route)
+        queue
+            .push_with_lane_with_state_and_routing_plan(transaction, state, route)
             .expect("enqueue actual retirement fixture work");
         (queue, clock)
     }

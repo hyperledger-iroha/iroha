@@ -12,7 +12,10 @@
     unix,
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 ))]
-pub(super) use supported::{TraceOutput, new_owned_file};
+pub(super) use supported::{
+    TraceOutput, canonical_inputs,
+    load_receipt::{JournalOutput, RetainedLoadFile},
+};
 
 #[cfg(all(
     unix,
@@ -233,9 +236,18 @@ mod supported {
             }
             Ok(())
         }
+        #[cfg(test)]
         fn create(
             &self,
             name: &std::ffi::OsStr,
+            hook: &mut impl FnMut(Phase) -> Result<()>,
+        ) -> Result<(File, Identity)> {
+            self.create_with_access(name, false, hook)
+        }
+        fn create_with_access(
+            &self,
+            name: &std::ffi::OsStr,
+            readable: bool,
             hook: &mut impl FnMut(Phase) -> Result<()>,
         ) -> Result<(File, Identity)> {
             self.check()?;
@@ -244,7 +256,11 @@ mod supported {
             let file = File::from(rustix::fs::openat(
                 self.file(),
                 name,
-                FILE_FLAGS,
+                if readable {
+                    (FILE_FLAGS & !OFlags::ACCMODE) | OFlags::RDWR
+                } else {
+                    FILE_FLAGS
+                },
                 Mode::RUSR | Mode::WUSR,
             )?);
             let state = held(&file)?;
@@ -298,9 +314,11 @@ mod supported {
             self.check()
         }
     }
+    #[cfg(test)]
     pub(crate) fn new_owned_file(path: &Path) -> Result<File> {
         new_owned_file_with_hook(path, |_| Ok(()))
     }
+    #[cfg(test)]
     fn new_owned_file_with_hook(
         path: &Path,
         mut hook: impl FnMut(Phase) -> Result<()>,
@@ -349,7 +367,7 @@ mod supported {
                 "trace stage path exceeds bound"
             );
             let (parent, destination) = Parent::capture(path, &mut hook)?;
-            let (file, identity) = parent.create(&stage, &mut hook)?;
+            let (file, identity) = parent.create_with_access(&stage, true, &mut hook)?;
             Ok(Self {
                 parent,
                 file,
@@ -362,10 +380,13 @@ mod supported {
         pub(crate) fn file_mut(&mut self) -> &mut File {
             &mut self.file
         }
-        pub(crate) fn publish(self) -> Result<()> {
+        pub(crate) fn publish(self) -> Result<load_receipt::RetainedLoadFile> {
             self.publish_with_hook(|_| Ok(()))
         }
-        fn publish_with_hook(self, mut hook: impl FnMut(Phase) -> Result<()>) -> Result<()> {
+        fn publish_with_hook(
+            self,
+            mut hook: impl FnMut(Phase) -> Result<()>,
+        ) -> Result<load_receipt::RetainedLoadFile> {
             let before =
                 self.parent
                     .check_file(&self.file, &self.stage, self.identity, self.maximum)?;
@@ -433,8 +454,23 @@ mod supported {
                 "trace changed during publication sync"
             );
             self.parent.require_absent(&self.stage)?;
-            Ok(())
+            load_receipt::RetainedLoadFile::capture(
+                self.parent,
+                self.destination,
+                self.file,
+                published,
+                self.maximum,
+                Some(self.stage),
+            )
         }
+    }
+    /// Exact journal and trace owners retained through terminal reply flush.
+    pub(crate) mod load_receipt {
+        include!("output/load_receipt.rs");
+    }
+    /// Retained originals and exact native transport publication.
+    pub(crate) mod canonical_inputs {
+        include!("output/canonical_inputs.rs");
     }
     #[cfg(test)]
     include!("output/tests.rs");
@@ -449,10 +485,110 @@ mod unsupported {
     use std::{fs::File, path::Path};
     // TODO: implement retained parent handles and atomic no-replace publication on Windows/other targets.
     // No pathname reopen, overwrite, hard-link fallback or unsafe compatibility route is accepted.
-    pub(crate) fn new_owned_file(_: &Path) -> Result<File> {
-        Err(eyre!(
-            "descriptor-owned output is unsupported on this platform"
-        ))
+    /// Fail closed where retained no-follow and no-replace owners are unavailable.
+    pub(crate) mod canonical_inputs {
+        use super::*;
+        use iroha_core::kura::CanonicalKuraEvidenceComplete;
+        use iroha_data_model::{bridge::BridgeFinalityProof, query::CommittedTransaction};
+        use std::path::PathBuf;
+        pub(crate) struct OriginalInputBinding {
+            pub(crate) path: PathBuf,
+            pub(crate) raw_sha256: [u8; 32],
+            pub(crate) max_bytes: u64,
+        }
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(crate) struct RawFileIdentity {
+            pub(crate) raw_sha256: [u8; 32],
+            pub(crate) byte_length: u64,
+        }
+        #[derive(Clone, Copy, Debug)]
+        pub(crate) struct CanonicalInputCaps {
+            pub(crate) finality_bytes: u64,
+            pub(crate) query_bytes: u64,
+            pub(crate) total_bytes: u64,
+        }
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(crate) struct CanonicalInputsIdentity {
+            pub(crate) context: RawFileIdentity,
+            pub(crate) finality: RawFileIdentity,
+            pub(crate) queries: RawFileIdentity,
+        }
+        pub(crate) struct RetainedOriginalInput {
+            _unavailable: (),
+        }
+        pub(crate) struct CanonicalInputPair {
+            _unavailable: (),
+        }
+        pub(crate) struct PublishedCanonicalInputs {
+            _unavailable: (),
+        }
+        fn unsupported<T>() -> Result<T> {
+            Err(eyre!(
+                "retained canonical inputs are unsupported on this platform"
+            ))
+        }
+        impl RetainedOriginalInput {
+            pub(crate) fn open(_: OriginalInputBinding) -> Result<Self> {
+                unsupported()
+            }
+            pub(crate) fn with_bytes<T>(&self, _: impl FnOnce(&[u8]) -> Result<T>) -> Result<T> {
+                unsupported()
+            }
+            pub(crate) fn require_descriptor(&self, _: u32) -> Result<()> {
+                unsupported()
+            }
+            pub(crate) fn identity(&self) -> Result<RawFileIdentity> {
+                unsupported()
+            }
+        }
+        impl CanonicalInputPair {
+            pub(crate) fn admit(_: &Path, _: &Path, _: CanonicalInputCaps) -> Result<Self> {
+                unsupported()
+            }
+            pub(crate) fn publish(
+                self,
+                _: RetainedOriginalInput,
+                _: CanonicalKuraEvidenceComplete,
+                _: &Vec<BridgeFinalityProof>,
+                _: &Vec<CommittedTransaction>,
+                _: &impl Fn() -> Result<()>,
+            ) -> Result<PublishedCanonicalInputs> {
+                unsupported()
+            }
+        }
+        impl PublishedCanonicalInputs {
+            pub(crate) fn identity(&self) -> Result<CanonicalInputsIdentity> {
+                unsupported()
+            }
+        }
+    }
+    pub(crate) struct JournalOutput;
+    #[derive(Debug)]
+    pub(crate) struct RetainedLoadFile;
+    impl JournalOutput {
+        pub(crate) fn create(_: &Path, _: usize) -> Result<Self> {
+            Err(eyre!("retained load output unavailable"))
+        }
+        pub(crate) fn writer_file(&self) -> Result<File> {
+            Err(eyre!("retained load output unavailable"))
+        }
+        pub(crate) fn seal(self, _: canonical_inputs::RawFileIdentity) -> Result<RetainedLoadFile> {
+            Err(eyre!("retained load output unavailable"))
+        }
+    }
+    impl RetainedLoadFile {
+        pub(crate) fn pair_identity(
+            &self,
+            _: &Self,
+        ) -> Result<(
+            canonical_inputs::RawFileIdentity,
+            canonical_inputs::RawFileIdentity,
+        )> {
+            Err(eyre!("retained load output unavailable"))
+        }
+        pub(crate) fn identity(&self) -> Result<canonical_inputs::RawFileIdentity> {
+            Err(eyre!("retained load output unavailable"))
+        }
     }
     pub(crate) struct TraceOutput {
         file: File,
@@ -466,7 +602,7 @@ mod unsupported {
         pub(crate) fn file_mut(&mut self) -> &mut File {
             &mut self.file
         }
-        pub(crate) fn publish(self) -> Result<()> {
+        pub(crate) fn publish(self) -> Result<RetainedLoadFile> {
             Err(eyre!(
                 "descriptor-owned output is unsupported on this platform"
             ))
@@ -477,4 +613,4 @@ mod unsupported {
     unix,
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 )))]
-pub(super) use unsupported::{TraceOutput, new_owned_file};
+pub(super) use unsupported::{JournalOutput, RetainedLoadFile, TraceOutput, canonical_inputs};

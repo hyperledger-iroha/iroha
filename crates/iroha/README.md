@@ -58,6 +58,13 @@ with `client.operator_client(operator_key_pair)?`. Synchronous applications use
 runtime. Remaining synchronous capability methods and authority-owned operations
 are tracked in the repository's first-release architecture redesign record.
 
+Account queries use `account.query_single(query).await?` or, with
+`iroha::query::AsyncQueryBuilderExt` imported,
+`account.query(query).execute_all().await?`. Use `execute().await?` to obtain a
+typed `QueryStream` and consume individual rows with `next().await`. Each
+continuation consumes its cursor before dispatch; a failed or cancelled
+continuation ends that stream and cannot replay the signed request.
+
 ## Node diagnostics
 
 Use `client.status().get().await?` for the typed status document and
@@ -66,6 +73,13 @@ use the same capability through `iroha::blocking::Client`, without `.await`.
 The operation selects one response representation, enforces the context deadline
 and rejects oversized or ambiguously labelled responses. Transport errors retain
 their I/O category in `TransportErrorKind`; HTTP errors retain their bounded body.
+
+Consensus operational evidence comes from
+`client.get_sumeragi_diagnostics().await?`, which sends an operator-signed request
+and validates Native AMX groups, participant applications, autonomous execution
+and relay evidence. `client.get_cross_lane_transfer_proofs().await?` additionally
+rejects duplicate relay proofs. Synchronous callers use the same method names on
+`iroha::blocking::Client`.
 
 Submission discovers the node's data-model version and signed-transaction schema
 through public `/v1/node/capabilities` metadata before dispatching transaction

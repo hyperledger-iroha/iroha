@@ -545,7 +545,8 @@ def build_receipt(
     g4p_completion_path: Path,
     g12_seed_completion_path: Path,
     g12_fault_soak_completion_path: Path,
-    scaling_evidence_manifest_path: Path,
+    scaling_execution_record_path: Path,
+    expected_scaling_execution_sha256: str,
     sdk_dependency_archive_path: Path,
     sdk_dependency_input_inventory_path: Path,
     sdk_dependency_final_work_inventory_path: Path,
@@ -554,10 +555,6 @@ def build_receipt(
     runtime_tool_probe_runtime_available: bool,
     private_build_roots_available: bool,
     bootstrap_private_inputs_available: bool,
-    expected_scaling_trial_harness_sha256: str,
-    expected_scaling_configuration_sha256: str,
-    expected_scaling_irohad_sha256: str,
-    expected_scaling_iroha_cli_sha256: str,
     repository_root_path: Path,
     runner_logs_sealed: bool = False,
 ) -> tuple[
@@ -653,15 +650,8 @@ def build_receipt(
         expected_signer_fingerprint=expected_signer_fingerprint,
         signature_archives=signature_archives,
         runner_logs_sealed=runner_logs_sealed,
-        expected_scaling_manifest_path=scaling_evidence_manifest_path,
-        expected_scaling_trial_harness_sha256=(
-            expected_scaling_trial_harness_sha256
-        ),
-        expected_scaling_configuration_sha256=(
-            expected_scaling_configuration_sha256
-        ),
-        expected_scaling_irohad_sha256=expected_scaling_irohad_sha256,
-        expected_scaling_iroha_cli_sha256=expected_scaling_iroha_cli_sha256,
+        expected_scaling_execution_record_path=scaling_execution_record_path,
+        expected_scaling_execution_sha256=expected_scaling_execution_sha256,
         expected_formal_replay_source_receipt_path=(
             formal_replay_source_receipt_path
         ),
@@ -714,24 +704,6 @@ def build_receipt(
         }
     )
 
-    (
-        scaling_bundle,
-        retained_scaling_validator,
-        scaling_trust_anchors,
-    ) = _validate_scaling_evidence(
-        manifest_path=scaling_evidence_manifest_path,
-        sealed=sealed,
-        repo_root=repo_root,
-        checker_environment=checker_environment,
-        expected_trial_harness_sha256=(
-            expected_scaling_trial_harness_sha256
-        ),
-        expected_configuration_sha256=(
-            expected_scaling_configuration_sha256
-        ),
-        expected_irohad_sha256=expected_scaling_irohad_sha256,
-        expected_iroha_cli_sha256=expected_scaling_iroha_cli_sha256,
-    )
     corridor_path, corridor_completion = _load_tsv(
         corridor_completion_path, "corridor completion"
     )
@@ -767,6 +739,14 @@ def build_receipt(
         / sealed["workspace_source_manifest_sha256"]
         / "programs"
         / prebuilt_invocation_id
+    )
+    scaling_evidence = _validate_fixed_scaling_archive(
+        execution_record_path=scaling_execution_record_path,
+        expected_execution_sha256=expected_scaling_execution_sha256,
+        bootstrap_evidence=bootstrap_evidence_dir_path, sealed=sealed,
+        repo_root=repo_root, checker_environment=checker_environment,
+        prebuilt_bundle=prebuilt_binary_bundle, prebuilt_bundle_dir=prebuilt_bundle_dir,
+        bootstrap_authentication=bootstrap_authentication,
     )
     g4p_evidence = _validate_g4p_evidence(
         completion_path=g4p_completion_path,
@@ -1006,9 +986,7 @@ def build_receipt(
             ],
             "chaos_completion": _artifact(chaos_path),
             "chaos_log": _artifact(chaos_log_contract),
-            "multilane_scaling_bundle": scaling_bundle,
-            "multilane_scaling_retained_validator": retained_scaling_validator,
-            "multilane_scaling_trust_anchors": scaling_trust_anchors,
+            "multilane_scaling": scaling_evidence,
             "g4p_multilane": g4p_evidence,
             "g12_cross_dataspace": g12_evidence,
         },
@@ -1066,6 +1044,9 @@ def _capture_path_contract(
         raise ReceiptError(f"{name} link count changed before receipt publication")
     if expected_size is not None and before.st_size != expected_size:
         raise ReceiptError(f"{name} size changed before receipt publication")
+    if before.st_size > 4 * 1024 * 1024 * 1024:
+        raise ReceiptError(f"{name} exceeds the aggregate evidence size limit")
+    maximum_bytes = before.st_size
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -1081,17 +1062,18 @@ def _capture_path_contract(
             or opened.st_mode != before.st_mode
             or opened.st_uid != before.st_uid
             or opened.st_nlink != before.st_nlink
+            or opened.st_size != before.st_size
         ):
             raise ReceiptError(f"{name} changed while it was opened")
         digest = hashlib.sha256()
         size = 0
         while True:
-            chunk = os.read(descriptor, 1024 * 1024)
+            chunk = os.read(descriptor, min(1024 * 1024, maximum_bytes - size + 1))
             if not chunk:
                 break
             size += len(chunk)
-            if size > 4 * 1024 * 1024 * 1024:
-                raise ReceiptError(f"{name} exceeds the aggregate evidence size limit")
+            if size > maximum_bytes:
+                raise ReceiptError(f"{name} grew beyond its captured evidence size")
             digest.update(chunk)
         after = os.fstat(descriptor)
         fields = (
@@ -1133,7 +1115,6 @@ def _snapshot_receipt_inputs(
     *,
     candidate_identity: PathContract,
     sealed_identity: PathContract,
-    scaling_root: Path,
     bootstrap_evidence_root: Path,
     candidate_root: Path,
     release_root: Path,
@@ -1174,70 +1155,44 @@ def _snapshot_receipt_inputs(
             continue
         by_path[path] = record
 
-    scaling_bundle = receipt["evidence"].get("multilane_scaling_bundle")
-    if not isinstance(scaling_bundle, dict):
-        raise ReceiptError("aggregate receipt lacks its scaling bundle inventory")
-    scaling_files_raw = scaling_bundle.get("files")
-    scaling_directories_raw = scaling_bundle.get("directories")
-    if (
-        scaling_bundle.get("archive_id") != "release-scaling.bundle.v1"
-        or not isinstance(scaling_files_raw, list)
-        or not isinstance(scaling_directories_raw, list)
-    ):
-        raise ReceiptError("aggregate receipt scaling bundle inventory is malformed")
-    expected_scaling_files: list[str] = []
-    expected_scaling_size = 0
-    for index, record in enumerate(scaling_files_raw):
-        if not isinstance(record, dict):
-            raise ReceiptError("aggregate receipt scaling file record is malformed")
-        relative = record.get("relative_path")
-        size = record.get("size_bytes")
-        if (
-            not isinstance(relative, str)
-            or type(size) is not int
-            or record.get("archive_id") != "release-scaling.file.v1:" + relative
-        ):
-            raise ReceiptError(
-                f"aggregate receipt scaling file {index} path is malformed"
-            )
-        expected_scaling_files.append(relative)
-        expected_scaling_size += size
-    if expected_scaling_files != sorted(expected_scaling_files) or len(
-        expected_scaling_files
-    ) != len(set(expected_scaling_files)):
-        raise ReceiptError(
-            "aggregate receipt scaling files are not one deterministic inventory"
-        )
-    if (
-        scaling_bundle.get("file_count") != len(expected_scaling_files)
-        or scaling_bundle.get("total_size_bytes") != expected_scaling_size
-        or any(not isinstance(item, str) for item in scaling_directories_raw)
-        or scaling_directories_raw != sorted(scaling_directories_raw)
-    ):
-        raise ReceiptError("aggregate receipt scaling bundle accounting is inconsistent")
-    current_scaling, current_directories, current_scaling_size = (
-        _scan_scaling_bundle(scaling_root)
-    )
-    if (
-        [item[0] for item in current_scaling] != expected_scaling_files
-        or current_directories != scaling_directories_raw
-        or current_scaling_size != expected_scaling_size
-    ):
-        raise ReceiptError(
-            "scaling evidence bundle inventory changed before receipt publication"
-        )
-    for relative, path, metadata in current_scaling:
-        record = next(
-            item for item in scaling_files_raw if item["relative_path"] == relative
-        )
-        by_path[path] = {
-            "path": str(path),
-            "sha256": record["sha256"],
-            "size_bytes": record["size_bytes"],
-            "mode": record["mode"],
-            "owner_uid": metadata.st_uid,
-            "nlink": metadata.st_nlink,
-        }
+    scaling_evidence = receipt['evidence'].get('multilane_scaling')
+    if not isinstance(scaling_evidence, dict) or not isinstance(scaling_evidence.get('parent_execution'), dict):
+        raise ReceiptError('aggregate receipt lacks parent scaling execution')
+    scaling_api = _scaling_record_support(release_root,
+        execution_record_path=bootstrap_evidence_root / 'scaling-execution.json',
+        expected_execution_sha256=scaling_evidence['parent_execution'].get('sha256'),
+        bootstrap_evidence=bootstrap_evidence_root)
+    scaling_record, scaling_snapshot = _scaling_execution_record(scaling_api,
+        bootstrap_evidence_root / 'scaling-execution.json',
+        scaling_evidence['parent_execution'].get('sha256'), bootstrap_evidence_root)
+    if scaling_api.receipt_projection(scaling_record) != scaling_evidence:
+        raise ReceiptError('aggregate receipt scaling projection differs')
+    scaling_root = _fixed_scaling_root(release_root)
+    scaling_files_raw, scaling_directories_raw = scaling_api.capture_public_archive(scaling_root, scaling_record)
+    by_path[scaling_snapshot.path] = _path_contract_artifact(_snapshot_contract(scaling_snapshot))
+    verifier_root = bootstrap_evidence_root / 'scaling-verifier-python'
+    verifier_files, verifier_directories = scaling_api.capture_verifier_archive(verifier_root, scaling_record)
+    preflight_root = bootstrap_evidence_root / 'scaling-preflight'
+    preflight_runner = receipt['authentication']['bootstrap']['runner']
+    preflight_identity = dict(head_commit=receipt['identity']['head_commit'],
+        head_tree=receipt['identity']['head_tree'],
+        workspace_source_manifest_sha256=receipt['identity']['sealed_source_manifest_sha256'])
+    preflight_context = dict(source_root=release_root, candidate_identity=preflight_identity,
+        invocation_sha256=preflight_runner['scaling_handoff']['IROHA_RELEASE_SCALING_INVOCATION_SHA256'],
+        timeout_seconds=preflight_runner['scaling_preflight_timeout_seconds'])
+    preflight_files, preflight_directories = scaling_api.capture_preflight_archive(preflight_root, scaling_record, **preflight_context)
+    for row in preflight_files:
+        path = preflight_root / row['relative_path']
+        by_path[path] = dict(path=str(path), sha256=row['sha256'], size_bytes=row['size_bytes'],
+                            mode=row['mode'], owner_uid=os.geteuid(), nlink=1)
+    for row in verifier_files:
+        path = verifier_root / row['relative_path']
+        by_path[path] = dict(path=str(path), sha256=row['sha256'], size_bytes=row['size_bytes'],
+                            mode=row['mode'], owner_uid=os.geteuid(), nlink=1)
+    for record in scaling_files_raw:
+        path = scaling_root.joinpath(*PurePosixPath(record['relative_path']).parts)
+        by_path[path] = dict(path=str(path), sha256=record['sha256'],
+            size_bytes=record['size_bytes'], mode=record['mode'], owner_uid=os.geteuid(), nlink=1)
 
     prebuilt_bundle = receipt["evidence"].get("prebuilt_binary_bundle")
     if (
@@ -1717,6 +1672,12 @@ def _snapshot_receipt_inputs(
                 f"aggregate evidence directory {index}",
             )
         )
+    for row in verifier_directories:
+        snapshots.append(_capture_directory_contract(verifier_root / row["relative_path"], "retained scaling verifier directory"))
+    for row in preflight_directories:
+        snapshots.append(_capture_directory_contract(preflight_root / row['relative_path'], 'retained scaling preflight directory'))
+    if scaling_api.capture_preflight_archive(preflight_root, scaling_record, **preflight_context) != (preflight_files, preflight_directories):
+        raise ReceiptError('complete scaling preflight changed during publication capture')
     return snapshots
 
 
@@ -1771,6 +1732,7 @@ def _revalidate_receipt_inputs(
     *,
     ignored_directories: frozenset[Path] = frozenset(),
 ) -> None:
+    _verify_scaling_record_runtime()
     for index, snapshot in enumerate(snapshots):
         if isinstance(snapshot, DirectoryContract):
             if snapshot.path in ignored_directories:
@@ -2107,7 +2069,8 @@ def main() -> int:
     parser.add_argument("--g4p-completion", type=Path, required=True)
     parser.add_argument("--g12-seed-completion", type=Path, required=True)
     parser.add_argument("--g12-fault-soak-completion", type=Path, required=True)
-    parser.add_argument("--scaling-evidence-manifest", type=Path, required=True)
+    parser.add_argument("--scaling-execution-record", type=Path, required=True)
+    parser.add_argument("--expected-scaling-execution-sha256", required=True)
     parser.add_argument("--sdk-dependency-archive", type=Path, required=True)
     parser.add_argument(
         "--sdk-dependency-input-inventory", type=Path, required=True
@@ -2121,14 +2084,6 @@ def main() -> int:
     parser.add_argument(
         "--runtime-tool-probe-result", type=Path, required=True
     )
-    parser.add_argument(
-        "--expected-scaling-trial-harness-sha256", required=True
-    )
-    parser.add_argument(
-        "--expected-scaling-configuration-sha256", required=True
-    )
-    parser.add_argument("--expected-scaling-irohad-sha256", required=True)
-    parser.add_argument("--expected-scaling-iroha-cli-sha256", required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--verify-existing", action="store_true")
@@ -2187,7 +2142,8 @@ def main() -> int:
             g4p_completion_path=args.g4p_completion,
             g12_seed_completion_path=args.g12_seed_completion,
             g12_fault_soak_completion_path=args.g12_fault_soak_completion,
-            scaling_evidence_manifest_path=args.scaling_evidence_manifest,
+            scaling_execution_record_path=args.scaling_execution_record,
+            expected_scaling_execution_sha256=args.expected_scaling_execution_sha256,
             sdk_dependency_archive_path=args.sdk_dependency_archive,
             sdk_dependency_input_inventory_path=(
                 args.sdk_dependency_input_inventory
@@ -2200,18 +2156,6 @@ def main() -> int:
             runtime_tool_probe_runtime_available=(not args.replay_existing),
             private_build_roots_available=(not args.replay_existing),
             bootstrap_private_inputs_available=(not args.replay_existing),
-            expected_scaling_trial_harness_sha256=(
-                args.expected_scaling_trial_harness_sha256
-            ),
-            expected_scaling_configuration_sha256=(
-                args.expected_scaling_configuration_sha256
-            ),
-            expected_scaling_irohad_sha256=(
-                args.expected_scaling_irohad_sha256
-            ),
-            expected_scaling_iroha_cli_sha256=(
-                args.expected_scaling_iroha_cli_sha256
-            ),
             repository_root_path=args.repository_root,
             runner_logs_sealed=(args.verify_existing or args.replay_existing),
         )
@@ -2219,7 +2163,6 @@ def main() -> int:
             receipt,
             candidate_identity=candidate_identity,
             sealed_identity=sealed_identity,
-            scaling_root=args.scaling_evidence_manifest.parent,
             bootstrap_evidence_root=args.bootstrap_evidence_dir,
             candidate_root=args.bootstrap_candidate_root,
             release_root=args.release_root,

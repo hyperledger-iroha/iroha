@@ -188,12 +188,13 @@ pub(crate) fn read_inherited_private_file(
     Err(eyre!("inherited client inputs require Unix descriptors"))
 }
 
+/// Safely duplicate an explicitly inherited descriptor for a retained CLI input owner.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(
     unsafe_code,
     reason = "fcntl F_DUPFD_CLOEXEC validates an untrusted raw descriptor and atomically duplicates it before constructing an owned File"
 )]
-fn duplicate_inherited_descriptor(fd: u32) -> Result<std::fs::File> {
+pub(crate) fn duplicate_inherited_descriptor(fd: u32) -> Result<std::fs::File> {
     use std::os::fd::FromRawFd as _;
     // Native ABI constants from Linux fcntl.h and the Darwin SDK sys/fcntl.h.
     #[cfg(target_os = "linux")]
@@ -234,7 +235,7 @@ fn duplicate_inherited_descriptor(fd: u32) -> Result<std::fs::File> {
 }
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn duplicate_inherited_descriptor(_: u32) -> Result<std::fs::File> {
+pub(crate) fn duplicate_inherited_descriptor(_: u32) -> Result<std::fs::File> {
     Err(eyre!(
         "inherited private inputs require a supported atomic descriptor ABI"
     ))

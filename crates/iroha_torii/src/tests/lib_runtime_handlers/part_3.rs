@@ -204,14 +204,15 @@ async fn reqwest_torii_proxy_snapshot_caps_buffered_bridge_response_bodies() {
     let response = reqwest::get(format!("http://{addr}/oversized"))
         .await
         .expect("fetch upstream response");
+    assert_eq!(response.content_length(), Some(12));
     let error = match super::reqwest_response_to_torii_proxy_snapshot(response, 4, false).await {
         Ok(_) => panic!("expected capped response error"),
         Err(error) => error,
     };
     upstream_task.abort();
-    assert!(
-        error.contains("configured limit of 4 bytes"),
-        "unexpected cap error: {error}"
+    assert_eq!(
+        error, "authoritative HTTP bridge response Content-Length exceeds the 4-byte limit",
+        "declared oversized bodies must fail before buffering"
     );
 }
 #[cfg(feature = "connect")]

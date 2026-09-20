@@ -297,11 +297,13 @@ The bounded proof synchronization layer can return `verification_sync_pending`
 while retaining its verified cache, without submitting another transaction.
 An authenticated peer still catching up, or a carrier newer than its captured
 tip, yields `verification_peer_pending`. The same pending result covers an
-exact HTTP 409 `bridge_finality_attestation_tip_mismatch`: the requested,
-applied and consensus-decision heights differ. The SDK requires
-the response to bind the request's height, challenge, node and network. This
-unsigned progress response never proves finality. Generic 404s, mixed error
-details and invalid attestations remain errors. Apply retries only explicit
+exact HTTP 409 `ErrorEnvelope` with code `bridge_finality_attestation_failure`,
+whose sole `finality_attestation_failure` detail has reason `TipChanged` and its
+`tip_mismatch` payload: the requested, applied and consensus-decision heights
+differ. The SDK requires the payload and envelope to bind the request's height,
+challenge, node and network. This unsigned progress response never proves
+finality. Generic 404s, conflicting reasons or payloads, and invalid attestations
+remain errors. Apply retries only explicit
 progress outcomes within its deadline; other verification errors stop the call.
 A successful completion names its immutable `completion_receipt`; exact verified
 canonical carrier bytes are retained beside the proof cache and per-peer receipt.

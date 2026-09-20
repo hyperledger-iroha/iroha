@@ -6363,8 +6363,9 @@ fn bridge_finality_attestation_error_response(
 ) -> Result<Response> {
     use iroha_core::bridge::BridgeFinalityAttestationBuildError as BuildError;
     use iroha_data_model::bridge::BridgeFinalityAttestationValidationError as ValidationError;
-    use iroha_torii_shared::bridge_finality::{
-        BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE, BridgeFinalityAttestationTipMismatchV1,
+    use iroha_torii_shared::{
+        bridge_attestation::FinalityAttestationFailureReason as Reason,
+        bridge_finality::BridgeFinalityAttestationTipMismatchV1,
     };
 
     let applied_height = match &err {
@@ -6388,21 +6389,29 @@ fn bridge_finality_attestation_error_response(
             network_id,
         };
         if progress.is_valid() {
-            let envelope = iroha_torii_shared::ErrorEnvelope::new(
-                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
-                "Requested, applied and status tip heights differ; retry a fresh attestation within the existing deadline.",
-            ).with_details(iroha_torii_shared::ErrorDetails {
-                bridge_finality_attestation_tip_mismatch: Some(progress),
-                ..iroha_torii_shared::ErrorDetails::default()
-            });
-            return Ok(crate::utils::respond_with_status_and_format(
-                StatusCode::CONFLICT,
-                envelope,
+            return Ok(crate::bridge_attestation::failure_response(
+                Reason::TipChanged,
+                challenge,
+                requested_height,
+                Some(progress),
                 format,
             ));
         }
     }
-    Err(map_bridge_finality_attestation_error(err))
+    let reason = crate::bridge_attestation::build_failure(err, status_height);
+    // A malformed or unbound height error cannot grant retryable progress.
+    let reason = if reason == Reason::TipChanged {
+        Reason::ConflictingState
+    } else {
+        reason
+    };
+    Ok(crate::bridge_attestation::failure_response(
+        reason,
+        challenge,
+        requested_height,
+        None,
+        format,
+    ))
 }
 
 #[cfg(test)]
@@ -6413,11 +6422,11 @@ mod bridge_finality_attestation_progress_tests {
     };
     use iroha_data_model::bridge::BridgeFinalityAttestationValidationError as ValidationError;
     use iroha_torii_shared::{
-        ErrorEnvelope,
-        bridge_finality::{
-            BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
-            BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES,
+        bridge_attestation::{
+            FINALITY_ATTESTATION_FAILURE_MAX_BYTES, FinalityAttestationFailure,
+            FinalityAttestationFailureReason as Reason,
         },
+        bridge_finality::BridgeFinalityAttestationTipMismatchV1,
     };
 
     fn identity() -> (PeerId, iroha_data_model::NetworkId) {
@@ -6426,6 +6435,34 @@ mod bridge_finality_attestation_progress_tests {
             PeerId::new(key.public_key().clone()),
             routing_test_network_id(71),
         )
+    }
+
+    async fn decode_failure(
+        response: Response,
+        format: crate::utils::ResponseFormat,
+    ) -> FinalityAttestationFailure {
+        let bytes =
+            axum::body::to_bytes(response.into_body(), FINALITY_ATTESTATION_FAILURE_MAX_BYTES)
+                .await
+                .unwrap();
+        let envelope: iroha_torii_shared::ErrorEnvelope =
+            if matches!(format, crate::utils::ResponseFormat::Norito) {
+                norito::decode_canonical_with_limits(
+                    &bytes,
+                    norito::canonical_decode_limits(bytes.len()),
+                )
+                .unwrap()
+            } else {
+                norito::json::from_slice(&bytes).unwrap()
+            };
+        assert_eq!(
+            envelope.code(),
+            iroha_torii_shared::bridge_attestation::FINALITY_ATTESTATION_FAILURE_CODE
+        );
+        let mut details = envelope.details.unwrap();
+        let failure = details.finality_attestation_failure.take().unwrap();
+        assert!(details.is_empty());
+        failure
     }
 
     #[tokio::test]
@@ -6441,7 +6478,7 @@ mod bridge_finality_attestation_progress_tests {
                 crate::utils::ResponseFormat::Norito,
             ] {
                 let (node_id, network_id) = identity();
-                let err = if status_race {
+                let error = if status_race {
                     BuildError::InvalidBody(ValidationError::StatusHeightMismatch)
                 } else {
                     BuildError::HeightIsNotDurableTip {
@@ -6451,7 +6488,7 @@ mod bridge_finality_attestation_progress_tests {
                 };
                 let response = crate::finalize_bridge_finality_attestation_response(
                     bridge_finality_attestation_error_response(
-                        err,
+                        error,
                         requested,
                         status,
                         [7; 32],
@@ -6479,44 +6516,25 @@ mod bridge_finality_attestation_progress_tests {
                     response.headers()[axum::http::header::CONTENT_TYPE],
                     expected_media
                 );
-                let bytes = axum::body::to_bytes(
-                    response.into_body(),
-                    BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES,
-                )
-                .await
-                .unwrap();
-                let envelope: ErrorEnvelope =
-                    if matches!(format, crate::utils::ResponseFormat::Norito) {
-                        norito::decode_canonical_with_limits(
-                            &bytes,
-                            norito::canonical_decode_limits(bytes.len()),
-                        )
-                        .unwrap()
-                    } else {
-                        norito::json::from_slice(&bytes).unwrap()
-                    };
-                assert_eq!(envelope.code, BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE);
-                let progress = envelope
-                    .details
-                    .unwrap()
-                    .bridge_finality_attestation_tip_mismatch
-                    .unwrap();
-                assert!(progress.matches(requested, [7; 32], &node_id, network_id));
+                let failure = decode_failure(response, format).await;
+                assert_eq!(failure.reason, Reason::TipChanged);
+                assert!(failure.matches(requested, [7; 32], &node_id, network_id));
+                let progress = failure.tip_mismatch.unwrap();
                 assert_eq!(progress.applied_height, applied);
                 assert_eq!(progress.status_height, status);
             }
         }
     }
 
-    #[test]
-    fn proof_identity_and_signature_failures_are_never_tip_progress() {
+    #[tokio::test]
+    async fn proof_identity_and_signature_failures_are_never_tip_progress() {
         let mut failures = vec![
             BuildError::EmptyState,
             BuildError::HeightOverflow,
             BuildError::InvalidSignerAlgorithm,
             BuildError::Signing("signing failed".to_owned()),
         ];
-        for proof_error in [
+        for error in [
             BridgeFinalityError::InvalidHeight(0),
             BridgeFinalityError::FinalityArtifactNotFound(10),
             BridgeFinalityError::FinalityArtifactRead {
@@ -6525,8 +6543,8 @@ mod bridge_finality_attestation_progress_tests {
             },
             BridgeFinalityError::FinalityArtifactMismatch { height: 10 },
         ] {
-            failures.push(BuildError::FinalityProof(proof_error.clone()));
-            failures.push(BuildError::GenesisFinalityProof(proof_error));
+            failures.push(BuildError::FinalityProof(error.clone()));
+            failures.push(BuildError::GenesisFinalityProof(error));
         }
         for error in [
             ValidationError::ZeroChallenge,
@@ -6554,98 +6572,84 @@ mod bridge_finality_attestation_progress_tests {
         });
         for error in failures {
             let (node_id, network_id) = identity();
-            let fixed = bridge_finality_attestation_error_response(
+            let expected_reason = match &error {
+                BuildError::HeightOverflow
+                | BuildError::InvalidSignerAlgorithm
+                | BuildError::Signing(_) => Reason::InternalFailure,
+                BuildError::InvalidBody(ValidationError::RestartRequired) => {
+                    Reason::RestartRequired
+                }
+                BuildError::FinalityProof(BridgeFinalityError::FinalityArtifactMismatch {
+                    ..
+                })
+                | BuildError::GenesisFinalityProof(
+                    BridgeFinalityError::FinalityArtifactMismatch { .. },
+                ) => Reason::ConflictingState,
+                BuildError::FinalityProof(_) | BuildError::GenesisFinalityProof(_) => {
+                    Reason::FinalityUnavailable
+                }
+                _ => Reason::ConflictingState,
+            };
+            let response = bridge_finality_attestation_error_response(
                 error,
                 10,
                 9,
                 [7; 32],
-                node_id,
+                node_id.clone(),
                 network_id,
                 crate::utils::ResponseFormat::Norito,
             )
-            .expect_err("only the two exact height errors may be progress");
-            assert_ne!(fixed.into_response().status(), StatusCode::CONFLICT);
+            .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                expected_reason.http_status_code()
+            );
+            let failure = decode_failure(response, crate::utils::ResponseFormat::Norito).await;
+            assert_eq!(failure.reason, expected_reason);
+            assert_ne!(failure.reason, Reason::TipChanged);
+            assert!(failure.tip_mismatch.is_none());
+            assert!(failure.matches(10, [7; 32], &node_id, network_id));
         }
     }
 
     #[tokio::test]
     async fn canonical_boundary_keeps_only_valid_tip_progress_status_and_code() {
-        use iroha_torii_shared::{
-            ErrorDetails, bridge_finality::BridgeFinalityAttestationTipMismatchV1,
-        };
-        for (status, code, applied, retained) in [
-            (
-                StatusCode::CONFLICT,
-                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
-                9,
-                true,
-            ),
-            (
-                StatusCode::NOT_FOUND,
-                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
-                9,
-                false,
-            ),
-            (StatusCode::CONFLICT, "query_validation_failed", 9, false),
-            (
-                StatusCode::CONFLICT,
-                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
-                10,
-                false,
-            ),
+        for (status, reason, applied, retained) in [
+            (StatusCode::CONFLICT, Reason::TipChanged, 9, true),
+            (StatusCode::NOT_FOUND, Reason::TipChanged, 9, false),
+            (StatusCode::CONFLICT, Reason::ConflictingState, 9, false),
+            (StatusCode::CONFLICT, Reason::TipChanged, 10, false),
         ] {
             let (node_id, network_id) = identity();
-            let envelope =
-                ErrorEnvelope::new(code, "snapshot progress").with_details(ErrorDetails {
-                    bridge_finality_attestation_tip_mismatch: Some(
-                        BridgeFinalityAttestationTipMismatchV1 {
-                            requested_height: 10,
-                            applied_height: applied,
-                            status_height: 10,
-                            challenge: [7; 32],
-                            node_id,
-                            network_id,
-                        },
-                    ),
-                    ..ErrorDetails::default()
-                });
-            let (parts, _) = Response::builder()
-                .status(status)
-                .body(axum::body::Body::empty())
-                .unwrap()
-                .into_parts();
-            let response = crate::finalize_bridge_finality_attestation_response(Ok(
-                crate::canonical_error_response(
-                    parts,
-                    envelope,
-                    crate::utils::ResponseFormat::Norito,
-                    false,
-                ),
-            ));
+            let progress = BridgeFinalityAttestationTipMismatchV1 {
+                requested_height: 10,
+                applied_height: applied,
+                status_height: 10,
+                challenge: [7; 32],
+                node_id: node_id.clone(),
+                network_id,
+            };
+            let mut response = crate::bridge_attestation::failure_response(
+                reason,
+                [7; 32],
+                10,
+                Some(progress),
+                crate::utils::ResponseFormat::Norito,
+            );
+            *response.status_mut() = status;
+            let response = crate::finalize_bridge_finality_attestation_response(Ok(response));
             assert_eq!(response.headers()["x-content-type-options"], "nosniff");
-            let bytes = axum::body::to_bytes(
-                response.into_body(),
-                BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES,
-            )
-            .await
-            .unwrap();
-            let decoded: ErrorEnvelope = norito::decode_canonical_with_limits(
-                &bytes,
-                norito::canonical_decode_limits(bytes.len()),
-            )
-            .unwrap();
+            let decoded = decode_failure(response, crate::utils::ResponseFormat::Norito).await;
             assert_eq!(
-                decoded
-                    .details
-                    .and_then(|details| details.bridge_finality_attestation_tip_mismatch)
-                    .is_some(),
+                decoded.reason.http_status_code() == status.as_u16()
+                    && decoded.matches(10, [7; 32], &node_id, network_id),
                 retained
             );
         }
     }
 
-    #[test]
-    fn invalid_height_progress_shapes_remain_fixed_errors() {
+    #[tokio::test]
+    async fn invalid_height_progress_shapes_remain_fixed_errors() {
         for (requested, applied, status, challenge) in [
             (0, 9, 9, [7; 32]),
             (10, 0, 10, [7; 32]),
@@ -6654,21 +6658,22 @@ mod bridge_finality_attestation_progress_tests {
             (10, 10, 10, [7; 32]),
         ] {
             let (node_id, network_id) = identity();
-            assert!(
-                bridge_finality_attestation_error_response(
-                    BuildError::HeightIsNotDurableTip {
-                        requested,
-                        committed: applied
-                    },
+            let response = bridge_finality_attestation_error_response(
+                BuildError::HeightIsNotDurableTip {
                     requested,
-                    status,
-                    challenge,
-                    node_id,
-                    network_id,
-                    crate::utils::ResponseFormat::Norito,
-                )
-                .is_err()
-            );
+                    committed: applied,
+                },
+                requested,
+                status,
+                challenge,
+                node_id,
+                network_id,
+                crate::utils::ResponseFormat::Norito,
+            )
+            .unwrap();
+            let failure = decode_failure(response, crate::utils::ResponseFormat::Norito).await;
+            assert_eq!(failure.reason, Reason::ConflictingState);
+            assert!(failure.tip_mismatch.is_none());
         }
         for error in [
             BuildError::HeightIsNotDurableTip {
@@ -6678,49 +6683,23 @@ mod bridge_finality_attestation_progress_tests {
             BuildError::InvalidBody(ValidationError::StatusHeightMismatch),
         ] {
             let (node_id, network_id) = identity();
-            assert!(
-                bridge_finality_attestation_error_response(
-                    error,
-                    10,
-                    10,
-                    [7; 32],
-                    node_id,
-                    network_id,
-                    crate::utils::ResponseFormat::Norito,
-                )
-                .is_err()
-            );
+            let response = bridge_finality_attestation_error_response(
+                error,
+                10,
+                10,
+                [7; 32],
+                node_id,
+                network_id,
+                crate::utils::ResponseFormat::Norito,
+            )
+            .unwrap();
+            let failure = decode_failure(response, crate::utils::ResponseFormat::Norito).await;
+            assert_eq!(failure.reason, Reason::ConflictingState);
+            assert!(failure.tip_mismatch.is_none());
         }
     }
 }
-fn map_bridge_finality_attestation_error(
-    err: iroha_core::bridge::BridgeFinalityAttestationBuildError,
-) -> Error {
-    use iroha_core::bridge::{
-        BridgeFinalityAttestationBuildError as BuildError, BridgeFinalityError,
-    };
-    let not_found = matches!(
-        &err,
-        BuildError::EmptyState
-            | BuildError::HeightIsNotDurableTip { .. }
-            | BuildError::FinalityProof(
-                BridgeFinalityError::InvalidHeight(_)
-                    | BridgeFinalityError::FinalityArtifactNotFound(_)
-            )
-            | BuildError::GenesisFinalityProof(
-                BridgeFinalityError::InvalidHeight(_)
-                    | BridgeFinalityError::FinalityArtifactNotFound(_)
-            )
-    );
-    if not_found {
-        return Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ));
-    }
-    Error::Query(iroha_data_model::ValidationFail::InternalError(
-        err.to_string(),
-    ))
-}
+
 fn sccp_bad_request(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),

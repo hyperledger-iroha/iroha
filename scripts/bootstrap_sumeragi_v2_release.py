@@ -7,8 +7,8 @@ bytes together with every digest-pinned adjacent bootstrap component before
 starting Python.  The bootstrap's checks of its own and component digests are
 useful evidence, but cannot make an untrusted bootstrap closure trustworthy.
 Invoke it with the protected interpreter as
-``/absolute/python3 -I -S /absolute/bootstrap_sumeragi_v2_release.py ...``;
-isolated, no-site startup is enforced before any candidate data is inspected.
+``/absolute/python3 -I -B -S /absolute/bootstrap_sumeragi_v2_release.py ...``;
+isolated, no-bytecode, no-site startup is enforced before candidate inspection.
 The external launcher must also provide a loader-clean environment and
 authenticate the release-host image and dynamic libraries: those events occur
 before this Python code can enforce its closed child environments.
@@ -23,16 +23,22 @@ can swap pathnames between checks.
 from __future__ import annotations
 
 import argparse
+import ast
+import importlib
+import importlib.machinery
 import base64
 import binascii
 from dataclasses import dataclass
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
 import selectors
+import select
+import socket
 import shutil
 import stat
 import subprocess
@@ -42,7 +48,7 @@ import tarfile
 import threading
 import time
 import types
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol
 
 
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
@@ -160,16 +166,16 @@ _RUNNER_TOOL_PROBE_OPERATION_IDS = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
+        "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "8fe0b1dcdf61ec3a5ff9fb5081e95bfd9726b858b78e1206c4e73fa18370e6eb"
+        "c881a4f0e313b7c00823f62fa2d4e766c04c3b365eeb1847423c7a30cba7a9f6"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "99f133b20edf8e0ec6be9c0ccdbdb5a36de78ae7f851cd3ceac37aef60325a3f"
+        "d32bb675f783227f514f00f542ea5fef78507f08f4587fff684057fbe4c1ce9c"
     ),
 }
 _BOOTSTRAP_COMPONENT_FILES = (
@@ -177,7 +183,7 @@ _BOOTSTRAP_COMPONENT_FILES = (
 )
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "f9e8e8ff5f745163a66d24f14ccd2362f100314752471b2981ceaf6eed05d888"
+        "06e5d09c2971525119a68c874937547f47ed20d2a061f4738673a6c44b97d239"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -213,11 +219,6 @@ _RUNNER_ENV_ALLOWLIST = {
     "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
     "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
     "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
-    "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
-    "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
-    "IROHA_RELEASE_SCALING_IROHAD_SHA256",
-    "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
-    "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
     "IROHA_RELEASE_TLA2TOOLS_JAR",
     "NIX_SSL_CERT_FILE",
     "RUSTUP_HOME",
@@ -308,9 +309,7 @@ _TERMINAL_EVIDENCE_KEYS = {
     "seed_matrix_localnet_manifests",
     "chaos_completion",
     "chaos_log",
-    "multilane_scaling_bundle",
-    "multilane_scaling_retained_validator",
-    "multilane_scaling_trust_anchors",
+    "multilane_scaling",
     "g4p_multilane",
     "g12_cross_dataspace",
 }
@@ -351,25 +350,10 @@ _PREBUILT_MANIFEST_FIELDS = (
         )
     ),
 )
-_SCALING_REQUIRED_TOOLING = (
-    ("localnet", "scripts/deploy_localnet.sh"),
-    ("load_generator", "scripts/tx_load.py"),
-    ("nexus_load_bundle", "scripts/nexus_lane_load_test.py"),
-)
-_SCALING_DIGEST_ENVIRONMENT = {
-    "trial_harness_sha256": "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
-    "configuration_sha256": "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
-    "irohad_sha256": "IROHA_RELEASE_SCALING_IROHAD_SHA256",
-    "iroha_cli_sha256": "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
-}
 _SCALING_SAFE_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
 _PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
 _MAX_TERMINAL_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
-_MAX_SCALING_BUNDLE_FILE_COUNT = 256
-_MAX_SCALING_BUNDLE_DIRECTORY_COUNT = 512
-_MAX_SCALING_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
-_MAX_SCALING_BUNDLE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _TRANSCRIPT_KEYS = {
     "format",
     "schema_version",
@@ -394,6 +378,7 @@ _MAX_RETAINED_TOTAL_BYTES = 64 * 1024 * 1024 * 1024
 _MAX_VALIDATOR_DIAGNOSTIC_BYTES = 64 * 1024
 _MAX_VALIDATOR_FAILURE_MARKER_BYTES = 64 * 1024
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 600
+_DEFAULT_SCALING_PREFLIGHT_TIMEOUT_SECONDS = 28_800
 _DIRECTORY_MODE = 0o700
 _TOOL_MODE = 0o500
 _DATA_MODE = 0o400
@@ -435,16 +420,13 @@ _VALIDATOR_OPTION_ORDER = (
     "--g4p-completion",
     "--g12-seed-completion",
     "--g12-fault-soak-completion",
-    "--scaling-evidence-manifest",
+    "--scaling-execution-record",
+    "--expected-scaling-execution-sha256",
     "--sdk-dependency-archive",
     "--sdk-dependency-input-inventory",
     "--sdk-dependency-final-work-inventory",
     "--runtime-tool-probe-manifest",
     "--runtime-tool-probe-result",
-    "--expected-scaling-trial-harness-sha256",
-    "--expected-scaling-configuration-sha256",
-    "--expected-scaling-irohad-sha256",
-    "--expected-scaling-iroha-cli-sha256",
     "--repository-root",
     "--output",
     "--verify-existing",
@@ -480,7 +462,7 @@ _VALIDATOR_PATH_OPTIONS = frozenset(
         "--g4p-completion",
         "--g12-seed-completion",
         "--g12-fault-soak-completion",
-        "--scaling-evidence-manifest",
+        "--scaling-execution-record",
         "--sdk-dependency-archive",
         "--sdk-dependency-input-inventory",
         "--sdk-dependency-final-work-inventory",
@@ -614,7 +596,7 @@ def _validate_validator_invocation(
     if (
         value["profile"] != "release"
         or value["operation"] != "verify-existing-and-ack"
-        or value["python_flags"] != ["-I", "-S"]
+        or value["python_flags"] != ["-I", "-B", "-S"]
         or value["validator"] != "protected:validate-receipt.py"
         or not isinstance(options, list)
         or len(options) != len(_VALIDATOR_OPTION_ORDER)
@@ -699,6 +681,7 @@ def _terminal_validator_invocation_values(
     acknowledgment_path: Path,
     source_manifest_sha256: str,
     authenticated_environment: dict[str, str],
+    scaling_execution: FileSnapshot,
 ) -> dict[str, tuple[str, str | bool]]:
     """Reconstruct every validator value from authenticated terminal records."""
 
@@ -708,7 +691,6 @@ def _terminal_validator_invocation_values(
         bootstrap = authentication["bootstrap"]
         trust = release_identity["trust_policy"]
         receipt_evidence = receipt["evidence"]
-        scaling_trust = receipt_evidence["multilane_scaling_trust_anchors"]
     except (KeyError, TypeError) as error:
         raise BootstrapError(
             "terminal receipt lacks validator invocation authentication"
@@ -759,25 +741,15 @@ def _terminal_validator_invocation_values(
             )
         return str(evidence / archive_name)
 
-    scaling_bundle = receipt_evidence.get("multilane_scaling_bundle")
-    scaling_files = (
-        scaling_bundle.get("files") if isinstance(scaling_bundle, dict) else None
-    )
-    if not isinstance(scaling_files, list):
-        raise BootstrapError("terminal receipt scaling inventory is malformed")
-    scaling_manifest_records = [
-        item
-        for item in scaling_files
-        if isinstance(item, dict)
-        and item.get("relative_path") == "scaling_evidence.json"
-    ]
-    scaling_manifest_path = authenticated_environment.get(
-        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
-    )
-    if len(scaling_manifest_records) != 1 or not isinstance(
-        scaling_manifest_path, str
-    ):
-        raise BootstrapError("terminal receipt scaling manifest path is not exact")
+    _scaling_require(type(scaling_execution) is FileSnapshot
+        and scaling_execution.path == evidence/'scaling-execution.json'
+        and scaling_execution.mode == _DATA_MODE)
+    _require_unchanged(scaling_execution, 'original parent scaling record',
+                      maximum_bytes=max(scaling_execution.size, 1))
+    scaling = receipt_evidence.get('multilane_scaling')
+    _scaling_require(type(scaling) is dict and scaling.get('parent_execution') == dict(
+        archive_id='release-scaling.parent-execution.v1', sha256=scaling_execution.sha256,
+        size_bytes=scaling_execution.size, mode='0400'))
     formal_replay = receipt_evidence.get("formal_replay_release")
     if (
         not isinstance(formal_replay, dict)
@@ -874,7 +846,8 @@ def _terminal_validator_invocation_values(
         "--g12-fault-soak-completion": (
             "path", artifact_path("g12_cross_dataspace", "fault_soak_completion")
         ),
-        "--scaling-evidence-manifest": ("path", scaling_manifest_path),
+        "--scaling-execution-record": ("path", str(scaling_execution.path)),
+        "--expected-scaling-execution-sha256": ("text", scaling_execution.sha256),
         "--sdk-dependency-archive": (
             "path", str(release_runner / "sdk-dependency-bundle.tar")
         ),
@@ -889,18 +862,6 @@ def _terminal_validator_invocation_values(
         ),
         "--runtime-tool-probe-result": (
             "path", str(release_runner / "runtime-tool-probe-result.json")
-        ),
-        "--expected-scaling-trial-harness-sha256": (
-            "text", scaling_trust["trial_harness_sha256"]
-        ),
-        "--expected-scaling-configuration-sha256": (
-            "text", scaling_trust["configuration_sha256"]
-        ),
-        "--expected-scaling-irohad-sha256": (
-            "text", scaling_trust["irohad_sha256"]
-        ),
-        "--expected-scaling-iroha-cli-sha256": (
-            "text", scaling_trust["iroha_cli_sha256"]
         ),
         "--repository-root": ("path", str(source)),
         "--output": ("path", str(receipt_path)),
@@ -1373,6 +1334,1234 @@ def _publish_completion_marker(
                 pass
 
 
+@dataclass(frozen=True)
+class PassedDescriptor:
+    """Original borrowed descriptor identity at this exact child launch."""
+
+    number: int
+    device: int
+    inode: int
+    mode: int
+    owner: int
+    flags: int
+
+
+def _validated_pass_fds(descriptors: tuple[int, ...]) -> tuple[PassedDescriptor, ...]:
+    if (type(descriptors) is not tuple or len(descriptors) > 2
+            or any(type(fd) is not int or not 3 <= fd < (1 << 20) for fd in descriptors)
+            or len(set(descriptors)) != len(descriptors)):
+        raise BootstrapError("protected command descriptor set is invalid")
+    result = []
+    try:
+        for fd in descriptors:
+            info = os.fstat(fd)
+            if os.get_inheritable(fd):
+                raise BootstrapError("parent descriptors must be close-on-exec")
+            result.append(PassedDescriptor(fd, info.st_dev, info.st_ino,
+                info.st_mode, info.st_uid, fcntl.fcntl(fd, fcntl.F_GETFL)))
+    except OSError as error:
+        raise BootstrapError("protected command descriptor is unavailable") from error
+    return tuple(result)
+
+
+@dataclass(frozen=True)
+class TerminalCommandObservation:
+    """Actual original child outcome; violations never replace its return code."""
+
+    pid: int
+    argv: tuple[str, ...]
+    cwd: str
+    environment_sha256: str
+    descriptors: tuple[PassedDescriptor, ...]
+    started_ns: int
+    deadline_ns: int
+    completed_ns: int | None
+    returncode: int
+    stdout_sha256: str
+    stderr_sha256: str
+    stdout_bytes: int
+    stderr_bytes: int
+    violations: tuple[str, ...]
+
+
+class CommandObservationOwner:
+    """One-use in-memory owner populated only around the original Popen/wait."""
+
+    def __init__(self) -> None:
+        self._phase = "new"
+        self._process = None
+        self._terminal = None
+        self._reaped = False
+
+    @property
+    def terminal(self) -> TerminalCommandObservation | None:
+        """Return the observed terminal result, including rejected-limit exits."""
+        return self._terminal
+
+    def _begin(self, argv, cwd, environment, descriptors, started_ns, deadline_ns):
+        if self._phase != "new":
+            raise BootstrapError("command observation owner is already consumed")
+        self._phase = "starting"
+        self._input = (tuple(argv), str(cwd),
+            hashlib.sha256(_canonical_json(environment)).hexdigest(),
+            descriptors, started_ns, deadline_ns)
+
+    def _spawned(self, process):
+        self._process = process
+        self._phase = "running"
+
+    def _waited(self, process, returncode):
+        if self._process is not process:
+            raise BootstrapError("natural wait lost its original child")
+        self._reaped = True
+        self._returncode = returncode
+
+    def _finish(self, process, completed_ns, returncode, digests, counts, violations):
+        if self._phase != "running" or self._process is not process:
+            raise BootstrapError("command observation lost its original child")
+        argv, cwd, environment, descriptors, started_ns, deadline_ns = self._input
+        self._terminal = TerminalCommandObservation(process.pid, argv, cwd,
+            environment, descriptors, started_ns, deadline_ns, completed_ns,
+            returncode, digests["stdout"].hexdigest(), digests["stderr"].hexdigest(),
+            counts["stdout"], counts["stderr"], tuple(violations))
+        self._phase = "terminal"
+
+
+@dataclass(frozen=True)
+class FixedScalingLaunch:
+    """Trusted preparation output; no generic executable/argument dispatch."""
+
+    python: Path
+    source_root: Path
+    argv: tuple[str, ...]
+    launch_input_fd: int
+    launch_input_sha256: str
+    seed_fd: int
+    cwd: Path
+    environment: dict[str, str]
+    timeout_seconds: int
+    maximum_output_bytes: int
+    evidence_root: Path
+    manifest_max_bytes: int
+    report_max_bytes: int
+    original_started_ns: int
+    deadline_ns: int
+
+
+@dataclass(frozen=True)
+class ScalingArtifactObservation:
+    """Stable parent-retained artifact bytes after the actual collector exit."""
+
+    relative_path: str
+    sha256: str
+    size_bytes: int
+    mode: int
+
+
+@dataclass(frozen=True)
+class ParentScalingObservation:
+    """Original process observation joined to retained manifest/report bytes."""
+
+    invocation_sha256: str
+    command: TerminalCommandObservation
+    launch_input_sha256: str
+    artifacts: tuple[ScalingArtifactObservation, ...]
+    original_started_ns: int
+
+
+class FixedScalingOperation(Protocol):
+    """Trusted bootstrap integration contract; never deserialize an operation.
+
+    The shipped bootstrap creates its sole lazy retained production operation.
+    prepare owns source/runtime admission; validate retains those exact inputs
+    through child completion; verify_publication checks complete canonical
+    archive semantics; close releases them only after natural child completion.
+    These callbacks do not supply an exit code or a caller-owned success record.
+    """
+
+    def prepare(self) -> FixedScalingLaunch: ...
+    def validate(self, launch: FixedScalingLaunch) -> None: ...
+    def child_finished(self, launch: FixedScalingLaunch,
+                       observation: TerminalCommandObservation | None) -> None: ...
+    def verify_publication(self, launch: FixedScalingLaunch,
+                           observation: ParentScalingObservation) -> None: ...
+    def close(self) -> None: ...
+
+
+def _scaling_require(condition: bool) -> None:
+    if not condition:
+        raise BootstrapError("fixed scaling handoff failed")
+
+
+def _scaling_launch_check(launch: FixedScalingLaunch) -> None:
+    _scaling_require(type(launch) is FixedScalingLaunch)
+    for value in (launch.python, launch.source_root, launch.cwd, launch.evidence_root):
+        _scaling_require(type(value) is type(Path('/')) and value.is_absolute()
+            and str(value) == os.path.abspath(value))
+    _scaling_require(type(launch.launch_input_sha256) is str
+        and _DIGEST_RE.fullmatch(launch.launch_input_sha256) is not None)
+    expected = (str(launch.python), '-I', '-B', '-S',
+        str(launch.source_root / 'scripts/nexus/run_multilane_scaling_gate.py'),
+        '--launch-input-fd', str(launch.launch_input_fd),
+        '--launch-input-sha256', launch.launch_input_sha256,
+        '--seed-fd', str(launch.seed_fd))
+    _scaling_require(type(launch.argv) is tuple and launch.argv == expected)
+    _scaling_require(type(launch.environment) is dict and all(
+        type(k) is str and type(v) is str for k, v in launch.environment.items()))
+    for value, cap in ((launch.timeout_seconds, 30 * 24 * 3600),
+            (launch.maximum_output_bytes, 16 * 1024 * 1024),
+            (launch.manifest_max_bytes, 1024 * 1024),
+            (launch.report_max_bytes, 1024 * 1024)):
+        _scaling_require(type(value) is int and 0 < value <= cap)
+    descriptors = _validated_pass_fds((launch.launch_input_fd, launch.seed_fd))
+    _scaling_require(type(launch.original_started_ns) is int
+        and type(launch.deadline_ns) is int and 0 < launch.original_started_ns < launch.deadline_ns
+        and launch.deadline_ns - launch.original_started_ns <= launch.timeout_seconds * 1_000_000_000
+        and launch.original_started_ns <= int(time.monotonic() * 1_000_000_000) < launch.deadline_ns)
+    _scaling_require(stat.S_ISREG(descriptors[0].mode)
+        and stat.S_ISFIFO(descriptors[1].mode)
+        and all(row.flags & os.O_ACCMODE == os.O_RDONLY for row in descriptors)
+        and descriptors[1].flags & os.O_NONBLOCK != 0)
+
+
+def _scaling_socket_identity(endpoint: socket.socket) -> tuple[int, int]:
+    info = os.fstat(endpoint.fileno())
+    _scaling_require(stat.S_ISSOCK(info.st_mode))
+    return info.st_dev, info.st_ino
+
+
+def _scaling_close_socket(endpoint: socket.socket, identity) -> None:
+    fd = endpoint.detach()
+    if fd < 0:
+        return
+    try:
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) == identity:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def _scaling_decode_request(raw: bytes) -> dict[str, str]:
+    _scaling_require(0 < len(raw) <= 4096 and raw.isascii())
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            _scaling_require(key not in result)
+            result[key] = value
+        return result
+    try:
+        value = json.loads(raw, object_pairs_hook=pairs)
+        _scaling_require(type(value) is dict and set(value) == {
+            'operation', 'invocation_sha256', 'challenge'})
+        _scaling_require(value['operation'] == 'fixed-scaling' and all(
+            type(value[key]) is str and _DIGEST_RE.fullmatch(value[key]) is not None
+            for key in ('invocation_sha256', 'challenge')))
+        _scaling_require(_canonical_json(value) == raw)
+        return value
+    except (ValueError, TypeError, RecursionError) as error:
+        raise BootstrapError("fixed scaling request is invalid") from error
+
+
+class FixedScalingHandoff:
+    """One fixed request serviced by the original release runner's parent.
+
+    The channel does not authorize arbitrary commands. No deadline runs during
+    the potentially long ordinary build/formal/soak corridor. A frame deadline
+    starts at its first byte and never renews; collector scope comes from its
+    admitted operation. The parent retains actual process observations.
+    """
+
+    def __init__(self, invocation_sha256: str, operation: FixedScalingOperation,
+                 *, frame_timeout_seconds: int = 30) -> None:
+        _scaling_require(type(invocation_sha256) is str
+            and _DIGEST_RE.fullmatch(invocation_sha256) is not None)
+        _scaling_require(type(frame_timeout_seconds) is int
+            and 0 < frame_timeout_seconds <= 300)
+        self.invocation_sha256 = invocation_sha256
+        self.challenge = secrets.token_hex(32)
+        self._operation = operation
+        self._frame_timeout = frame_timeout_seconds
+        self._parent, self._runner = socket.socketpair()
+        self._parent.set_inheritable(False)
+        self._runner.set_inheritable(False)
+        self._parent.setblocking(False)
+        self._parent_identity = _scaling_socket_identity(self._parent)
+        self._runner_identity = _scaling_socket_identity(self._runner)
+        self._phase = 'new'
+        self._runner_process = None
+        self._runner_reaped = False
+        self._frame_end = None
+        self._request = bytearray()
+        self._error = None
+        self._response = None
+        self._command = CommandObservationOwner()
+        self._observation = None
+        self._artifact_handles = []
+        self._operation_closed = False
+        self._launch = None
+        self._child_finished = False
+
+    @property
+    def runner_descriptor(self) -> int:
+        """Endpoint for only the outer runner and its designated handoff."""
+        _scaling_require(self._phase == 'new')
+        _scaling_require(_scaling_socket_identity(self._runner) == self._runner_identity)
+        return self._runner.fileno()
+
+    @property
+    def command_observation(self) -> TerminalCommandObservation | None:
+        """Actual collector terminal status, even when publication fails."""
+        return self._command.terminal
+
+    @property
+    def observation(self) -> ParentScalingObservation | None:
+        """Verified original process/artifact join; never reconstructed from JSON."""
+        return self._observation if self._phase == 'complete' else None
+
+    @property
+    def response(self) -> dict[str, Any] | None:
+        """Return a copy of the one response, which alone is not release authority."""
+        return dict(self._response) if self._response is not None else None
+
+    def _started(self, process) -> None:
+        _scaling_require(self._phase == 'new' and self._runner_process is None)
+        self._runner_process = process
+        _scaling_require(_scaling_socket_identity(self._runner) == self._runner_identity)
+        self._phase = 'waiting'
+        _scaling_close_socket(self._runner, self._runner_identity)
+
+    def _runner_waited(self, process, returncode) -> None:
+        _scaling_require(self._runner_process is process and type(returncode) is int)
+        self._runner_reaped = True
+        self._runner_returncode = returncode
+
+    def _retain_artifact(self, launch, name, maximum):
+        path = launch.evidence_root / name
+        parent = os.open(launch.evidence_root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        fd = None
+        try:
+            root = os.fstat(parent)
+            _scaling_require(stat.S_ISDIR(root.st_mode) and root.st_uid == os.geteuid()
+                and stat.S_IMODE(root.st_mode) == 0o700)
+            fd = os.open(name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=parent)
+            before = os.fstat(fd)
+            _scaling_require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid()
+                and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) in (0o400, 0o600)
+                and 0 < before.st_size <= maximum)
+            digest = hashlib.sha256()
+            offset = 0
+            while offset < before.st_size:
+                part = os.pread(fd, min(65536, before.st_size-offset), offset)
+                _scaling_require(bool(part)); digest.update(part); offset += len(part)
+            identity = lambda x: (x.st_dev, x.st_ino, x.st_mode, x.st_uid, x.st_nlink,
+                x.st_size, x.st_mtime_ns, x.st_ctime_ns)
+            _scaling_require(identity(before) == identity(os.fstat(fd))
+                == identity(os.stat(name, dir_fd=parent, follow_symlinks=False)))
+            self._artifact_handles.append((parent, fd, name, identity(before),
+                (root.st_dev, root.st_ino, root.st_mode, root.st_uid), launch.evidence_root))
+            return ScalingArtifactObservation(name, digest.hexdigest(), offset,
+                stat.S_IMODE(before.st_mode))
+        except BaseException:
+            if fd is not None: os.close(fd)
+            os.close(parent)
+            raise
+
+    def revalidate_observation(self) -> ParentScalingObservation:
+        """Rehash original retained publication handles before parent receipt join."""
+        _scaling_require(self._observation is not None)
+        observed = []
+        for parent, fd, name, pin, root_pin, root_path in self._artifact_handles:
+            root = os.fstat(parent)
+            pathname = root_path.lstat()
+            _scaling_require((root.st_dev, root.st_ino, root.st_mode, root.st_uid)
+                == root_pin == (pathname.st_dev, pathname.st_ino, pathname.st_mode, pathname.st_uid))
+            identity = lambda x: (x.st_dev, x.st_ino, x.st_mode, x.st_uid, x.st_nlink,
+                x.st_size, x.st_mtime_ns, x.st_ctime_ns)
+            _scaling_require(identity(os.fstat(fd)) == pin
+                == identity(os.stat(name, dir_fd=parent, follow_symlinks=False)))
+            digest = hashlib.sha256(); offset = 0
+            while offset < pin[5]:
+                chunk = os.pread(fd, min(65536, pin[5]-offset), offset)
+                _scaling_require(bool(chunk)); digest.update(chunk); offset += len(chunk)
+            _scaling_require(identity(os.fstat(fd)) == pin)
+            observed.append(ScalingArtifactObservation(name, digest.hexdigest(), offset,
+                stat.S_IMODE(pin[2])))
+        _scaling_require(tuple(observed) == self._observation.artifacts)
+        return self._observation
+
+    def _execute(self) -> None:
+        self._phase = 'consumed'
+        launch = self._operation.prepare()
+        self._launch = launch
+        try:
+            _scaling_launch_check(launch)
+            _scaling_require(self._operation.validate(launch) is None)
+            result = _run_bounded(launch.python, launch.argv[1:], cwd=launch.cwd,
+                environment=dict(launch.environment), timeout_seconds=launch.timeout_seconds,
+                maximum_output_bytes=launch.maximum_output_bytes,
+                pass_fds=(launch.launch_input_fd, launch.seed_fd), observation=self._command,
+                deadline_ns=launch.deadline_ns)
+        finally:
+            # None means Popen never returned a child. A missing observation
+            # after an owned spawn is unknown; retain the operation in that case.
+            if self._command._process is None or (self._command._reaped
+                    and self._command.terminal is not None):
+                _scaling_require(self._operation.child_finished(launch,self._command.terminal) is None)
+                self._child_finished = True
+        _scaling_require(self._operation.validate(launch) is None)
+        terminal = self._command.terminal
+        _scaling_require(terminal is not None and result.returncode == terminal.returncode)
+        if result.returncode != 0:
+            raise BootstrapError("fixed collector returned a nonzero status")
+        artifacts = (self._retain_artifact(launch, 'manifest.json', launch.manifest_max_bytes),
+            self._retain_artifact(launch, 'report.json', launch.report_max_bytes))
+        observation = ParentScalingObservation(self.invocation_sha256, terminal,
+            launch.launch_input_sha256, artifacts, launch.original_started_ns)
+        _scaling_require(self._operation.verify_publication(launch, observation) is None)
+        _scaling_require(self._operation.validate(launch) is None)
+        self._observation = observation
+        self.revalidate_observation()
+
+    def _close_operation(self):
+        _scaling_require(self._launch is None or self._child_finished)
+        _scaling_require(self._operation.close() is None)
+        self._operation_closed = True
+
+    def _reply(self, success) -> None:
+        terminal = self._command.terminal
+        value = {'operation': 'fixed-scaling', 'invocation_sha256': self.invocation_sha256,
+            'challenge': self.challenge, 'gate_status': 0 if success else 2,
+            'process_returncode': terminal.returncode if terminal is not None else None,
+            'manifest_sha256': self._observation.artifacts[0].sha256 if success else None,
+            'report_sha256': self._observation.artifacts[1].sha256 if success else None}
+        self._response = value
+        raw = _canonical_json(value)
+        self._parent.settimeout(self._frame_timeout)
+        self._parent.sendall(len(raw).to_bytes(4, 'big') + raw)
+        self._parent.shutdown(socket.SHUT_WR)
+
+    def _finish_request(self):
+        _scaling_require(len(self._request) >= 4)
+        size = int.from_bytes(self._request[:4], 'big')
+        _scaling_require(0 < size <= 4096 and len(self._request) == size + 4)
+        value = _scaling_decode_request(bytes(self._request[4:]))
+        _scaling_require(value['invocation_sha256'] == self.invocation_sha256
+            and value['challenge'] == self.challenge)
+        self._execute()
+
+    def _service(self):
+        if self._phase != 'waiting': return
+        try:
+            _scaling_require(_scaling_socket_identity(self._parent) == self._parent_identity)
+            if self._frame_end is not None and time.monotonic() > self._frame_end:
+                raise BootstrapError("fixed scaling request frame expired")
+            readable, _, _ = select.select([self._parent], [], [], 0.05)
+            if not readable: return
+            raw = self._parent.recv(4101 - len(self._request))
+            if self._frame_end is not None and time.monotonic() > self._frame_end:
+                raise BootstrapError("fixed scaling request frame expired")
+            if raw:
+                if self._frame_end is None:
+                    self._frame_end = time.monotonic() + self._frame_timeout
+                self._request.extend(raw)
+                _scaling_require(len(self._request) <= 4100)
+                if len(self._request) >= 4:
+                    expected = int.from_bytes(self._request[:4], 'big')
+                    _scaling_require(0 < expected <= 4096 and len(self._request) <= expected+4)
+                return
+            # EOF is required before dispatch, so trailing or duplicate frames
+            # cannot start a second child after a first request was accepted.
+            self._finish_request()
+            self._close_operation()
+            self._reply(True)
+            self._phase = 'complete'
+        except BaseException as error:
+            self._error = error
+            self._phase = 'failed'
+            if not self._operation_closed:
+                try:
+                    self._close_operation()
+                except BaseException: pass
+            try: self._reply(False)
+            except BaseException: pass
+        finally:
+            if self._phase in ('complete', 'failed'):
+                try:
+                    if not self._operation_closed:
+                        self._close_operation()
+                except BaseException as error:
+                    self._error = error
+                    self._phase = 'failed'
+                _scaling_close_socket(self._parent, self._parent_identity)
+
+    def wait_runner(self, process) -> int:
+        """Service one fixed channel and always reap the original runner naturally."""
+        _scaling_require(self._runner_process is process and self._phase == 'waiting')
+        error = None
+        try:
+            while process.poll() is None:
+                self._service()
+                if self._phase != 'waiting': time.sleep(0.05)
+        except BaseException as caught:
+            error = caught
+            self._error = caught
+            self._phase = 'failed'
+            try: self._reply(False)
+            except BaseException: pass
+            _scaling_close_socket(self._parent, self._parent_identity)
+        finally:
+            returncode, wait_error = _wait_naturally(process)
+            self._runner_waited(process, returncode)
+            if error is None: error = wait_error
+        if error is not None: raise error
+        if self._error is not None: raise self._error
+        if returncode == 0:
+            _scaling_require(self._phase == 'complete' and self._observation is not None)
+        return returncode
+
+    def close(self) -> None:
+        """Release retained channels/artifacts after the originating runner wait."""
+        # The process owner calls this only after wait; a caller cannot turn an
+        # active collector or runner into completed cleanup by closing handles.
+        _scaling_require(self._runner_process is None or self._runner_reaped)
+        for endpoint, pin in ((self._parent, self._parent_identity),
+                              (self._runner, self._runner_identity)):
+            _scaling_close_socket(endpoint, pin)
+        for parent, fd, name, pin, root_pin, root_path in self._artifact_handles:
+            for number, expected in ((fd,pin[:2]),(parent,root_pin[:2])):
+                try:
+                    info = os.fstat(number)
+                    if (info.st_dev,info.st_ino) == expected: os.close(number)
+                except OSError: pass
+        self._artifact_handles.clear()
+        if not self._operation_closed:
+            self._close_operation()
+
+
+def _wait_naturally(process):
+    """Retain an original child through interruptions without any process signal."""
+    first_error = None
+    while True:
+        try:
+            return process.wait(), first_error
+        except BaseException as error:
+            if first_error is None: first_error = error
+            try: time.sleep(0.05)
+            except BaseException: pass
+
+
+class BootstrapPreflightArchive:
+    """Original protected writer for the fixed durable preflight subtree.
+
+    The process owner controls when this sink may be released. Stream contents
+    are discarded after publication; only bounded streaming snapshots remain.
+    """
+
+    def __init__(self, evidence: Path, evidence_fd: int):
+        self.path = evidence / 'scaling-preflight'
+        self._evidence, self._evidence_fd = evidence, evidence_fd
+        self._evidence_pin = self._identity(os.fstat(evidence_fd))
+        self._descriptor = self._descriptor_pin = None
+        self._phase, self._caps, self._files = 'new', {}, {}
+
+    @staticmethod
+    def _identity(info):
+        return (info.st_dev, info.st_ino, stat.S_IMODE(info.st_mode), info.st_uid)
+
+    def _owned_descriptor(self):
+        return _capture_descriptor_pin(self._descriptor)
+
+    def _guard(self):
+        _scaling_require(self._phase in ('writing', 'sealed'))
+        parent = os.fstat(self._evidence_fd)
+        _scaling_require(self._identity(parent) == self._evidence_pin
+            == self._identity(self._evidence.lstat())
+            and stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid()
+            and stat.S_IMODE(parent.st_mode) == _DIRECTORY_MODE)
+        opened = os.fstat(self._descriptor)
+        named = os.stat('scaling-preflight', dir_fd=self._evidence_fd, follow_symlinks=False)
+        _scaling_require(self._owned_descriptor() == self._descriptor_pin
+            and self._identity(opened) == self._identity(named)
+            and stat.S_ISDIR(named.st_mode) and named.st_uid == os.getuid()
+            and stat.S_IMODE(named.st_mode) == _DIRECTORY_MODE)
+        names = set()
+        with os.scandir(self._descriptor) as entries:
+            for index, entry in enumerate(entries):
+                _scaling_require(index < len(self._caps))
+                names.add(entry.name)
+        _scaling_require(names == set(self._files))
+
+    def create(self, caps):
+        """Allocate only after the original preflight deadline has started."""
+        _scaling_require(self._phase == 'new' and type(caps) is dict
+            and {'inventory.json', 'index.json'} <= caps.keys()
+            and all(type(name) is str and re.fullmatch(
+                r'(?:inventory\.json|index\.json|unit-[0-9]{3}\.(?:command\.json|result\.json|stdout|stderr))', name)
+                and type(cap) is int and cap > 0 for name, cap in caps.items()))
+        self._caps = dict(caps)
+        try:
+            parent = os.fstat(self._evidence_fd)
+            _scaling_require(self._identity(parent) == self._evidence_pin
+                == self._identity(self._evidence.lstat())
+                and stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid()
+                and stat.S_IMODE(parent.st_mode) == _DIRECTORY_MODE)
+            os.mkdir('scaling-preflight', _DIRECTORY_MODE, dir_fd=self._evidence_fd)
+            created = os.stat('scaling-preflight', dir_fd=self._evidence_fd, follow_symlinks=False)
+            self._descriptor, self._descriptor_pin = _open_capture_descriptor('scaling-preflight',
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                (created.st_dev, created.st_ino, stat.S_IFDIR, created.st_uid),
+                'durable preflight directory',
+                dir_fd=self._evidence_fd)
+            self._phase = 'writing'
+            self._guard()
+            os.fsync(self._evidence_fd)
+        except BaseException:
+            self._phase = 'failed'
+            raise
+
+    def write(self, name, data, maximum_bytes):
+        """Publish one exact original buffer and retain only its digest metadata."""
+        self._guard()
+        _scaling_require(self._phase == 'writing' and name in self._caps
+            and name not in self._files and type(data) is bytes
+            and type(maximum_bytes) is int and maximum_bytes == self._caps[name]
+            and len(data) <= maximum_bytes)
+        if name == 'index.json':
+            _scaling_require(set(self._files) == self._caps.keys() - {'index.json'})
+        try:
+            original = _write_artifact(self.path, self._descriptor, name, data, _DATA_MODE)
+            snapshot = _capture_large_file_at(self._descriptor, name, self.path / name,
+                'durable preflight member', maximum_bytes=maximum_bytes)
+            _scaling_require(snapshot.sha256 == original.sha256 and snapshot.size == len(data)
+                and snapshot.mode == _DATA_MODE and snapshot.owner == os.getuid()
+                and snapshot.nlink == 1
+                and (snapshot.device, snapshot.inode) == (original.device, original.inode))
+            self._files[name] = snapshot
+            if name == 'index.json': self._phase = 'sealed'
+            self._guard()
+            return snapshot
+        except BaseException:
+            self._phase = 'failed'
+            raise
+
+    def verify(self):
+        """Recheck the original bounded file identities without retaining log bytes."""
+        self._guard()
+        for name, expected in self._files.items():
+            actual = _capture_large_file_at(self._descriptor, name, self.path / name,
+                'durable preflight member', maximum_bytes=self._caps[name])
+            _scaling_require(actual == expected)
+        self._guard()
+
+    @property
+    def rows(self):
+        """Original metadata for the shared data codec's exact portable census."""
+        self._guard()
+        return tuple(dict(relative_path=name, size_bytes=row.size, sha256=row.sha256,
+                          mode=f'{row.mode:04o}', max_bytes=self._caps[name])
+                     for name, row in sorted(self._files.items()))
+
+    def close(self):
+        """Release only this retained descriptor; never delete populated evidence."""
+        if self._phase == 'closed': return
+        if self._descriptor is not None:
+            _close_capture_descriptor(self._descriptor, self._descriptor_pin)
+        self._phase = 'closed'
+
+
+class ReleaseInvocationRoot:
+    """Retained original invocation directory; cleanup remains with its existing owner."""
+
+    def __init__(self):
+        raise BootstrapError("use allocate_release_invocation_root")
+
+    @property
+    def path(self) -> Path:
+        return self._snapshot.path
+
+    @property
+    def base(self) -> Path:
+        return self._base
+
+    @property
+    def descriptor(self) -> int:
+        self.validate()
+        return self._root_fd
+
+    @property
+    def snapshot(self) -> DirectorySnapshot:
+        """Initial snapshot; content timestamps may change during normal construction."""
+        return self._snapshot
+
+    def validate(self) -> None:
+        _scaling_require(not self._closed)
+        identity=lambda value:(value.st_dev,value.st_ino,stat.S_IMODE(value.st_mode),value.st_uid)
+        base=os.fstat(self._base_fd)
+        _scaling_require(identity(base)==self._base_pin==identity(self._base.lstat())
+            and stat.S_ISDIR(base.st_mode))
+        root=os.fstat(self._root_fd)
+        current=os.stat(self.path.name,dir_fd=self._base_fd,follow_symlinks=False)
+        expected=(self._snapshot.device,self._snapshot.inode,self._snapshot.mode,self._snapshot.owner)
+        _scaling_require(identity(root)==expected==identity(current)
+            and stat.S_ISDIR(root.st_mode) and stat.S_ISDIR(current.st_mode))
+
+    def close(self) -> None:
+        """Close only owned descriptors; never delete populated or empty outputs."""
+        if self._closed: return
+        for fd,pin in ((self._root_fd,(self._snapshot.device,self._snapshot.inode)),
+                      (self._base_fd,self._base_pin[:2])):
+            try:
+                info=os.fstat(fd)
+                if (info.st_dev,info.st_ino)==pin: os.close(fd)
+            except OSError: pass
+        self._closed=True
+
+
+def allocate_release_invocation_root(candidate: Path, bootstrap_evidence: Path,
+        cargo_cache: Path, *, base: Path | None = None) -> ReleaseInvocationRoot:
+    """Allocate the shell's canonical external invocation root in its original parent.
+
+    Keep root-owned sticky ancestry, exact 0700 ownership, shell-safe spelling and
+    disjointness from source, bootstrap and Cargo-cache roots. Only an exact empty
+    directory created here can be removed on allocation failure. The existing
+    release cleanup helper owns all later populated-output cleanup.
+    """
+    if base is None:
+        preferred=Path('/private/tmp')
+        base=preferred if preferred.is_dir() and not preferred.is_symlink() else Path('/tmp')
+        base=base.resolve(strict=True)
+    base=_absolute_resolved_existing(base,'release invocation base')
+    _scaling_require(_SAFE_PATH_RE.fullmatch(str(base)) is not None and os.pathsep not in str(base))
+    protected=[]
+    for path in (candidate,bootstrap_evidence,cargo_cache):
+        _scaling_require(type(path) is type(Path('/')) and path.is_absolute()
+            and path==Path(os.path.abspath(path)))
+        protected.append(path.resolve(strict=False))
+    base_fd=os.open(base,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW)
+    root_fd=None;name=None;pin=None
+    try:
+        info=os.fstat(base_fd)
+        _scaling_require(stat.S_ISDIR(info.st_mode) and info.st_uid==0
+            and info.st_mode & stat.S_ISVTX != 0
+            and (info.st_dev,info.st_ino)==(base.lstat().st_dev,base.lstat().st_ino))
+        name='iroha-sumeragi-v2-release.'+secrets.token_hex(16)
+        path=base/name
+        _scaling_require(_SAFE_PATH_RE.fullmatch(str(path)) is not None
+            and os.pathsep not in str(path)
+            and all(not _inside(path,other) and not _inside(other,path) for other in protected))
+        os.mkdir(name,_DIRECTORY_MODE,dir_fd=base_fd)
+        root_fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=base_fd)
+        os.fchmod(root_fd,_DIRECTORY_MODE)
+        opened=os.fstat(root_fd);pin=(opened.st_dev,opened.st_ino)
+        snapshot=_private_directory_snapshot(path,'release invocation root')
+        _scaling_require(pin==(snapshot.device,snapshot.inode))
+        os.fsync(base_fd)
+        owner=object.__new__(ReleaseInvocationRoot)
+        owner._base=base;owner._base_fd=base_fd;owner._root_fd=root_fd
+        owner._base_pin=(info.st_dev,info.st_ino,stat.S_IMODE(info.st_mode),info.st_uid)
+        owner._snapshot=snapshot;owner._closed=False
+        owner.validate()
+        return owner
+    except BaseException:
+        if root_fd is not None: os.close(root_fd)
+        if name is not None and pin is not None:
+            try:
+                current=os.stat(name,dir_fd=base_fd,follow_symlinks=False)
+                if (current.st_dev,current.st_ino)==pin: os.rmdir(name,dir_fd=base_fd)
+            except OSError: pass
+        os.close(base_fd)
+        raise
+
+
+@dataclass(frozen=True)
+class ScalingSourceSelection:
+    """Original bootstrap observations of the completed inner build inputs."""
+
+    source: DirectorySnapshot
+    identity: FileSnapshot
+    source_paths: FileSnapshot
+    binary_manifest: FileSnapshot
+    rustc_version: FileSnapshot
+    python_runtime_binding: FileSnapshot
+
+
+def _prepare_scaling_source_selection(
+    invocation: ReleaseInvocationRoot,
+    candidate_identity: FileSnapshot,
+    python: FileSnapshot,
+    manifest_helper: FileSnapshot,
+    rustc: FileSnapshot,
+    evidence: Path,
+    evidence_fd: int,
+    framework_binding: bytes,
+    environment: dict[str, str],
+    timeout_seconds: int,
+) -> ScalingSourceSelection:
+    """Select build outputs from the retained root, never from a gate request.
+
+    The designated handoff calls this only after the inner build has naturally
+    completed. Sealing changes filesystem permission bits and consequently the
+    workspace manifest; the signed commit/tree/lock identity must stay exact.
+    The protected manifest helper independently verifies the sealed worktree's
+    raw bytes against its index before any parent scaling module is imported.
+    """
+    _scaling_require(type(invocation) is ReleaseInvocationRoot)
+    invocation.validate()
+    _scaling_require(type(timeout_seconds) is int and timeout_seconds > 0
+                     and type(framework_binding) is bytes
+                     and 0 < len(framework_binding) <= _MAX_EVIDENCE_BYTES)
+    for label, snapshot, maximum, executable in (
+        ('scaling candidate identity', candidate_identity, _MAX_IDENTITY_BYTES, False),
+        ('scaling selected Python', python, _MAX_TOOL_BYTES, True),
+        ('scaling protected manifest helper', manifest_helper, _MAX_HELPER_BYTES, False),
+        ('scaling selected rustc', rustc, _MAX_TOOL_BYTES, True),
+    ):
+        _require_unchanged(snapshot, label, maximum_bytes=maximum, executable=executable)
+    original = _load_identity(candidate_identity.data)
+    source_path = invocation.path / 'source'
+    source = _sealed_directory_snapshot(source_path, 'scaling sealed source')
+    identity = _read_file(invocation.path / 'sealed-identity.json',
+                          'scaling sealed identity', maximum_bytes=_MAX_IDENTITY_BYTES)
+    observed_bytes, observed = _compute_identity(python.path, manifest_helper.path,
+                                                source_path, environment, timeout_seconds)
+    _scaling_require(identity.data == observed_bytes)
+    for field in ('head_commit', 'head_tree', 'index_tree', 'cargo_lock_sha256'):
+        _scaling_require(observed[field] == original[field])
+    _scaling_require(observed['index_tree'] == observed['head_tree'])
+    source_digest = observed['workspace_source_manifest_sha256']
+    source_paths_path = evidence / 'scaling-source-paths.txt'
+    _scaling_require(not os.path.lexists(source_paths_path))
+    paths_result = _run_bounded(python.path, (
+        '-I', '-B', '-S', str(manifest_helper.path), '--root', str(source_path),
+        '--write-path-list', str(source_paths_path)), cwd=source_path,
+        environment=dict(environment), timeout_seconds=timeout_seconds,
+        maximum_output_bytes=_MAX_HELPER_OUTPUT_BYTES)
+    _scaling_require(type(paths_result) is CommandResult
+                     and paths_result.returncode == 0 and paths_result.stderr == b''
+                     and paths_result.stdout == (source_digest + '\n').encode('ascii'))
+    source_paths = _read_file(source_paths_path, 'scaling exact source path list',
+                             maximum_bytes=_MAX_HELPER_BYTES)
+    _scaling_require(source_paths.size > 0)
+    binary_manifest = _read_file(invocation.path / 'output' / 'sumeragi-v2-release'
+        / source_digest / 'programs' / '.sumeragi-v2-prebuilt-binaries.tsv',
+        'scaling native binary manifest', maximum_bytes=_MAX_HELPER_BYTES)
+    version = _run_bounded(rustc.path, ('--version', '--verbose'), cwd=source_path,
+        environment=dict(environment), timeout_seconds=timeout_seconds,
+        maximum_output_bytes=_MAX_HELPER_OUTPUT_BYTES)
+    _scaling_require(type(version) is CommandResult and version.returncode == 0
+                     and version.stderr == b'' and version.stdout.endswith(b'\n')
+                     and version.stdout.isascii() and b'\0' not in version.stdout
+                     and b'\r' not in version.stdout)
+    rustc_version = _write_artifact(evidence, evidence_fd, 'scaling-rustc-version.txt',
+                                   version.stdout, _DATA_MODE)
+    runtime_binding = _write_artifact(evidence, evidence_fd, 'scaling-python-runtime.json',
+                                      framework_binding, _DATA_MODE)
+    repeated, _ = _compute_identity(python.path, manifest_helper.path, source_path,
+                                    environment, timeout_seconds)
+    _scaling_require(repeated == observed_bytes)
+    invocation.validate()
+    _require_sealed_directory_unchanged(source, 'scaling sealed source')
+    for label, snapshot, maximum, executable in (
+        ('scaling candidate identity', candidate_identity, _MAX_IDENTITY_BYTES, False),
+        ('scaling selected Python', python, _MAX_TOOL_BYTES, True),
+        ('scaling protected manifest helper', manifest_helper, _MAX_HELPER_BYTES, False),
+        ('scaling selected rustc', rustc, _MAX_TOOL_BYTES, True),
+        ('scaling sealed identity', identity, _MAX_IDENTITY_BYTES, False),
+        ('scaling exact source path list', source_paths, _MAX_HELPER_BYTES, False),
+        ('scaling native binary manifest', binary_manifest, _MAX_HELPER_BYTES, False),
+        ('scaling rustc version', rustc_version, _MAX_HELPER_OUTPUT_BYTES, False),
+        ('scaling Python runtime binding', runtime_binding, _MAX_EVIDENCE_BYTES, False),
+    ):
+        _require_unchanged(snapshot, label, maximum_bytes=maximum, executable=executable)
+    return ScalingSourceSelection(source, identity, source_paths, binary_manifest,
+                                   rustc_version, runtime_binding)
+
+
+# Inserted into the already protected bootstrap, before _run_bounded.
+_SCALING_PARENT_EXTENSIONS = (
+    'scripts/nexus/scaling_preflight_archive.py',
+    'scripts/nexus/scaling_release_preflight.py',
+    'scripts/nexus/scaling_archive_data.py',
+    'scripts/nexus/scaling_release_provisioning.py',
+    'scripts/nexus/scaling_release_record.py',
+    'scripts/sumeragi_v2_release_scaling_operation.py',
+)
+
+
+class ScalingParentModules:
+    """Captured authenticated source modules; no ambient source or pyc import.
+
+    Source selection has already reproduced the sealed index/workspace. The
+    bootstrap repeats that source verification around initial module loading.
+    Retained module identities survive safe close for the final pure projection;
+    closing this loader does not claim old pathnames remain live afterward.
+    """
+    def __init__(self, selected: ScalingSourceSelection):
+        _scaling_require(type(selected) is ScalingSourceSelection)
+        self._selected = selected
+        self._snapshots, self._modules = {}, {}
+        self._closed = False
+        self._installed = False
+        self._source = selected.source
+        self._previous_cache_prefix = sys.pycache_prefix
+        self._cache_prefix = str(selected.source_paths.path.parent/'scaling-unused-parent-cache')
+        self._cache_active = False
+        try:
+            # Some authenticated modules use SourceFileLoader directly, outside
+            # this finder. A nonexistent cache namespace prevents inherited pyc
+            # reads there; -B alone only prevents writing new bytecode.
+            _scaling_require(sys.dont_write_bytecode is True
+                and not os.path.lexists(self._cache_prefix))
+            sys.pycache_prefix = self._cache_prefix
+            self._cache_active = True
+            registry = self._capture('scripts/nexus/scaling_cli_bootstrap.py')
+            parsed = ast.parse(registry.data)
+            matches = [node.value for node in parsed.body if isinstance(node, ast.Assign)
+                and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == 'PYTHON_SOURCE_FILES']
+            _scaling_require(len(matches) == 1)
+            names = ast.literal_eval(matches[0])
+            _scaling_require(type(names) is tuple and 1 <= len(names) <= 128
+                and len(set(names)) == len(names))
+            for name in (*names, *_SCALING_PARENT_EXTENSIONS): self._capture(name)
+            self.verify()
+            sys.meta_path.insert(0, self)
+            self._installed = True
+            source = self.load('compute_workspace_source_manifest')
+            members = source.read_source_path_list(selected.source_paths.path)
+            _scaling_require(all(str(row.path.relative_to(self._source.path)) in members
+                                 for row in self._snapshots.values()))
+            self.verify()
+        except BaseException:
+            self.release()
+            raise
+
+    def _capture(self, relative):
+        _scaling_require(type(relative) is str
+            and re.fullmatch(r'scripts/(?:nexus/)?[A-Za-z_][A-Za-z_0-9]*\.py', relative))
+        name = Path(relative).stem
+        _scaling_require(name not in sys.stdlib_module_names)
+        path = self._source.path / relative
+        if name in self._snapshots:
+            _scaling_require(self._snapshots[name].path == path)
+            return self._snapshots[name]
+        _scaling_require(name not in sys.modules and len(self._snapshots) < 132)
+        row = _read_file(path, 'sealed scaling parent module', maximum_bytes=_MAX_HELPER_BYTES)
+        _scaling_require(row.mode in (0o400, 0o500) and row.nlink == 1
+                         and row.owner == os.getuid())
+        self._snapshots[name] = row
+        return row
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname not in self._snapshots: return None
+        _scaling_require(not self._closed and target is None and path is None)
+        return importlib.machinery.ModuleSpec(fullname, self,
+            origin=str(self._snapshots[fullname].path))
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        _scaling_require(not self._closed and module.__name__ in self._snapshots
+                         and module.__name__ not in self._modules)
+        row = self._snapshots[module.__name__]
+        _require_unchanged(row, 'captured scaling parent module', maximum_bytes=_MAX_HELPER_BYTES)
+        module.__file__ = str(row.path)
+        module.__package__ = ''
+        self._modules[module.__name__] = module
+        exec(compile(row.data, str(row.path), 'exec', dont_inherit=True), module.__dict__)
+        self.verify()
+
+    def load(self, name):
+        _scaling_require(not self._closed and name in self._snapshots)
+        value = importlib.import_module(name)
+        _scaling_require(self._modules.get(name) is value)
+        self.verify()
+        return value
+
+    def verify(self):
+        _scaling_require(not self._closed and self._cache_active
+            and sys.dont_write_bytecode is True
+            and sys.pycache_prefix == self._cache_prefix
+            and not os.path.lexists(self._cache_prefix))
+        _require_sealed_directory_unchanged(self._source, 'scaling module source')
+        _require_unchanged(self._selected.source_paths, 'scaling source path list',
+                           maximum_bytes=_MAX_HELPER_BYTES)
+        for row in self._snapshots.values():
+            _require_unchanged(row, 'captured scaling module', maximum_bytes=_MAX_HELPER_BYTES)
+        self.verify_retained()
+
+    def verify_retained(self):
+        for name, module in self._modules.items():
+            _scaling_require(sys.modules.get(name) is module
+                and module.__file__ == str(self._snapshots[name].path)
+                and module.__loader__ is self
+                and module.__spec__.loader is self
+                and module.__spec__.origin == module.__file__)
+
+    def close(self):
+        if self._closed: return
+        try:
+            self.verify()
+        finally:
+            # Remove only this finder even when its source/module check failed.
+            # Loaded objects remain retained until the enclosing owner releases.
+            sys.meta_path[:] = [value for value in sys.meta_path if value is not self]
+            self._installed, self._closed = False, True
+            self._restore_cache_prefix()
+
+    def _restore_cache_prefix(self):
+        if self._cache_active and sys.pycache_prefix == self._cache_prefix:
+            sys.pycache_prefix = self._previous_cache_prefix
+        self._cache_active = False
+
+    def release(self):
+        """Release only this loader's identities; never foreign replacement modules."""
+        if self._installed and self in sys.meta_path: sys.meta_path.remove(self)
+        self._installed, self._closed = False, True
+        self._restore_cache_prefix()
+        for name, module in reversed(tuple(self._modules.items())):
+            if sys.modules.get(name) is module: del sys.modules[name]
+
+
+class BootstrapScalingOperation:
+    """Lazy original-parent preparation, fixed execution and record publication."""
+    def __init__(self, invocation: ReleaseInvocationRoot, candidate_identity: FileSnapshot,
+                 python: FileSnapshot, manifest_helper: FileSnapshot, rustc: FileSnapshot,
+                 plan: FileSnapshot, budget: FileSnapshot, handoff_helper: FileSnapshot,
+                 evidence: Path, evidence_fd: int, framework_binding: bytes,
+                 environment: dict[str, str], command_timeout_seconds: int,
+                 installed_dependencies: Path, machine_id: str, storage_model: str,
+                 observation_overhead_seconds: int, preflight_timeout_seconds: int):
+        _scaling_require(type(invocation) is ReleaseInvocationRoot)
+        invocation.validate()
+        for row in (candidate_identity, python, manifest_helper, rustc, plan, budget, handoff_helper):
+            _scaling_require(type(row) is FileSnapshot)
+        _scaling_require(type(observation_overhead_seconds) is int
+                         and 0 < observation_overhead_seconds <= 600)
+        for value in (machine_id, storage_model):
+            _scaling_require(type(value) is str and 0 < len(value) <= 512
+                and all(32 <= ord(char) < 127 for char in value))
+        self._invocation = invocation
+        self._original = (candidate_identity, python, manifest_helper, rustc, plan, budget, handoff_helper)
+        self._evidence, self._evidence_fd = evidence, evidence_fd
+        self._framework = framework_binding
+        self._environment = tuple(sorted(environment.items()))
+        self._timeout = command_timeout_seconds
+        self._dependencies = installed_dependencies
+        self._labels = (machine_id, storage_model)
+        self._overhead = observation_overhead_seconds
+        _scaling_require(type(preflight_timeout_seconds) is int and 600 <= preflight_timeout_seconds <= 86400)
+        self._preflight_timeout = preflight_timeout_seconds
+        self._phase = 'new'
+        self._loader = self._prepared = self._operation = self._record = None
+        self._observation = self._verification = self._inputs = None
+        self._record_api = self._encoder = None
+        self._verifier_python_owner = self._verifier_python_json = None
+        self._selection = None
+        self._preflight = None
+        self.invocation_sha256 = hashlib.sha256(_canonical_json(dict(
+            operation='iroha.sumeragi_v2.fixed_scaling.parent.v1',
+            root=str(invocation.path), inputs=[row.sha256 for row in self._original],
+            dependencies=str(installed_dependencies), labels=list(self._labels),
+            observation_overhead_seconds=observation_overhead_seconds,
+            preflight_timeout_seconds=preflight_timeout_seconds))).hexdigest()
+        self._invocation_pin = self.invocation_sha256
+        self._check_original()
+
+    def _check_original(self):
+        self._invocation.validate()
+        _scaling_require(self.invocation_sha256 == self._invocation_pin)
+        for index, row in enumerate(self._original):
+            _require_unchanged(row, 'original parent scaling input',
+                maximum_bytes=_MAX_TOOL_BYTES if index in (1, 3) else _MAX_HELPER_BYTES,
+                executable=index in (1, 3))
+
+    def _check_selected_source(self):
+        self._check_original()
+        row = self._selection
+        _scaling_require(type(row) is ScalingSourceSelection)
+        raw, _ = _compute_identity(self._original[1].path, self._original[2].path,
+            row.source.path, dict(self._environment), self._timeout)
+        _scaling_require(raw == row.identity.data)
+        _require_sealed_directory_unchanged(row.source, 'selected scaling source')
+
+    def prepare(self):
+        _scaling_require(self._phase == 'new')
+        self._phase = 'preparing'
+        try:
+            self._check_original()
+            candidate, python, helper, rustc, plan, budget, _ = self._original
+            self._selection = selected = _prepare_scaling_source_selection(self._invocation,
+                candidate, python, helper, rustc, self._evidence, self._evidence_fd,
+                self._framework, dict(self._environment), self._timeout)
+            self._check_selected_source()
+            self._loader = ScalingParentModules(selected)
+            preflight = self._loader.load('scaling_release_preflight')
+            dependency_api = self._loader.load('scaling_cli_bootstrap')
+            self._preflight = preflight.CompleteScalingPreflight(
+                selected.source.path, self._dependencies,
+                self._invocation.path/'runtime/scaling-preflight', python.path,
+                dict(self._environment), self._preflight_timeout,
+                preflight.PreflightApi(CommandObservationOwner, _run_bounded,
+                    _read_file, _require_unchanged), dependency_api,
+                archive=BootstrapPreflightArchive(self._evidence, self._evidence_fd),
+                candidate_identity=_load_identity(selected.identity.data),
+                invocation_sha256=self.invocation_sha256)
+            self._preflight.run()
+            self._preflight.verify()
+            self._check_selected_source()
+            provisioning = self._loader.load('scaling_release_provisioning')
+            self._check_selected_source()
+            identity = _load_identity(selected.identity.data)
+            root = self._invocation.path
+            choices = provisioning.ParentScalingSelection(selected.source.path,
+                selected.source_paths.path, selected.source_paths.sha256,
+                identity['workspace_source_manifest_sha256'], root/'target', root/'output',
+                selected.binary_manifest.path.parent, selected.binary_manifest.sha256,
+                selected.rustc_version.path, self._evidence,
+                selected.python_runtime_binding.path, selected.python_runtime_binding.sha256,
+                self._dependencies, plan.path, plan.sha256, budget.path, budget.sha256,
+                root/'runtime/scaling-control', root/'output/scaling', root/'runtime/scaling-work',
+                self._labels[0], self._labels[1], identity['head_commit'],
+                self._environment, self._overhead)
+            # Seed is created once, remains runtime-only and enters the existing
+            # retained pipe owner. No socket request selects or carries it.
+            self._prepared = provisioning.PreparedScalingInputs.prepare(choices, secrets.token_hex(32))
+            self._inputs = self._prepared.verification_inputs()
+            self._stage_verifier_python()
+            concrete = self._loader.load('sumeragi_v2_release_scaling_operation')
+            self._record_api = self._loader.load('scaling_release_record')
+            self._encoder = self._record_api.encode_parent_execution
+            api = concrete.BootstrapScalingApi(FixedScalingLaunch, CommandObservationOwner,
+                TerminalCommandObservation, ParentScalingObservation, ScalingArtifactObservation,
+                CommandResult, _run_bounded, _validated_pass_fds)
+            self._operation = concrete.FixedScalingOperation(self._prepared, self.invocation_sha256, api)
+            self._launch = self._operation.prepare()
+            self._phase = 'borrowed'
+            self.validate(self._launch)
+            return self._launch
+        except BaseException:
+            # Preflight owns its original children independently and close() refuses
+            # unknown terminal state. Collector preparation does not spawn: a
+            # returned concrete launch remains our original no-spawn borrow.
+            if self._phase == 'borrowed':
+                self._operation.child_finished(self._launch, None)
+            self._phase = 'failed'
+            self.close()
+            raise
+
+    def _stage_verifier_python(self):
+        """Retain original nonsecret package content for fresh receipt processes."""
+        self._prepared.validate()
+        python_contract = self._loader.load('scaling_cli_bootstrap')
+        # The exact prepared owner already guards this originating dependency
+        # object, its paths and package bytes. Do not rescan an installed path.
+        original = self._prepared._dependencies
+        source = original.paths.source_root
+        expected = python_contract.dependency_package_census(source)
+        os.mkdir('scaling-verifier-python', _DIRECTORY_MODE, dir_fd=self._evidence_fd)
+        root = self._evidence/'scaling-verifier-python'
+        python_contract.stage_dependency_source(source, root/'source')
+        self._verifier_python_owner = python_contract.PythonDependencies.provision(
+            root/'source', root/'bundle', root/'inventory.json')
+        self._verifier_python_owner.verify()
+        _scaling_require(python_contract.dependency_package_census(root/'source') == expected
+            and python_contract.dependency_package_census(root/'bundle') == expected)
+        self._verifier_python_json = _canonical_json(dict(
+            inventory_sha256=self._verifier_python_owner.paths.inventory_sha256,
+            files=list(expected)))
+        self._prepared.validate()
+        self._verifier_python_owner.verify()
+
+    def validate(self, launch):
+        _scaling_require(self._phase in ('borrowed', 'reaped', 'verified')
+                         and launch is self._launch)
+        self._check_original()
+        self._loader.verify()
+        self._preflight.verify()
+        self._operation.validate(launch)
+        if self._record is not None:
+            _require_unchanged(self._record, 'original scaling execution record',
+                              maximum_bytes=self._record_api.MAX_RECORD_BYTES)
+
+    def child_finished(self, launch, observation):
+        _scaling_require(self._phase == 'borrowed' and launch is self._launch)
+        self._operation.child_finished(launch, observation)
+        self._phase = 'reaped'
+
+    def verify_publication(self, launch, observation):
+        _scaling_require(self._phase == 'reaped' and launch is self._launch)
+        self.validate(launch)
+        self._operation.verify_publication(launch, observation)
+        self._observation = observation
+        self._verification = self._operation.verification
+        raw = self._encode_record(observation)
+        self._record = _write_artifact(self._evidence, self._evidence_fd,
+                                      'scaling-execution.json', raw, _DATA_MODE)
+        self._operation.validate(launch)
+        _scaling_require(time.monotonic_ns() < launch.deadline_ns)
+        self._phase = 'verified'
+
+    def _encode_record(self, observation):
+        _scaling_require(observation is self._observation
+            and self._operation.verification is self._verification
+            and self._record_api.encode_parent_execution is self._encoder)
+        self._loader.verify_retained()
+        self._preflight.verify_retained()
+        self._verifier_python_owner.verify()
+        return self._encoder(_load_identity(self._selection.identity.data), self._inputs,
+            observation, self._verification, observation_overhead_seconds=self._overhead,
+            verifier_python=json.loads(self._verifier_python_json),
+            preflight=self._preflight.archive_binding)
+
+    def revalidate_final(self, observation):
+        """Reproject the same retained objects after natural runner completion."""
+        _scaling_require(self._phase == 'closed' and self._record is not None)
+        _scaling_require(self._encode_record(observation) == self._record.data)
+        _require_unchanged(self._record, 'original scaling execution record',
+                          maximum_bytes=self._record_api.MAX_RECORD_BYTES)
+        return self._record
+
+    @property
+    def record_api(self):
+        _scaling_require(self._phase == 'closed' and self._record is not None)
+        self._loader.verify_retained()
+        return self._record_api
+
+    def close(self):
+        if self._phase == 'closed': return
+        if self._operation is not None: self._operation.close()
+        elif self._prepared is not None: self._prepared.close()
+        if self._preflight is not None: self._preflight.close()
+        if self._loader is not None: self._loader.close()
+        self._phase = 'closed'
+
+    def release(self):
+        """Final module release only after the original child owners allow close."""
+        # Establish natural terminal ownership before exceptional cleanup can
+        # release the retained source or archive descriptors.
+        if self._operation is not None: self._operation.close()
+        elif self._prepared is not None: self._prepared.close()
+        if self._preflight is not None: self._preflight.require_terminal()
+        try:
+            self.close()
+        finally:
+            self._release_retained()
+
+    def _release_retained(self):
+        try:
+            if self._verifier_python_owner is not None: self._verifier_python_owner.close()
+        finally:
+            try:
+                if self._preflight is not None: self._preflight.release()
+            finally:
+                if self._loader is not None: self._loader.release()
+
+
 def _run_bounded(
     executable: Path,
     arguments: Iterable[str],
@@ -1381,8 +2570,33 @@ def _run_bounded(
     environment: dict[str, str],
     timeout_seconds: int,
     maximum_output_bytes: int,
+    pass_fds: tuple[int, ...] = (),
+    observation: CommandObservationOwner | None = None,
+    deadline_ns: int | None = None,
 ) -> CommandResult:
+    descriptors = _validated_pass_fds(pass_fds)
+    if (type(timeout_seconds) is not int or timeout_seconds <= 0
+            or type(maximum_output_bytes) is not int or maximum_output_bytes <= 0):
+        raise BootstrapError("protected command bounds are invalid")
+    if observation is not None and type(observation) is not CommandObservationOwner:
+        raise BootstrapError("protected command observation owner is invalid")
     argv = [str(executable), *arguments]
+    started = time.monotonic()
+    deadline = started + timeout_seconds
+    started_ns = int(started * 1_000_000_000)
+    has_original_deadline = deadline_ns is not None
+    if deadline_ns is None:
+        deadline_ns = int(deadline * 1_000_000_000)
+    elif (type(deadline_ns) is not int or not started_ns < deadline_ns
+            or deadline_ns > started_ns + timeout_seconds * 1_000_000_000):
+        raise BootstrapError("protected command original deadline is invalid or expired")
+    deadline = deadline_ns / 1_000_000_000
+    if observation is not None:
+        observation._begin(argv, cwd, environment, descriptors, started_ns, deadline_ns)
+    if _validated_pass_fds(pass_fds) != descriptors:
+        raise BootstrapError("protected command descriptors changed before launch")
+    if has_original_deadline and int(time.monotonic() * 1_000_000_000) >= deadline_ns:
+        raise BootstrapError("protected command original deadline expired before launch")
     try:
         process = subprocess.Popen(
             argv,
@@ -1391,11 +2605,16 @@ def _run_bounded(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            close_fds=True,
+            pass_fds=pass_fds,
         )
     except OSError as error:
         raise BootstrapError(f"could not execute protected command {executable}") from error
-    assert process.stdout is not None and process.stderr is not None
+    if observation is not None:
+        observation._spawned(process)
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    digests = {name: hashlib.sha256() for name in buffers}
+    counts = {name: 0 for name in buffers}
     # Bounds determine the eventual verdict; they never control the child.
     # Retain only the capped prefix while draining both streams through EOF.
     retained_output_bytes = 0
@@ -1407,6 +2626,8 @@ def _run_bounded(
     def retain(label: str, chunk: bytes) -> None:
         nonlocal retained_output_bytes, output_limit_exceeded
         with output_lock:
+            digests[label].update(chunk)
+            counts[label] += len(chunk)
             retained_capacity = max(
                 maximum_output_bytes - retained_output_bytes, 0
             )
@@ -1430,65 +2651,100 @@ def _run_bounded(
         ("stdout", process.stdout),
         ("stderr", process.stderr),
     )
-    drain_threads = [
-        threading.Thread(
-            target=drain,
-            args=(label, stream),
-            name=f"bootstrap-{label}-drain",
-        )
-        for label, stream in drain_specs
-    ]
+    drain_threads = []
     started_threads: list[threading.Thread] = []
     supervision_error: BaseException | None = None
-    deadline = time.monotonic() + timeout_seconds
     try:
+        assert process.stdout is not None and process.stderr is not None
+        drain_threads = [
+            threading.Thread(
+                target=drain,
+                args=(label, stream),
+                name=f"bootstrap-{label}-drain",
+            )
+            for label, stream in drain_specs
+        ]
         for thread in drain_threads:
             thread.start()
             started_threads.append(thread)
         while process.poll() is None:
+            if _validated_pass_fds(pass_fds) != descriptors:
+                raise BootstrapError("protected command descriptors changed during execution")
             if time.monotonic() > deadline:
                 runtime_limit_exceeded = True
             time.sleep(0.05)
     except BaseException as error:
         supervision_error = error
     finally:
-        missing_specs = drain_specs[len(started_threads) :]
-        if missing_specs:
-            # Thread creation failure is itself only an observer failure. Keep
-            # every still-unowned pipe open and drain it in this thread so the
-            # child remains free to reach natural completion.
-            fallback = selectors.DefaultSelector()
-            try:
-                for label, stream in missing_specs:
-                    os.set_blocking(stream.fileno(), False)
-                    fallback.register(stream, selectors.EVENT_READ, label)
-                while fallback.get_map():
-                    for key, _ in fallback.select(1.0):
-                        try:
-                            chunk = os.read(key.fileobj.fileno(), 64 * 1024)
-                        except BlockingIOError:
-                            continue
-                        if chunk:
-                            retain(key.data, chunk)
-                        else:
-                            fallback.unregister(key.fileobj)
-            except BaseException as error:
-                drain_errors.append(error)
-            finally:
-                fallback.close()
+        try:
+            missing_specs = drain_specs[len(started_threads) :]
+            if missing_specs:
+                # Thread creation failure is itself only an observer failure. Keep
+                # every still-unowned pipe open and drain it in this thread so the
+                # child remains free to reach natural completion.
+                fallback = selectors.DefaultSelector()
+                try:
+                    for label, stream in missing_specs:
+                        os.set_blocking(stream.fileno(), False)
+                        fallback.register(stream, selectors.EVENT_READ, label)
+                    while fallback.get_map():
+                        for key, _ in fallback.select(1.0):
+                            try:
+                                chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                            except BlockingIOError:
+                                continue
+                            if chunk:
+                                retain(key.data, chunk)
+                            else:
+                                fallback.unregister(key.fileobj)
+                except BaseException as error:
+                    drain_errors.append(error)
+                finally:
+                    fallback.close()
+        except BaseException as error:
+            drain_errors.append(error)
         try:
             # This is deliberately unbounded: neither a latched policy
             # violation nor an observer exception authorizes child control.
-            returncode = process.wait()
+            returncode, wait_error = _wait_naturally(process)
+            if observation is not None:
+                observation._waited(process, returncode)
+            if supervision_error is None:
+                supervision_error = wait_error
         finally:
             for thread in started_threads:
-                thread.join()
-            process.stdout.close()
-            process.stderr.close()
+                while True:
+                    try:
+                        thread.join()
+                        break
+                    except BaseException as error:
+                        if supervision_error is None: supervision_error = error
+            for stream in (process.stdout, process.stderr):
+                try: stream.close()
+                except BaseException as error: drain_errors.append(error)
+    completed_ns = None
+    descriptor_error = None
+    try:
+        completed = time.monotonic()
+        completed_ns = int(completed * 1_000_000_000)
+        if completed > deadline:
+            runtime_limit_exceeded = True
+        if _validated_pass_fds(pass_fds) != descriptors:
+            raise BootstrapError("protected command descriptors changed before terminal observation")
+    except BaseException as error:
+        descriptor_error = error
+        if supervision_error is None: supervision_error = error
+    violations = []
+    if supervision_error is not None: violations.append("supervision")
+    if descriptor_error is not None: violations.append("terminal_identity_or_clock")
+    if len(started_threads) != len(drain_threads): violations.append("drain_start")
+    if drain_errors: violations.append("drain")
+    if runtime_limit_exceeded: violations.append("runtime")
+    if output_limit_exceeded: violations.append("output")
+    if observation is not None:
+        observation._finish(process, completed_ns, returncode, digests, counts, violations)
     if supervision_error is not None:
         raise supervision_error
-    if time.monotonic() > deadline:
-        runtime_limit_exceeded = True
     if len(started_threads) != len(drain_threads):
         raise BootstrapError("protected command output drain could not start")
     if drain_errors:
@@ -1510,6 +2766,7 @@ def _run_release_runner(
     environment: dict[str, str],
     stdout_descriptor: int,
     stderr_descriptor: int,
+    scaling_handoff: FixedScalingHandoff | None = None,
 ) -> CommandResult:
     """Run the release runner with private regular-file diagnostic sinks.
 
@@ -1520,7 +2777,13 @@ def _run_release_runner(
     for the in-flight runner to finish naturally.
     """
 
+    if scaling_handoff is not None and type(scaling_handoff) is not FixedScalingHandoff:
+        raise BootstrapError("release scaling handoff owner is invalid")
+    inherited = (scaling_handoff.runner_descriptor,) if scaling_handoff is not None else ()
+    inherited_pins = _validated_pass_fds(inherited)
     argv = [str(executable), *arguments]
+    if _validated_pass_fds(inherited) != inherited_pins:
+        raise BootstrapError("release runner descriptor changed before launch")
     try:
         process = subprocess.Popen(
             argv,
@@ -1530,12 +2793,23 @@ def _run_release_runner(
             stdout=stdout_descriptor,
             stderr=stderr_descriptor,
             close_fds=True,
+            pass_fds=inherited,
         )
     except OSError as error:
         raise RunnerLaunchError(
             f"could not execute protected command {executable}"
         ) from error
-    returncode = process.wait()
+    if scaling_handoff is None:
+        returncode, wait_error = _wait_naturally(process)
+        if wait_error is not None: raise wait_error
+    else:
+        try:
+            scaling_handoff._started(process)
+            returncode = scaling_handoff.wait_runner(process)
+        except BaseException:
+            returncode, _ = _wait_naturally(process)
+            scaling_handoff._runner_waited(process, returncode)
+            raise
     return CommandResult(returncode, b"", b"")
 
 
@@ -1627,6 +2901,54 @@ def _capture_large_file(path: Path, label: str) -> LargeFileSnapshot:
         os.close(descriptor)
 
 
+def _capture_descriptor_pin(descriptor):
+    """Bind the original capture slot, including access and inheritance flags."""
+    metadata = os.fstat(descriptor)
+    return ((metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode), metadata.st_uid),
+            fcntl.fcntl(descriptor, fcntl.F_GETFL), fcntl.fcntl(descriptor, fcntl.F_GETFD))
+
+
+def _require_capture_descriptor(descriptor, pin, label):
+    try:
+        if _capture_descriptor_pin(descriptor) == pin:
+            return
+    except OSError:
+        pass
+    raise BootstrapError(f"{label} original descriptor changed")
+
+
+def _close_capture_descriptor(descriptor, pin):
+    try:
+        if _capture_descriptor_pin(descriptor) == pin:
+            os.close(descriptor)
+    except OSError:
+        pass
+
+
+def _open_capture_descriptor(path, flags, expected_identity, label, *, dir_fd=None):
+    """Acquire one selected read-only slot without closing a reused error slot."""
+    descriptor = os.open(path, flags, **({} if dir_fd is None else {'dir_fd': dir_fd}))
+    mask = os.O_ACCMODE | os.O_NONBLOCK | os.O_APPEND | os.O_ASYNC
+    def admitted(pin):
+        return (pin[0] == expected_identity and pin[1] & mask == flags & mask
+                and pin[2] == fcntl.FD_CLOEXEC)
+    try:
+        pin = _capture_descriptor_pin(descriptor)
+        if not admitted(pin):
+            raise BootstrapError(f"{label} original descriptor changed while opened")
+        return descriptor, pin
+    except BaseException:
+        # The selected inode and explicit open flags also bound cleanup when
+        # initial fstat/fcntl acquisition itself fails before a full pin exists.
+        try:
+            pin = _capture_descriptor_pin(descriptor)
+            if admitted(pin):
+                _close_capture_descriptor(descriptor, pin)
+        except OSError:
+            pass
+        raise
+
+
 def _capture_large_file_at(
     parent_fd: int,
     name: str,
@@ -1639,6 +2961,7 @@ def _capture_large_file_at(
 
     if name in {"", ".", ".."} or "/" in name or "\0" in name:
         raise BootstrapError(f"{label} has an unsafe leaf name")
+    parent_pin = _capture_descriptor_pin(parent_fd)
     try:
         before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except OSError as error:
@@ -1653,7 +2976,8 @@ def _capture_large_file_at(
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(name, flags, dir_fd=parent_fd)
+        descriptor, descriptor_pin = _open_capture_descriptor(name, flags,
+            (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode), before.st_uid), label, dir_fd=parent_fd)
     except OSError as error:
         raise BootstrapError(f"{label} could not be opened safely") from error
     try:
@@ -1669,7 +2993,11 @@ def _capture_large_file_at(
         digest = hashlib.sha256()
         total = 0
         while True:
-            block = os.read(descriptor, 1024 * 1024)
+            _require_capture_descriptor(parent_fd, parent_pin, label)
+            _require_capture_descriptor(descriptor, descriptor_pin, label)
+            block = os.read(descriptor, min(1024 * 1024, maximum_bytes - total + 1))
+            _require_capture_descriptor(descriptor, descriptor_pin, label)
+            _require_capture_descriptor(parent_fd, parent_pin, label)
             if not block:
                 break
             total += len(block)
@@ -1684,6 +3012,8 @@ def _capture_large_file_at(
             for field in stable
         ):
             raise BootstrapError(f"{label} changed while it was hashed")
+        _require_capture_descriptor(descriptor, descriptor_pin, label)
+        _require_capture_descriptor(parent_fd, parent_pin, label)
         return LargeFileSnapshot(
             path=path,
             sha256=digest.hexdigest(),
@@ -1697,13 +3027,37 @@ def _capture_large_file_at(
             ctime_ns=opened.st_ctime_ns,
         )
     finally:
-        os.close(descriptor)
+        _close_capture_descriptor(descriptor, descriptor_pin)
+
+
+def _capture_bounded_large_file(path: Path, label: str, *, maximum_bytes: int) -> LargeFileSnapshot:
+    """Capture through a checked current parent with an explicit allocation cap."""
+    _scaling_require(type(maximum_bytes) is int and maximum_bytes >= 0)
+    if not path.is_absolute() or path.resolve() != path:
+        raise BootstrapError(f"{label} path is not canonical")
+    parent = path.parent.lstat()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptor, descriptor_pin = _open_capture_descriptor(path.parent, flags,
+        (parent.st_dev, parent.st_ino, stat.S_IFMT(parent.st_mode), parent.st_uid), label)
+    try:
+        opened = os.fstat(descriptor)
+        identity = lambda row: (row.st_dev,row.st_ino,row.st_mode,row.st_uid)
+        if not stat.S_ISDIR(parent.st_mode) or identity(parent) != identity(opened):
+            raise BootstrapError(f"{label} parent changed while it was opened")
+        _require_capture_descriptor(descriptor, descriptor_pin, label)
+        result = _capture_large_file_at(descriptor,path.name,path,label,maximum_bytes=maximum_bytes)
+        _require_capture_descriptor(descriptor, descriptor_pin, label)
+        if identity(path.parent.lstat()) != identity(opened):
+            raise BootstrapError(f"{label} parent changed during capture")
+        return result
+    finally:
+        _close_capture_descriptor(descriptor, descriptor_pin)
 
 
 def _require_large_file_unchanged(
     snapshot: LargeFileSnapshot, label: str
 ) -> None:
-    if _capture_large_file(snapshot.path, label) != snapshot:
+    if _capture_bounded_large_file(snapshot.path, label, maximum_bytes=snapshot.size) != snapshot:
         raise BootstrapError(f"{label} changed after it was sealed")
 
 
@@ -1808,6 +3162,7 @@ def _compute_identity(
         python,
         [
             "-I",
+            "-B",
             "-S",
             str(helper),
             "--root",
@@ -2202,6 +3557,7 @@ def _copy_framework_python_archive(
         protected_python.path,
         [
             "-I",
+            "-B",
             "-S",
             str(runtime_helper.path),
             "--copy-framework-python",
@@ -2283,6 +3639,7 @@ def _verify_framework_python_archive(
         protected_python.path,
         [
             "-I",
+            "-B",
             "-S",
             str(runtime_helper.path),
             "--verify-framework-python",
@@ -2718,6 +4075,7 @@ def _run_tool_probe_closure(
         python.path,
         [
             "-I",
+            "-B",
             "-S",
             str(helper.path),
             "--tool-manifest",
@@ -2950,9 +4308,10 @@ def _cleanup(path: Path) -> None:
 
 
 def bootstrap(args: argparse.Namespace) -> int:
-    if not sys.flags.isolated or not sys.flags.no_site:
+    if (sys.flags.isolated != 1 or sys.flags.dont_write_bytecode != 1
+            or sys.flags.no_site != 1):
         raise BootstrapError(
-            "bootstrap must be started by protected Python with both -I and -S"
+            "bootstrap must be started by protected Python with -I -B -S"
         )
     candidate = _absolute_resolved_existing(args.candidate_root, "candidate root")
     if not candidate.is_dir():
@@ -2965,6 +4324,10 @@ def bootstrap(args: argparse.Namespace) -> int:
 
     protected_specs = (
         ("bootstrap", bootstrap_path, args.expected_bootstrap_sha256, _MAX_HELPER_BYTES, False),
+        ("scaling_plan", args.scaling_plan, args.expected_scaling_plan_sha256, 1024 * 1024, False),
+        ("scaling_budget", args.scaling_budget, args.expected_scaling_budget_sha256, 1024 * 1024, False),
+        ("scaling_handoff_helper", args.scaling_handoff_helper,
+            args.expected_scaling_handoff_helper_sha256, _MAX_HELPER_BYTES, False),
         ("python", args.python_bin, args.expected_python_sha256, _MAX_TOOL_BYTES, True),
         ("git", args.git_bin, args.expected_git_sha256, _MAX_TOOL_BYTES, True),
         ("ssh_keygen", args.ssh_keygen_bin, args.expected_ssh_keygen_sha256, _MAX_TOOL_BYTES, True),
@@ -3131,6 +4494,15 @@ def bootstrap(args: argparse.Namespace) -> int:
         protected["runner_tool_manifest"], candidate
     )
     runner_extra_environment = _parse_runner_environment(args.runner_environment)
+    if 'CARGO_HOME' not in runner_extra_environment:
+        raise BootstrapError("release requires an explicit protected CARGO_HOME input")
+    scaling_cargo_cache = _absolute_resolved_existing(
+        Path(runner_extra_environment['CARGO_HOME']), 'original release Cargo cache')
+    scaling_dependencies = _absolute_resolved_existing(
+        args.scaling_dependency_source, 'original scaling dependency source')
+    if (not scaling_dependencies.is_dir() or _inside(scaling_dependencies, candidate)
+            or not scaling_cargo_cache.is_dir()):
+        raise BootstrapError("scaling dependency and Cargo cache roots must be original external directories")
     formal_replay_environment_names = {
         "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
         "IROHA_RELEASE_FORMAL_REPLAY_RELEASE_ROOT",
@@ -3190,6 +4562,9 @@ def bootstrap(args: argparse.Namespace) -> int:
     runner_stdout_descriptor: int | None = None
     runner_stderr_descriptor: int | None = None
     runner_logs: dict[str, LargeFileSnapshot] = {}
+    scaling_invocation: ReleaseInvocationRoot | None = None
+    scaling_operation: BootstrapScalingOperation | None = None
+    scaling_handoff: FixedScalingHandoff | None = None
     try:
         for child in ("home", "tmp", "runner-tools"):
             os.mkdir(child, _DIRECTORY_MODE, dir_fd=evidence_fd)
@@ -3205,6 +4580,9 @@ def bootstrap(args: argparse.Namespace) -> int:
         )
         archive_names = {
             "bootstrap": "trusted-bootstrap.py",
+            "scaling_plan": "scaling-plan.json",
+            "scaling_budget": "scaling-budget.json",
+            "scaling_handoff_helper": "scaling-handoff.py",
             "python": (
                 "python-runtime/bin/python3"
                 if _FRAMEWORK_PYTHON
@@ -3480,7 +4858,7 @@ def bootstrap(args: argparse.Namespace) -> int:
         python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
         python_probe = _run_bounded(
             archives["python"].path,
-            ["-I", "-S", "-c", python_probe_code],
+            ["-I", "-B", "-S", "-c", python_probe_code],
             cwd=evidence,
             environment=environment,
             timeout_seconds=args.command_timeout_seconds,
@@ -3540,6 +4918,7 @@ def bootstrap(args: argparse.Namespace) -> int:
         )
         verifier_arguments = [
             "-I",
+            "-B",
             "-S",
             str(archives["identity_verifier"].path),
             "--root", str(candidate),
@@ -3918,6 +5297,25 @@ def bootstrap(args: argparse.Namespace) -> int:
             maximum_bytes=_MAX_HELPER_BYTES,
         )
 
+        if framework_python_record is None:
+            raise BootstrapError("fixed scaling requires the authenticated framework Python runtime")
+        scaling_invocation = allocate_release_invocation_root(candidate, evidence, scaling_cargo_cache)
+        scaling_operation = BootstrapScalingOperation(scaling_invocation, identity_snapshot,
+            archives['python'], archives['manifest_helper'], runner_tool_archives['rustc'],
+            archives['scaling_plan'], archives['scaling_budget'], archives['scaling_handoff_helper'],
+            evidence, evidence_fd, _canonical_json(framework_python_record), environment,
+            args.command_timeout_seconds, scaling_dependencies, args.scaling_machine_id,
+            args.scaling_storage_model, args.scaling_observation_overhead_seconds,
+            args.scaling_preflight_timeout_seconds)
+        scaling_handoff = FixedScalingHandoff(scaling_operation.invocation_sha256, scaling_operation)
+        scaling_environment = {
+            'IROHA_RELEASE_INVOCATION_ROOT': str(scaling_invocation.path),
+            'IROHA_RELEASE_TEMP_BASE': str(scaling_invocation.base),
+            'IROHA_RELEASE_SCALING_GATE_FD': str(scaling_handoff.runner_descriptor),
+            'IROHA_RELEASE_SCALING_INVOCATION_SHA256': scaling_operation.invocation_sha256,
+            'IROHA_RELEASE_SCALING_CHALLENGE': scaling_handoff.challenge,
+            'IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256': archives['scaling_handoff_helper'].sha256,
+        }
         completion_path = evidence / "BOOTSTRAP_COMPLETED.json"
         policy_environment_without_self_digest = {
             "SUMERAGI_V2_RELEASE_RUNTIME_HELPER": str(
@@ -3993,6 +5391,7 @@ def bootstrap(args: argparse.Namespace) -> int:
             ],
             {
                 **runner_extra_environment,
+                **scaling_environment,
                 **policy_environment_without_self_digest,
                 **alias_environment_without_self_digest,
             },
@@ -4069,6 +5468,8 @@ def bootstrap(args: argparse.Namespace) -> int:
             },
             "runner": {
                 "archive_id": "release-candidate.runner.v1",
+                "scaling_handoff": scaling_environment,
+                "scaling_preflight_timeout_seconds": args.scaling_preflight_timeout_seconds,
                 "invocation": {
                     "profile": "release",
                     "operation_id": "sumeragi-v2.release.v1",
@@ -4112,6 +5513,7 @@ def bootstrap(args: argparse.Namespace) -> int:
                     "argv": [
                         str(archives["python"].path),
                         "-I",
+                        "-B",
                         "-S",
                         "-c",
                         python_probe_code,
@@ -4166,6 +5568,7 @@ def bootstrap(args: argparse.Namespace) -> int:
             environment=runner_environment,
             stdout_descriptor=runner_stdout_descriptor,
             stderr_descriptor=runner_stderr_descriptor,
+            scaling_handoff=scaling_handoff,
         )
         runner_status = runner.returncode if runner.returncode >= 0 else 128 - runner.returncode
         runner_logs = {
@@ -4334,6 +5737,9 @@ def bootstrap(args: argparse.Namespace) -> int:
             return runner_status
         if post_error is not None:
             raise post_error
+        original_scaling_observation = scaling_handoff.revalidate_observation()
+        scaling_execution = scaling_operation.revalidate_final(original_scaling_observation)
+        scaling_record_api = scaling_operation.record_api
 
         (
             retained_release_root,
@@ -4347,6 +5753,7 @@ def bootstrap(args: argparse.Namespace) -> int:
             evidence_fd,
             candidate=candidate,
             authenticated_environment=runner_environment_without_self_digest,
+            scaling_execution=scaling_execution,
         )
         if retained_result_snapshot is None or retained_validation_ack is None:
             raise BootstrapError("production release lacks protected retained result and validator acknowledgment")
@@ -4378,6 +5785,8 @@ def bootstrap(args: argparse.Namespace) -> int:
             authenticated_environment=runner_environment_without_self_digest,
             release_runner=retained_release_root,
             receipt_path=retained_receipt_path,
+            scaling_execution=scaling_execution,
+            scaling_record_api=scaling_record_api,
         )
         _require_unchanged(
             terminal_receipt,
@@ -4426,7 +5835,10 @@ def bootstrap(args: argparse.Namespace) -> int:
             expected_signer_fingerprint=args.expected_signer_fingerprint,
             environment=runner_environment,
             timeout_seconds=args.command_timeout_seconds,
+            scaling_execution=scaling_execution,
         )
+        _scaling_require(scaling_operation.revalidate_final(
+            scaling_handoff.revalidate_observation()) is scaling_execution)
         ack = _parse_canonical_json(retained_validation_ack, "receipt validation acknowledgment")
         if ack["validator"]["bootstrap_completion_sha256"] != marker.sha256:
             raise BootstrapError("receipt validation acknowledgment names the wrong bootstrap")
@@ -4471,9 +5883,14 @@ def bootstrap(args: argparse.Namespace) -> int:
             set_attestation_snapshot=approval_set_attestation,
             marker_record=approval_marker_record,
         )
+        _scaling_require(scaling_operation.revalidate_final(
+            scaling_handoff.revalidate_observation()) is scaling_execution)
+        scaling_projection = scaling_record_api.receipt_projection(
+            scaling_record_api.decode_parent_execution(scaling_execution.data))
         release_completion_value = {
             "schema_version": 2,
             "result": "release-complete",
+            "scaling_execution": scaling_projection,
             "bootstrap_completion_sha256": marker.sha256,
             "candidate_identity_sha256": identity_snapshot.sha256,
             "candidate_commit_oid": identity["head_commit"],
@@ -4648,6 +6065,8 @@ def bootstrap(args: argparse.Namespace) -> int:
         _require_sealed_directory_unchanged(
             sealed_directory, "retained sealed source root"
         )
+        _scaling_require(scaling_operation.revalidate_final(
+            scaling_handoff.revalidate_observation()) is scaling_execution)
         success = True
         try:
             print(
@@ -4662,6 +6081,11 @@ def bootstrap(args: argparse.Namespace) -> int:
             pass
         return 0
     finally:
+        # No failure cleanup may release inputs or delete files beneath a child
+        # whose original natural wait is still unresolved.
+        if scaling_handoff is not None: scaling_handoff.close()
+        if scaling_operation is not None: scaling_operation.release()
+        if scaling_invocation is not None: scaling_invocation.close()
         for descriptor in (runner_stdout_descriptor, runner_stderr_descriptor):
             if descriptor is not None:
                 try:
@@ -4693,9 +6117,33 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _scaling_preflight_timeout(value: str) -> int:
+    """Separate bounded preflight duration; helper and experiment clocks differ."""
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError("preflight timeout must be integer seconds") from error
+    if not 600 <= seconds <= 86400:
+        raise argparse.ArgumentTypeError("preflight timeout must be 600..86400 seconds")
+    return seconds
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate-root", type=Path, required=True)
+    parser.add_argument("--scaling-plan", type=Path, required=True)
+    parser.add_argument("--expected-scaling-plan-sha256", required=True)
+    parser.add_argument("--scaling-budget", type=Path, required=True)
+    parser.add_argument("--expected-scaling-budget-sha256", required=True)
+    parser.add_argument("--scaling-handoff-helper", type=Path, required=True)
+    parser.add_argument("--expected-scaling-handoff-helper-sha256", required=True)
+    parser.add_argument("--scaling-dependency-source", type=Path, required=True)
+    parser.add_argument("--scaling-machine-id", required=True)
+    parser.add_argument("--scaling-storage-model", required=True)
+    parser.add_argument("--scaling-observation-overhead-seconds", type=_positive_int, required=True)
+    parser.add_argument("--scaling-preflight-timeout-seconds", type=_scaling_preflight_timeout,
+        default=_DEFAULT_SCALING_PREFLIGHT_TIMEOUT_SECONDS,
+        help="one complete preflight deadline in seconds (600..86400; default 28800)")
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--expected-bootstrap-sha256", required=True)
     parser.add_argument("--python-bin", type=Path, required=True)

@@ -257,6 +257,24 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             }
         };
 
+        // Storage completion may take time while an independent writer latches
+        // a sticky Queue recovery fault. Preserve the completed geometry owner
+        // but refuse State visibility if that happened during this attempt.
+        if let Some(error) = self
+            .decision
+            .journals
+            .components
+            ._fences
+            ._queue
+            .as_ref()
+            .and_then(|queue| queue.ensure_available().err())
+        {
+            return Err((
+                self.abort(),
+                CarrierPublicationError::QueueRetirement(error),
+            ));
+        }
+
         // Reservations are declared before decomposition so even unwind drops
         // component writers/fences before returning their retained capacity.
         let installation;

@@ -85,7 +85,7 @@ pub fn sha256_reader_bounded(
     const BUFFER_BYTES: usize = 64 * 1024;
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
-    let mut buffer = vec![0_u8; BUFFER_BYTES].into_boxed_slice();
+    let mut buffer = zeroize::Zeroizing::new(vec![0_u8; BUFFER_BYTES].into_boxed_slice());
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
@@ -592,6 +592,51 @@ mod tests {
     fn bounded_streaming_sha256_rejects_oversized_input() {
         let err = sha256_reader_bounded(&b"oversized"[..], 8).expect_err("input exceeds limit");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+    #[test]
+    fn bounded_streaming_sha256_preserves_reader_error_after_sensitive_prefix() {
+        struct FailingReader(usize);
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                assert_eq!(output.len(), 64 * 1024);
+                if self.0 == 1 {
+                    output[..17].copy_from_slice(b"sensitive-prefix!");
+                    return Ok(17);
+                }
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "reader-denied",
+                ))
+            }
+        }
+        let mut reader = FailingReader(0);
+        let error = sha256_reader_bounded(&mut reader, 64 * 1024).unwrap_err();
+        assert_eq!(reader.0, 2);
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "reader-denied");
+        assert!(!format!("{error:?}").contains("sensitive-prefix"));
+    }
+    #[test]
+    fn bounded_streaming_sha256_propagates_reader_unwind_after_sensitive_prefix() {
+        struct PanickingReader(usize);
+        impl std::io::Read for PanickingReader {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                assert_eq!(output.len(), 64 * 1024);
+                if self.0 == 1 {
+                    output[..17].copy_from_slice(b"sensitive-prefix!");
+                    return Ok(17);
+                }
+                panic!("reader unwind");
+            }
+        }
+        let mut reader = PanickingReader(0);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sha256_reader_bounded(&mut reader, 64 * 1024)
+        }));
+        assert!(result.is_err());
+        assert_eq!(reader.0, 2);
     }
     #[test]
     fn keccak256_returns_raw_digest_bytes() {

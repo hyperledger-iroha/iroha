@@ -116,7 +116,7 @@ fn empty_decoy_queue_and_foreign_state_never_supply_original_cut() {
     )
     .err()
     .unwrap();
-    assert!(matches!(error, CarrierQueueRetirementError::ForeignState));
+    assert!(matches!(error, CarrierQueueRetirementError::ForeignQueue));
     drop(decoy.try_lock_lane_retirement_observer().unwrap());
     let foreign = State::new_for_testing(
         World::default(),

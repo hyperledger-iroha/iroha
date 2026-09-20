@@ -730,17 +730,17 @@ fn dispatcher_transition_requires_complete_qualified_transfer_producer_join() {
                     .as_array_mut()
                     .unwrap()[5],
                 "size",
-                norito::json!(64 * 1024 * 1024 + 1),
+                norito::json!((64 * 1024 * 1024 + 1)),
             ),
             8 => set(
                 r[5].as_object_mut().unwrap().get_mut("allocation").unwrap(),
                 "bytes",
-                norito::json!(99),
+                norito::json!((99)),
             ),
             9 => set(
                 r[5].as_object_mut().unwrap().get_mut("allocation").unwrap(),
                 "files",
-                norito::json!(1u64 << 50),
+                norito::json!((1u64 << 50)),
             ),
             10 => {
                 r[5].as_object_mut()

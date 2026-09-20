@@ -245,9 +245,12 @@ mod sign;
 pub use sign::{
     bind_and_sign_staged_sumeragi_v2_context, staged_signed_sumeragi_v2_context_hashes,
 };
+pub(crate) use sign::{
+    staged_signed_genesis_merge_authority, staged_signed_genesis_with_projection,
+};
 mod validate;
 pub use generate::{ConsensusPolicy, generate_default, validate_consensus_mode};
-pub use npos::ensure_npos_parameters;
+pub use npos::{ensure_npos_parameters, has_npos_parameters};
 pub use profile::{
     GenesisProfile, PUBLIC_NEXUS_CHAIN_ID, PUBLIC_XOR_ALIAS, ProfileDefaults,
     TAIRA_XOR_ASSET_DEFINITION_ID, parse_vrf_seed_hex, profile_defaults, profile_requires_npos,

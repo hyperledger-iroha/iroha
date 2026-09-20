@@ -253,19 +253,24 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
         .clone();
     let durable = store.store(manifest, bytes.clone()).unwrap();
     let descriptor_budget = mv::allocation::AllocationBudget::new(
-        store.retained_validation_descriptor_bytes::<ActualPhaseValidator>().unwrap(),
+        store
+            .retained_validation_descriptor_bytes::<ActualPhaseValidator>()
+            .unwrap(),
     );
     let mut service = store
-        .retained_validation_service(ActualPhaseValidator {
-            state: Arc::clone(&state),
-            queue: Arc::clone(&queue),
-            topology,
-            calls: Arc::clone(&calls),
-            releases: Arc::clone(&releases),
-            provider: None,
-            reputation: None,
-            wake: Waker::noop().clone(),
-        }, &descriptor_budget)
+        .retained_validation_service(
+            ActualPhaseValidator {
+                state: Arc::clone(&state),
+                queue: Arc::clone(&queue),
+                topology,
+                calls: Arc::clone(&calls),
+                releases: Arc::clone(&releases),
+                provider: None,
+                reputation: None,
+                wake: Waker::noop().clone(),
+            },
+            &descriptor_budget,
+        )
         .unwrap();
     fail_next_marker_file_sync();
     assert!(matches!(
@@ -410,7 +415,9 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
             let RetainedPhase::Checkpointed(decision) = phase else {
                 panic!("physical acquisition must receive the original checkpoint");
             };
-            match decision.try_prepare_physical(&producer.state, None, |_, _| Ok::<_, Infallible>(())) {
+            match decision
+                .try_prepare_physical(&producer.state, None, |_, _| Ok::<_, Infallible>(()))
+            {
                 Ok(_) => panic!("original account writer must defer publication"),
                 Err((decision, error)) => {
                     Err::<(), _>((RetainedPhase::Checkpointed(decision), error))
@@ -620,19 +627,24 @@ fn retained_capture_refusal_resumes_original_archives_before_any_validation_mark
         )
         .unwrap();
     let descriptor_budget = mv::allocation::AllocationBudget::new(
-        store.retained_validation_descriptor_bytes::<ActualPhaseValidator>().unwrap(),
+        store
+            .retained_validation_descriptor_bytes::<ActualPhaseValidator>()
+            .unwrap(),
     );
     let mut service = store
-        .retained_validation_service(ActualPhaseValidator {
-            state: Arc::clone(&state),
-            queue: phase_queue(),
-            topology,
-            calls: Arc::clone(&calls),
-            releases: Arc::clone(&releases),
-            provider: Some(provider_owner),
-            reputation: Some(reputation_owner),
-            wake: wake.clone(),
-        }, &descriptor_budget)
+        .retained_validation_service(
+            ActualPhaseValidator {
+                state: Arc::clone(&state),
+                queue: phase_queue(),
+                topology,
+                calls: Arc::clone(&calls),
+                releases: Arc::clone(&releases),
+                provider: Some(provider_owner),
+                reputation: Some(reputation_owner),
+                wake: wake.clone(),
+            },
+            &descriptor_budget,
+        )
         .unwrap();
     let mut allocations = None;
     let mut capture_allocation = None;
@@ -1184,6 +1196,14 @@ pub(super) fn fixture_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
 
 /// Execute a signed lane addition after publishing its actual genesis predecessor.
 fn fixture_lifecycle_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
+    let (state, decision, _queue) = fixture_lifecycle_decision_with_retirement(None);
+    (state, decision)
+}
+
+/// Execute real signed lifecycle instructions against the configured original lanes.
+fn fixture_lifecycle_decision_with_retirement(
+    retirement: Option<bool>,
+) -> (Box<State>, CheckpointDecision<(), ()>, Arc<Queue>) {
     use crate::queue::{Queue, execution_context_for_routing_plan};
     use crate::tx::AcceptedTransaction;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -1197,6 +1217,20 @@ fn fixture_lifecycle_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
     use std::{borrow::Cow, num::NonZeroU64, time::Duration};
 
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    if retirement.is_some() {
+        nexus.lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            std::num::NonZeroU32::new(2).unwrap(),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "retiring-lifecycle".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .unwrap();
+    }
     nexus.fees.base_fee = iroha_primitives::numeric::Quantity::zero();
     nexus.fees.per_byte_fee = iroha_primitives::numeric::Quantity::zero();
     nexus.fees.per_instruction_fee = iroha_primitives::numeric::Quantity::zero();
@@ -1278,12 +1312,20 @@ fn fixture_lifecycle_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
         &nexus.lane_catalog,
         &incarnations,
         LaneLifecyclePlan {
-            additions: vec![LaneConfig {
-                id: LaneId::new(1),
-                alias: "published-lifecycle".to_owned(),
-                ..LaneConfig::default()
-            }],
-            retire: Vec::new(),
+            additions: if retirement == Some(false) {
+                Vec::new()
+            } else {
+                vec![LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "published-lifecycle".to_owned(),
+                    ..LaneConfig::default()
+                }]
+            },
+            retire: if retirement.is_some() {
+                vec![LaneId::new(1)]
+            } else {
+                Vec::new()
+            },
         },
     )
     .unwrap()
@@ -1298,7 +1340,10 @@ fn fixture_lifecycle_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
         .with_instructions([SetParameter::new(Parameter::Custom(parameter))])
         .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let (events, _receiver) = tokio::sync::broadcast::channel(32);
-    let queue = Queue::from_config(iroha_config::parameters::actual::Queue::default(), events);
+    let queue = Arc::new(Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events,
+    ));
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
     let route = queue.route_plan_with_state(&accepted, &state).unwrap();
     let leader = context.leader(0);
@@ -1360,8 +1405,11 @@ fn fixture_lifecycle_decision() -> (Box<State>, CheckpointDecision<(), ()>) {
     );
     assert!(decision.journals.geometry.has_pending_lifecycle());
     assert!(decision.journals.geometry.requires_storage_transition());
-    assert!(!decision.journals.geometry.requires_queue_custody());
-    (state, decision)
+    assert_eq!(
+        decision.journals.geometry.requires_queue_custody(),
+        retirement.is_some()
+    );
+    (state, decision, queue)
 }
 
 pub(super) fn acquire<'target, A, B>(
@@ -1994,11 +2042,11 @@ fn changed_world_predecessor_releases_all_earlier_families_without_rebinding() {
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
     );
-    let (retry, error) = match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
-    {
-        Ok(_) => panic!("equal bytes cannot rebind an original owner"),
-        Err(refusal) => refusal,
-    };
+    let (retry, error) =
+        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
+            Ok(_) => panic!("equal bytes cannot rebind an original owner"),
+            Err(refusal) => refusal,
+        };
     assert!(matches!(
         error,
         CarrierPhysicalPreparationError::World(WorldPublicationError::Field(
@@ -2036,11 +2084,11 @@ fn actual_validation_overlay_defers_at_hash_before_taking_its_world_writers() {
     let (state, decision) = fixture_decision();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let validating = state.block(decision.block().header());
-    let (retry, error) = match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
-    {
-        Ok(_) => panic!("the real validation overlay owns the original cut"),
-        Err(refusal) => refusal,
-    };
+    let (retry, error) =
+        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
+            Ok(_) => panic!("the real validation overlay owns the original cut"),
+            Err(refusal) => refusal,
+        };
     assert!(matches!(
         &error,
         CarrierPhysicalPreparationError::Component {
@@ -2166,7 +2214,9 @@ fn all_reservations_outlive_component_writers_and_state_fences_on_drop_and_abort
             guard("binding"),
         );
         let prepared = decision
-            .try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(guard("installation")))
+            .try_prepare_physical(&state, None, |_, _| {
+                Ok::<_, Infallible>(guard("installation"))
+            })
             .unwrap_or_else(|(_, error)| panic!("physical preparation: {error:?}"));
         assert!(released.lock().unwrap().is_empty());
         if abort {
@@ -2284,11 +2334,11 @@ fn original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owner
     let generation = state.state_view_generation();
     state.kura.poison_canonical_storage_for_tests();
     let state_held = state.state_commit_lock.lock();
-    let (retry, error) = match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(()))
-    {
-        Ok(_) => panic!("poison requires actual storage repair"),
-        Err(refusal) => refusal,
-    };
+    let (retry, error) =
+        match decision.try_prepare_physical(&state, None, |_, _| Ok::<_, Infallible>(())) {
+            Ok(_) => panic!("poison requires actual storage repair"),
+            Err(refusal) => refusal,
+        };
     assert!(matches!(
         error,
         CarrierPhysicalPreparationError::Kura(KuraPublicationPreparationError::Storage(
@@ -2467,3 +2517,6 @@ fn attached_foreign_checkpoint_never_grants_state_acquisition() {
     drop(decision);
     drop(foreign);
 }
+
+#[path = "queue_publication_tests.rs"]
+mod queue_publication_tests;

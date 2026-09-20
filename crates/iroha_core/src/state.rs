@@ -473,8 +473,8 @@ pub(crate) use lane_admitted_input::{
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) use lane_consensus_state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY;
 pub use native_execution_evidence::{
-    NativeExecutionEvidenceLimits, NativeExecutionEvidenceVerifier, NativeLaneContextsEvidenceV1,
-    VerifiedNativeExecutionCarrier,
+    FinalizedNativeContextV1, NativeExecutionEvidenceLimits, NativeExecutionEvidenceVerifier,
+    NativeLaneContextsEvidenceV1, VerifiedNativeExecutionCarrier,
 };
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub use native_execution_evidence::{
@@ -35577,6 +35577,20 @@ impl State {
         authority_height: u64,
     ) -> Result<(Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1), MergeLedgerCommitError>
     {
+        Self::merge_active_lane_authority_snapshot_from_snapshot(
+            state_view,
+            &state_view.lane_incarnations,
+            &state_view.lane_incarnation_activation_heights,
+            authority_height,
+        )
+    }
+    fn merge_active_lane_authority_snapshot_from_snapshot(
+        state_view: &impl StateReadOnly,
+        lane_incarnations: &BTreeMap<LaneId, Hash>,
+        lane_incarnation_activation_heights: &BTreeMap<LaneId, u64>,
+        authority_height: u64,
+    ) -> Result<(Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1), MergeLedgerCommitError>
+    {
         let nexus = state_view.nexus();
         if nexus.lane_catalog.lanes().is_empty()
             || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
@@ -35588,13 +35602,11 @@ impl State {
         let mut active_lanes = Vec::with_capacity(nexus.lane_catalog.lanes().len());
         let mut lane_committees = Vec::with_capacity(nexus.lane_catalog.lanes().len());
         for lane in nexus.lane_catalog.lanes() {
-            let incarnation = state_view
-                .lane_incarnations
+            let incarnation = lane_incarnations
                 .get(&lane.id)
                 .copied()
                 .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?;
-            let activation_height = state_view
-                .lane_incarnation_activation_heights
+            let activation_height = lane_incarnation_activation_heights
                 .get(&lane.id)
                 .and_then(|height| height.checked_add(1))
                 .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?;
@@ -52486,6 +52498,52 @@ impl State {
     }
 }
 impl StateBlock<'_> {
+    /// Project height-one merge authority from this exact authenticated overlay.
+    ///
+    /// Only the new genesis capability requests these coherence checks. Ordinary
+    /// StateView merge planning keeps its existing projection and error behavior.
+    pub(crate) fn staged_genesis_merge_authority_snapshot(
+        &self,
+    ) -> Result<(Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1), MergeLedgerCommitError>
+    {
+        let projection = State::merge_active_lane_authority_snapshot_from_snapshot(
+            self,
+            &self.lane_incarnations,
+            &self.lane_incarnation_activation_heights,
+            1,
+        )?;
+        if self.lane_incarnations.len() != projection.1.len()
+            || self.lane_incarnation_activation_heights.len() != projection.1.len()
+        {
+            return Err(MergeLedgerCommitError::IncarnationContext(
+                "staged genesis active incarnation maps differ from the exact lane catalog"
+                    .to_owned(),
+            ));
+        }
+        for binding in &projection.1 {
+            let lineage = self
+                .lane_incarnation_lineage
+                .get(&binding.lane_id)
+                .ok_or_else(|| {
+                    MergeLedgerCommitError::IncarnationContext(format!(
+                        "staged genesis lane {} has no signed retained lineage",
+                        binding.lane_id
+                    ))
+                })?;
+            if lineage.incarnation != binding.incarnation
+                || self
+                    .lane_incarnation_activation_heights
+                    .get(&binding.lane_id)
+                    != Some(&lineage.activation_height)
+            {
+                return Err(MergeLedgerCommitError::IncarnationContext(format!(
+                    "staged genesis lane {} differs from its signed retained lineage",
+                    binding.lane_id
+                )));
+            }
+        }
+        Ok(projection)
+    }
     /// Compute the canonical V1 execution-policy identity frozen for this block scope.
     ///
     /// # Errors

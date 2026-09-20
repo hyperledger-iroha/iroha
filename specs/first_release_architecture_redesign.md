@@ -748,9 +748,11 @@ The production-inventory parser retains every literal owner, so the six native
 AMX tests are included in the unchanged 881-test inventory seal. Exact guard
 checks follow the audited current source. Historical prose assertions now use
 the structured receipt selector/command contract. The canonical proof-fidelity
-selection currently collects 5,877 tests against an exact release pin of 5,507;
-that mismatch remains an explicit qualification blocker. The release count is
-not refreshed from collection alone. The recovery mutation harness now replaces
+selection now collects 6,170 unique tests from the current composed source,
+including the complete semantic, Native and in-flight Kura reconciliation
+suites and both current include-owner controls. The runner and receipt bind that exact selection and count. Collection
+establishes the required census; execution of the complete corpus remains an
+explicit qualification blocker. The recovery mutation harness now replaces
 complete code-token spans rather than matching Rust line wrapping. It retains
 all ten existing rejection checks and adds four cases covering capacity, read
 errors and exact repeated discovery. All four selected candidate source tests,
@@ -809,7 +811,8 @@ candidate tests pass, including the complete corridor source test; four applied
 smoke tests pass with the exact reviewed afterimages. All 5,877 canonical test
 IDs are preserved. The current repository budget reports 242 findings and 174
 existing exceptions, with no new violating path after the split. The main test
-module's complete decomposition and the exact 5,507 release-pin discrepancy remain unresolved.
+module's complete decomposition remains unresolved. The current proof-fidelity
+registration binds the actual 6,170-case census; its full execution remains pending.
 Its provider checks now belong to the inventory component: main falls to 33,974
 lines and inventory remains below its default cap at 2,250. Only the main
 exception ratchets down, from 34,006 to 33,974. All 54 applied provider/inventory

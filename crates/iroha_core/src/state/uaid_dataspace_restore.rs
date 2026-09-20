@@ -80,7 +80,7 @@ pub(super) fn rebuild(world: &mut World) -> core::result::Result<usize, String> 
                 ),
         )?;
         let mut touched: BTreeSet<_> = manifests.revert_map().keys().copied().collect();
-        for (key, previous_account) in accounts.revert_map() {
+        for (key, previous_account) in accounts.revert_map().iter() {
             for value in [previous_account.as_ref(), accounts.current().get(key)]
                 .into_iter()
                 .flatten()

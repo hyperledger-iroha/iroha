@@ -1128,6 +1128,8 @@ def test_receipt_rejects_sumeragi_diagnostics_rust_log_missing_named_test(
     assert isinstance(summary, Path)
     assert isinstance(completion, Path)
     summary_lines = summary.read_text(encoding="utf-8").splitlines()
+    original_summary_lines = list(summary_lines)
+    original_completion_fields = read_tsv_fields(completion)
     row_index = next(
         index
         for index, line in enumerate(summary_lines[1:], 1)
@@ -1136,6 +1138,7 @@ def test_receipt_rejects_sumeragi_diagnostics_rust_log_missing_named_test(
     row = summary_lines[row_index].split("\t")
     log = summary.parent / row[8]
     log_lines = log.read_text(encoding="utf-8").splitlines()
+    original_diagnostics_log = log.read_bytes()
     named_test_index = next(
         index
         for index, line in enumerate(log_lines)
@@ -1157,6 +1160,53 @@ def test_receipt_rejects_sumeragi_diagnostics_rust_log_missing_named_test(
         "corridor exact Cargo leg sumeragi-diagnostics-rust lacks its named test"
         in result.stderr
     )
+
+    # Restore the original diagnostics proof, then keep summary counts intact
+    # while corrupting named outcomes for each newly required async boundary.
+    log.write_bytes(original_diagnostics_log)
+    for leg_id in ['sumeragi-async-query-rust',
+ 'sumeragi-async-diagnostics-rust',
+ 'sumeragi-blocking-boundary-rust',
+ 'query-request-wire-rust',
+ 'native-amx-typed-query-rust']:
+        current_index = next(
+            index for index, line in enumerate(original_summary_lines[1:], 1)
+            if "\t" + leg_id + "\t" in line
+        )
+        current_row = original_summary_lines[current_index].split("\t")
+        current_log = summary.parent / current_row[8]
+        original_lines = current_log.read_text(encoding="utf-8").splitlines()
+        selected = next(index for index, line in enumerate(original_lines)
+                        if line.startswith("test ") and line.endswith(" ... ok"))
+        for mutation in ("missing", "substituted", "duplicate", "extra", "extra_unicode"):
+            changed_lines = list(original_lines)
+            if mutation == "missing":
+                del changed_lines[selected]
+            elif mutation == "substituted":
+                changed_lines[selected] = "test unregistered_substitute ... ok"
+            elif mutation == "duplicate":
+                changed_lines.insert(selected, changed_lines[selected])
+            elif mutation == "extra_unicode":
+                changed_lines.insert(selected, "test unregistered_é ... ok")
+            else:
+                changed_lines.insert(selected, "test unregistered_extra ... ok")
+            current_log.write_text("\n".join(changed_lines) + "\n", encoding="utf-8")
+            changed_row = list(current_row)
+            changed_row[7] = sha256(current_log)
+            changed_summary = list(original_summary_lines)
+            changed_summary[current_index] = "\t".join(changed_row)
+            summary.write_text("\n".join(changed_summary) + "\n", encoding="utf-8")
+            changed_completion = dict(original_completion_fields)
+            changed_completion["summary_sha256"] = sha256(summary)
+            write_tsv(completion, changed_completion)
+            result = run_writer(evidence, tmp_path / (leg_id + "-" + mutation + ".json"), writer)
+            assert result.returncode == 1
+            assert "corridor exact Cargo leg " + leg_id in result.stderr
+            assert ("lacks its named test" in result.stderr
+                    or "contains an unexpected named result" in result.stderr)
+        current_log.write_text("\n".join(original_lines) + "\n", encoding="utf-8")
+    summary.write_text("\n".join(original_summary_lines) + "\n", encoding="utf-8")
+    write_tsv(completion, original_completion_fields)
 
 
 def test_receipt_rejects_sumeragi_diagnostics_suite_source_drift(

@@ -352,7 +352,7 @@ where
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
-            revert: EbrCell::new(revert),
+            revert: revert.into_iter().collect(),
             blocks,
         })
     }
@@ -466,7 +466,7 @@ where
         let blocks = self.blocks.read();
         out.push('{');
         out.push_str("\"revert\":");
-        write_revert(revert.deref(), out);
+        write_revert(revert.iter(), out);
         out.push(',');
         out.push_str("\"blocks\":");
         write_blocks(&blocks, out);
@@ -481,7 +481,7 @@ where
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
         out.push_str("\"revert\":");
-        write_revert(self.revert_map(), out);
+        write_revert(self.revert_map().iter(), out);
         out.push(',');
         out.push_str("\"blocks\":");
         out.push('{');
@@ -636,13 +636,12 @@ where
         .deserialize(parser)
     }
 }
-fn write_revert<K, V>(map: &BTreeMap<K, Option<V>>, out: &mut String)
+fn write_revert<'a, K, V>(mut iter: impl Iterator<Item = (&'a K, &'a Option<V>)>, out: &mut String)
 where
-    K: JsonKeyCodec,
-    V: JsonSerialize,
+    K: JsonKeyCodec + 'a,
+    V: JsonSerialize + 'a,
 {
     out.push('{');
-    let mut iter = map.iter();
     if let Some((key, value)) = iter.next() {
         key.encode_json_key(out);
         out.push(':');
