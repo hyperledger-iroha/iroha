@@ -1322,3 +1322,34 @@ fn geometry_refusal_drops_originals_before_capture_reservation() {
     );
     assert_eq!(state.kura.blocks_count(), 0);
 }
+
+#[test]
+fn carrier_journal_shell_plan_precedes_execution_and_survives_capture() {
+    // This reservation is deliberately scoped to actual World shells. The
+    // fixture supplies the separate execution/runtime/archive payload owners.
+    let bytes = PreparedCarrier::world_journal_shell_bytes().unwrap();
+    let budget = mv::allocation::AllocationBudget::new(bytes);
+    let reservation = budget.try_reserve_bytes(bytes).unwrap();
+    let (state, proposal, topology, context) = super::super::tests::fixture();
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    let prepared = super::super::tests::prepare(&state, proposal, &topology, &context)
+        .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
+    let journals = prepared
+        .prepare_journals(None, None, |inputs| {
+            assert_eq!(inputs.world_journal_shell_bytes().unwrap(), bytes);
+            assert_eq!(budget.reserved_bytes(), bytes);
+            Ok::<_, std::convert::Infallible>(reservation)
+        })
+        .unwrap_or_else(|error| panic!("capture candidate: {error:?}"));
+    assert_eq!(budget.reserved_bytes(), bytes);
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(mv::allocation::AllocationRefusal::Capacity { .. })
+    ));
+    drop(journals);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        before
+    );
+}

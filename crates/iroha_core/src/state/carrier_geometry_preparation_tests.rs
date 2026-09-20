@@ -230,6 +230,7 @@ fn carrier_geometry_completion_requires_original_state_and_exact_header_before_e
             attempted_header,
             &mut state.tiered_backend.lock(),
             &lease,
+            None,
         );
         assert!(matches!(result, Err(LaneLifecycleError::Storage(detail))
             if detail.contains("original State or carrier header")));
@@ -246,7 +247,13 @@ fn carrier_geometry_completion_requires_original_state_and_exact_header_before_e
     }
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .unwrap()
             .updated_da_mapping()
             .is_some()
@@ -308,8 +315,13 @@ fn carrier_geometry_retirement_and_replacement_require_original_queue_custody() 
         );
         let lease = state.kura.try_publication_lease().unwrap();
         let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
-        let result =
-            geometry.complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease);
+        let result = geometry.complete_under(
+            &state,
+            header(),
+            &mut state.tiered_backend.lock(),
+            &lease,
+            None,
+        );
         assert!(matches!(result, Err(LaneLifecycleError::Storage(detail))
             if detail.contains("no retained original Queue cut")));
         assert!(geometry.raw.is_none());
@@ -331,7 +343,7 @@ fn carrier_geometry_foreign_lease_refuses_before_descriptor_capture_or_effects()
     let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease)
+            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
             .is_err()
     );
     assert!(geometry.raw.is_none());
@@ -402,7 +414,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease)
+            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
             .is_err()
     );
     assert!(geometry.raw.as_ref().unwrap().has_pending_journal_write());
@@ -412,7 +424,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
     let lease = state.kura.try_publication_lease().unwrap();
     // No nested acquisition: this lease remains held throughout the exact retry.
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease)
+        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
         .unwrap();
     assert_eq!(
         geometry.raw.as_ref().unwrap().phase(),
@@ -436,7 +448,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
             .is_dir()
     );
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease)
+        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
         .unwrap();
     assert_eq!(state.canonical_runtime.view().get(), &runtime);
     assert_eq!(norito::json::to_json(&state.world).unwrap(), world);
@@ -467,12 +479,18 @@ fn carrier_geometry_completion_requires_original_prepared_descriptors() {
     let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease)
+            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
             .is_err()
     );
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .is_err()
     );
     assert!(geometry.raw.is_none());
@@ -506,12 +524,18 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
         .prepare_under(&state.tiered_backend.lock(), &lease)
         .unwrap();
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease)
+        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
         .unwrap();
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .is_err()
     );
     assert_eq!(
@@ -533,7 +557,8 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
                 &state,
                 header(),
                 &mut state.tiered_backend.lock(),
-                &foreign_lease
+                &foreign_lease,
+                None,
             )
             .is_err()
     );
@@ -544,7 +569,13 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     let lease = state.kura.try_publication_lease().unwrap();
     {
         let completed = geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None,
+            )
             .unwrap();
         assert!(std::ptr::eq(
             completed.updated_da_mapping().unwrap(),
@@ -566,7 +597,13 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     // they cannot replace the journal or reconstruct the mapping from live State.
     {
         let completed = geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None,
+            )
             .unwrap();
         assert!(std::ptr::eq(
             completed.updated_da_mapping().unwrap(),
@@ -599,7 +636,13 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
         .prepare_under(&state.tiered_backend.lock(), &lease)
         .unwrap();
     geometry
-        .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+        .complete_under(
+            &state,
+            header(),
+            &mut state.tiered_backend.lock(),
+            &lease,
+            None,
+        )
         .unwrap();
     let journal_path = state.kura.lane_geometry_journal_path();
     let original_bytes = std::fs::read(&journal_path).unwrap();
@@ -613,7 +656,13 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
     );
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .is_err()
     );
     assert_eq!(
@@ -632,7 +681,13 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
     );
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .is_err()
     );
 }
@@ -647,7 +702,13 @@ fn carrier_geometry_no_change_completion_has_no_mapping_or_storage_owner() {
     let lease = state.kura.try_publication_lease().unwrap();
     assert!(
         geometry
-            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &lease,
+                None
+            )
             .unwrap()
             .updated_da_mapping()
             .is_none()
@@ -655,3 +716,6 @@ fn carrier_geometry_no_change_completion_has_no_mapping_or_storage_owner() {
     assert!(geometry.raw.is_none());
     assert!(geometry.tiered.is_none());
 }
+
+#[path = "carrier_queue_retirement_tests.rs"]
+mod queue_retirement_tests;

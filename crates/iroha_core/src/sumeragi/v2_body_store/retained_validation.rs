@@ -6,16 +6,28 @@ use crate::sumeragi::v2_apply::validation_custody::{
 };
 
 impl V2BodyStore {
+    /// Plan the exact retained-service descriptor allocations before construction.
+    /// Candidate execution and nested journals require separate admission.
+    pub(crate) fn retained_validation_descriptor_bytes<P: CarrierValidator>(
+        &self,
+    ) -> Result<usize, V2BodyStoreError> {
+        RetainedBodyValidationService::<P>::descriptor_bytes(self.capacity.max_body_entries)
+            .map_err(super::super::v2_apply::validation_custody::CarrierCustodyError::from)
+            .map_err(V2BodyStoreError::from)
+    }
+
     /// Reserve bounded service descriptors from this exact open height store.
     /// This is not admission for the payload retained by the associated owner.
     pub(crate) fn retained_validation_service<P: CarrierValidator>(
         &self,
         validator: P,
+        budget: &mv::allocation::AllocationBudget,
     ) -> Result<RetainedBodyValidationService<P>, V2BodyStoreError> {
         Ok(RetainedBodyValidationService::new(
             validator,
             self.instance_identity(),
             self.capacity.max_body_entries,
+            budget,
         )?)
     }
 

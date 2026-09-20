@@ -28,6 +28,7 @@ mod execution_prefix;
     )
 )]
 mod journals;
+pub(super) mod queue_retirement;
 pub(crate) use journals::PreparedCarrierJournals;
 pub(crate) use journals::PublishedNativeApply;
 pub(crate) use journals::RetainedCarrier;
@@ -51,6 +52,15 @@ pub(crate) struct PreparedCarrier<'state> {
 }
 
 impl<'state> PreparedCarrier<'state> {
+    /// Plan World journal wrapper allocations before acquiring execution writers.
+    /// These capture/installation shells coexist through retry. Their checked
+    /// requested bytes are only one part of complete candidate admission; MV
+    /// payloads, runtime, archives and publication resources remain separate.
+    pub(crate) fn world_journal_shell_bytes() -> Result<usize, mv::allocation::AllocationRefusal> {
+        super::world_journals::resources::WorldJournalShellDemand::plan()
+            .map(|demand| demand.total_bytes())
+    }
+
     /// Inspect the exact retained Native custody without source reconstruction.
     #[cfg(test)]
     pub(in crate::state) fn native_source_for_test(

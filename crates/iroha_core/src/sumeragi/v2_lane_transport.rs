@@ -331,6 +331,20 @@ impl NativeLaneTransport {
             && parent == self.state.latest_block_hash_fast()
     }
 
+    /// Service one retained occurrence through the real actor admission owner.
+    /// `global` is required only for Decision routing. Missing/stale routing and
+    /// pressure retain the original fanout, post and ticket for a later turn.
+    pub(crate) fn poll(
+        &mut self,
+        observed: &VerifiedLaneContexts,
+        global: Option<&VerifiedHeightContext>,
+        network: &crate::IrohaNetwork,
+    ) -> Result<NativeTransportProgress, String> {
+        self.poll_with(observed, global, |post, ticket| {
+            network.post_recoverable(post, ticket)
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn poll_for_test(
         &mut self,

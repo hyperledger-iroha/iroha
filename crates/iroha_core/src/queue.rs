@@ -4208,8 +4208,8 @@ pub(crate) struct QueueRetirementBusy {
 /// store, mutation mutex, then the outer reservation-transition mutex. The
 /// predicate still allocates/scans bounded Queue indexes; its admission cost is
 /// part of the aggregate owner's resource obligation, not a mutex property.
-/// TODO: retain this cut from the original Apply service Queue through the
-/// complete geometry publisher's visibility interval and resource admission.
+/// The carrier publisher retains this cut from the original Apply service
+/// through geometry and State visibility; its aggregate admission covers scans.
 pub(crate) struct QueueLaneRetirementCut<'queue> {
     reservations: PublicationGuard<'queue, LaneQueueReservationStore>,
     _mutation: PublicationGuard<'queue>,
@@ -4217,6 +4217,16 @@ pub(crate) struct QueueLaneRetirementCut<'queue> {
 }
 
 impl QueueLaneRetirementCut<'_> {
+    /// Authenticate the original service Queue while this exact cut remains held.
+    pub(crate) fn belongs_to(&self, queue: &Queue) -> bool {
+        core::ptr::eq(self.observer.queue, queue)
+    }
+
+    /// Recheck the sticky recovery fault without reacquiring the retained owners.
+    pub(crate) fn durability_faulted(&self) -> bool {
+        self.observer.durability_faulted()
+    }
+
     /// Register the exact pending condition without reacquiring retained Queue owners.
     /// A wake grants no authority: callers reacquire the cut and recheck the predicate.
     pub(crate) fn lane_pending_work_release(
@@ -26060,6 +26070,27 @@ pub mod tests {
             1
         );
     }
+    /// Latch the real pending-plan recovery failure for the carrier-cut control.
+    pub(crate) fn fault_carrier_retirement_queue_fixture(queue: &Queue) {
+        queue.mark_plan_journal_durability_fault(&std::io::Error::other("carrier cut fixture fault"), None);
+    }
+
+    /// Enqueue actual lane-one work for the carrier retirement integration controls.
+    pub(crate) fn carrier_retirement_queue_fixture(
+        state: &mut State,
+    ) -> (Queue, iroha_primitives::time::MockTimeHandle) {
+        let (clock, time) = TimeSource::new_mock(Duration::from_secs(1));
+        let queue = queue_with_state_free_future_created_router(state, &time);
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
+        let transaction = accepted_tx_by_someone(&time);
+        register_accepted_tx_authority_for_queue_test(state, &transaction);
+        let route = queue.route_plan_with_state(&transaction, state).expect("fixture route");
+        assert_eq!(route.coordinator_route().lane_id, LaneId::new(1));
+        queue.push_with_lane_with_state_and_routing_plan(transaction, state, route)
+            .expect("enqueue actual retirement fixture work");
+        (queue, clock)
+    }
+
     fn accepted_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
         accepted_tx_by(
             AccountId::new(ALICE_KEYPAIR.public_key().clone()),

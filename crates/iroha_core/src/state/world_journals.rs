@@ -17,6 +17,8 @@ use mv::{BlockMode, Key, Value};
 
 #[path = "world_publication.rs"]
 pub(in crate::state) mod publication;
+#[path = "world_journal_resources.rs"]
+pub(in crate::state) mod resources;
 
 /// Refusal drops the entire original overlay without publishing any component.
 #[derive(Debug, thiserror::Error)]
