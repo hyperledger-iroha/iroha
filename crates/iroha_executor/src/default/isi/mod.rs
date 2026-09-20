@@ -105,8 +105,7 @@ mod tests {
         fn new() -> Self {
             let authority_keypair = fixture_key_pair(0xA5);
             let authority = AccountId::new(authority_keypair.public_key().clone());
-            let header =
-                BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, None, 0, 0);
+            let header = BlockHeader::new(NonZeroU64::new(1).expect("nonzero"), None, None, 0, 0);
             Self {
                 host: iroha_smart_contract::Iroha,
                 ctx: Context {

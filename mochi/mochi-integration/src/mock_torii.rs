@@ -20,6 +20,8 @@ use iroha_data_model::{
             SumeragiV2GenesisContextParameters, SumeragiV2HeightContextStatus, SumeragiV2Status,
             SumeragiV2StatusPhase,
         },
+        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+        output_budget::ExecutionOutputLimits,
         stream::{BlockMessage, BlockSubscriptionRequest},
     },
     events::{
@@ -67,17 +69,25 @@ fn canonical_block_stream_message() -> Vec<u8> {
         None,
         None,
     );
-    let entrypoint_hashes = block
-        .external_entrypoints_cloned()
-        .map(|entrypoint| entrypoint.hash())
-        .collect::<Vec<_>>();
     block
-        .set_transaction_results(
+        .set_execution_outputs(
+            vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 0,
+                result: Ok(iroha_data_model::transaction::DataTriggerSequence::default()).into(),
+                completions: Vec::new(),
+            })],
+            1,
+            Default::default(),
             Vec::new(),
-            &entrypoint_hashes,
-            vec![Ok(
-                iroha_data_model::transaction::DataTriggerSequence::default(),
-            )],
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &ExecutionOutputLimits {
+                max_outputs: 1,
+                max_output_bytes: 64 * 1024,
+                max_total_output_bytes: 64 * 1024,
+                max_executed_wire_bytes: 1024 * 1024,
+            },
         )
         .expect("attach canonical successful mock block result");
     let final_signature = iroha_data_model::block::BlockSignature::new(
@@ -739,18 +749,19 @@ mod tests {
         assert_eq!(block_message.0.committed_fragment_count(), Some(1));
         block_message
             .0
-            .validate_entrypoint_merkle_cache()
-            .expect("mock block entrypoint Merkle cache must be canonical");
+            .validate_proposal_commitments()
+            .expect("mock block proposal commitments must be canonical");
         block_message
             .0
-            .validate_result_merkle_cache()
-            .expect("mock block result Merkle cache must be canonical");
+            .validate_output_merkle_cache()
+            .expect("mock block output Merkle cache must be canonical");
         assert_eq!(
-            block_message.0.header().result_merkle_root(),
+            block_message.0.output_merkle_commitment(),
             block_message
                 .0
-                .result_merkle_commitment()
-                .map(|commitment| *commitment.root())
+                .output_hashes()
+                .collect::<iroha_crypto::MerkleTree<_>>()
+                .commitment()
         );
         let event_message: EventMessage = norito::decode_from_bytes(&data.event_frame)
             .expect("default event frame must be a canonical EventMessage");

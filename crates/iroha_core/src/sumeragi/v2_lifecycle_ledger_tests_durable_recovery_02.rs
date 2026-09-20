@@ -3789,13 +3789,15 @@ fn cold_evidence_finality(fixture: &RecoveryFixture, kura: &Kura) -> BlockHeader
     .unwrap();
     let header = block.header();
     kura.store_block(std::sync::Arc::new(block)).unwrap();
-    kura.store_v2_finality_artifact(&wire::finality::V2FinalityArtifact::new(
-        fixture.verified.context().clone(),
-        subject,
-        certificate,
-        fixture.verified.proofs_of_possession().to_vec(),
-    ))
-    .expect("actual BLS-authenticated immutable finality");
+    let receipt = kura
+        .store_v2_finality_artifact(&wire::finality::V2FinalityArtifact::new(
+            fixture.verified.context().clone(),
+            subject,
+            certificate,
+            fixture.verified.proofs_of_possession().to_vec(),
+        ))
+        .expect("actual BLS-authenticated immutable finality");
+    assert_eq!(receipt.height(), header.height().get());
     header
 }
 

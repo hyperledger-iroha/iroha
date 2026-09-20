@@ -1915,6 +1915,7 @@ struct PreparedReputationInsertion<'archive> {
     archive: &'archive ReputationFinalizedArchive,
     index: ArchiveIndexWriteGuard<'archive, ArchiveIndex>,
     key: ReputationFinalizedArchiveKeyV1,
+    #[cfg(test)]
     finalized_at_unix_ms: u64,
     state: Option<PreparedReputationState>,
 }
@@ -1942,6 +1943,7 @@ impl PreparedReputationInsertion<'_> {
         persist_admitted_reputation(self.archive, &mut self.index, &self.key, &mut self.state)
     }
 
+    #[cfg(test)]
     fn detach(
         self,
         archive: Arc<ReputationFinalizedArchive>,
@@ -3852,6 +3854,7 @@ impl ReputationFinalizedArchive {
                     archive: self,
                     index,
                     key: projection.key,
+                    #[cfg(test)]
                     finalized_at_unix_ms: projection.finalized_at_unix_ms,
                     state: None,
                 });
@@ -3917,6 +3920,7 @@ impl ReputationFinalizedArchive {
             archive: self,
             index,
             key: next_state.key.clone(),
+            #[cfg(test)]
             finalized_at_unix_ms: next_state.finalized_at_unix_ms,
             state: material.map(|material| material.finish(next_state)),
         })
@@ -4005,6 +4009,7 @@ impl ReputationFinalizedArchive {
             archive: self,
             index,
             key: next_state.key.clone(),
+            #[cfg(test)]
             finalized_at_unix_ms: next_state.finalized_at_unix_ms,
             state: Some(material.finish(next_state)),
         })

@@ -8,7 +8,7 @@ use super::*;
 
 const INSTANCE_PATH_DOMAIN: &[u8] = b"iroha:kura:lane-storage-instance:v1\0";
 
-/// Exact authenticated lane-instance identity. This value is a locator, not write authority.
+/// Exact lane-instance storage identity. This value is a locator, not write authority.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, norito::NoritoSchema,
 )]
@@ -22,6 +22,25 @@ pub struct LaneStorageIdentity {
 }
 
 impl LaneStorageIdentity {
+    /// Construct an exact storage locator from all five identity components.
+    /// This grants no authenticated recovery, execution, or write authority.
+    #[must_use]
+    pub fn new(
+        network_id: NetworkId,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        incarnation: Hash,
+        activation_height: u64,
+    ) -> Self {
+        Self {
+            network_id,
+            lane_id,
+            dataspace_id,
+            incarnation,
+            activation_height,
+        }
+    }
+
     fn key(self) -> String {
         let encoded = self.encode();
         hex::encode(Hash::new_from_chunks(&[INSTANCE_PATH_DOMAIN, &encoded]).as_ref())
@@ -81,15 +100,13 @@ mod tests {
     use norito::codec::DecodeAll;
 
     fn identity() -> LaneStorageIdentity {
-        LaneStorageIdentity {
-            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-                b"network",
-            ))),
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(2),
-            incarnation: Hash::new(b"incarnation"),
-            activation_height: 3,
-        }
+        LaneStorageIdentity::new(
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"network"))),
+            LaneId::new(1),
+            DataSpaceId::new(2),
+            Hash::new(b"incarnation"),
+            3,
+        )
     }
 
     #[test]

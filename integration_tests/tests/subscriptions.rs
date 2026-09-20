@@ -8,7 +8,7 @@ use iroha::data_model::subscription::{
 };
 use iroha::{
     blocking::Client,
-    data_model::{Level, asset::AssetId, prelude::*},
+    data_model::{Level, asset::AssetId, block::execution_output::ExecutionOutputV1, prelude::*},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -201,18 +201,18 @@ async fn wait_for_invoice_status(
                         .map(|blocks| {
                             let hits = blocks
                                 .iter()
-                                .filter(|block| block.time_triggers().len() > 0)
+                                .filter(|block| block.execution_outputs().iter().any(|output| matches!(output, ExecutionOutputV1::Time(_))))
                                 .take(3)
                                 .map(|block| {
                                     let results = block
-                                        .results()
+                                        .output_results()
                                         .map(|result| format!("{result:?}"))
                                         .collect::<Vec<_>>()
                                         .join(", ");
                                     format!(
                                         "h{} time_triggers={} results=[{}]",
                                         block.header().height().get(),
-                                        block.time_triggers().len(),
+                                        block.execution_outputs().iter().filter(|output| matches!(output, ExecutionOutputV1::Time(_))).count(),
                                         results
                                     )
                                 })

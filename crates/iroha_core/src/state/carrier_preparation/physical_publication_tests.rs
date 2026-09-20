@@ -745,10 +745,14 @@ fn geometry_refusal_returns_original_decision_and_releases_every_physical_writer
             .1,
     );
     let physical = acquire(decision, &state);
-    let (mut retry, _) = match physical.try_resume_geometry() {
+    let (mut retry, error) = match physical.publish() {
         Ok(_) => panic!("foreign geometry must refuse before effects"),
         Err(refusal) => refusal,
     };
+    assert!(matches!(
+        error,
+        publication::CarrierPublicationError::Geometry
+    ));
     assert_fences_free_except(&state, "");
     drop(state.kura.try_publication_lease().unwrap());
     assert!(state.block_hashes.inner.try_write().is_some());
@@ -770,9 +774,12 @@ fn geometry_refusal_returns_original_decision_and_releases_every_physical_writer
         membership
     );
     retry.journals.geometry = original_geometry;
-    let physical = acquire(retry, &state)
-        .try_resume_geometry()
-        .unwrap_or_else(|(_, error)| panic!("exact geometry owner retry: {error}"));
+    let mut physical = acquire(retry, &state);
+    assert!(
+        !physical
+            .try_complete_geometry()
+            .expect("the original identity transition has no storage effects")
+    );
     assert!(std::ptr::eq(physical.target, &*state));
     drop(physical.abort());
     assert_eq!(state.state_view_generation(), generation);
@@ -784,7 +791,18 @@ fn geometry_refusal_returns_original_decision_and_releases_every_physical_writer
 
 #[test]
 fn geometry_backend_contention_releases_writers_and_waits_for_actual_backend_release() {
-    let (state, decision) = fixture_decision();
+    let (state, mut decision) = fixture_decision();
+    // Identity transitions never acquire the backend. Retain an actual storage
+    // addition to exercise the physical completion seam without publishing State.
+    let geometry = {
+        let mut block = state.merge_preexecution_block(decision.block().header());
+        crate::state::carrier_geometry_preparation::tests::stage_structural_manual_addition(
+            &mut block,
+        );
+        block.prepare_carrier_geometry().unwrap()
+    };
+    assert!(geometry.requires_storage_transition());
+    decision.journals.geometry = geometry;
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let wire = decision.block().encode_wire().unwrap();
     let hashes = decision
@@ -794,10 +812,11 @@ fn geometry_backend_contention_releases_writers_and_waits_for_actual_backend_rel
         .as_slice()
         .as_ptr();
     let held = state.tiered_backend.lock();
-    let (retry, error) = match acquire(decision, &state).try_resume_geometry() {
-        Ok(_) => panic!("the actual backend owner must release first"),
-        Err(refusal) => refusal,
-    };
+    let mut physical = acquire(decision, &state);
+    let error = physical
+        .try_complete_geometry()
+        .expect_err("the actual backend owner must release first");
+    let retry = physical.abort();
     let crate::state::LaneLifecycleError::PublicationBusy { field, wait } = error else {
         panic!("expected the backend's actual release observation");
     };
@@ -815,9 +834,12 @@ fn geometry_backend_contention_releases_writers_and_waits_for_actual_backend_rel
     drop(held);
     assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
     assert!(poll(&mut wait, &wakes).is_ready());
-    let physical = acquire(retry, &state)
-        .try_resume_geometry()
-        .unwrap_or_else(|(_, error)| panic!("original owner after backend release: {error}"));
+    let mut physical = acquire(retry, &state);
+    assert!(
+        physical
+            .try_complete_geometry()
+            .expect("original owner after backend release updates the mapping")
+    );
     drop(physical.abort());
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),

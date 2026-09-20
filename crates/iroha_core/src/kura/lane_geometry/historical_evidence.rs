@@ -225,6 +225,7 @@ impl Kura {
 
 impl ObservedHistoricalRecoveryEvidence<'_> {
     /// Consume exact read evidence without declaring it durable or authorizing retirement.
+    #[cfg(test)]
     pub(super) fn into_observed(
         self,
     ) -> Result<(Vec<HistoricalAutonomousLaneRecoveryRecordV1>, u64)> {

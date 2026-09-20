@@ -17,6 +17,7 @@ impl EntryScore {
 impl TieredManifestEntry {
     /// Returns the deterministic measured value footprint for the entry.
     #[must_use]
+    #[cfg(test)]
     pub fn value_size_bytes(&self) -> usize {
         self.value_size_bytes
     }

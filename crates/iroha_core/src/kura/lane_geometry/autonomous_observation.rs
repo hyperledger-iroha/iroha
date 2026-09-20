@@ -264,11 +264,13 @@ impl Kura {
 
 impl ObservedAutonomousAttemptNamespace<'_> {
     /// Borrow the authenticated attempt projection without claiming durability.
+    #[cfg(test)]
     pub(super) fn attempts(&self) -> &AutonomousAttempts {
         &self.attempts
     }
 
     /// Consume the unchanged observation without claiming durability.
+    #[cfg(test)]
     pub(super) fn into_observed(self) -> Result<AutonomousAttempts> {
         self.ensure_unchanged()?;
         Ok(self.attempts)

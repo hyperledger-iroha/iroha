@@ -21,7 +21,8 @@ Options:
   --native-amx-iterations <N>
                           Native AMX soak iterations, 1..100 (default: 10)
   --multilane-four-peer-release
-                          Run both mandatory non-ignored four-peer release gates
+                          Require all four non-ignored four-peer release gates
+                          (blocked until native recreation/recovery exists)
   --target-dir <PATH>     Set CARGO_TARGET_DIR for the test run
   --evidence-dir <PATH>   Persist exact per-run logs and completion accounting
   --fast                  Rejected: release validation uses only pinned Cargo
@@ -49,8 +50,11 @@ RUN_SCOPE="case"
 NATIVE_AMX_ITERATIONS=""
 readonly NATIVE_AMX_FAULT_SOAK_TEST="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly NATIVE_AMX_GROUPED_PRUNING_MARKER="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
-readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
-readonly AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
+# TODO: implement these current-native qualifications before opening G-4P.
+# These required identities have no test bodies yet; never replace them with
+# unrelated Native AMX success or the retired executable MergeQC scenarios.
+readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_native_four_peer_recreates_lane_and_rejects_stale_artifacts"
+readonly AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_native_recovers_missing_execution_evidence_after_restart"
 readonly AUTOSCALE_DRAIN_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly CROSS_DATASPACE_CASE_TEST="nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing"
 readonly CROSS_DATASPACE_FAULT_SOAK_TEST="nexus::cross_dataspace_localnet::cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
@@ -228,6 +232,16 @@ done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 cd "$repo_root"
+if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
+  for required_native_test in \
+    "$AUTOSCALE_FOUR_PEER_RELEASE_TEST" \
+    "$AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST"; do
+    if [[ "$(grep -Ec -- "^(async )?fn ${required_native_test##*::}\\(" integration_tests/tests/nexus/autoscale_localnet.rs || true)" != 1 ]]; then
+      echo "G-4P unavailable: current-native lane recreation and execution-evidence restart recovery qualification is not implemented: ${required_native_test}" >&2
+      exit 1
+    fi
+  done
+fi
 source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
 release_head_commit="${IROHA_RELEASE_HEAD_COMMIT:-}"
 release_head_tree="${IROHA_RELEASE_HEAD_TREE:-}"

@@ -279,6 +279,8 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
     let original_prefix = prepared.execution_prefix_commitment();
     let original_state_pointer = std::ptr::from_ref(prepared.state.as_ref());
     let result = prepared.prepare_journals(Some(original_archive), None, |original| {
+        assert!(original.provider.is_some());
+        assert!(original.reputation.is_none());
         assert!(!called);
         called = true;
         assert_eq!(
@@ -920,11 +922,11 @@ fn prepared_archive_projections_survive_state_journal_decomposition() {
         let prepared = super::super::tests::prepare(&state, proposal.clone(), &topology, &context)
             .unwrap_or_else(|(_, error)| panic!("prepare candidate: {error}"));
         let journals = prepared
-            .prepare_journals(
-                Some(provider_owner),
-                Some(reputation_owner),
-                admit_journals_for_test,
-            )
+            .prepare_journals(Some(provider_owner), Some(reputation_owner), |original| {
+                assert!(original.provider.is_some());
+                assert!(original.reputation.is_some());
+                admit_journals_for_test(original)
+            })
             .unwrap();
         assert!(journals.provider_capture.is_some());
         assert!(journals.reputation_capture.is_some());

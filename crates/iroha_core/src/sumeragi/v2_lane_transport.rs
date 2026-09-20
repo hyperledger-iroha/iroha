@@ -331,19 +331,6 @@ impl NativeLaneTransport {
             && parent == self.state.latest_block_hash_fast()
     }
 
-    /// Use the real recoverable actor API. One blocked peer cannot monopolize
-    /// either its fanout or the native process's next control turn.
-    pub(crate) fn poll(
-        &mut self,
-        observed: &VerifiedLaneContexts,
-        global: Option<&VerifiedHeightContext>,
-        network: &crate::IrohaNetwork,
-    ) -> Result<NativeTransportProgress, String> {
-        self.poll_with(observed, global, |post, ticket| {
-            network.post_recoverable(post, ticket)
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn poll_for_test(
         &mut self,

@@ -265,6 +265,7 @@ impl Kura {
 impl ObservedNativeAmxEvidence<'_> {
     /// Consume authenticated read evidence without asserting filesystem durability.
     /// This projection cannot authorize retirement or survive a mutation boundary.
+    #[cfg(test)]
     pub(super) fn into_observed(self) -> Result<NativeGeometryEvidence> {
         for observed in &self.files {
             let after = self

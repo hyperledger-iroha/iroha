@@ -20,7 +20,7 @@ pub(in crate::state) mod publication;
 
 /// Refusal drops the entire original overlay without publishing any component.
 #[derive(Debug, thiserror::Error)]
-pub(in crate::state) enum CaptureError<E> {
+pub(crate) enum CaptureError<E> {
     /// One original journal has a different acquisition mode.
     #[error("World journal {field} mode {actual:?} differs from {expected:?}")]
     InconsistentMode {

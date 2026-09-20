@@ -96,13 +96,16 @@ fn raw_geometry_capture_is_pure_and_excludes_competing_owners() {
             .begin_raw_geometry_attempt(request, &BTreeSet::new(), &BTreeMap::new())
             .unwrap();
         assert_eq!(original.phase(), RawGeometryPhase::Captured);
-        assert!(matches!(
-            lease.begin_raw_geometry_attempt(request, &BTreeSet::new(), &BTreeMap::new()),
-            Err(Error::LaneGeometryAttemptBusy { .. })
-        ));
+        let busy =
+            match lease.begin_raw_geometry_attempt(request, &BTreeSet::new(), &BTreeMap::new()) {
+                Err(error @ Error::LaneGeometryAttemptBusy { .. }) => error,
+                _ => panic!("the original claim must exclude competing owners"),
+            };
+        assert!(busy.to_string().contains("release pending"));
         assert_eq!(fs::read(kura.lane_geometry_journal_path()).unwrap(), before);
         original.rollback_under(&lease).unwrap();
         assert_eq!(original.phase(), RawGeometryPhase::RolledBack);
+        assert!(busy.to_string().contains("released; retry acquisition"));
         let replacement = lease
             .begin_raw_geometry_attempt(request, &BTreeSet::new(), &BTreeMap::new())
             .unwrap();

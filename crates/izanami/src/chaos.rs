@@ -3272,8 +3272,6 @@ impl IzanamiRunner {
                 blocking_applied_success = snapshot.blocking_applied_success,
                 confirmation_sampled = snapshot.confirmation_sampled,
                 confirmation_applied = snapshot.confirmation_applied,
-                confirmation_rejected = snapshot.confirmation_rejected,
-                confirmation_expired = snapshot.confirmation_expired,
                 confirmation_failed = snapshot.confirmation_failed,
                 confirmation_budget_skipped = snapshot.confirmation_budget_skipped,
                 confirmation_queue_dropped = snapshot.confirmation_queue_dropped,
@@ -3332,8 +3330,6 @@ impl IzanamiRunner {
                 blocking_applied_success = snapshot.blocking_applied_success,
                 confirmation_sampled = snapshot.confirmation_sampled,
                 confirmation_applied = snapshot.confirmation_applied,
-                confirmation_rejected = snapshot.confirmation_rejected,
-                confirmation_expired = snapshot.confirmation_expired,
                 confirmation_failed = snapshot.confirmation_failed,
                 confirmation_budget_skipped = snapshot.confirmation_budget_skipped,
                 confirmation_queue_dropped = snapshot.confirmation_queue_dropped,
@@ -7268,8 +7264,6 @@ struct Metrics {
     blocking_applied_success: AtomicU64,
     confirmation_sampled: AtomicU64,
     confirmation_applied: AtomicU64,
-    confirmation_rejected: AtomicU64,
-    confirmation_expired: AtomicU64,
     confirmation_failed: AtomicU64,
     confirmation_budget_skipped: AtomicU64,
     confirmation_queue_dropped: AtomicU64,
@@ -7340,12 +7334,6 @@ impl Metrics {
     }
     fn record_confirmation_audit_applied(&self) {
         self.confirmation_applied.fetch_add(1, Ordering::Relaxed);
-    }
-    fn record_confirmation_audit_rejected(&self) {
-        self.confirmation_rejected.fetch_add(1, Ordering::Relaxed);
-    }
-    fn record_confirmation_audit_expired(&self) {
-        self.confirmation_expired.fetch_add(1, Ordering::Relaxed);
     }
     fn record_confirmation_audit_failed(&self) {
         self.confirmation_failed.fetch_add(1, Ordering::Relaxed);
@@ -7432,8 +7420,6 @@ impl Metrics {
             blocking_applied_success: self.blocking_applied_success.load(Ordering::Relaxed),
             confirmation_sampled: self.confirmation_sampled.load(Ordering::Relaxed),
             confirmation_applied: self.confirmation_applied.load(Ordering::Relaxed),
-            confirmation_rejected: self.confirmation_rejected.load(Ordering::Relaxed),
-            confirmation_expired: self.confirmation_expired.load(Ordering::Relaxed),
             confirmation_failed: self.confirmation_failed.load(Ordering::Relaxed),
             confirmation_budget_skipped: self.confirmation_budget_skipped.load(Ordering::Relaxed),
             confirmation_queue_dropped: self.confirmation_queue_dropped.load(Ordering::Relaxed),
@@ -7558,8 +7544,6 @@ struct MetricsSnapshot {
     blocking_applied_success: u64,
     confirmation_sampled: u64,
     confirmation_applied: u64,
-    confirmation_rejected: u64,
-    confirmation_expired: u64,
     confirmation_failed: u64,
     confirmation_budget_skipped: u64,
     confirmation_queue_dropped: u64,
@@ -10349,8 +10333,6 @@ mod tests {
         metrics.record_blocking_applied_success();
         metrics.record_confirmation_audit_sampled();
         metrics.record_confirmation_audit_applied();
-        metrics.record_confirmation_audit_rejected();
-        metrics.record_confirmation_audit_expired();
         metrics.record_confirmation_audit_failed();
         metrics.record_confirmation_audit_budget_skipped();
         metrics.record_confirmation_audit_queue_dropped();
@@ -10385,8 +10367,6 @@ mod tests {
         assert_eq!(snapshot.blocking_applied_success, 1);
         assert_eq!(snapshot.confirmation_sampled, 1);
         assert_eq!(snapshot.confirmation_applied, 1);
-        assert_eq!(snapshot.confirmation_rejected, 1);
-        assert_eq!(snapshot.confirmation_expired, 1);
         assert_eq!(snapshot.confirmation_failed, 1);
         assert_eq!(snapshot.confirmation_budget_skipped, 1);
         assert_eq!(snapshot.confirmation_queue_dropped, 1);

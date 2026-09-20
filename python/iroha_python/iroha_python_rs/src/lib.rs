@@ -12212,16 +12212,10 @@ fn verify_committed_transaction_inclusion_json_py(
             "committed transaction inclusion proof verification failed",
         ));
     }
-    let proof_kind = if committed.merge_inclusion.is_some() {
-        "certified_merge"
-    } else {
-        "ordinary"
-    };
     let entrypoint_kind = match &committed.entrypoint {
         TransactionEntrypoint::External(_) => "External",
         TransactionEntrypoint::SealedCommitment(_) => "SealedCommitment",
         TransactionEntrypoint::SealedReveal(_) => "SealedReveal",
-        TransactionEntrypoint::Time(_) => "Time",
     };
     let external_transaction = match &committed.entrypoint {
         TransactionEntrypoint::External(transaction) => Some(transaction),
@@ -12270,7 +12264,7 @@ fn verify_committed_transaction_inclusion_json_py(
         })
         .transpose()?;
     let (result_ok, rejection_code, rejection_message, contract_rejection) =
-        match &committed.result.0 {
+        match &committed.result().0 {
             Ok(_) => (true, None, None, None),
             Err(reason) => (
                 false,
@@ -12280,7 +12274,7 @@ fn verify_committed_transaction_inclusion_json_py(
             ),
         };
     let batch_outcomes = committed
-        .result
+        .result()
         .batch_transfer_outcomes()
         .iter()
         .map(batch_outcome_json)
@@ -12304,12 +12298,8 @@ fn verify_committed_transaction_inclusion_json_py(
         norito::json::Value::from(carrier.header().height().get()),
     );
     result.insert(
-        "result_hash".into(),
-        norito::json::Value::String(hex_encode(committed.result_hash.as_ref())),
-    );
-    result.insert(
-        "proof_kind".into(),
-        norito::json::Value::String(proof_kind.to_owned()),
+        "output_hash".into(),
+        norito::json::Value::String(hex_encode(committed.output_hash.as_ref())),
     );
     result.insert(
         "entrypoint_kind".into(),
@@ -14825,7 +14815,6 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
     };
     let mut header = BlockHeader::new(
         NonZeroU64::new(1).expect("nonzero height"),
-        None,
         None,
         None,
         1_700_000_000_000,

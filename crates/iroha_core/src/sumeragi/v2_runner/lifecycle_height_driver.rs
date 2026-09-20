@@ -1130,10 +1130,6 @@ mod tests {
             }
 
             match (self, selected) {
-            (
-                Self::AwaitingCompletion,
-                Completion::LifecycleValidateLocalWaiting | Completion::LifecycleValidateLocalRequeued,
-            ) => Ok(Self::AwaitingCompletion),
             (Self::AwaitingCompletion, Completion::LifecycleValidatePublished { ordinal }) => {
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
@@ -1434,6 +1430,15 @@ mod tests {
             Completion::LifecycleValidateLocalRequeued,
         ] {
             assert!(!completion_selection_retries_before_runtime(&selected));
+            for claim in [
+                LifecycleProducerClaimDispositionV1::Eligible,
+                LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+            ] {
+                assert_eq!(
+                    claim.observe_completion(&selected).unwrap(),
+                    LifecycleProducerClaimDispositionV1::AwaitingCompletion
+                );
+            }
         }
     }
 

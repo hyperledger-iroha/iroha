@@ -13,6 +13,8 @@ use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     block::{
         consensus::{ExecWitness, ExecWitnessMsg},
+        execution_output::{NetworkExecutionOutputV1, TimeInvocationV1, TriggerUseV1},
+        output_budget::ExecutionOutputLimits,
         stream::{BlockMessage, BlockSubscriptionRequest},
     },
     events::{
@@ -1322,6 +1324,12 @@ fn caller_supplied_readiness_transactions_keep_the_exact_signed_envelope() {
     assert_eq!(exact.transactions[0].hash(), hash);
 }
 const BLOCK_WIRE_FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/canonical_block_wire.bin");
+const SAMPLE_OUTPUT_LIMITS: ExecutionOutputLimits = ExecutionOutputLimits {
+    max_outputs: 8,
+    max_output_bytes: 64 * 1024,
+    max_total_output_bytes: 512 * 1024,
+    max_executed_wire_bytes: 1024 * 1024,
+};
 const EVENT_MESSAGE_FIXTURE: &[u8] =
     include_bytes!("../../tests/fixtures/canonical_event_message.bin");
 const PIPELINE_EVENT_MESSAGE_FIXTURE: &[u8] =
@@ -1350,12 +1358,22 @@ fn sample_block_with_result(
     result: iroha_data_model::transaction::TransactionResultInner,
 ) -> SignedBlock {
     let mut block = sample_block_proposal();
-    let entrypoint_hashes = block
-        .external_entrypoints_cloned()
-        .map(|entrypoint| entrypoint.hash())
-        .collect::<Vec<_>>();
+    let fragments = u64::from(result.is_ok());
     block
-        .set_transaction_results(Vec::new(), &entrypoint_hashes, vec![result])
+        .set_execution_outputs(
+            vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 0,
+                result: result.into(),
+                completions: Vec::new(),
+            })],
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &SAMPLE_OUTPUT_LIMITS,
+        )
         .expect("attach aligned sample transaction result");
     let final_signature = iroha_data_model::block::BlockSignature::new(
         0,
@@ -1387,6 +1405,10 @@ fn committed_block_rejection_is_not_reported_as_smoke_success() {
     });
     let expected_reason = format!("{rejection:?}");
     let block = sample_block_with_result(Err(rejection));
+    let summary = BlockSummary::from_block(&block);
+    assert_eq!(summary.transaction_count, 1);
+    assert_eq!(summary.rejected_transaction_count, 1);
+    assert_eq!(summary.time_trigger_count, 0);
     let tx_hash = block
         .external_transactions()
         .next()
@@ -1401,9 +1423,59 @@ fn committed_block_rejection_is_not_reported_as_smoke_success() {
     }
 }
 #[test]
+fn block_summary_and_smoke_join_keep_scheduled_outputs_separate_from_network_inputs() {
+    let mut block = sample_block();
+    let tx_hash = block.external_transactions().next().unwrap().hash();
+    let mut outputs = block.execution_outputs().to_vec();
+    outputs.push(ExecutionOutputV1::time_output_limit_rejection(
+        TimeInvocationV1 {
+            schedule_index: 0,
+            event: TimeEvent {
+                interval: TimeInterval {
+                    since_ms: 41_999,
+                    length_ms: 1,
+                },
+            },
+            trigger: TriggerUseV1 {
+                trigger_id: "summary_timer".parse().unwrap(),
+                registered_at_height: 0,
+                action_hash: Hash::new(b"summary scheduled action"),
+            },
+        },
+    ));
+    block
+        .set_execution_outputs(
+            outputs,
+            1,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &SAMPLE_OUTPUT_LIMITS,
+        )
+        .expect("attach distinct network and time outputs");
+    let summary = BlockSummary::from_block(&block);
+    assert_eq!(summary.transaction_count, 1);
+    assert_eq!(summary.rejected_transaction_count, 0);
+    assert_eq!(summary.time_trigger_count, 1);
+    assert_eq!(
+        smoke_transaction_result_in_block(&block, &tx_hash)
+            .expect("network input has its explicit output")
+            .expect("network input succeeded"),
+        block.header().height().get()
+    );
+    let missing = HashOf::from_untyped_unchecked(Hash::new(b"absent smoke transaction"));
+    assert!(smoke_transaction_result_in_block(&block, &missing).is_none());
+}
+#[test]
 fn block_hash_presence_without_aligned_result_is_not_smoke_success() {
     let block = sample_block_proposal();
     assert!(block.is_resultless_proposal());
+    let summary = BlockSummary::from_block(&block);
+    assert_eq!(summary.transaction_count, 1);
+    assert_eq!(summary.rejected_transaction_count, 0);
+    assert_eq!(summary.time_trigger_count, 0);
     let tx_hash = block
         .external_transactions()
         .next()
@@ -1816,17 +1888,18 @@ async fn block_stream_decodes_block_events() {
 fn block_canonical_wire_matches_fixture() {
     let block = sample_block();
     block
-        .validate_entrypoint_merkle_cache()
-        .expect("canonical fixture entrypoint Merkle cache");
+        .validate_proposal_commitments()
+        .expect("canonical fixture proposal commitments");
     block
-        .validate_result_merkle_cache()
-        .expect("canonical fixture result Merkle cache");
+        .validate_output_merkle_cache()
+        .expect("canonical fixture output Merkle cache");
     assert_eq!(block.committed_fragment_count(), Some(1));
     assert_eq!(
-        block.header().result_merkle_root(),
+        block.output_merkle_commitment(),
         block
-            .result_merkle_commitment()
-            .map(|commitment| *commitment.root())
+            .output_hashes()
+            .collect::<iroha_crypto::MerkleTree<_>>()
+            .commitment()
     );
     let wire = block.canonical_wire().expect("canonical wire").into_vec();
     assert_eq!(wire.as_slice(), BLOCK_WIRE_FIXTURE);

@@ -48,9 +48,11 @@ readonly replay_runner="scripts/formal/check_sumeragi_v2_replay_trace.sh"
 readonly chaos_runner="scripts/run_sumeragi_v2_100k_chaos.sh"
 readonly kura_source="crates/iroha_core/src/kura.rs"
 readonly test_network_source="crates/iroha_test_network/src/lib.rs"
-readonly autoscale_test="nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
+# TODO: implement these current-native qualifications before opening G-4P.
+# Executable MergeQC recreation/recovery tests were retired with that path.
+readonly autoscale_test="nexus_autoscale_native_four_peer_recreates_lane_and_rejects_stale_artifacts"
 readonly autoscale_qualified_test="nexus::autoscale_localnet::${autoscale_test}"
-readonly autoscale_restart_test="nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
+readonly autoscale_restart_test="nexus_autoscale_native_recovers_missing_execution_evidence_after_restart"
 readonly autoscale_restart_qualified_test="nexus::autoscale_localnet::${autoscale_restart_test}"
 readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
@@ -84,6 +86,9 @@ require_nonignored_test() {
     grep -Ec -- "^(async )?fn ${test_name}\\(" "$path" || true
   )"
   if [[ "$declaration_count" != 1 ]]; then
+    if [[ "$test_name" == "$autoscale_test" || "$test_name" == "$autoscale_restart_test" ]]; then
+      echo "G-4P unavailable: current-native lane recreation and execution-evidence restart recovery qualification is not implemented: ${test_name}" >&2
+    fi
     echo "expected one exact mandatory multilane test declaration ${test_name} in ${path}; found ${declaration_count}" >&2
     exit 1
   fi

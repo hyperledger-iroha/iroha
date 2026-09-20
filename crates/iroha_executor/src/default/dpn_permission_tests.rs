@@ -33,7 +33,6 @@ mod dpn_permission_tests {
                         NonZeroU64::new(height).expect("non-zero block height"),
                         None,
                         None,
-                        None,
                         0,
                         0,
                     ),
@@ -255,13 +254,10 @@ mod dpn_permission_tests {
         }
     }
 
-
     #[test]
     fn dpn_admin_cannot_be_granted_to_a_role() {
         let bootstrap = account(82);
-        let role_id = "dpn_admin_role"
-            .parse::<RoleId>()
-            .expect("role id");
+        let role_id = "dpn_admin_role".parse::<RoleId>().expect("role id");
         let mut executor = TestExecutor::genesis(bootstrap);
         role::visit_grant_role_permission(
             &mut executor,

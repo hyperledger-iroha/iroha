@@ -52,35 +52,19 @@ use iroha_crypto::{
 use iroha_data_model::{
     HasMetadata, NetworkId,
     account::{
-        AccountId, NewAccount,
+        AccountId,
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
-    asset::{
-        AssetTransferControlWindow, AssetTransferLimit,
-        id::{AssetDefinitionId, AssetId},
-    },
+    asset::id::{AssetDefinitionId, AssetId},
     block::{BlockHeader, consensus::LaneBlockCommitment},
     confidential::{ConfidentialMemoEnvelopeV1, ConfidentialMemoSuiteV1},
     da::manifest::DaManifestV1,
     domain::Domain,
-    escrow::EscrowId,
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     governance::types::{
-        AbiVersion, ContractAbiHash, ContractCodeHash, ProposalKind,
-        ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     },
-    isi::{
-        EndKaigi, Instruction as InstructionTrait, InstructionBox, Register,
-        ReportKaigiRelayHealth, SetKeyValue, Transfer, TransferAssetBatch,
-        asset_transfer_control::{SetAssetTransferBlacklist, SetAssetTransferControl},
-        escrow::CancelAssetLock,
-        ministry::SubmitAgendaProposal,
-        settlement::{SettleFxCorridor, SettlementInstructionBox},
-    },
-    kaigi::{
-        KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
-        scalar::KaigiAuthorizationScalarV1,
-    },
+    isi::{InstructionBox, Register, Transfer},
     nexus::{
         AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, LaneRelayEnvelope, TouchManifest,
         compute_descriptor_binding, compute_settlement_hash, validate_descriptor,
@@ -91,7 +75,6 @@ use iroha_data_model::{
         validate_privacy_capability_archive_v1,
     },
     proof::{ProofAttachment, ProofAttachmentList},
-    rwa::{NewRwa, RwaParentRef},
     smart_contract::ContractAddress,
     sorafs::orderbook_submission::{
         parse_sorafs_orderbook_cancel_reason_v1, parse_sorafs_orderbook_decimal_u64_v1,
@@ -105,10 +88,7 @@ use iroha_data_model::{
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder},
     },
-    trigger::{
-        Trigger,
-        action::{Action, Repeats},
-    },
+    trigger::action::{Action, Repeats},
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
 use iroha_model_base::domain::DomainId;
@@ -133,7 +113,26 @@ use std::{
 // Production receives the evidence through decoded instructions instead;
 // direct construction remains deliberately confined to tests.
 #[cfg(test)]
-use iroha_data_model::isi::settlement::FxCorridorOracleEvidence;
+use iroha_data_model::{
+    account::NewAccount,
+    asset::{AssetTransferControlWindow, AssetTransferLimit},
+    escrow::EscrowId,
+    governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash},
+    isi::{
+        EndKaigi, Instruction as InstructionTrait, ReportKaigiRelayHealth, SetKeyValue,
+        TransferAssetBatch,
+        asset_transfer_control::{SetAssetTransferBlacklist, SetAssetTransferControl},
+        escrow::CancelAssetLock,
+        ministry::SubmitAgendaProposal,
+        settlement::{FxCorridorOracleEvidence, SettleFxCorridor, SettlementInstructionBox},
+    },
+    kaigi::{
+        KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiRelayHealthStatus,
+        scalar::KaigiAuthorizationScalarV1,
+    },
+    rwa::{NewRwa, RwaParentRef},
+    trigger::Trigger,
+};
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{
@@ -154,9 +153,11 @@ use napi::{
     sys,
 };
 use napi_derive::napi;
+#[cfg(test)]
+use norito::core as norito_core;
 use norito::{
     codec::DecodeAll,
-    core as norito_core, decode_from_bytes,
+    decode_from_bytes,
     json::{self, Map, Value},
 };
 use sorafs_car::{
@@ -1643,7 +1644,6 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         NonZeroU64::new(1).expect("nonzero height"),
         None,
         None,
-        None,
         1_700_000_000_000,
         0,
     );
@@ -1826,6 +1826,7 @@ pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
     Ok(Buffer::from(binding_bytes.to_vec()))
 }
 #[allow(unsafe_code)]
+#[cfg(test)]
 fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, norito_core::Error> {
     iroha_js_codec::decode_instruction_aligned(bytes)
 }
@@ -6079,48 +6080,58 @@ mod sorafs_orderbook_validation_tests {
 fn parse_hash_value(value: json::Value, context: &str) -> napi::Result<Hash> {
     iroha_js_codec::parse_hash_value(value, context).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn parse_optional_kaigi_scalar(
     value: Option<json::Value>,
     context: &str,
 ) -> napi::Result<Option<KaigiAuthorizationScalarV1>> {
     iroha_js_codec::parse_optional_kaigi_scalar(value, context).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn parse_optional_commitment(
     value: Option<json::Value>,
     context: &str,
 ) -> napi::Result<Option<KaigiParticipantCommitment>> {
     iroha_js_codec::parse_optional_commitment(value, context).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn parse_optional_nullifier(
     value: Option<json::Value>,
     context: &str,
 ) -> napi::Result<Option<KaigiParticipantNullifier>> {
     iroha_js_codec::parse_optional_nullifier(value, context).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn optional_kaigi_scalar_to_json(value: Option<&KaigiAuthorizationScalarV1>) -> json::Value {
     iroha_js_codec::optional_kaigi_scalar_to_json(value)
 }
+#[cfg(test)]
 fn optional_commitment_to_json(value: Option<&KaigiParticipantCommitment>) -> json::Value {
     iroha_js_codec::optional_commitment_to_json(value)
 }
+#[cfg(test)]
 fn optional_nullifier_to_json(value: Option<&KaigiParticipantNullifier>) -> json::Value {
     iroha_js_codec::optional_nullifier_to_json(value)
 }
 fn account_id_to_canonical_i105(account_id: &AccountId) -> napi::Result<String> {
     iroha_js_codec::account_id_to_canonical_i105(account_id).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn parse_rwa_parent_refs_value(
     value: json::Value,
     context: &str,
 ) -> napi::Result<Vec<RwaParentRef>> {
     iroha_js_codec::parse_rwa_parent_refs_value(value, context).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn rwa_parent_refs_to_json(parents: &[RwaParentRef]) -> json::Value {
     iroha_js_codec::rwa_parent_refs_to_json(parents)
 }
+#[cfg(test)]
 fn new_rwa_to_json(rwa: &NewRwa) -> napi::Result<json::Value> {
     iroha_js_codec::new_rwa_to_json(rwa).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn normalize_zk_ballot_public_inputs(value: &mut json::Value, context: &str) -> napi::Result<()> {
     iroha_js_codec::normalize_zk_ballot_public_inputs(value, context).map_err(codec_to_napi)
 }
@@ -6425,6 +6436,7 @@ fn parse_metadata_payload(context: &str, payload: Option<String>) -> napi::Resul
         },
     )
 }
+#[cfg(test)]
 fn validate_governance_instruction_selectors(value: &json::Value) -> napi::Result<()> {
     iroha_js_codec::validate_governance_instruction_selectors(value).map_err(codec_to_napi)
 }
@@ -6433,9 +6445,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     iroha_js_codec::value_to_instruction(value).map_err(codec_to_napi)
 }
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
+#[cfg(test)]
 fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json::Value> {
     iroha_js_codec::instruction_to_json_value(instruction).map_err(codec_to_napi)
 }
+#[cfg(test)]
 fn custom_json_value(payload: json::Value) -> json::Value {
     iroha_js_codec::custom_json_value(payload)
 }

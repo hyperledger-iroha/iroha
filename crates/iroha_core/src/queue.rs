@@ -4232,6 +4232,7 @@ impl QueueLaneRetirementCut<'_> {
     }
 
     /// Check exact current ownership while enqueue, removal and reservation changes are fenced.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn lane_has_pending_work(
         &self,

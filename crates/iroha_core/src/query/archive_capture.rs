@@ -70,6 +70,7 @@ impl ArchiveCaptureGate {
     /// capacity checks, and remain held until this reservation is installed.
     /// Only one candidate can own that predecessor; losing admission returns
     /// the exact release event needed to retry after dropping those writers.
+    #[cfg(test)]
     pub(crate) fn try_reserve(&self) -> Result<ArchiveCaptureReservation, ArchiveCaptureWait> {
         let mut state = self.state.lock();
         if let Some(active) = state.active.upgrade() {

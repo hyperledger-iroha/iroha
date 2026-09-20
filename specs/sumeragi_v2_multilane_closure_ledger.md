@@ -2343,15 +2343,25 @@ evidence-aware drain, archive, and useful autonomous execution through the
 canonical carrier. Body-pruning cases must establish the `ML-KURA-01`
 deterministic keeper set, authenticated direct adverts, local-keeper pinning,
 and recovery from every advertised keeper; tuple-count or test-only advert
-injection is insufficient. Required anchors include
-`nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart`,
+injection is insufficient. The executable MergeQC recreation and sidecar
+recovery scenarios have been retired: current authenticated execution rejects
+that authority. TODO: implement current-native four-peer lane recreation with
+stale-artifact rejection and restart recovery of missing execution evidence.
+The reserved required identities are
+`nexus_autoscale_native_four_peer_recreates_lane_and_rejects_stale_artifacts`
+and `nexus_autoscale_native_recovers_missing_execution_evidence_after_restart`
+in `integration_tests/tests/nexus/autoscale_localnet.rs`. They are currently
+unavailable, so the inventory guard and release launcher refuse G-4P before
+running Cargo. The receipt validator requires these exact identities and
+rejects evidence bearing the retired scenario names.
+
+The existing control-only
 `nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart`,
-and the strict autoscale cycle tests in
-`integration_tests/tests/nexus/autoscale_localnet.rs`, after their production
-prerequisites are reachable. A skipped test or test-only producer is a failure.
-The mandatory four-peer lifecycle and rotating-validator Native tests are now
-non-ignored and source-bound into the release runner, but no fresh completion
-artifact is recorded here. Rotating message-loss faults use the
+strict autoscale cycle tests, and rotating-validator Native AMX evidence remain
+valid requirements; they do not substitute for missing recreation/recovery
+qualification. All four mandatory release runs remain required. A skipped test
+or test-only producer is a failure, and no fresh completion artifact is recorded
+here. Rotating message-loss faults use the
 feature-isolated authenticated consensus message controller and must prove the
 installed hold/drop command and matched-message evidence before its atomic heal;
 retired `[sumeragi.debug.rbc]` keys are rejected configuration, not evidence.

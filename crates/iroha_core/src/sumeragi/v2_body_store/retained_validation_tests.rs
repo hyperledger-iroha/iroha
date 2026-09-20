@@ -97,9 +97,10 @@ fn retained_marker_file_sync_refusal_keeps_owner_through_retry_abort_and_consume
             .allocation(),
         allocation
     );
-    store
+    let cached = store
         .execute_retained_durable_validation(durable.clone(), durable.manifest_hash(), &mut service)
         .unwrap();
+    assert_eq!(cached.validated_receipt(), Some(&receipt));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     drop(service.select(&receipt).unwrap());
     assert_eq!(
@@ -302,9 +303,10 @@ fn retained_validation_requires_exact_store_and_existing_cached_owner() {
         Err(V2BodyStoreError::ReceiptMismatch)
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    store
+    let outcome = store
         .execute_retained_durable_validation(durable.clone(), durable.manifest_hash(), &mut service)
         .unwrap();
+    assert_eq!(outcome.validated_receipt().unwrap().durable(), &durable);
     let (replacement, replacement_calls, _) = validator(&durable);
     let mut missing = store.retained_validation_service(replacement).unwrap();
     assert!(matches!(

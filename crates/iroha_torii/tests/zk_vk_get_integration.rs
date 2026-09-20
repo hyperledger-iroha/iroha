@@ -28,7 +28,7 @@ async fn zk_vk_get_returns_record_with_key() {
     let state = State::new_for_testing(World::new(), kura, query);
     let mut state = state;
     // Insert a verifying key record directly into WSV via a block transaction
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let stx = block.transaction();
     let backend = "halo2/ipa";

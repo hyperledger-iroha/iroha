@@ -2,7 +2,10 @@
 
 use super::*;
 use crate::secure_file_metadata::{self, SecureMetadata};
-use std::sync::{Arc, OnceLock};
+use std::{
+    io::ErrorKind,
+    sync::{Arc, OnceLock},
+};
 
 #[derive(Debug)]
 struct Directory {
@@ -527,6 +530,7 @@ impl TieredGeometryAttempt {
     }
 
     /// Whether all effects owned by this attempt have been reversed and synced.
+    #[cfg(test)]
     pub(crate) fn is_rolled_back(&self) -> bool {
         self.rolled_back
     }

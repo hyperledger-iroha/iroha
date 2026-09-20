@@ -134,8 +134,7 @@ fn seeded_zk_roots_state(
     let asset_alias = "rose#centralbank";
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     {
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let definition = AssetDefinition::numeric(
