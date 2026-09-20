@@ -2583,6 +2583,27 @@ source inspection and comment corrections alone cannot close these rows:
   assertions preserved. The older formal declarations are being rebound to
   the live driver; the test facade cannot establish production reachability.
 
+- **Released Validate-to-Apply diagnostics:** the two temporary test-only
+  failure traces in `PreparedLiveValidateApplyRegistryWork::into_released_typed_concrete`
+  are removed. Publication, staged coordinator/LedgerV1 checks and both
+  ownership-preserving rejection branches are unchanged. Existing
+  `resolved_live_validate_retained_terminal_publishes_one_current_commit_apply`,
+  `resolved_recovered_validate_retained_terminal_publishes_one_current_commit_apply`,
+  `resolved_published_validate_retained_terminal_publishes_one_current_commit_apply`,
+  `resolved_validate_retained_terminal_rejects_changed_outcome_digest_before_apply`
+  and `already_terminal_validate_cold_reopen_preserves_success_and_rejection`
+  cover the released-owner boundary. The direct-Serve source contracts bind
+  its preflight/publication chain. Fresh execution and formal evidence remain
+  Open under `ML-AUT-06`, `ML-LIFE-05` and `G-FORMAL`.
+- **Kura physical accounting:** the obsolete composition TODO is replaced with
+  the implemented ownership contract. `TotalDiskUsageMutation` owns exact
+  physical scopes and child completion; `reconcile_physical_resource_inventory`
+  atomically initializes the declared Kura-owned families after bounded
+  recovery. Delegated Sumeragi WAL, body and Certified-Serve stores retain
+  independent writers and are outside this metric. Missing declarations or
+  incomplete children leave affected families unavailable. The physical guard
+  and initialization tests cover this boundary; `G-SCALE` evidence remains Open.
+
 The `v2_ready_durable_validate_adapter_preview.rs` post-WAL-append TODO now has
 token-local test-only injection and
 `ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit`.
@@ -2718,6 +2739,13 @@ remain required by the mapped rows.
   routing overrides when `nexus.enabled` is false. That preserves the
   configuration-only production boundary in `ML-LIFE-01`; it is not an
   environment-controlled autonomous-execution toggle.
+- Emergency Kura Fast startup is read-only. The production Sumeragi runner
+  closes consensus ingress and idles before active-height recovery, lifecycle
+  generation claims or lane hydration. It does not admit productive multilane
+  operation with omitted evidence; a Strict restart owns recovery and reopening.
+  `emergency_fast_idles_before_any_active_height_recovery` binds this ordering.
+  This intentional posture is not a bypass or an execution receipt for
+  `ML-AUT-06`, `ML-LIFE-01` or `ML-LIFE-05`; their evidence remains Open.
 - Queue durability ambiguity disables admission/selection until bounded
   restart recovery, and Kura retirement rejects obsolete, unexpected,
   malformed, temporary, hardlinked, or symlinked evidence. Those rejections

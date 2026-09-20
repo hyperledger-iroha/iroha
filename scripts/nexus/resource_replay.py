@@ -1,6 +1,6 @@
 """Independently replay raw resource captures against CLI clock and peer owners.
 
-This library validates resource evidence only. It never samples processes, makes
+This library validates resource evidence and exact journal Applied agreement. It never samples processes, makes
 HTTP requests, repairs captures, or extends the transaction Applied drain. The
 caller supplies trusted prelaunch identities and exact expected timing geometry.
 """
@@ -17,9 +17,13 @@ import stat
 
 from kura_resource_metrics import AvailableObservation, ProjectionError, parse_kura_resource_metrics
 from resource_process import ProcessIdentity
+from applied_request_journal import (
+    AppliedJournalError, AppliedRequestReader, RetainedApplication, FINAL_FIELDS, OBSERVATION_EVENTS,
+)
 from signed_request_journal import SignedRequestError, SignedRequestReader, RetainedRequest, EVENTS as SIGNED_EVENTS
 from resource_evidence_budget import (
     BudgetError, CaptureGeometry, CapturePolicy, PerRunResourceBudget, validate_run_budget,
+    parse_run_budget, run_budget_inputs,
     MAX_CONTROL_FILES, MAX_TOTAL_BYTES, MAX_WIRE_BYTES,
     MAX_FILE_BYTES as MAX_JOURNAL_BYTES,
     CAPTURE_MANIFEST_BYTES as MAX_MANIFEST_BYTES,
@@ -36,9 +40,9 @@ JOURNAL_SCHEMA = 'iroha.sumeragi_v2.multilane_scaling.collector_journal.v1'
 DIGEST = re.compile(r'[0-9a-f]{64}')
 PLAN_FIELDS = {'event', 'schema', 'pair_index', 'variant', 'seed', 'accounts', 'account_selection',
                'workload', 'max_effects_per_account', 'scheduled_requests', 'warmup_ns', 'measurement_ns',
-               'drain_ns', 'submission_lag_bound_ns', 'preparation_lookahead', 'preparation_concurrency',
+               'drain_ns', 'local_applied_required', 'submission_lag_bound_ns', 'preparation_lookahead', 'preparation_concurrency',
                'preparation_ahead_ns', 'max_submissions', 'max_in_flight', 'max_status_requests', 'poll_interval_ns'}
-OTHER_EVENTS = SIGNED_EVENTS | {'scheduled', 'workload_account_preflight', 'prepared', 'offer', 'accepted', 'status',
+OTHER_EVENTS = SIGNED_EVENTS | OBSERVATION_EVENTS | {'scheduled', 'workload_account_preflight', 'prepared', 'offer', 'accepted', 'status',
                 'status_missing', 'workload_postconditions_started', 'workload_account_postcondition'}
 
 
@@ -207,6 +211,22 @@ class ReplayResult:
     global_byte_limit: int
     control_file_limit: int
     signed_requests: tuple[RetainedRequest, ...]
+    applied_requests: tuple[RetainedApplication, ...]
+    geometry: ReplayGeometry
+    allocation: PerRunResourceBudget
+
+
+def _join_requests(signed, applied):
+    """Require the same complete ordered request owners from both journal passes."""
+    _require(type(signed) is tuple and type(applied) is tuple
+             and 0 < len(signed) == len(applied) <= 1_000_000, 'request_join_coverage_invalid')
+    for index, (request, observation) in enumerate(zip(signed, applied, strict=True)):
+        _require(type(request) is RetainedRequest and type(observation) is RetainedApplication,
+                 'request_join_type_invalid')
+        _require(type(request.index) is int and type(observation.index) is int
+                 and request.index == observation.index == index
+                 and type(request.hash) is str and type(observation.hash) is str
+                 and request.hash == observation.hash, 'request_join_identity_mismatch')
 
 
 def _stat_identity(info):
@@ -286,7 +306,7 @@ class _Captures:
 
 
 def _file_admitted(info, count):
-    _require(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600
+    _require(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) in (0o400, 0o600)
              and info.st_uid == os.geteuid() and info.st_nlink == 1 and info.st_size == count,
              'capture_file_invalid')
 
@@ -381,13 +401,15 @@ class _JournalState:
         self.finish_start, self.finish_end, self.final_rows = None, None, set()
         self.scheduled_requests = None
         self.signed = SignedRequestReader(allocation.journal.max_bytes)
+        self.applied = AppliedRequestReader(geometry.final)
 
     def consume(self, row):
         try:
             self.signed.check_interleaving(row)
             self._consume_resource(row)
             self.signed.consume(row)
-        except SignedRequestError as error:
+            self.applied.consume(row)
+        except (SignedRequestError, AppliedJournalError) as error:
             self.signed.abort()
             raise ReplayError(str(error)) from None
         except BaseException:
@@ -462,8 +484,7 @@ class _JournalState:
             self.finish_start, self.finish_end, self.pending, self.stage = row['start_offset_ns'], end, None, 'final'
         elif event == 'request_final':
             _require(self.stage == 'final', 'transaction_final_order_invalid')
-            _fields(row, ('event', 'plan', 'hash', 'offer_offset_ns', 'acknowledgment_offset_ns', 'applied_offset_ns',
-                          'block_height', 'status_attempts', 'submission_finished', 'failure'))
+            _fields(row, FINAL_FIELDS)
             plan = _fields(row['plan'], ('cohort', 'sequence', 'logical_id', 'scheduled_offset_ns', 'account_index'))
             _require(plan['cohort'] in ('warmup', 'measurement'), 'transaction_cohort_invalid')
             sequence = _integer(plan['sequence'], 0, 1_000_000)
@@ -473,8 +494,10 @@ class _JournalState:
             offer = _integer(row['offer_offset_ns'], -(1 << 63), (1 << 63) - 1)
             ack = _integer(row['acknowledgment_offset_ns'], offer, (1 << 63) - 1)
             applied = _integer(row['applied_offset_ns'], offer + 1, (1 << 63) - 1)
-            _require((ack < 0 and applied < 0) if plan['cohort'] == 'warmup' else
-                     (0 <= offer and ack <= geometry.final and applied <= geometry.final), 'transaction_drain_extended')
+            local_applied = _integer(row['local_applied_offset_ns'], offer + 1, (1 << 63) - 1)
+            _require((ack < 0 and applied < 0 and local_applied < 0) if plan['cohort'] == 'warmup' else
+                     (0 <= offer and ack <= geometry.final and applied <= geometry.final
+                      and local_applied <= geometry.final), 'transaction_drain_extended')
             self.final_rows.add(identity)
         elif event == 'collection_finished':
             _require(self.stage == 'final' and len(self.final_rows) == self.scheduled_requests, 'collection_finish_order_invalid')
@@ -521,6 +544,19 @@ def replay(capture_directory: Path, journal_path: Path, expected_journal_sha256:
     """
     allocation = validate_replay_scope(expected_peers, geometry,
                                        expected_policy=expected_policy, allocation=allocation)
+    # Own all validated input values before the first filesystem operation.
+    # Re-admission alone retains nested caller dataclasses; the canonical input
+    # conversion reconstructs each bounded ledger value without those aliases.
+    geometry = ReplayGeometry(**asdict(geometry))
+    expected_peers = tuple(ExpectedPeer(peer.peer_id, ProcessIdentity(**asdict(peer.identity)))
+                           for peer in expected_peers)
+    try:
+        expected_policy = CapturePolicy(**asdict(expected_policy))
+        allocation = parse_run_budget(run_budget_inputs(allocation))
+    except BudgetError:
+        raise ReplayError('resource_budget_invalid') from None
+    allocation = validate_replay_scope(expected_peers, geometry,
+                                       expected_policy=expected_policy, allocation=allocation)
     _require(type(expected_journal_sha256) is str and DIGEST.fullmatch(expected_journal_sha256) is not None,
              'journal_digest_invalid')
     # One preflight and all inclusive measurement/drain samples; finish has no capture.
@@ -560,6 +596,9 @@ def replay(capture_directory: Path, journal_path: Path, expected_journal_sha256:
                      'journal_parent_changed')
         finally: os.close(check)
         captures.finish()
+        signed_requests = state.signed.finish()
+        applied_requests = state.applied.finish()
+        _join_requests(signed_requests, applied_requests)
         reductions = [state.preflight, *(row.capture for row in state.samples)]
         raw_bytes = sum(row.raw_body_bytes for row in reductions)
         manifest_bytes = sum(row.manifest_bytes for row in reductions)
@@ -569,8 +608,8 @@ def replay(capture_directory: Path, journal_path: Path, expected_journal_sha256:
                             allocation.journal.max_bytes, allocation.member_count,
                             allocation.experiment.resource_bytes, allocation.experiment.resource_member_count,
                             allocation.experiment.total_bytes, MAX_TOTAL_BYTES, MAX_CONTROL_FILES,
-                            state.signed.finish())
-    except SignedRequestError as error:
+                            signed_requests, applied_requests, geometry, allocation)
+    except (SignedRequestError, AppliedJournalError) as error:
         raise ReplayError(str(error)) from None
     except OSError:
         raise ReplayError('evidence_filesystem_unavailable') from None

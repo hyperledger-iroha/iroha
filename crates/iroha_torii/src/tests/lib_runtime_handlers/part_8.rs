@@ -209,12 +209,34 @@ fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> Authoritati
             install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, manifest_bindings)]);
         }
     }
+    // Peer bindings activate at height one. Persist the existing signed block
+    // fixture and its matching State journal before resolving current authority.
+    record_latest_committed_header_for_test(&app, 1, 0);
+    let committed = app
+        .state
+        .view()
+        .canonical_block_by_height(NonZeroUsize::new(1).expect("height one"))
+        .expect("authority fixture has a canonical signed height-one Kura body");
+    assert_eq!(committed.header().height().get(), 1);
+    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let committee = app
+        .state
+        .resolve_lane_committee(super::lane_authority_route(route))
+        .expect("all four fixture bindings are active at the committed height");
+    assert_eq!(committee.authority_height(), 1);
+    assert_eq!(committee.into_validators().len(), 4);
+    assert_eq!(
+        app.state
+            .manifest_lane_validator_bindings_at_height(LaneId::SINGLE, 1)
+            .len(),
+        4
+    );
     AuthoritativeLaneFixture {
         app,
         local_peer_id,
         authoritative_peer_id,
         fallback_peer_id,
-        route: RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        route,
     }
 }
 

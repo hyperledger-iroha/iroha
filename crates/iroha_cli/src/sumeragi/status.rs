@@ -13,7 +13,7 @@ pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Resul
 }
 pub(crate) fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs) -> Result<()> {
     let client = context.client_from_config()?;
-    let diagnostics = client.get_sumeragi_diagnostics()?;
+    let diagnostics = iroha::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()?;
     let value = norito::json::to_value(&diagnostics)?;
     match context.output_format() {
         CliOutputFormat::Text => context.println(summarize_diagnostics(&value)),

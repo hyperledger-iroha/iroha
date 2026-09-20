@@ -91,6 +91,25 @@ fn watch_child(mut child: OwnedChild, control: Arc<Control>) {
     }
 }
 
+/// Build the one supported Python worker invocation without starting a child.
+/// The caller retains the interpreter and complete source/runtime namespace.
+fn worker_command(args: &Args) -> Command {
+    let mut command = Command::new(&args.resource_program);
+    command
+        .args(["-B", "-S"])
+        .arg(&args.resource_worker)
+        .arg("--config")
+        .arg(&args.resource_config)
+        .arg("--capture-dir")
+        .arg(&args.resource_capture_dir)
+        .env_clear()
+        .current_dir("/")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    command
+}
+
 struct Work {
     request: Request,
     deadline: u64,
@@ -128,17 +147,7 @@ impl ChildProbe {
         }
         let capture_path = args.resource_capture_dir.clone();
         let mut child = OwnedChild(
-            Command::new(&args.resource_program)
-                .arg(&args.resource_worker)
-                .arg("--config")
-                .arg(&args.resource_config)
-                .arg("--capture-dir")
-                .arg(&args.resource_capture_dir)
-                .env_clear()
-                .current_dir("/")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+            worker_command(args)
                 .spawn()
                 .map_err(|_| eyre!("resource probe could not start"))?,
         );

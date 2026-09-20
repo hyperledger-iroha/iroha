@@ -75,6 +75,9 @@ _TRUSTED_INPUT_KEYS = {
     "sdk_dependency_bundle_manifest",
     "revocation",
     "runner_tool_manifest",
+    "scaling_plan",
+    "scaling_budget",
+    "scaling_handoff_helper",
     "ssh_keygen",
 }
 _TRUSTED_ARCHIVE_NAMES = {
@@ -110,25 +113,28 @@ _TRUSTED_ARCHIVE_NAMES = {
     "sdk_dependency_bundle_manifest": "sdk-dependency-bundle-manifest.json",
     "revocation": "bootstrap-revocation",
     "runner_tool_manifest": "runner-tool-manifest.json",
+    "scaling_plan": "scaling-plan.json",
+    "scaling_budget": "scaling-budget.json",
+    "scaling_handoff_helper": "scaling-handoff.py",
     "ssh_keygen": "ssh-keygen",
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
+        "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
+        '8cb10f1984af55194c2209d3a65a5e28e1a2ab563a5e333f49bc9184e7f83a9e'
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
+        '6d1f78d58ce2455dbd7a6426cd8d8f82f5b2752b126d04c38a81811a8fb85ec7'
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "d1cf09532bdbf00d3ed259d42895692c44aaf635899d325316488b4e42ffda56"
+        '8efda50ba816170d063ca8b4755a05189c6d5fff8ae64d5746d9bebfcb40b824'
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -196,12 +202,6 @@ _RUNNER_EXTRA_ENV = {
     "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
     "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
     "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
-    "IROHA_RELEASE_INVOCATION_ROOT",
-    "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
-    "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
-    "IROHA_RELEASE_SCALING_IROHAD_SHA256",
-    "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
-    "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
     "IROHA_RELEASE_TLA2TOOLS_JAR",
     "NIX_SSL_CERT_FILE",
     "RUSTUP_HOME",
@@ -650,6 +650,8 @@ def _load_identity(value: Any, label: str) -> dict[str, Any]:
 
 
 def _artifact_limit(label: str) -> int:
+    if label in {"scaling_plan", "scaling_budget"}:
+        return 1024 * 1024
     if label in _EXECUTABLE_INPUTS:
         return _MAX_TOOL_BYTES
     if label in {"allowed_signers", "revocation"}:
@@ -2839,6 +2841,7 @@ def _replay_runner_tool_probes(
         archives["python"].path,
         (
             "-I",
+            "-B",
             "-S",
             str(archives["tool_probe_helper"].path),
             "--tool-manifest",
@@ -2862,6 +2865,41 @@ def _replay_runner_tool_probes(
             "independent runner tool functional-probe replay failed"
         )
     return manifest, result_snapshot
+
+
+_SCALING_HANDOFF_KEYS = {
+    'IROHA_RELEASE_INVOCATION_ROOT', 'IROHA_RELEASE_TEMP_BASE',
+    'IROHA_RELEASE_SCALING_GATE_FD', 'IROHA_RELEASE_SCALING_INVOCATION_SHA256',
+    'IROHA_RELEASE_SCALING_CHALLENGE', 'IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256',
+}
+_SCALING_CHANNEL_KEYS = _SCALING_HANDOFF_KEYS - {
+    'IROHA_RELEASE_INVOCATION_ROOT', 'IROHA_RELEASE_TEMP_BASE'}
+
+
+def _scaling_handoff_contract(value, evidence, candidate, helper_sha256):
+    """Decode authenticated original metadata without adopting its historical FD."""
+    value = _exact_dict(value, _SCALING_HANDOFF_KEYS, 'original scaling handoff')
+    if any(type(item) is not str or not item or '\0' in item for item in value.values()):
+        raise ValidationError('original scaling handoff values are malformed')
+    root, base = (Path(value[name]) for name in (
+        'IROHA_RELEASE_INVOCATION_ROOT', 'IROHA_RELEASE_TEMP_BASE'))
+    for path in (root, base):
+        if (not path.is_absolute() or str(path) != os.path.abspath(path)
+                or re.fullmatch(r'/[A-Za-z0-9_./+-]+', str(path)) is None):
+            raise ValidationError('original scaling handoff path is not exact')
+    if root.parent != base or any(root == path or root in path.parents or path in root.parents
+                                 for path in (evidence.path, candidate)):
+        raise ValidationError('original scaling invocation is not external and exact')
+    descriptor = value['IROHA_RELEASE_SCALING_GATE_FD']
+    if (re.fullmatch(r'[1-9][0-9]{0,6}', descriptor) is None
+            or not 3 <= int(descriptor) < 1 << 20):
+        raise ValidationError('original scaling descriptor metadata is not bounded')
+    for name in ('IROHA_RELEASE_SCALING_INVOCATION_SHA256', 'IROHA_RELEASE_SCALING_CHALLENGE',
+                 'IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256'):
+        _digest(value[name], 'original scaling handoff digest')
+    if value['IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256'] != helper_sha256:
+        raise ValidationError('original scaling handoff helper differs from protected input')
+    return dict(value)
 
 
 def _runner_contract(
@@ -2890,8 +2928,18 @@ def _runner_contract(
         "size_bytes",
         "tool_directory",
         "tools",
+        "scaling_handoff",
+        "scaling_preflight_timeout_seconds",
     }
     runner = _exact_dict(value, keys, "runner contract")
+    preflight_timeout = _strict_int(
+        runner["scaling_preflight_timeout_seconds"],
+        "original scaling preflight timeout", minimum=600,
+    )
+    if preflight_timeout > 86400:
+        raise ValidationError("original scaling preflight timeout is out of range")
+    handoff = _scaling_handoff_contract(runner["scaling_handoff"], evidence, candidate,
+        archives["scaling_handoff_helper"].sha256)
     expected_runner = candidate / "scripts" / "run_sumeragi_v2_release_gates.sh"
     runner_argument = _canonical_existing(runner_argument, "current runner path")
     runner_path = _canonical_existing(expected_runner, "candidate runner path")
@@ -2953,7 +3001,9 @@ def _runner_contract(
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.getuid()
             or metadata.st_nlink != 1
-            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or stat.S_IMODE(metadata.st_mode) not in (
+                (0o400, 0o600) if checkpoint == "sealed"
+                and os.path.lexists(evidence.path / "release-runner-result.json") else (0o600,))
         ):
             raise ValidationError("active runner log metadata is not exact")
 
@@ -3076,6 +3126,17 @@ def _runner_contract(
         for key, item in environment.items()
     ):
         raise ValidationError("runner closed environment is malformed")
+    if checkpoint == "entry":
+        if any(environment.get(key) != item for key, item in handoff.items()):
+            raise ValidationError('entry scaling metadata differs from original producer')
+    else:
+        if any(key in os.environ for key in _SCALING_CHANNEL_KEYS):
+            raise ValidationError('sealed validator cannot inherit the original scaling channel')
+        if any(key in environment and environment[key] != item for key, item in handoff.items()):
+            raise ValidationError('sealed scaling metadata differs from original producer')
+        # Reconstruct historical launch metadata only. Never set os.environ or
+        # reopen the recorded descriptor in this standalone validation process.
+        environment.update(handoff)
     environment_digest = _digest(
         runner["environment_sha256"], "runner environment digest"
     )
@@ -3096,7 +3157,10 @@ def _environment_contract(
     marker_digest: str,
     tool_directory: Path,
     checkpoint: str,
+    scaling_handoff: dict[str, str],
 ) -> None:
+    handoff = _scaling_handoff_contract(scaling_handoff, evidence, candidate,
+        archives["scaling_handoff_helper"].sha256)
     expected = dict(_BASE_ENVIRONMENT)
     expected.update(
         {
@@ -3159,6 +3223,7 @@ def _environment_contract(
     })
     expected.update(policy)
     expected.update(aliases)
+    expected.update(handoff)
     allowed_keys = set(expected) | _RUNNER_EXTRA_ENV
     if set(environment) - allowed_keys or not set(expected).issubset(environment):
         raise ValidationError("runner closed environment has unapproved or missing variables")
@@ -3235,9 +3300,17 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
         "sealed-identity.json",
         "release-retained-inventory.json",
         "release-runner-result.json",
+        "release-runner-private-provenance.json",
     }
+    scaling = {'scaling-source-paths.txt', 'scaling-rustc-version.txt',
+        'scaling-python-runtime.json', 'scaling-execution.json', 'scaling-verifier-python', 'scaling-preflight'}
     if checkpoint == "sealed":
-        permitted.update(retained if "release-runner-result.json" in observed else {"release-runner"})
+        if "release-runner-result.json" in observed:
+            permitted.update(retained | scaling)
+        # Before the fixed handoff there are no late parent publications. After
+        # it, require the complete fixed group; a partial group is not accepted.
+        if observed & scaling:
+            permitted.update(scaling)
     if observed != permitted:
         raise ValidationError("bootstrap evidence directory has an unexpected top-level inventory")
     for name in ("home", "tmp", "runner-bin", "runner-tools"):
@@ -3268,17 +3341,21 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
             not stat.S_ISREG(item.st_mode)
             or item.st_uid != os.getuid()
             or item.st_nlink != 1
-            or stat.S_IMODE(item.st_mode) != 0o600
+            or stat.S_IMODE(item.st_mode) not in (
+                (0o400, 0o600) if checkpoint == "sealed" and "release-runner-result.json" in observed
+                else (0o600,))
         ):
             raise ValidationError(f"bootstrap {name} is not one active private log")
-    if checkpoint == "sealed" and "release-runner" in observed:
-        item = os.stat("release-runner", dir_fd=evidence.descriptor, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(item.st_mode)
-            or item.st_uid != os.getuid()
-            or stat.S_IMODE(item.st_mode) != _DIRECTORY_MODE
-        ):
-            raise ValidationError("sealed release-runner subtree is not one private directory")
+    for name in {'scaling-verifier-python', 'scaling-preflight'} & observed:
+        item = os.stat(name, dir_fd=evidence.descriptor, follow_symlinks=False)
+        if (not stat.S_ISDIR(item.st_mode) or item.st_uid != os.getuid()
+                or stat.S_IMODE(item.st_mode) != _DIRECTORY_MODE):
+            raise ValidationError('retained scaling support root is not private')
+    for name in (scaling - {'scaling-verifier-python', 'scaling-preflight'}) & observed:
+        item = os.stat(name, dir_fd=evidence.descriptor, follow_symlinks=False)
+        if (not stat.S_ISREG(item.st_mode) or item.st_uid != os.getuid() or item.st_nlink != 1
+                or stat.S_IMODE(item.st_mode) != 0o400):
+            raise ValidationError('retained scaling publication is not an exact protected file')
     for name in retained & observed:
         item = os.stat(name, dir_fd=evidence.descriptor, follow_symlinks=False)
         if (
@@ -3290,10 +3367,16 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
             raise ValidationError(f"retained release evidence {name} is unsafe")
 
 
-def _sealed_release_root(evidence: DirectorySnapshot) -> tuple[Path, Snapshot | None]:
+def _sealed_release_root(evidence: DirectorySnapshot, scaling_handoff: dict[str, str]) -> tuple[Path, Snapshot | None]:
+    invocation = _canonical_existing(Path(scaling_handoff["IROHA_RELEASE_INVOCATION_ROOT"]),
+        "original retained invocation root")
+    source = _canonical_existing(invocation / "source", "retained source root")
+    if (source != invocation / "source" or invocation == evidence.path
+            or invocation in evidence.path.parents or evidence.path in invocation.parents):
+        raise ValidationError("retained release source is not external and exact")
     result_path = evidence.path / "release-runner-result.json"
     if not result_path.exists() and not result_path.is_symlink():
-        return evidence.path / "release-runner" / "source", None
+        return source, None
     snapshot = _read_path(
         result_path,
         "protected outer release result",
@@ -3317,19 +3400,6 @@ def _sealed_release_root(evidence: DirectorySnapshot) -> tuple[Path, Snapshot | 
         or value["source_archive_id"] != "release-retained.source.v1"
     ):
         raise ValidationError("protected outer release result schema is not exact")
-    invocation_value = os.environ.get("IROHA_RELEASE_INVOCATION_ROOT")
-    if not isinstance(invocation_value, str) or not invocation_value:
-        raise ValidationError(
-            "path-free retained result lacks private invocation provenance"
-        )
-    invocation = _canonical_existing(
-        Path(invocation_value), "retained invocation root"
-    )
-    source = _canonical_existing(
-        invocation / "source", "retained source root"
-    )
-    if source != invocation / "source" or invocation == evidence.path or invocation in evidence.path.parents or evidence.path in invocation.parents:
-        raise ValidationError("retained release source is not external and exact")
     _digest(_string(value["source_manifest_sha256"], "retained source digest"), "retained source digest")
     for field, local_path, name, archive_id in (
         ("receipt", invocation / "output" / "release" / "RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json", "release-terminal.receipt.v1"),
@@ -3360,8 +3430,8 @@ def _sealed_release_root(evidence: DirectorySnapshot) -> tuple[Path, Snapshot | 
 
 
 def validate(args: argparse.Namespace) -> None:
-    if not sys.flags.isolated or not sys.flags.no_site:
-        raise ValidationError("validator must run under archived Python with -I and -S")
+    if not sys.flags.isolated or not sys.flags.dont_write_bytecode or not sys.flags.no_site:
+        raise ValidationError("validator must run under archived Python with -I -B -S")
     if os.getuid() != os.geteuid():
         raise ValidationError("set-ID execution is not supported")
     candidate = _canonical_existing(args.candidate_root, "current candidate root")
@@ -3450,6 +3520,7 @@ def validate(args: argparse.Namespace) -> None:
                 "argv": [
                     str(archives["python"].path),
                     "-I",
+                    "-B",
                     "-S",
                     "-c",
                     python_probe_code,
@@ -3477,6 +3548,7 @@ def validate(args: argparse.Namespace) -> None:
             marker_digest,
             tool_directory,
             args.checkpoint,
+            marker_value["runner"]["scaling_handoff"],
         )
         tool_probe_manifest, tool_probe_result = _replay_runner_tool_probes(
             probes["runner_tool_closure"],
@@ -3491,7 +3563,7 @@ def validate(args: argparse.Namespace) -> None:
         helper_environment = {key: environment[key] for key in helper_keys}
         result = _run_bounded(
             archives["python"].path,
-            ["-I", "-S", str(archives["manifest_helper"].path), "--root", str(candidate), "--release-identity-json"],
+            ["-I", "-B", "-S", str(archives["manifest_helper"].path), "--root", str(candidate), "--release-identity-json"],
             cwd=candidate,
             environment=helper_environment,
         )
@@ -3528,7 +3600,7 @@ def validate(args: argparse.Namespace) -> None:
                 raise ValidationError("entry validator is not the candidate script")
             current_validator = expected_validator
         else:
-            sealed_root, release_result_snapshot = _sealed_release_root(evidence)
+            sealed_root, release_result_snapshot = _sealed_release_root(evidence, marker_value["runner"]["scaling_handoff"])
             if current_validator_path != (
                 sealed_root / "scripts" / "validate_sumeragi_v2_release_bootstrap.py"
             ):

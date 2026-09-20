@@ -42,6 +42,7 @@ fn settle(records: &mut [Record]) {
     for record in records {
         record.submission_finished = true;
         record.applied = Some((0, 3));
+        record.local_applied = Some((0, 3));
     }
 }
 fn accounts() -> Vec<Account> {

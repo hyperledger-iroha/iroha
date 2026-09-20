@@ -3,9 +3,18 @@
 //! The caller owns the expected raw SHA-256 and byte admission. Neither a proof
 //! artifact nor this request can provide its own trust pin. Decoding invokes the
 //! ordinary schedule/binding admission; it creates no completed-proof authority.
-//! TODO: connect this codec to retained request-file handles and the pinned CLI.
+//! Filesystem admission retains the request descriptor and ancestors through
+//! consuming export/replay, proof publication and final projection.
+//! Preparation calls `prepare_bound`, which returns a `PreparedLaunch` retaining
+//! the original facts and published transport pair. Export and replay each call
+//! `open_launcher` and consume its `RetainedLauncherRequest`. These are separate
+//! per-command owners. Executable identity and complete runtime admission belong
+//! to the original parent, independently of every request and reply.
 
 use super::*;
+
+pub(super) mod journal;
+pub(super) mod prepare;
 
 #[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_kagami::scaling_evidence::LauncherRequestV1")]

@@ -176,32 +176,47 @@ AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
    'for (height, hash) in tips',
    'Ok(match latest')),
  ('SumeragiV2NativeApplicationEvidence',
-  'crates/iroha_core/src/sumeragi/lane_planner.rs',
-  'fn',
-  'v2_known_lane_tip_for_route',
-  ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
-   'tip.lane_id == lane_id\n'
-   '                && tip.dataspace_id == dataspace_id\n'
-   '                && tip.lane_incarnation == lane_incarnation',
-   '.read_latest_native_amx_participant_application_receipt(lane_id)\n'
-   '            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;',
-   'crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {',
-   'if descriptor.dataspace_id != dataspace_id\n'
-   '                    || descriptor.lane_incarnation != lane_incarnation\n'
-   '                    || latest_receipt.application_block_height >= proposal_height',
-   '} else if matching.is_empty() {',
-   'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
-   'if hashes.len() > 1 {\n        return Ok(None);\n    }'),
-  ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
-   '.read_latest_native_amx_participant_application_receipt(lane_id)',
-   'crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {',
-   'return Ok(None);',
-   'crate::kura::NativeAmxLatestReceiptObservation::Applied(latest_receipt) => {',
-   'if descriptor.dataspace_id != dataspace_id',
-   '} else if matching.is_empty() {',
-   'return Ok(None);',
-   'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
-   'if hashes.len() > 1')),
+ 'crates/iroha_core/src/sumeragi/lane_planner.rs',
+ 'fn',
+ 'v2_known_lane_tip_for_route',
+ ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
+  'tip.lane_id == lane_id\n'
+  '                && tip.dataspace_id == dataspace_id\n'
+  '                && tip.lane_incarnation == lane_incarnation',
+  '.read_native_amx_participant_application_history(lane_id)\n'
+  '            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;',
+  'Some(\n'
+  '                crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)\n'
+  '                | '
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)\n'
+  '                | '
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),\n'
+  '            ) => {',
+  'if descriptor.dataspace_id != dataspace_id\n'
+  '                    || descriptor.lane_incarnation != lane_incarnation\n'
+  '                    || latest_receipt.application_block_height >= proposal_height',
+  '} else if matching.is_empty() {',
+  'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
+  'if hashes.len() > 1 {\n        return Ok(None);\n    }',
+  'match history\n            .entries()\n            .next_back()'),
+ ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
+  '.read_native_amx_participant_application_history(lane_id)',
+  'Some(\n'
+  '                crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)\n'
+  '                | '
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)\n'
+  '                | '
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),\n'
+  '            ) => {',
+  'return Ok(None);',
+  'Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(\n'
+  '                latest_receipt,\n'
+  '            )) => {',
+  'if descriptor.dataspace_id != dataspace_id',
+  '} else if matching.is_empty() {',
+  'return Ok(None);',
+  'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
+  'if hashes.len() > 1')),
  ('SumeragiV2NativeApplicationEvidence',
   'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
   'fn',

@@ -8063,7 +8063,7 @@ fn wait_for_identical_native_amx_receipt(
         let mut receipts = Vec::with_capacity(process_count);
         last_observed.clear();
         for (peer_index, peer) in network.all_peers().enumerate() {
-            match peer.client().client().get_sumeragi_diagnostics() {
+            match peer.client().get_sumeragi_diagnostics() {
                 Ok(diagnostics) => match native_receipt_from_diagnostics(&diagnostics, source_id) {
                     Ok(Some(receipt)) => {
                         last_observed.push(format!(

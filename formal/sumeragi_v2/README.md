@@ -697,8 +697,8 @@ height-context state are not migrated in place.
   The same schema-5 ledger machine-maps every conceptual `ML-MUT-*` ID from
   the closure ledger. `tla_counterexample` entries cover every and only the 106
   production-refinement `_bug.cfg` files.
-  The 106-case runner and the separate in-flight runner (one fixed positive
-  and twenty-five mutations) retain fresh private invocation directories under
+  The 106-case runner and the separate 26-case in-flight runner (one fixed
+  positive and twenty-five mutations) retain fresh private invocation directories under
   `SUMERAGI_V2_FORMAL_EVIDENCE_DIR`, or the system temp directory for local
   runs. Each prints its retained path on entry and exit, including failures.
   `sumeragi_v2_tlc_artifacts.py` copies the exact executed module/config and
@@ -713,7 +713,10 @@ height-context state are not migrated in place.
   an observed-order convenience view, with no total-order claim across streams.
   Create-only `accepted.json` records follow all assertions, and
   `finished.json` records whether every expected case was accepted with intact
-  input, tool, raw-output and record hash links. Missing
+  input, tool, raw-output and record hash links. The in-flight source contract
+  binds the recorder count to its one positive and exact 25-mutant inventory;
+  controlled recorder tests reject both smaller and larger declared counts
+  after all 26 cases otherwise pass. Missing
   terminal records indicate an incomplete invocation; failed artifacts remain
   available. These schema-V1 records are bounded abstract evidence, with no
   immutable release-receipt or production-refinement claim. Nightly CI already
@@ -722,7 +725,7 @@ height-context state are not migrated in place.
   run `python3 -m pytest -q scripts/tests/sumeragi_v2_tlc_artifacts_test.py` to
   check retention and rejection without running TLC.
   These twenty-eight controls join the twenty-seven formal-launcher cases in
-  the existing fifty-five-test preflight; the release corridor retains 84 legs.
+  the existing fifty-five-test preflight; the release corridor retains 88 legs.
   The ledger's separate
   `composed_state_action_relation_with_source_bound_trace_extraction` contract binds the
   accepted payload schema V1 in `LaneExecutablePayloadV1`, QueuePlan journal
@@ -794,6 +797,11 @@ height-context state are not migrated in place.
   requires the exact source-binding check first, validates the pinned Apalache 0.52.2
   launcher and jar hashes, typechecks the five refinement modules
   plus the layout-only in-flight carrier module, and
+  uses fixed `search.invariant.mode=after` scheduling and requires the tool to
+  report that exact mode. Every configured invariant is checked after the
+  disjunction of all enabled transitions at each step. No transition, invariant
+  or length filter is accepted, and external tuning/encoding overrides remain
+  rejected. The state relation and bounds are unchanged; the runner
   requires one exact `NoError` result at these reviewed bounds:
 
   | Kernel | Fixed configuration | `Next` bound |
@@ -810,17 +818,20 @@ height-context state are not migrated in place.
   and the named terminal-disposition counterexample are required; an earlier
   model's bounded result does not qualify this repaired candidate.
 
-  Twenty-two runner-contract negative controls reject tool-version or checksum
+  Thirty-five runner-contract negative controls reject tool-version or checksum
   drift, source-binding bypass, unauthenticated workspace-manifest authority,
   invalid workspace-digest grammar, omission or substitution of either
   source-manifest evidence field, a self-comparing drift check, reduced
   autoscale or QueuePlan bounds, mutation
   substitution, removal of a Native invariant, a reduced Kura bound or Kura
   mutation substitution, a reduced in-flight bound or in-flight mutation
-  substitution, a weakened success marker, and a length override. The default
+  substitution, a weakened success marker, and a length override. They also
+  reject omitted, substituted, dynamic or duplicate scheduling; added invariant,
+  transition or length filters; external tuning arguments or environment
+  acceptance; and a weakened scheduling result marker. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  seventy-three exact refinement-kernel TLC mutation witnesses and the twenty-five
-  exact in-flight layout mutation witnesses. Its default thirteen-config TLC
+  106 exact refinement-kernel TLC mutation witnesses and the twenty-five
+  exact in-flight layout mutation witnesses. Its default seventeen-config TLC
   matrix includes `kura_replica_retention_fixed.cfg` and applies the same exact
   successful-transcript contract as the other fixed positive kernels.
   Apalache does not run those
@@ -1753,7 +1764,7 @@ The two historical autonomous hydration capacity regressions add two names in
 the existing lane-work module, bringing the
 current inventory to 881 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 84 legs. The
+corridor contains 88 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor. The
 fence rows prove that an exact lifecycle dequeue serializes both same-wire and
 unrelated producers until publication, and that abandoning an unpublished
@@ -1878,14 +1889,14 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 84 legs, including the governance-
+the complete pre-network corridor now spans 88 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
 command-success legs. Its finality and height-context proposal-origin modules
 each use a dedicated `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of the 43 modules or 84 legs. The
+geometry tests as part of the 43 modules or 88 legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -2035,7 +2046,7 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 84 pre-network legs and the exact
+binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
 881-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable

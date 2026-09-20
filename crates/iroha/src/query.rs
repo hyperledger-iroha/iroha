@@ -1,5 +1,6 @@
 //! Functions and types to make queries to the Iroha peer.
 #![allow(clippy::result_large_err)]
+mod asynchronous;
 use crate::{
     client::{APPLICATION_NORITO, Client, QueryResult, ResponseReport, join_torii_url},
     crypto::{HashOf, KeyPair},
@@ -21,6 +22,7 @@ use crate::{
     http::{Method as HttpMethod, RequestBuilder},
     http_default::{DefaultHttpTransport, DefaultRequestBuilder},
 };
+pub use asynchronous::{AsyncQueryBuilderExt, QueryStream};
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;

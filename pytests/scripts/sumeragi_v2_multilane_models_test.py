@@ -82,6 +82,132 @@ def test_reviewed_rust_include_manifest_is_pinned_and_current() -> None:
     assert errors == []
 
 
+# Current split owners retain their production or regression role in the exact
+# recursive source closure; nested catalog tests have explicit owners as well.
+CURRENT_REVIEWED_INCLUDE_COMPONENTS = (
+    ("crates/iroha_core/src/state.rs", (
+        ("state/runtime_catalog.rs", "stage_consensus_catalog_transition"),
+        ("state/runtime_catalog_startup.rs", "lane_manifests_with_committed_catalog"),
+        ("state/runtime_catalog_commit.rs", "validate_runtime_catalog_block_overlay"),
+        ("state/merge_runtime_effects.rs", "validate_merge_runtime_catalog_effects"),
+    )),
+    ("crates/iroha_core/src/state/runtime_catalog.rs", (
+        ("runtime_catalog_tests.rs", "runtime_catalog_stages_dataspace_lane_manifest_atomically_with_four_live_pops"),
+    )),
+    ("crates/iroha_core/src/state/runtime_catalog_tests.rs", (
+        ("runtime_catalog_commit_tests.rs", "runtime_catalog_final_overlay_rechecks_late_validator_invalidation"),
+    )),
+    ("crates/iroha_core/src/kura.rs", (
+        ("kura/native_amx_publication_capacity.rs", "rebuild_native_amx_publication_capacity_on_startup"),
+        ("kura/native_amx_publication_index.rs", "read_native_amx_publication_index_for_store"),
+        ("kura/native_amx_publication_startup_pins.rs", "native_amx_publication_pins_before_storage_recovery"),
+        ("kura/tests/01b_startup_replay_geometry_binding.rs", "startup_replay_geometry_transition_rejects_restored_lane_sidecar_drift"),
+        ("kura/tests/10d_native_amx_publication_capacity.rs", "native_amx_indexed_publication_survives_no_snapshot_rewind_cold_restart_and_completion"),
+    )),
+    ("crates/iroha_core/src/kura/lane_geometry.rs", (
+        ("startup_replay_geometry_binding.rs", "begin_startup_replay_geometry_transition"),
+    )),
+    ("crates/iroha_core/src/block.rs", (
+        ("block/replay_proposal_authority_tests.rs", "authenticated_replay_authority_rejects_different_proposal_wire_and_state_prefix"),
+        ("block/parallel_account_profile_tests.rs", "parallel_account_profile_rejects_foreign_permission_payloads"),
+    )),
+    ("crates/iroha_core/src/sumeragi/v2_lane_work.rs", (
+        ("tests/v2_lane_work_ordinary_dispatch.rs", "ordinary_lane_consumer_retains_exact_commit_under_real_actor_backpressure"),
+    )),
+    ("crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs", (
+        ("v2_effects_proposal_fetch_store_refinement.rs", "proposal_fetch_store_refinement_rejects_foreign_root_and_coordinates"),
+    )),
+    ("crates/iroha_core/src/sumeragi/v2.rs", (
+        ("v2_cold_body_pipeline_origin.rs", "restore_authenticated_cold_body_origin"),
+        ("v2_retained_incident_diagnostic.rs", "retained_wal_incident_metadata_for_test"),
+        ("tests/v2_adapter_complete_tip_decision_activation_cases.rs", "production_complete_tip_activates_recovered_unapplied_decision"),
+        ("tests/v2_adapter_complete_tip_decision_authority_cases.rs", "complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cache"),
+    )),
+)
+
+
+@pytest.mark.parametrize(("relative", "components"), CURRENT_REVIEWED_INCLUDE_COMPONENTS)
+def test_current_reviewed_include_components_have_exact_owner_and_source(
+    relative: str, components: tuple[tuple[str, str], ...]
+) -> None:
+    module = load_checker()
+    errors: list[str] = []
+    closure = module.reviewed_source._resolve_reviewed_rust_source(
+        ROOT_DIR, relative, "current reviewed split owner", errors
+    )
+    assert errors == []
+    assert closure is not None
+    expanded = module._expanded_source_manifest_paths({Path(relative)}, ROOT_DIR, errors)
+    assert errors == []
+    for component, symbol in components:
+        provider = Path(relative).parent / component
+        assert component in module._REVIEWED_RUST_INCLUDE_MANIFESTS[relative]
+        assert closure.providers.count(provider) == 1
+        assert provider in expanded
+        edges = [edge for edge in closure.provenance if edge.provider == provider]
+        assert len(edges) == 1
+        assert edges[0].root_parent == Path(relative)
+        assert edges[0].parent == Path(relative)
+        assert closure.source.count(f"fn {symbol}(") == 1
+        assert (ROOT_DIR / provider).read_text(encoding="utf-8").count(f"fn {symbol}(") == 1
+
+
+@pytest.mark.parametrize(("relative", "components"), CURRENT_REVIEWED_INCLUDE_COMPONENTS)
+def test_current_reviewed_include_closure_rejects_missing_duplicate_and_extra_source(
+    tmp_path: Path, relative: str, components: tuple[tuple[str, str], ...]
+) -> None:
+    module = load_checker()
+    parent = copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    original = parent.read_text(encoding="utf-8")
+    component = components[0][0]
+    provider = parent.parent / component
+    provider_bytes = provider.read_bytes()
+    errors: list[str] = []
+    invocations = module.reviewed_source._rust_provider_invocations(
+        original, parent, module._REVIEWED_RUST_INCLUDE_MANIFESTS[relative], errors
+    )
+    assert errors == []
+    selected = [item for item in invocations if item.relative == component]
+    assert len(selected) == 1
+    invocation = selected[0]
+    binding = original[invocation.start:invocation.end]
+    extra = parent.parent / "unreviewed_extra_source.rs"
+    extra.write_text("fn unreviewed_extra_source() {}\n", encoding="utf-8")
+    initialize_git_fixture(tmp_path)
+
+    # Missing bytes, a removed owner edge, a duplicate edge, and an otherwise
+    # valid tracked extra provider must each fail for its own closure reason.
+    for mutation in ("missing-file", "missing-edge", "duplicate-edge", "extra-edge"):
+        parent.write_text(original, encoding="utf-8")
+        provider.write_bytes(provider_bytes)
+        if mutation == "missing-file":
+            provider.unlink()
+        elif mutation == "missing-edge":
+            parent.write_text(
+                original[:invocation.start] + original[invocation.end:], encoding="utf-8"
+            )
+        elif mutation == "duplicate-edge":
+            parent.write_text(original + "\n" + binding + "\n", encoding="utf-8")
+        else:
+            parent.write_text(
+                original + '\ninclude!("unreviewed_extra_source.rs");\n', encoding="utf-8"
+            )
+        errors = []
+        _path, source = module._read_reviewed_rust_source(
+            tmp_path, relative, f"current include closure {mutation}", errors
+        )
+        assert source is None, (relative, mutation)
+        if mutation == "missing-file":
+            assert any(
+                str(provider) in error and "provider is missing or unreadable" in error
+                for error in errors
+            ), errors
+        elif mutation == "duplicate-edge":
+            assert any("duplicate reviewed Rust include provider" in error for error in errors), errors
+        else:
+            assert any("reviewed Rust include inventory must equal" in error for error in errors), errors
+
+
 def test_reviewed_rust_source_expands_daemon_runtime_dependency_contract() -> None:
     module = load_checker()
     errors: list[str] = []
@@ -1247,6 +1373,50 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
     contract = canonical_contract()
     copy_layout_fixture(tmp_path, module, contract)
     assert validate_fixture(tmp_path, module, contract) == ()
+    runner_path = tmp_path / module.INFLIGHT_LAYOUT_RUNNER
+    runner_source = runner_path.read_text(encoding="utf-8")
+    count_argument = "--expected-cases 26"
+    assert runner_source.count(count_argument) == 1
+    assert len(module.INFLIGHT_LAYOUT_MUTATIONS) == 25
+    count_mutations = [
+        (replacement, runner_source.replace(count_argument, replacement, 1))
+        for replacement in (
+            "--expected-cases 23",
+            "--expected-cases 25",
+            "--expected-cases 27",
+            "",
+            '--expected-cases "${INFLIGHT_CASE_COUNT:-26}"',
+            "--expected-cases 26 --expected-cases 25",
+            "--expected-cases=26",
+        )
+    ]
+    without_count = runner_source.replace(count_argument, "", 1)
+    count_mutations.extend((
+        ("comment-only", without_count + "\n# " + count_argument + "\n"),
+        ("relocated", without_count + '\nreadonly RECORDER_COUNT_NOTE="'
+         + count_argument + '"\n'),
+    ))
+    try:
+        for label, mutated_source in count_mutations:
+            runner_path.write_text(mutated_source, encoding="utf-8")
+            errors = []
+            module._validate_inflight_recorder_inventory(
+                runner_path, runner_path.read_text(encoding="utf-8"), errors
+            )
+            assert any(
+                "recorder must declare exactly 26 cases" in error
+                for error in errors
+            ), (label, errors)
+            if label == "--expected-cases 23":
+                # Prove the same predicate is reached through the full actual
+                # validator, without reparsing every Rust owner for each case.
+                errors = validate_fixture(tmp_path, module, contract)
+                assert any(
+                    "recorder must declare exactly 26 cases" in error
+                    for error in errors
+                ), errors
+    finally:
+        runner_path.write_text(runner_source, encoding="utf-8")
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs"
     constructor = "Some(CheckedProductionTransition::unwitnessed(projection))"
     symbol = "check_production_in_flight_reservation_transition"

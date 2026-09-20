@@ -59,6 +59,7 @@
 mod account_activity;
 #[cfg(feature = "app_api")]
 mod app_api;
+mod bridge_attestation;
 mod game;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
@@ -6128,11 +6129,11 @@ fn sanitize_error_details(details: &mut ErrorDetails) {
         details.pipeline_transaction_status_not_found = None;
     }
     if details
-        .bridge_finality_attestation_tip_mismatch
+        .finality_attestation_failure
         .as_ref()
-        .is_some_and(|progress| !progress.is_valid())
+        .is_some_and(|failure| !failure.is_valid())
     {
-        details.bridge_finality_attestation_tip_mismatch = None;
+        details.finality_attestation_failure = None;
     }
     retain_valid_error_detail(&mut details.last_status);
     retain_valid_error_detail(&mut details.hint);
@@ -6166,11 +6167,40 @@ fn canonical_error_response(
     parts.headers.remove("x-iroha-stream-error");
     parts.headers.remove(MCP_NATIVE_ERROR_HEADER);
     parts.extensions.remove::<ReviewedProtocolNativeError>();
+    // Recognize the closed finality observation before generic 500 sanitization.
+    // Rebuild its fixed public message and sole detail instead of trusting any
+    // handler-provided diagnostics, including on the InternalFailure path.
+    let finality_failure = if envelope.code()
+        == iroha_torii_shared::bridge_attestation::FINALITY_ATTESTATION_FAILURE_CODE
+    {
+        let mut details = envelope.details.take().unwrap_or_default();
+        details
+            .finality_attestation_failure
+            .take()
+            .filter(|failure| {
+                details.is_empty()
+                    && failure.is_valid()
+                    && failure.reason.http_status_code() == parts.status.as_u16()
+            })
+    } else {
+        None
+    };
+    let exact_finality_failure = finality_failure.is_some();
+    if let Some(failure) = finality_failure {
+        envelope = failure.into_error_envelope();
+    } else if envelope.code()
+        == iroha_torii_shared::bridge_attestation::FINALITY_ATTESTATION_FAILURE_CODE
+    {
+        let (code, message) = generic_error_for_status(parts.status);
+        envelope = ErrorEnvelope::new(code, message);
+    }
     if parts.status == StatusCode::INTERNAL_SERVER_ERROR {
-        envelope = ErrorEnvelope::new(
-            "internal_server_error",
-            "Torii could not complete the request.",
-        );
+        if !exact_finality_failure {
+            envelope = ErrorEnvelope::new(
+                "internal_server_error",
+                "Torii could not complete the request.",
+            );
+        }
         for name in [
             "x-iroha-reject-code",
             "x-iroha-axt-code",
@@ -6202,10 +6232,16 @@ fn canonical_error_response(
         let (_, message) = generic_error_for_status(parts.status);
         envelope.message = message.to_owned();
     }
+    // Finality reasons own their retry semantics. The canonical dedicated detail
+    // stays sole; generic 503/429 errors retain their existing Retry-After fields.
+    if exact_finality_failure {
+        parts.headers.remove(axum::http::header::RETRY_AFTER);
+    }
     if matches!(
         parts.status,
         StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
-    ) {
+    ) && !exact_finality_failure
+    {
         let seconds = retry_after_seconds(&parts.headers);
         let details = envelope.details.get_or_insert_with(Default::default);
         details.retry_after_seconds = Some(seconds);
@@ -6255,11 +6291,8 @@ fn canonical_error_response(
         {
             details.pipeline_transaction_status_not_found = None;
         }
-        if parts.status != StatusCode::CONFLICT
-            || envelope.code
-                != iroha_torii_shared::bridge_finality::BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE
-        {
-            details.bridge_finality_attestation_tip_mismatch = None;
+        if !exact_finality_failure {
+            details.finality_attestation_failure = None;
         }
         sanitize_error_details(details);
     }
@@ -31796,18 +31829,13 @@ async fn handler_bridge_finality_attestation_inner(
         .sumeragi
         .as_ref()
         .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-    let Some(status) =
-        iroha_core::sumeragi::status::v2_status_with_restart_required(restart_required)
-    else {
-        let mut response = axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
-        protect_bridge_finality_attestation_response(&mut response);
-        return Ok(response);
-    };
-    if status.restart_required {
-        let mut response = axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
-        protect_bridge_finality_attestation_response(&mut response);
-        return Ok(response);
+    let status = iroha_core::sumeragi::status::v2_status_with_restart_required(restart_required);
+    if let Some(reason) = bridge_attestation::startup_failure(restart_required, status.as_ref()) {
+        return Ok(bridge_attestation::failure_response(
+            reason, challenge, height, None, format,
+        ));
     }
+    let status = status.expect("startup classification requires an initialized status");
     #[cfg(feature = "telemetry")]
     if _api_token_principal.is_some() {
         crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality/attestation");

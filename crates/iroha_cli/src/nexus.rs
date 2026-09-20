@@ -490,7 +490,9 @@ fn private_settlement<C: RunContext>(
 }
 fn lane_report<C: RunContext>(context: &mut C, args: &LaneReportArgs) -> Result<()> {
     let client = context.client_from_config()?;
-    let status = norito::json::to_value(&client.get_sumeragi_diagnostics()?)?;
+    let status = norito::json::to_value(
+        &iroha::blocking::Client::from_client(client)?.get_sumeragi_diagnostics()?,
+    )?;
     let lanes = status
         .get("lane_governance")
         .cloned()

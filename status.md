@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-15. Iroha 3 is under active first-release implementation. Full release qualification remains open; the deployed basic Taira scope is recorded separately below. Signed source checkpoints do not establish runtime readiness. This page records current findings and bounded local evidence; it is not a substitute for the release gates in [the roadmap](roadmap.md).
+Last updated: 2026-09-16. Iroha 3 is under active first-release implementation. Full release qualification remains open; the deployed basic Taira scope is recorded separately below. Signed source checkpoints do not establish runtime readiness. This page records current findings and bounded local evidence; it is not a substitute for the release gates in [the roadmap](roadmap.md).
 
 The previous dirty working copies are preserved in the [dated historical archive](docs/history/2026-09-06/index.md). Its manifest binds every source occurrence and reconstructs the original bytes. Historical pass counts, plans, dates, and former policies do not attest the current candidate. [Repository ownership](docs/repository_map.md) and the [architecture record](specs/first_release_architecture_redesign.md) provide detail.
 
@@ -60,9 +60,20 @@ The merged candidate retains one compact V1 protocol, explicit codec identities,
 
 The earlier merge selection passed 11 metadata, 58 FASTPQ, 100 JavaScript and 51 source-helper tests; one expensive FASTPQ diagnostic remains ignored. The FASTPQ build has zero warnings. Formatting and retired-codec checks pass. The broader multilane audit still reports source-binding drift; its full gate and the merged workspace/network suites remain unqualified.
 
-Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md).
-No milestone or release gate is closed. The composed Kura resource inventory and
-telemetry are published. Retry 19's 205-Core/three-configuration selection finishes
+Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md). The [2026-09-15 integration checkpoint](docs/history/2026-09-15/multilane-integration.md)
+records the applied candidate and isolated results, each bound to its own source.
+Seven shared finality, 41 Rust SDK, 39 Torii, 102 Core, 207 CLI and five crypto tests pass.
+The default daemon and both four-validator harnesses build. The first Native network run
+started four peers but failed because blocking SDK calls entered a Tokio runtime; the applied async repair
+now fails compilation with three Send-lifetime and four type-inference errors, before any of its nine query tests run. Kagami's earlier-source run passed 450 and failed 28 tests with unchanged source; reviewed corrections cover genesis, state-aware routing, journal-height evidence and six localnet fixtures.
+The focused native rerun passes seven of eight, including all six localnet cases; the remaining Taira fixture now supplies network-bound governance defaults. Both new lane-ID preservation controls pass; the generated-facts leaf-cap correction is independently reviewed and awaits application and native execution. Complete Kagami validation remains open.
+The full 73-unit preflight stopped on frozen earlier source after 61 passing units/4,366 outcomes: the next handoff suite passed 45 and failed eight at the select descriptor limit; eleven units were unlaunched. The private readiness correction passes all 60 handoff controls.
+The earlier 342-path candidate passes the full structural check; 276 formal regressions, five TLC models and 106 exact mutants pass on their recorded sources.
+The complete in-flight TLC positive/25-mutant corpus and five Apalache bounds pass; the 18-step check remains running.
+Earlier 83-leg corridor controls pass 60/60, JVM parity 127/127 and SDK source closure 23/23. Current
+formal, network, scaling, native SDK, generated release artifacts and workspace qualification remain open.
+The 88-leg registration includes 13 async Rust tests blocked by compilation. The private receipt successor passes 24 checks; the expanded 375-test receipt gate passes four focused controls, with full execution pending. Bootstrap fixture migration and final composition remain in progress. The applied CI source-admission correction passes 198 archive/inventory checks. All gates remain open.
+The composed Kura resource inventory and telemetry are published. Retry 19's 205-Core/three-configuration selection finishes
 206 passed and two failed, with all 8,812 source paths and original/retained
 binary hashes unchanged during execution. Both direct reservation guards pass.
 The remaining signed-snapshot bootstrap fixture was corrected; retry 20 then

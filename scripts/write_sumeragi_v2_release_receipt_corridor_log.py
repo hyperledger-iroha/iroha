@@ -59,16 +59,13 @@ _RECEIPT_VALIDATION_OPTION_ORDER = (
     "--g4p-completion",
     "--g12-seed-completion",
     "--g12-fault-soak-completion",
-    "--scaling-evidence-manifest",
+    "--scaling-execution-record",
+    "--expected-scaling-execution-sha256",
     "--sdk-dependency-archive",
     "--sdk-dependency-input-inventory",
     "--sdk-dependency-final-work-inventory",
     "--runtime-tool-probe-manifest",
     "--runtime-tool-probe-result",
-    "--expected-scaling-trial-harness-sha256",
-    "--expected-scaling-configuration-sha256",
-    "--expected-scaling-irohad-sha256",
-    "--expected-scaling-iroha-cli-sha256",
     "--repository-root",
     "--output",
     "--verify-existing",
@@ -104,7 +101,7 @@ _RECEIPT_VALIDATION_PATH_OPTIONS = frozenset(
         "--g4p-completion",
         "--g12-seed-completion",
         "--g12-fault-soak-completion",
-        "--scaling-evidence-manifest",
+        "--scaling-execution-record",
         "--sdk-dependency-archive",
         "--sdk-dependency-input-inventory",
         "--sdk-dependency-final-work-inventory",
@@ -170,7 +167,7 @@ def _receipt_validation_invocation_binding(arguments: list[str]) -> dict[str, An
     invocation = {
         "profile": "release",
         "operation": "verify-existing-and-ack",
-        "python_flags": ["-I", "-S"],
+        "python_flags": ["-I", "-B", "-S"],
         "validator": "protected:validate-receipt.py",
         "ordered_options": bindings,
     }
@@ -1124,6 +1121,10 @@ def _publish_receipt_validation_ack(
 ) -> None:
     """Publish the archived validator's canonical, no-clobber success ack."""
 
+    if (sys.flags.isolated != 1 or sys.flags.dont_write_bytecode != 1
+            or sys.flags.no_site != 1):
+        raise ReceiptError("receipt validation Python requires -I -B -S")
+
     invocation_root = release_root.parent
     validator_path = Path(__file__).resolve(strict=True)
     if (
@@ -1145,8 +1146,6 @@ def _publish_receipt_validation_ack(
         validator_path, "archived receipt validator", maximum_bytes=16 * 1024 * 1024,
     )
     stdout = f"Sumeragi v2 aggregate release receipt verified: {receipt_path}\n".encode()
-    if sys.flags.isolated != 1 or sys.flags.no_site != 1:
-        raise ReceiptError("receipt validation Python flags are not exact")
     invocation_binding = _receipt_validation_invocation_binding(sys.argv[1:])
     value = {
         "format": "iroha-sumeragi-v2-receipt-validation-ack",
@@ -1375,6 +1374,41 @@ def _corridor_legs(
             "client::tests::get_sumeragi_ -- --test-threads=1",
         )
     )
+    # Bind each newly required Rust query boundary to its actual crate/target.
+    legs.extend(
+        (
+            (
+                "sumeragi-async-query-rust",
+                "cargo-exact",
+                9,
+                "cargo test --locked --offline -p iroha --lib query::asynchronous::tests:: -- --test-threads=1",
+            ),
+            (
+                "sumeragi-async-diagnostics-rust",
+                "cargo-exact",
+                1,
+                "cargo test --locked --offline -p iroha --lib client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation -- --exact --test-threads=1",
+            ),
+            (
+                "sumeragi-blocking-boundary-rust",
+                "cargo-exact",
+                1,
+                "cargo test --locked --offline -p iroha --lib blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io -- --exact --test-threads=1",
+            ),
+            (
+                "query-request-wire-rust",
+                "cargo-exact",
+                1,
+                "cargo test --locked --offline -p iroha_data_model --lib query::builder::tests::encoded_request_is_shared_with_synchronous_execution -- --exact --test-threads=1",
+            ),
+            (
+                "native-amx-typed-query-rust",
+                "cargo-exact",
+                1,
+                "cargo test --locked --offline -p integration_tests --test native_amx_routing typed_musubi_queries_distinguish_found_absent_and_stale_results -- --exact --test-threads=1",
+            ),
+        )
+    )
     legs.extend(
         (
             f"sumeragi-diagnostics-{surface}",
@@ -1475,18 +1509,9 @@ def _corridor_legs(
                 "pytests/scripts/sumeragi_v2_release_process_policy_test.py",
             ),
             (
-                "preflight-multilane-scaling",
-                "pytest",
-                53,
-                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
-                "-q -p no:cacheprovider "
-                "scripts/tests/validate_multilane_scaling_evidence_test.py "
-                "scripts/tests/run_multilane_scaling_gate_test.py",
-            ),
-            (
                 "preflight-proof-fidelity",
                 "pytest",
-                5507,
+                6172,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
@@ -1495,6 +1520,9 @@ def _corridor_legs(
                 "pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py "
                 "pytests/scripts/sumeragi_v2_multilane_native_merge_manifest_test.py "
                 "pytests/scripts/sumeragi_v2_multilane_passive_recovery_contract_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_semantic_binding_reconciliation_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::test_current_reviewed_include_components_have_exact_owner_and_source "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::test_current_reviewed_include_closure_rejects_missing_duplicate_and_extra_source "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
                 "test_inflight_composed_contract_rejects_legacy_layout_only_claim "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
@@ -1513,7 +1541,10 @@ def _corridor_legs(
                 "test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal "
                 "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
                 "test_inflight_layout_contract_rejects_membership_only_lane_authorship "
-                + _WIRE_RELEASE_INVARIANT_PYTEST_NODES,
+                + _WIRE_RELEASE_INVARIANT_PYTEST_NODES
+                + " pytests/scripts/sumeragi_v2_multilane_kura_native_reconciliation_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_kura_inflight_reconciliation_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_api_authority_separation_requires_async_diagnostics_owner",
             ),
             (
                 "preflight-formal-launcher",

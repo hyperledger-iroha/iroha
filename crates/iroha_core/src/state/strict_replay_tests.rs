@@ -260,6 +260,7 @@ pub(super) struct AppliedReplayBlock {
     pub(super) checkpoint_hash: Hash,
 }
 pub(super) struct StrictReplayFixture {
+    pub(super) genesis: iroha_genesis::GenesisBlock,
     chain_id: ChainId,
     pub(super) genesis_account: AccountId,
     genesis_key: KeyPair,
@@ -616,6 +617,7 @@ impl StrictReplayFixture {
         let expected_snapshot =
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(state.as_ref());
         Self {
+            genesis,
             chain_id,
             genesis_account,
             genesis_key,

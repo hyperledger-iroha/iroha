@@ -244,14 +244,14 @@ fn client_tip_progress_fixture()
 fn client_tip_progress_envelope(
     progress: iroha_torii_shared::bridge_finality::BridgeFinalityAttestationTipMismatchV1,
 ) -> iroha_torii_shared::ErrorEnvelope {
-    iroha_torii_shared::ErrorEnvelope::new(
-        iroha_torii_shared::bridge_finality::BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_CODE,
-        "tip is changing",
-    )
-    .with_details(iroha_torii_shared::ErrorDetails {
-        bridge_finality_attestation_tip_mismatch: Some(progress),
-        ..iroha_torii_shared::ErrorDetails::default()
-    })
+    iroha_torii_shared::bridge_attestation::FinalityAttestationFailure {
+        height: progress.requested_height,
+        challenge: progress.challenge,
+        reason:
+            iroha_torii_shared::bridge_attestation::FinalityAttestationFailureReason::TipChanged,
+        tip_mismatch: Some(progress),
+    }
+    .into_error_envelope()
 }
 
 #[test]
@@ -348,7 +348,9 @@ fn bridge_finality_attestation_reader_rejects_malformed_or_unbound_tip_progress(
 
 #[test]
 fn bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_http() {
-    use iroha_torii_shared::bridge_finality::BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES;
+    use iroha_torii_shared::bridge_attestation::{
+        FINALITY_ATTESTATION_FAILURE_MAX_BYTES, FinalityAttestationFailureReason as Reason,
+    };
     let progress = client_tip_progress_fixture();
     let envelope = client_tip_progress_envelope(progress.clone());
     let wire = norito::to_bytes(&envelope).expect("wire");
@@ -357,7 +359,14 @@ fn bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_h
     let mut missing_details = envelope.clone();
     missing_details.details = None;
     let mut wrong_details = envelope.clone();
-    wrong_details.details = Some(iroha_torii_shared::ErrorDetails::default());
+    wrong_details
+        .details
+        .as_mut()
+        .unwrap()
+        .finality_attestation_failure
+        .as_mut()
+        .unwrap()
+        .reason = Reason::ConflictingState;
     let mut mixed_details = envelope.clone();
     mixed_details.details.as_mut().unwrap().reject_code = Some("invalid_finality_proof".into());
     let mut trailing = wire.clone();
@@ -379,12 +388,17 @@ fn bridge_finality_attestation_reader_rejects_untyped_or_noncanonical_progress_h
     for body in [
         Vec::new(),
         trailing,
-        vec![0; BRIDGE_FINALITY_ATTESTATION_TIP_MISMATCH_MAX_BYTES + 1],
+        vec![0; FINALITY_ATTESTATION_FAILURE_MAX_BYTES + 1],
         norito::to_bytes(&wrong_code).expect("wire"),
         norito::to_bytes(&missing_details).expect("wire"),
         norito::to_bytes(&wrong_details).expect("wire"),
         norito::to_bytes(&mixed_details).expect("wire"),
         b"query_validation_failed: Query not found in the live query store.".to_vec(),
+        norito::to_bytes(&iroha_torii_shared::ErrorEnvelope::new(
+            "bridge_finality_attestation_tip_mismatch",
+            "retired envelope",
+        ))
+        .expect("obsolete envelope is negative data"),
     ] {
         responses.push(mk_response(
             StatusCode::CONFLICT,

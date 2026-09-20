@@ -71,6 +71,24 @@ off-chain token format. The command and bundle are not shipped yet. The
 disposable four-validator devnet is qualification tooling, not a way to join
 the public testnet.
 
+### Scaling load terminal handoff
+
+`tx load` requires a fresh nonzero 64-character lowercase hexadecimal
+`--invocation-id`. Machine execution emits one bounded JSON line only after
+resource collection, workload checks, exact global and peer-local Applied
+observations, and durable journal/trace publication complete. The receipt binds
+that invocation, pair/variant/seed, resource budget, scheduled request count,
+and raw SHA-256 plus byte length of both original output files. Retained native
+file and parent handles remain checked through the actual reply flush.
+
+The scaling launcher uses the original global client descriptor, each original
+`--account-config` path, and peer3's original `--local-observer-config` path.
+It supplies `--fee-payer authority` and every schedule, concurrency and resource
+bound explicitly. Account, observer and resource options take original paths;
+they do not accept descriptor pseudo-paths. A zero exit and terminal receipt
+establish transport custody; joined journal, resource and canonical proof
+replay determine whether a trial passes.
+
 ### Local SoraFS artifacts
 
 Local SoraFS compilation and packaging run without client configuration:
@@ -127,39 +145,59 @@ Configured relative paths resolve from the directory containing the client TOML 
 ### Fixed-schedule transaction collection
 
 `iroha tx load` uses persistent SDK clients to prepare and submit a fixed
-open-loop workload and observe exact global state-resolved Applied outcomes.
-It requires an explicit fee payer and existing funded account configuration:
+open-loop workload. Every request must reach state-resolved Applied globally
+and on the required local observer at the same block height within the original
+drain deadline. The fixed launcher selects the original peer whose stopped Kura
+will be inspected. It supplies that peer's client configuration, a funded account
+pool, an explicit fee payer and the bounded resource sampler inputs:
 
 ```sh
 iroha --config client.toml --fee-payer authority tx load \
+  --invocation-id "${INVOCATION_ID}" \
   --pair-index 1 --variant one_lane --seed "${PAIR_SEED}" \
   --offered-load-tps "${OFFERED_TPS}" --warmup-seconds "${WARMUP_SECONDS}" \
   --measurement-seconds "${MEASUREMENT_SECONDS}" --drain-seconds "${DRAIN_SECONDS}" \
   --max-submission-lag-ms "${SUBMISSION_LAG_MS}" \
+  --account-config "${ACCOUNT_0_CONFIG}" --account-config "${ACCOUNT_1_CONFIG}" \
+  --account-config "${ACCOUNT_2_CONFIG}" --account-config "${ACCOUNT_3_CONFIG}" \
+  --local-observer-config "${PEER_3_CLIENT_CONFIG}" \
+  --resource-program "${ABSOLUTE_PYTHON_PATH}" \
+  --resource-worker "${ABSOLUTE_RESOURCE_WORKER_PATH}" \
+  --resource-config "${OWNER_ONLY_PROBE_CONFIG}" \
+  --resource-budget-sha256 "${PUBLIC_RUN_BUDGET_SHA256}" \
+  --resource-capture-dir "${ABSENT_ABSOLUTE_CAPTURE_DIR}" \
+  --resource-interval-ms "${SAMPLING_INTERVAL_MS}" \
+  --resource-timeout-ms "${SAMPLING_TIMEOUT_MS}" \
+  --resource-max-start-lag-ms "${SAMPLING_START_LAG_MS}" \
   --trace-out "${ABSENT_ABSOLUTE_TRACE_PATH}" \
   --diagnostic-out "${ABSENT_ABSOLUTE_JOURNAL_PATH}"
 ```
 
 Use repeated `--account-config` paths to select an ordered pool of independently
-funded signing accounts on the same network. Logical workload identities select
-accounts deterministically; config files and signing credentials remain local.
-The workload emits equal-size Log instructions and binds its logical identity in
-transaction metadata. It does not claim that this workload exercises independent
-execution lanes: routing, fee contention and real workload representativeness
-still require qualification.
+funded signing accounts on the same chain and genesis network as the local
+observer. The pool contains 4 through 64 accounts in multiples of four, and each
+nonempty cohort contains complete pool rounds. Logical identities select accounts
+deterministically and bind self-owned account metadata inserts. The collector
+verifies the complete account effects after draining; routing, fee contention and
+real workload representativeness still require qualification. Configuration files
+and signing credentials remain local.
 
 Preparation, submission, outstanding observations and diagnostic recording have
 explicit fixed bounds. A missed schedule, exhausted local capacity, unknown or
 failed submission, authoritative terminal failure, or incomplete drain fails
 collection; no transaction is automatically replayed. `--help` lists the
-lookahead, concurrency and polling controls. The collector includes polling and
-transport delay in its observed latency; it never estimates a server commit time.
+lookahead, concurrency and polling controls. Global and local reads share the same
+observation capacity and fixed clock. The trace retains global observation latency,
+including polling and transport delay; waiting for the local peer does not rewrite
+those timestamps or extend the drain deadline.
 
 The new diagnostic JSON-lines file retains the schedule, exact hashes,
 observations and final outcomes. The strict V1 trace is published without
 replacing an existing file only after every scheduled request is acknowledged
-and state-applied within its phase deadline and the journal reaches durable
-storage. Both files have hard byte bounds; oversized experiments fail instead
+and state-applied globally and locally at the same height within its phase deadline,
+and the journal reaches durable storage. Local hash, scope, provenance, height and
+observation time are retained separately so the launcher can verify the local
+barrier before stopping the peer. Both files have hard byte bounds; oversized experiments fail instead
 of truncating records. Endpoint URLs and external error text are omitted; the
 journal retains fixed failure stages and bounded status classifications. No
 private key or authentication header is written.
@@ -695,3 +733,10 @@ The full Iroha CLI reference is rendered from the live command tree and is not
 checked into the repository. Redirect it to an operator-chosen path when a
 standalone copy is needed. Kagami retains its smaller checked-in
 `CommandLineHelp.md` snapshot and validates that snapshot in its unit tests.
+
+The fixed scaling generator accepts its private development seed only through
+`kagami localnet --scaling-lanes <1|4> --seed-fd <FD>`. The fixed Python owner
+passes an anonymous read-only nonblocking pipe containing exactly 64 lowercase
+hexadecimal bytes followed by EOF. The descriptor is consumed before native
+output generation; the seed never enters process arguments or public receipts.
+Generic localnet development generation has its own independent input policy.

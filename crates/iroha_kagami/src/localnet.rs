@@ -105,6 +105,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use zeroize::{Zeroize as _, Zeroizing};
+mod scaling;
+
 /// User-facing options for generating a bare-metal localnet.
 pub struct LocalnetOptions {
     /// Optional Sora profile selector (multi-lane / dataspace defaults).
@@ -1042,8 +1044,11 @@ pub struct Args {
     /// Optional UTF-8 seed for deterministic development keys.
     ///
     /// Omit this option to generate independent keys from operating-system entropy.
-    #[arg(long, short)]
+    #[arg(long, short, conflicts_with = "scaling_lanes")]
     seed: Option<String>,
+    /// Fixed scaling only: inherited read-only nonblocking pipe with exactly 64 lowercase hex bytes and EOF.
+    #[arg(long, value_name = "FD", requires = "scaling_lanes", conflicts_with = "seed", value_parser = clap::value_parser!(i32).range(3..=65535))]
+    seed_fd: Option<i32>,
     /// Canonical chain identifier written into genesis, peer configs, and the client config.
     #[arg(long, value_name = "CHAIN_ID", default_value = DEFAULT_CHAIN_ID)]
     chain_id: String,
@@ -1057,6 +1062,14 @@ pub struct Args {
     /// Apply a localnet performance profile (10k TPS / 1s finality presets).
     #[arg(long, value_enum, value_name = "PROFILE")]
     perf_profile: Option<LocalnetPerfProfileArg>,
+    /// Generate a fixed execution-lane layout with four NPoS validators and autoscaling disabled.
+    /// Use the same private development seed and options for both variants.
+    #[arg(long, value_enum, value_name = "LANES", requires = "seed_fd")]
+    scaling_lanes: Option<scaling::ScalingLanes>,
+    /// Ordered workload accounts for a fixed scaling layout (4..=64, in groups of four).
+    /// Defaults to four when --scaling-lanes is present.
+    #[arg(long, value_name = "COUNT", requires = "scaling_lanes", value_parser = clap::value_parser!(u16).range(4..=64))]
+    scaling_accounts: Option<u16>,
     /// Host to bind P2P and Torii listeners to (host/IP only, no port).
     #[arg(long, default_value = DEFAULT_BIND_HOST, value_name = "HOST")]
     bind_host: String,
@@ -1089,7 +1102,7 @@ pub struct Args {
     #[arg(long, value_name = "MILLISECONDS", value_parser = clap::value_parser!(u64).range(1..))]
     block_cadence_ms: Option<u64>,
     /// Consensus mode to emit in genesis/configs.
-    /// Defaults to `permissioned` for generic localnets.
+    /// Defaults to `permissioned` for generic localnets and `npos` for fixed scaling layouts.
     /// Sora profile localnets and perf profiles require `npos`.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
@@ -1112,10 +1125,13 @@ impl<T: Write> RunArgs<T> for Args {
         let Self {
             peers,
             seed,
+            seed_fd,
             chain_id,
             sora_profile,
             private_dataspace,
             perf_profile,
+            scaling_lanes,
+            scaling_accounts,
             bind_host,
             public_host,
             base_api_port,
@@ -1131,9 +1147,22 @@ impl<T: Write> RunArgs<T> for Args {
         // validation. Once validation succeeds, `LocalnetOptions` takes over
         // the same custody obligation through its `Drop` implementation.
         let mut seed = seed.map(Zeroizing::new);
+        if let Some(seed_fd) = seed_fd {
+            ensure!(
+                seed.is_none() && scaling_lanes.is_some(),
+                "fixed scaling requires only --seed-fd"
+            );
+            seed = Some(scaling::seed::read_development_seed(seed_fd)?);
+        } else {
+            ensure!(scaling_lanes.is_none(), "fixed scaling requires --seed-fd");
+        }
         let sora_profile = resolve_sora_profile(sora_profile, private_dataspace)?;
         let perf_profile = perf_profile.map(LocalnetPerfProfile::from);
-        let consensus_mode = resolve_requested_consensus_mode(consensus_mode, perf_profile);
+        let scaling = scaling::ScalingLayout::from_args(scaling_lanes, scaling_accounts)?;
+        let consensus_mode = resolve_requested_consensus_mode(
+            consensus_mode.or_else(|| scaling.map(|_| ConsensusModeArg::Npos)),
+            perf_profile,
+        );
         let mut assets = if sample_asset {
             vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
@@ -1164,7 +1193,7 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms,
         };
-        generate_localnet_inner(&opts, writer, Some(&chain_id))
+        generate_localnet_for_layout(&opts, writer, Some(&chain_id), scaling)
     }
 }
 struct Peer {
@@ -1208,12 +1237,21 @@ struct LocalnetPeerStoragePaths {
 }
 impl LocalnetPeerStoragePaths {
     fn new(out_dir: &Path, peer_index: usize) -> Self {
-        let state = out_dir.join("state").join(format!("peer{peer_index}"));
+        Self::from_roots(
+            out_dir.join("storage").join(format!("peer{peer_index}")),
+            out_dir.join("state").join(format!("peer{peer_index}")),
+        )
+    }
+    fn scaling(out_dir: &Path, peer_index: usize) -> Self {
+        let role = out_dir.join("storage").join(format!("peer{peer_index}"));
+        Self::from_roots(role.join("kura"), role.join("state"))
+    }
+    fn from_roots(kura: PathBuf, state: PathBuf) -> Self {
         let streaming = state.join("streaming");
         let torii = state.join("torii");
         let sorafs = state.join("sorafs");
         Self {
-            kura: out_dir.join("storage").join(format!("peer{peer_index}")),
+            kura,
             soracloud_runtime: state.join("soracloud_runtime"),
             tiered_state: state.join("tiered_state"),
             da_store: state.join("da_wsv_snapshots"),
@@ -1336,13 +1374,24 @@ fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) ->
 fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
     account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant)
 }
-#[allow(clippy::too_many_lines)]
 fn generate_localnet_inner<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
     chain_id: Option<&str>,
 ) -> Outcome {
+    generate_localnet_for_layout(opts, writer, chain_id, None)
+}
+#[allow(clippy::too_many_lines)]
+fn generate_localnet_for_layout<T: Write>(
+    opts: &LocalnetOptions,
+    writer: &mut BufWriter<T>,
+    chain_id: Option<&str>,
+    scaling: Option<scaling::ScalingLayout>,
+) -> Outcome {
     init_instruction_registry();
+    if let Some(layout) = scaling {
+        layout.validate(opts)?;
+    }
     let chain_id = resolve_localnet_chain_id(chain_id)?;
     let taira = chain_id == PUBLIC_TAIRA_CHAIN_ID;
     let hosts = validate_localnet_options(opts, taira)?;
@@ -1367,9 +1416,13 @@ fn generate_localnet_inner<T: Write>(
         .wrap_err("prepare fresh localnet private output directory")?;
     let shell_out_dir = crate::shell::absolute_quote_path(&out_dir)
         .wrap_err("validate localnet output path for shell handoff commands")?;
-    write_localnet_gitignore(&out_dir)?;
-    tui::status("Copying rANS tables");
-    let rans_tables_path = copy_rans_tables(&out_dir)?;
+    let rans_tables_path = if scaling.is_none() {
+        write_localnet_gitignore(&out_dir)?;
+        tui::status("Copying rANS tables");
+        Some(copy_rans_tables(&out_dir)?)
+    } else {
+        None
+    };
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     // Keep every account literal and permission payload emitted by this localnet
@@ -1391,10 +1444,21 @@ fn generate_localnet_inner<T: Write>(
         chain_discriminant,
         taira,
     )?;
+    let scaling_accounts = scaling
+        .map(|layout| layout.identities(seed_bytes))
+        .transpose()?
+        .unwrap_or_default();
     let client_identity = localnet_ephemeral_identity(seed_bytes, b"operator-root")?;
     let onboarding_identity = localnet_ephemeral_identity(seed_bytes, b"onboarding-root")?;
-    let runtime_bundle =
-        write_localnet_runtime_bundle(&out_dir, &client_identity, &onboarding_identity)?;
+    let runtime_bundle = if scaling.is_none() {
+        Some(write_localnet_runtime_bundle(
+            &out_dir,
+            &client_identity,
+            &onboarding_identity,
+        )?)
+    } else {
+        None
+    };
     if taira {
         write_taira_runtime_signer_keys(&out_dir, &peers)?;
         write_mint_finality_seeds(&out_dir, &peers)?;
@@ -1457,6 +1521,9 @@ fn generate_localnet_inner<T: Write>(
         &client_identity.account_id,
         &onboarding_identity.account_id,
     )?;
+    if let Some(layout) = scaling {
+        genesis = layout.append_accounts(genesis, &scaling_accounts)?;
+    }
     genesis = apply_parameter_overrides(
         genesis,
         opts.peers,
@@ -1511,8 +1578,14 @@ fn generate_localnet_inner<T: Write>(
     )?;
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
-    let alias_setup_intent_path =
-        write_localnet_alias_setup_intent(&out_dir, &alias_setup_request)?;
+    let alias_setup_intent_path = if scaling.is_none() {
+        Some(write_localnet_alias_setup_intent(
+            &out_dir,
+            &alias_setup_request,
+        )?)
+    } else {
+        None
+    };
     let genesis_json_path = out_dir.join("genesis.json");
     let genesis_signed_path = out_dir.join("genesis.signed.nrt");
     let genesis_expected_hash_path = out_dir.join(GENESIS_EXPECTED_HASH_FILE);
@@ -1542,7 +1615,11 @@ fn generate_localnet_inner<T: Write>(
     let bootstrap_peer = peers
         .first()
         .expect("localnet always has at least one peer");
-    let bootstrap_paths = LocalnetPeerStoragePaths::new(&out_dir, 0);
+    let bootstrap_paths = if scaling.is_some() {
+        LocalnetPeerStoragePaths::scaling(&out_dir, 0)
+    } else {
+        LocalnetPeerStoragePaths::new(&out_dir, 0)
+    };
     let bootstrap_config = render_peer_config(
         bootstrap_peer,
         &trusted,
@@ -1554,7 +1631,7 @@ fn generate_localnet_inner<T: Write>(
         ))),
         &bls_entries,
         &bootstrap_paths,
-        &rans_tables_path,
+        rans_tables_path.as_deref(),
         &chain_id,
         chain_discriminant,
         (&hosts.bind, &hosts.public),
@@ -1563,10 +1640,8 @@ fn generate_localnet_inner<T: Write>(
             npos_bootstrap,
             taira,
             operator_account: &operator_account_literal,
-            operator_private_key_file: &runtime_bundle.operator_signer_key,
             onboarding_account: &onboarding_account_literal,
-            onboarding_private_key_file: &runtime_bundle.onboarding_signer_key,
-            onboarding_token_hash: &runtime_bundle.onboarding_token_hash,
+            runtime: runtime_bundle.as_ref(),
         },
         opts.sora_profile,
         lane_manifest_directory.as_deref(),
@@ -1579,7 +1654,18 @@ fn generate_localnet_inner<T: Write>(
         queue_capacity,
         sumeragi_body_bytes,
     );
+    let bootstrap_config = if let Some(layout) = scaling {
+        scaling::runtime_paths::bind(
+            layout.render_config(bootstrap_config, &scaling_accounts)?,
+            &bootstrap_paths,
+        )?
+    } else {
+        bootstrap_config
+    };
     let config = parse_localnet_peer_config(&bootstrap_config, None)?;
+    if scaling.is_some() {
+        scaling::runtime_paths::validate(&config, &bootstrap_paths)?;
+    }
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
     let confidential_policy_hash =
         iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
@@ -1588,12 +1674,14 @@ fn generate_localnet_inner<T: Write>(
         .with_consensus_meta();
     let genesis_public_key_path = out_dir.join(GENESIS_PUBLIC_KEY_FILE);
     let genesis_private_key_path = out_dir.join(GENESIS_PRIVATE_KEY_FILE);
-    write_genesis_key_files(
-        &genesis_public_key_path,
-        &genesis_private_key_path,
-        &genesis_public_key,
-        &genesis_private,
-    )?;
+    if scaling.is_none() {
+        write_genesis_key_files(
+            &genesis_public_key_path,
+            &genesis_private_key_path,
+            &genesis_public_key,
+            &genesis_private,
+        )?;
+    }
     let genesis_expected_hash = write_genesis(GenesisWriteContext {
         manifest: &genesis,
         public_key: &genesis_public_key,
@@ -1614,35 +1702,47 @@ fn generate_localnet_inner<T: Write>(
     )?;
     tui::status("Genesis staged and bootstrap-validated");
     tui::status("Writing peer configs");
+    let mut scaling_genesis_context = None;
+    let mut scaling_config_digests = Vec::new();
     for (idx, peer) in peers.iter().enumerate() {
-        let paths = LocalnetPeerStoragePaths::new(&out_dir, idx);
+        let paths = if scaling.is_some() {
+            LocalnetPeerStoragePaths::scaling(&out_dir, idx)
+        } else {
+            LocalnetPeerStoragePaths::new(&out_dir, idx)
+        };
         fs::create_dir_all(&paths.kura)
             .wrap_err_with(|| format!("failed to create kura dir {}", paths.kura.display()))?;
         fs::create_dir_all(&paths.state).wrap_err_with(|| {
             format!("failed to create peer state dir {}", paths.state.display())
         })?;
-        fs::create_dir_all(&paths.tiered_state).wrap_err_with(|| {
-            format!(
-                "failed to create tiered state dir {}",
-                paths.tiered_state.display()
-            )
-        })?;
-        fs::create_dir_all(&paths.da_store).wrap_err_with(|| {
-            format!(
-                "failed to create DA WSV snapshot dir {}",
-                paths.da_store.display()
-            )
-        })?;
+        if scaling.is_none() {
+            fs::create_dir_all(&paths.tiered_state).wrap_err_with(|| {
+                format!(
+                    "failed to create tiered state dir {}",
+                    paths.tiered_state.display()
+                )
+            })?;
+            fs::create_dir_all(&paths.da_store).wrap_err_with(|| {
+                format!(
+                    "failed to create DA WSV snapshot dir {}",
+                    paths.da_store.display()
+                )
+            })?;
+        }
         let rendered = render_peer_config(
             peer,
             &trusted,
             &peer_telemetry_urls,
             &genesis_public_key,
             &genesis_signed_path,
-            LocalnetGenesisIdentitySource::PublishedFile,
+            if scaling.is_some() {
+                LocalnetGenesisIdentitySource::BootstrapInline(genesis_expected_hash)
+            } else {
+                LocalnetGenesisIdentitySource::PublishedFile
+            },
             &bls_entries,
             &paths,
-            &rans_tables_path,
+            rans_tables_path.as_deref(),
             &chain_id,
             chain_discriminant,
             (&hosts.bind, &hosts.public),
@@ -1651,10 +1751,8 @@ fn generate_localnet_inner<T: Write>(
                 npos_bootstrap,
                 taira,
                 operator_account: &operator_account_literal,
-                operator_private_key_file: &runtime_bundle.operator_signer_key,
                 onboarding_account: &onboarding_account_literal,
-                onboarding_private_key_file: &runtime_bundle.onboarding_signer_key,
-                onboarding_token_hash: &runtime_bundle.onboarding_token_hash,
+                runtime: runtime_bundle.as_ref(),
             },
             opts.sora_profile,
             lane_manifest_directory.as_deref(),
@@ -1667,6 +1765,14 @@ fn generate_localnet_inner<T: Write>(
             queue_capacity,
             sumeragi_body_bytes,
         );
+        let rendered = if let Some(layout) = scaling {
+            scaling::runtime_paths::bind(
+                layout.render_config(rendered, &scaling_accounts)?,
+                &paths,
+            )?
+        } else {
+            rendered
+        };
         let path = out_dir.join(format!("peer{idx}.toml"));
         let parsed_config =
             parse_localnet_peer_config(&rendered, Some(&path)).wrap_err_with(|| {
@@ -1681,22 +1787,47 @@ fn generate_localnet_inner<T: Write>(
                 genesis_expected_hash
             ));
         }
+        if scaling.is_some() && idx == 0 {
+            // Derive from the final signed body and this exact final effective
+            // config, never from the provisional policy-derivation config.
+            scaling_genesis_context = Some(scaling::genesis_context_bytes(
+                &genesis_json_path,
+                &genesis_signed_path,
+                &parsed_config,
+            )?);
+        }
         write_owner_only_localnet_file(&path, rendered.as_bytes())
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
+        if scaling.is_some() {
+            scaling_config_digests.push(iroha_crypto::sha256(rendered.as_bytes()));
+        }
+    }
+    if let Some(context) = &scaling_genesis_context {
+        let path = out_dir.join(scaling::GENESIS_CONTEXT_FILE);
+        write_owner_only_localnet_file(&path, &context)
+            .wrap_err("publish fixed scaling genesis context")?;
+        let persisted = crate::secure_fs::read_private_file(&path)
+            .wrap_err("read back fixed scaling genesis context")?;
+        ensure!(
+            persisted.as_slice() == context.as_slice(),
+            "fixed scaling genesis context changed during publication"
+        );
     }
     tui::status("Peer configs written and validated");
-    tui::status("Writing start/stop scripts");
-    let fee_asset_definition_id = localnet_fee_asset_literal();
-    write_scripts(
-        &out_dir,
-        opts.peers.get(),
-        sora_profile_enabled,
-        taira,
-        &client_account_literal,
-        &fee_asset_definition_id,
-    )?;
+    if scaling.is_none() {
+        tui::status("Writing start/stop scripts");
+        let fee_asset_definition_id = localnet_fee_asset_literal();
+        write_scripts(
+            &out_dir,
+            opts.peers.get(),
+            sora_profile_enabled,
+            taira,
+            &client_account_literal,
+            &fee_asset_definition_id,
+        )?;
+    }
     tui::status("Writing client config");
-    write_client_config(
+    let scaling_client_digest = write_client_config(
         &out_dir,
         opts.base_api_port,
         &hosts.public,
@@ -1704,36 +1835,76 @@ fn generate_localnet_inner<T: Write>(
         chain_discriminant,
         &client_identity,
     )?;
+    let scaling_account_digests = if let Some(layout) = scaling {
+        layout.write_accounts(
+            &out_dir,
+            opts.base_api_port,
+            &hosts.public,
+            &chain_id,
+            *config.common.chain_discriminant.value(),
+            &scaling_accounts,
+        )?
+    } else {
+        Vec::new()
+    };
     let primary_torii_url = hosts.public.torii_url(opts.base_api_port);
     let client_config_path = out_dir.join("client.toml");
     let start_path = out_dir.join("start.sh");
     let stop_path = out_dir.join("stop.sh");
-    write_localnet_readme(
-        &out_dir,
-        &chain_id,
-        opts.seed.as_deref(),
-        opts.consensus_mode,
-        opts.peers.get(),
-        &primary_torii_url,
-        &genesis_json_path,
-        &genesis_signed_path,
-        &genesis_expected_hash_path,
-        &genesis_public_key_path,
-        &genesis_private_key_path,
-        &client_config_path,
-        &start_path,
-        &stop_path,
-        &client_identity.account_literal(chain_discriminant),
-        &onboarding_identity.account_id.to_string(),
-        &runtime_bundle,
-        &alias_setup_intent_path,
-        &shell_out_dir,
-    )?;
-    crate::secure_fs::harden_private_tree_with_owner_executables(
-        &out_dir,
-        &[&start_path, &stop_path],
-    )
-    .wrap_err("harden fresh localnet private artifact tree")?;
+    if let Some(runtime_bundle) = runtime_bundle.as_ref() {
+        write_localnet_readme(
+            &out_dir,
+            &chain_id,
+            opts.seed.as_deref(),
+            opts.consensus_mode,
+            opts.peers.get(),
+            &primary_torii_url,
+            &genesis_json_path,
+            &genesis_signed_path,
+            &genesis_expected_hash_path,
+            &genesis_public_key_path,
+            &genesis_private_key_path,
+            &client_config_path,
+            &start_path,
+            &stop_path,
+            &client_identity.account_literal(chain_discriminant),
+            &onboarding_identity.account_id.to_string(),
+            runtime_bundle,
+            alias_setup_intent_path
+                .as_deref()
+                .ok_or_else(|| eyre!("ordinary localnet lost its alias intent"))?,
+            &shell_out_dir,
+        )?;
+    }
+    let generic_executables = [start_path.as_path(), stop_path.as_path()];
+    let executable_files: &[&Path] = if scaling.is_some() {
+        &[]
+    } else {
+        &generic_executables
+    };
+    crate::secure_fs::harden_private_tree_with_owner_executables(&out_dir, executable_files)
+        .wrap_err("harden fresh localnet private artifact tree")?;
+    if let Some(layout) = scaling {
+        let context = scaling_genesis_context
+            .as_deref()
+            .ok_or_else(|| eyre!("fixed generation lost its original genesis context"))?;
+        let mut anchors = scaling::anchors::Inputs::new(&out_dir, genesis_expected_hash)?;
+        anchors.authenticate(&peers, &scaling_config_digests, context)?;
+        return anchors.publish(
+            writer,
+            layout,
+            &peers,
+            &scaling_accounts,
+            &hosts.public,
+            &chain_id,
+            scaling_client_digest,
+            &scaling_account_digests,
+        );
+    }
+    let runtime_bundle =
+        runtime_bundle.ok_or_else(|| eyre!("ordinary localnet lost its runtime bundle"))?;
+    let alias_setup_intent_path =
+        alias_setup_intent_path.ok_or_else(|| eyre!("ordinary localnet lost its alias intent"))?;
     tui::success("Localnet ready");
     writeln!(writer, "out_dir: {}", out_dir.display())?;
     writeln!(writer, "chain_id: {}", chain_id)?;
@@ -2362,10 +2533,8 @@ struct RenderPeerFeatures<'a> {
     npos_bootstrap: bool,
     taira: bool,
     operator_account: &'a str,
-    operator_private_key_file: &'a Path,
     onboarding_account: &'a str,
-    onboarding_private_key_file: &'a Path,
-    onboarding_token_hash: &'a [u8; 32],
+    runtime: Option<&'a LocalnetRuntimeBundle>,
 }
 #[derive(Clone, Copy)]
 enum LocalnetGenesisIdentitySource {
@@ -2382,7 +2551,7 @@ fn render_peer_config(
     genesis_identity: LocalnetGenesisIdentitySource,
     bls_entries: &[BlsEntry],
     storage_paths: &LocalnetPeerStoragePaths,
-    rans_tables_path: &Path,
+    rans_tables_path: Option<&Path>,
     chain_id: &str,
     chain_discriminant: Option<u16>,
     hosts: (&CanonicalHost, &CanonicalHost),
@@ -2406,10 +2575,8 @@ fn render_peer_config(
         npos_bootstrap,
         taira,
         operator_account,
-        operator_private_key_file,
         onboarding_account,
-        onboarding_private_key_file,
-        onboarding_token_hash,
+        runtime,
     } = features;
     let localnet_operator_account = operator_account.to_owned();
     let genesis_account = AccountId::new(genesis_public_key.clone());
@@ -2848,37 +3015,39 @@ fn render_peer_config(
                 .into_owned(),
         ),
     );
-    let mut streaming_codec = Table::new();
-    streaming_codec.insert(
-        "cabac_mode".into(),
-        Value::String(codec_defaults::CABAC_MODE.to_owned()),
-    );
-    streaming_codec.insert(
-        "trellis_blocks".into(),
-        Value::Array(
-            codec_defaults::trellis_blocks()
-                .into_iter()
-                .map(|size| Value::Integer(i64::from(size)))
-                .collect(),
-        ),
-    );
-    streaming_codec.insert(
-        "rans_tables_path".into(),
-        Value::String(rans_tables_path.to_string_lossy().into_owned()),
-    );
-    streaming_codec.insert(
-        "entropy_mode".into(),
-        Value::String(codec_defaults::entropy_mode()),
-    );
-    streaming_codec.insert(
-        "bundle_width".into(),
-        Value::Integer(i64::from(codec_defaults::bundle_width())),
-    );
-    streaming_codec.insert(
-        "bundle_accel".into(),
-        Value::String(codec_defaults::bundle_accel()),
-    );
-    streaming.insert("codec".into(), Value::Table(streaming_codec));
+    if let Some(rans_tables_path) = rans_tables_path {
+        let mut streaming_codec = Table::new();
+        streaming_codec.insert(
+            "cabac_mode".into(),
+            Value::String(codec_defaults::CABAC_MODE.to_owned()),
+        );
+        streaming_codec.insert(
+            "trellis_blocks".into(),
+            Value::Array(
+                codec_defaults::trellis_blocks()
+                    .into_iter()
+                    .map(|size| Value::Integer(i64::from(size)))
+                    .collect(),
+            ),
+        );
+        streaming_codec.insert(
+            "rans_tables_path".into(),
+            Value::String(rans_tables_path.to_string_lossy().into_owned()),
+        );
+        streaming_codec.insert(
+            "entropy_mode".into(),
+            Value::String(codec_defaults::entropy_mode()),
+        );
+        streaming_codec.insert(
+            "bundle_width".into(),
+            Value::Integer(i64::from(codec_defaults::bundle_width())),
+        );
+        streaming_codec.insert(
+            "bundle_accel".into(),
+            Value::String(codec_defaults::bundle_accel()),
+        );
+        streaming.insert("codec".into(), Value::Table(streaming_codec));
+    }
     root.insert("streaming".into(), Value::Table(streaming));
     let mut sorafs_storage = Table::new();
     if sora_profile.is_some() {
@@ -3277,106 +3446,111 @@ fn render_peer_config(
         );
         torii.insert("mcp".into(), Value::Table(mcp));
     }
-    let mut account_onboarding = Table::new();
-    account_onboarding.insert(
-        "authority".into(),
-        Value::String(onboarding_account.to_owned()),
-    );
-    account_onboarding.insert(
-        "private_key_file".into(),
-        Value::String(onboarding_private_key_file.to_string_lossy().into_owned()),
-    );
-    account_onboarding.insert("lease_term_years".into(), Value::Integer(1));
-    account_onboarding.insert("additional_permissions".into(), Value::Array(Vec::new()));
-    let mut credential_scope = Table::new();
-    if taira {
-        credential_scope.insert(
-            "dataspace".into(),
-            Value::String(TAIRA_CANARY_DATASPACE_ALIAS.to_owned()),
-        );
-    } else {
-        credential_scope.insert(
-            "domain".into(),
-            Value::String(CLIENT_ACCOUNT_DOMAIN.to_owned()),
-        );
-    }
-    let mut credential = Table::new();
-    credential.insert(
-        "id".into(),
-        Value::String(LOCALNET_ONBOARDING_CREDENTIAL_ID.to_owned()),
-    );
-    credential.insert("scope".into(), Value::Table(credential_scope));
-    credential.insert(
-        "token_hash".into(),
-        Value::String(format!("blake3:{}", hex::encode(onboarding_token_hash))),
-    );
-    account_onboarding.insert(
-        "credentials".into(),
-        Value::Array(vec![Value::Table(credential)]),
-    );
-    if npos_bootstrap {
+    if let Some(runtime) = runtime {
+        let mut account_onboarding = Table::new();
         account_onboarding.insert(
-            "fee_sponsor_program_id".into(),
-            Value::String(fee_sponsor_program_id),
+            "authority".into(),
+            Value::String(onboarding_account.to_owned()),
         );
+        account_onboarding.insert(
+            "private_key_file".into(),
+            Value::String(runtime.onboarding_signer_key.to_string_lossy().into_owned()),
+        );
+        account_onboarding.insert("lease_term_years".into(), Value::Integer(1));
+        account_onboarding.insert("additional_permissions".into(), Value::Array(Vec::new()));
+        let mut credential_scope = Table::new();
+        if taira {
+            credential_scope.insert(
+                "dataspace".into(),
+                Value::String(TAIRA_CANARY_DATASPACE_ALIAS.to_owned()),
+            );
+        } else {
+            credential_scope.insert(
+                "domain".into(),
+                Value::String(CLIENT_ACCOUNT_DOMAIN.to_owned()),
+            );
+        }
+        let mut credential = Table::new();
+        credential.insert(
+            "id".into(),
+            Value::String(LOCALNET_ONBOARDING_CREDENTIAL_ID.to_owned()),
+        );
+        credential.insert("scope".into(), Value::Table(credential_scope));
+        credential.insert(
+            "token_hash".into(),
+            Value::String(format!(
+                "blake3:{}",
+                hex::encode(runtime.onboarding_token_hash)
+            )),
+        );
+        account_onboarding.insert(
+            "credentials".into(),
+            Value::Array(vec![Value::Table(credential)]),
+        );
+        if npos_bootstrap {
+            account_onboarding.insert(
+                "fee_sponsor_program_id".into(),
+                Value::String(fee_sponsor_program_id),
+            );
+        }
+        torii.insert(
+            "account_onboarding".into(),
+            Value::Table(account_onboarding),
+        );
+        let mut faucet = Table::new();
+        faucet.insert("enabled".into(), Value::Boolean(true));
+        faucet.insert(
+            "authority".into(),
+            Value::String(localnet_operator_account.clone()),
+        );
+        faucet.insert(
+            "private_key_file".into(),
+            Value::String(runtime.operator_signer_key.to_string_lossy().into_owned()),
+        );
+        faucet.insert(
+            "asset_definition_id".into(),
+            Value::String(localnet_fee_asset_literal()),
+        );
+        faucet.insert(
+            "amount".into(),
+            Value::String(LOCALNET_FAUCET_AMOUNT.to_owned()),
+        );
+        faucet.insert(
+            "pow_difficulty_bits".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_DIFFICULTY_BITS),
+        );
+        faucet.insert(
+            "pow_scrypt_log_n".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_LOG_N),
+        );
+        faucet.insert(
+            "pow_scrypt_r".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_R),
+        );
+        faucet.insert(
+            "pow_scrypt_p".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_P),
+        );
+        faucet.insert(
+            "pow_max_anchor_age_blocks".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_MAX_ANCHOR_AGE_BLOCKS),
+        );
+        faucet.insert(
+            "pow_adaptive_lookback_blocks".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_LOOKBACK_BLOCKS),
+        );
+        faucet.insert(
+            "pow_adaptive_claims_per_extra_bit".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT),
+        );
+        faucet.insert(
+            "pow_adaptive_max_extra_bits".into(),
+            Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_MAX_EXTRA_BITS),
+        );
+        // Local generated networks do not have finalized public Taira VRF seed material.
+        faucet.insert("pow_beacon_seed_enabled".into(), Value::Boolean(false));
+        torii.insert("faucet".into(), Value::Table(faucet));
     }
-    torii.insert(
-        "account_onboarding".into(),
-        Value::Table(account_onboarding),
-    );
-    let mut faucet = Table::new();
-    faucet.insert("enabled".into(), Value::Boolean(true));
-    faucet.insert(
-        "authority".into(),
-        Value::String(localnet_operator_account.clone()),
-    );
-    faucet.insert(
-        "private_key_file".into(),
-        Value::String(operator_private_key_file.to_string_lossy().into_owned()),
-    );
-    faucet.insert(
-        "asset_definition_id".into(),
-        Value::String(localnet_fee_asset_literal()),
-    );
-    faucet.insert(
-        "amount".into(),
-        Value::String(LOCALNET_FAUCET_AMOUNT.to_owned()),
-    );
-    faucet.insert(
-        "pow_difficulty_bits".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_DIFFICULTY_BITS),
-    );
-    faucet.insert(
-        "pow_scrypt_log_n".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_LOG_N),
-    );
-    faucet.insert(
-        "pow_scrypt_r".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_R),
-    );
-    faucet.insert(
-        "pow_scrypt_p".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_SCRYPT_P),
-    );
-    faucet.insert(
-        "pow_max_anchor_age_blocks".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_MAX_ANCHOR_AGE_BLOCKS),
-    );
-    faucet.insert(
-        "pow_adaptive_lookback_blocks".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_LOOKBACK_BLOCKS),
-    );
-    faucet.insert(
-        "pow_adaptive_claims_per_extra_bit".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT),
-    );
-    faucet.insert(
-        "pow_adaptive_max_extra_bits".into(),
-        Value::Integer(LOCALNET_FAUCET_POW_ADAPTIVE_MAX_EXTRA_BITS),
-    );
-    // Local generated networks do not have finalized public Taira VRF seed material.
-    faucet.insert("pow_beacon_seed_enabled".into(), Value::Boolean(false));
-    torii.insert("faucet".into(), Value::Table(faucet));
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
     norito_rpc.insert("enabled".into(), Value::Boolean(true));
@@ -6122,8 +6296,24 @@ fn write_client_config(
     chain_id: &str,
     chain_discriminant: Option<u16>,
     client: &LocalnetClientIdentity,
-) -> Result<()> {
-    let path = out_dir.join("client.toml");
+) -> Result<[u8; 32]> {
+    write_client_config_at(
+        &out_dir.join("client.toml"),
+        base_api_port,
+        torii_host,
+        chain_id,
+        chain_discriminant,
+        client,
+    )
+}
+fn write_client_config_at(
+    path: &Path,
+    base_api_port: u16,
+    torii_host: &CanonicalHost,
+    chain_id: &str,
+    chain_discriminant: Option<u16>,
+    client: &LocalnetClientIdentity,
+) -> Result<[u8; 32]> {
     // Render explicitly to avoid pretty-printer wrapping the long keys.
     let torii_host = torii_host.url_host();
     let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
@@ -6161,9 +6351,9 @@ fn write_client_config(
         private_key = client.private_key.as_str(),
         public_key = client.public_key,
     ));
-    write_owner_only_localnet_file(&path, rendered.as_bytes())
-        .wrap_err_with(|| format!("write operator client config {}", path.display()))?;
-    Ok(())
+    write_owner_only_localnet_file(path, rendered.as_bytes())
+        .wrap_err_with(|| format!("write localnet client config {}", path.display()))?;
+    Ok(iroha_crypto::sha256(rendered.as_bytes()))
 }
 #[allow(clippy::too_many_arguments)]
 fn write_localnet_readme(
@@ -6212,6 +6402,15 @@ fn write_localnet_readme(
             )
         })
         .unwrap_or_default();
+    let profile_notes = concat!(
+        "- Generated peer configs enable structural `torii.account_onboarding` and KAGEMUSHA V1 reserve routing\n",
+        "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
+        "Run `kagami docker` without `--seed` against this directory to validate the exact ",
+        "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
+        "authoritative prepared bundle. The resulting Compose manifest embeds only read-only ",
+        "paths to the three public runtime artifacts. The signing key is never mounted at ",
+        "runtime; keep it offline and never commit it.\n\n",
+    );
     let rendered = format!(
         concat!(
             "# Kagami Localnet\n\n",
@@ -6238,13 +6437,7 @@ fn write_localnet_readme(
             "- Onboarding API token sidecar: `{onboarding_token_file}`\n",
             "- Secret-free alias setup intent: `{alias_setup_intent}`\n",
             "- KAGEMUSHA reserve account: deterministic account derived from the exact genesis network id and asset definition\n",
-            "- Generated peer configs enable structural `torii.account_onboarding` and KAGEMUSHA V1 reserve routing\n",
-            "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
-            "Run `kagami docker` without `--seed` against this directory to validate the exact ",
-            "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
-            "authoritative prepared bundle. The resulting Compose manifest embeds only read-only ",
-            "paths to the three public runtime artifacts. The signing key is never mounted at ",
-            "runtime; keep it offline and never commit it.\n\n",
+            "{profile_notes}",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -6258,6 +6451,7 @@ fn write_localnet_readme(
         ),
         chain_id = chain_id,
         seed_line = seed_line,
+        profile_notes = profile_notes,
         consensus_mode = consensus_mode_label(consensus_mode),
         peers = peers,
         torii_url = torii_url,
@@ -10113,10 +10307,12 @@ mod tests {
     #[test]
     fn client_config_selects_the_generated_identity_file_only() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let root = crate::secure_fs::prepare_empty_private_directory(tmp.path())
+            .expect("prepare private client config directory");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
         write_client_config(
-            tmp.path(),
+            &root,
             8080,
             &host,
             DEFAULT_CHAIN_ID,
@@ -10124,8 +10320,7 @@ mod tests {
             &localnet_client_identity(None, false).expect("default client"),
         )
         .expect("write client config");
-        let contents =
-            fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
+        let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
         assert!(contents.contains("private_key = \"802620"));
         let value: toml::Value = toml::from_str(&contents).expect("parse client config");
         assert_eq!(
@@ -10159,10 +10354,12 @@ mod tests {
     #[test]
     fn client_config_records_chain_discriminant_when_known() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let root = crate::secure_fs::prepare_empty_private_directory(tmp.path())
+            .expect("prepare private client config directory");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
         write_client_config(
-            tmp.path(),
+            &root,
             8080,
             &host,
             DEFAULT_CHAIN_ID,
@@ -10170,8 +10367,7 @@ mod tests {
             &localnet_client_identity(None, false).expect("default client"),
         )
         .expect("write client config");
-        let contents =
-            fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
+        let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
         let value: toml::Value = toml::from_str(&contents).expect("parse client config");
         let account = value
             .get("account")
@@ -10335,24 +10531,47 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-        let contents =
-            fs::read_to_string(temp.path().join("genesis.json")).expect("read generated genesis");
-        let client_account_id = account_id_runtime_literal(
-            &localnet_client_account_id(),
-            /* chain_discriminant */ None,
+        let client_config: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("client.toml")).expect("read generated client"),
+        )
+        .expect("parse generated client");
+        let client_public_key = client_config["account"]["public_key"]
+            .as_str()
+            .expect("generated client public key")
+            .parse::<iroha_crypto::PublicKey>()
+            .expect("canonical client public key");
+        let operator =
+            localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
+                .expect("derive generated operator");
+        assert_eq!(client_public_key, operator.public_key);
+        let client_fee_asset = AssetId::new(
+            localnet_fee_asset_definition_id(),
+            AccountId::new(client_public_key),
         );
-        let expected_mint = format!(
-            "\"destination\": \"{}#{}\"",
-            localnet_fee_asset_literal(),
-            client_account_id
-        );
+        let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+            .expect("parse generated genesis");
+        let minted = manifest
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
+                    Some(MintBox::Asset(mint)) if mint.destination() == &client_fee_asset => {
+                        Some(mint.object().clone())
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<Vec<_>>();
         assert!(
-            contents.contains(&expected_mint),
+            !minted.is_empty(),
             "generated genesis should fund the client signer fee asset"
         );
-        assert!(
-            contents.contains(&LOCALNET_FAUCET_AUTHORITY_BALANCE.to_string()),
-            "generated genesis should give the reused local faucet signer enough XOR for repeated claims"
+        assert_eq!(
+            minted,
+            vec![
+                Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
+                Quantity::from(LOCALNET_FAUCET_AUTHORITY_BALANCE),
+            ],
+            "generated genesis should fund alias setup and the reused faucet signer exactly once each"
         );
     }
     #[test]
@@ -10470,7 +10689,20 @@ mod tests {
             faucet.get("enabled").and_then(toml::Value::as_bool),
             Some(true)
         );
-        let expected_authority = localnet_client_account_literal(None);
+        let operator =
+            localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
+                .expect("derive generated operator");
+        let client_config: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("client.toml")).expect("read generated client"),
+        )
+        .expect("parse generated client");
+        let client_public_key = client_config["account"]["public_key"]
+            .as_str()
+            .expect("generated client public key")
+            .parse::<iroha_crypto::PublicKey>()
+            .expect("canonical client public key");
+        assert_eq!(client_public_key, operator.public_key);
+        let expected_authority = operator.account_literal(None);
         let expected_fee_asset = localnet_fee_asset_literal();
         assert_eq!(
             faucet.get("authority").and_then(toml::Value::as_str),
@@ -10671,9 +10903,11 @@ mod tests {
     #[test]
     fn client_config_renders_ipv6_torii_url() {
         let tmp = tempfile::tempdir().expect("tmp dir");
+        let root = crate::secure_fs::prepare_empty_private_directory(tmp.path())
+            .expect("prepare private client config directory");
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
         write_client_config(
-            tmp.path(),
+            &root,
             8080,
             &host,
             DEFAULT_CHAIN_ID,
@@ -10681,8 +10915,7 @@ mod tests {
             &localnet_client_identity(None, false).expect("default client"),
         )
         .expect("write client config");
-        let contents =
-            fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
+        let contents = fs::read_to_string(root.join("client.toml")).expect("read client config");
         assert!(contents.contains("torii_url = \"http://[::1]:8080/\""));
     }
     #[test]

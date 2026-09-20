@@ -322,10 +322,11 @@ def producer_fidelity_fixture(root, case):
         if case in ('account63', 'account64'): row['plan']['account_index'] = int(case[-2:])
         row['hash'] = f'{2 * index + 1:064x}'
         row.update(offer_offset_ns=offset, acknowledgment_offset_ns=offset + 1,
-                   applied_offset_ns=-1 if cohort == 'warmup' else fixture.geometry.final)
+                   applied_offset_ns=-1 if cohort == 'warmup' else fixture.geometry.final,
+                   local_applied_offset_ns=-1 if cohort == 'warmup' else fixture.geometry.final)
         final.append(row)
     events = [r for r in fixture.events if r['event'] not in signed.EVENTS |
-              {'scheduled', 'prepared', 'offer', 'request_final', 'collection_finished'}]
+              {'scheduled', 'prepared', 'offer', 'accepted', 'status', 'local_status', 'request_final', 'collection_finished'}]
     events[0]['scheduled_requests'] = len(final)
     events[0]['accounts'] = [{'authority': f'synthetic-account-{i}'} for i in range(64)]
     fixture.events = add_retention(events + final + [dict(event='collection_finished', passed=True, failure=None)])

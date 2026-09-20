@@ -4982,15 +4982,10 @@ async fn collect_sumeragi_statuses(
 ) -> Result<Vec<SumeragiDiagnosticsStatus>> {
     try_join_all(network.peers().iter().map(|peer| async move {
         let client = peer.client();
-        let handle = task::spawn_blocking(move || client.client().get_sumeragi_diagnostics());
-        if let Ok(joined) = tokio::time::timeout(status_timeout, handle).await {
-            joined
-                .map_err(|err| {
-                    eyre!(
-                        "sumeragi status join failed for peer {}: {err:?}",
-                        peer.mnemonic()
-                    )
-                })?
+        if let Ok(response) = tokio::time::timeout(
+            status_timeout, client.client().get_sumeragi_diagnostics(),
+        ).await {
+            response
                 .map_err(|err| {
                     eprintln!(
                         "sumeragi status request failed for peer {}: {err:?} (best_effort={:?}, stdout={:?})",

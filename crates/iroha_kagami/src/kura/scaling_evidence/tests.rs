@@ -302,6 +302,40 @@ fn rehashed_and_resigned_entry_cannot_change_independent_route_or_authority() {
         );
         assert!(verifier.finish().is_err());
     }
+
+    let fixture = Fixture::new(4);
+    let mut duplicate = fixture.plan();
+    duplicate.active_lanes[3].lane_id = duplicate.active_lanes[2].lane_id;
+    assert_eq!(
+        ScalingProofVerifier::new(duplicate, limits())
+            .err()
+            .unwrap()
+            .to_string(),
+        "invalid active lane geometry"
+    );
+
+    // The original plan remains independent even when the changed entry and
+    // its carrier reference, merge signature and finality proof are re-signed.
+    for change in 0..3 {
+        let mut fixture = Fixture::new(4);
+        let original_hash = fixture.entry.canonical_hash();
+        let mut verifier = fixture.start(fixture.plan(), limits());
+        match change {
+            0 => {
+                fixture.entry.active_lanes.pop();
+            }
+            1 => fixture.entry.active_lanes[3].lane_id = fixture.entry.active_lanes[2].lane_id,
+            _ => fixture.entry.active_lanes[3].lane_id = LaneId::new(4),
+        }
+        fixture.rebuild_carrier();
+        assert_ne!(fixture.entry.canonical_hash(), original_hash);
+        assert_eq!(
+            fixture.push(&mut verifier).unwrap_err().to_string(),
+            "historical route authority differs from launch plan",
+            "re-signed active lane mutation {change}"
+        );
+        assert!(verifier.finish().is_err());
+    }
 }
 
 #[test]

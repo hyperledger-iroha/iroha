@@ -130,7 +130,7 @@ def test_release_trust_inputs_are_the_only_new_runner_environment_names(
     for component in BOOTSTRAP_COMPONENTS:
         shutil.copy2(component, tmp_path / component.name)
     result = subprocess.run(
-        [str(PYTHON), "-I", "-S", str(copied), "--help"],
+        [str(PYTHON), "-I", "-B", "-S", str(copied), "--help"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -849,7 +849,7 @@ if args.validation_ack is not None:
     invocation_core = {
         "profile": "release",
         "operation": "verify-existing-and-ack",
-        "python_flags": ["-I", "-S"],
+        "python_flags": ["-I", "-B", "-S"],
         "validator": "protected:validate-receipt.py",
         "ordered_options": bindings,
     }
@@ -2011,7 +2011,7 @@ release_receipt="$release_output/release/RELEASE_COMPLETED.json"
 release_ack="$release_runner/receipt-validation-ack.json"
 source_manifest_sha256="$(python3 -I -S -c 'import json,sys;print(json.load(open(sys.argv[1], encoding="utf-8"))["workspace_source_manifest_sha256"])' "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY")"
 set +e
-python3 -I -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" \
+python3 -I -B -S "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR/validate-receipt.py" \
   --candidate-identity "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY" \
   --sealed-identity "$release_runner/sealed-identity.json" \
   --release-root "$release_runner/source" \
@@ -2292,6 +2292,7 @@ class Fixture:
         arguments = [
             str(PYTHON),
             "-I",
+            "-B",
             "-S",
             str(BOOTSTRAP),
             "--candidate-root", str(self.candidate),

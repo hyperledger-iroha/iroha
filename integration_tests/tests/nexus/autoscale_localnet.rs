@@ -172,12 +172,13 @@ fn public_profile_lane_catalog() -> TomlValue {
         TomlValue::Table(lane_descriptor(2, "zk")),
     ])
 }
+// Ordinary lifecycle and recovery cases exercise the production daemon.
+// Scenarios that control authenticated votes opt in at their call site.
 fn autoscale_localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
-        .with_consensus_message_control()
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "autoscale", "enabled"], true)
@@ -2040,7 +2041,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                     committed: lane.committed,
                 })
                 .collect::<Vec<_>>();
-            let sumeragi_status = client.client().get_sumeragi_diagnostics().ok();
+            let sumeragi_status = client.get_sumeragi_diagnostics().ok();
             let lane_commitments = sumeragi_status
                 .as_ref()
                 .map(|sumeragi_status| {
@@ -5238,7 +5239,7 @@ fn wait_for_certified_elastic_lane(
         last_observed = 0;
         last_errors.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.client().get_sumeragi_diagnostics() {
+            match client.get_sumeragi_diagnostics() {
                 Ok(status)
                     if status.committed_lane_blocks.iter().any(|block| {
                         block.lane_id == lane_id
@@ -5281,7 +5282,7 @@ fn wait_for_certified_elastic_lane_incarnation(
         last_stale.clear();
         last_errors.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.client().get_sumeragi_diagnostics() {
+            match client.get_sumeragi_diagnostics() {
                 Ok(status) => {
                     let lane_rows = status
                         .committed_lane_blocks
@@ -5904,7 +5905,9 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
         .expect("autoscale localnet test mutex poisoned");
     configure_load_sequence_seed(Some(context));
     let started = sandbox::start_network_blocking_or_skip(
-        autoscale_localnet_builder().with_block_cadence(TWO_PHASE_DRAIN_PIPELINE_TIME),
+        autoscale_localnet_builder()
+            .with_consensus_message_control()
+            .with_block_cadence(TWO_PHASE_DRAIN_PIPELINE_TIME),
         context,
     )?;
     let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, context)?
@@ -6279,9 +6282,7 @@ fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_
                 && merge_entrypoint_occurrences(peer, autonomous_b.entrypoint_hash)? == 1,
             "peer {index} lost or duplicated autonomous work across A/B/A lifecycle recovery"
         );
-        let diagnostics = peer_client_with_timeout(peer)
-            .client()
-            .get_sumeragi_diagnostics()?;
+        let diagnostics = peer_client_with_timeout(peer).get_sumeragi_diagnostics()?;
         ensure!(
             diagnostics
                 .committed_lane_blocks
@@ -6353,6 +6354,13 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
     ensure!(
         network.peers().len() == TOTAL_PEERS,
         "certified merge recovery requires exactly {TOTAL_PEERS} peers"
+    );
+    ensure!(
+        network
+            .peers()
+            .iter()
+            .all(|peer| peer.consensus_message_control().is_none()),
+        "certified merge recovery must use the production daemon without message control"
     );
     wait_for_storage_lane_count(
         &network,
@@ -6855,6 +6863,13 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
     ensure!(
         network.peers().len() == TOTAL_PEERS,
         "two-phase drain regression requires exactly {TOTAL_PEERS} peers"
+    );
+    ensure!(
+        network
+            .peers()
+            .iter()
+            .all(|peer| peer.consensus_message_control().is_none()),
+        "two-phase drain recovery must use the production daemon without message control"
     );
     wait_for_storage_lane_count(
         &network,

@@ -1693,7 +1693,7 @@ The two historical autonomous hydration capacity regressions add two names in
 the existing lane-work module, yielding the current 881-test,
 43-module inventory. The complete source-sealed
 pre-network corridor
-contains 84 legs. Six source-
+contains 88 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1816,7 +1816,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 84 legs, including the governance-unlock audit module, the autonomous
+now has 88 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P

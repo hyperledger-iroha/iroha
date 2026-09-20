@@ -268,17 +268,16 @@ NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS = (('crates/iroha_data_model/src/block/c
    'include_native_lane,',
    'iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,')),
  ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
-  'method',
-  'ApplyFixture::new_with_options_and_retention',
-  ('(1_u8..=4)',
-   'Algorithm::BlsNormal',
-   'if include_lane_lifecycle {',
-   'locked_lane_work_test_kura(blocks_in_memory)',
-   'State::new_with_chain_and_network_id_for_testing(',
-   'context.network_id,',
-   'install_fixture_validator_authority(&state, &context, &validator_set_pops);',
-   'if include_native_lane {',
-   'install_fixture_native_lane(&mut state, &mut context);')),
+ 'method',
+ 'ApplyFixture::new_with_options_and_retention',
+ ('Self::new_with_options_and_retention_and_genesis(\n'
+  '            include_lane_payload,\n'
+  '            include_projection_policies,\n'
+  '            include_lane_lifecycle,\n'
+  '            include_native_lane,\n'
+  '            blocks_in_memory,\n'
+  '            false,\n'
+  '        )',)),
  ('crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs',
   'struct',
   'NativeAmxParticipantReceiptLatestIndexV2',
@@ -294,7 +293,23 @@ NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS = (('crates/iroha_data_model/src/block/c
    'application_block_hash: HashOf<BlockHeader>',
    'executed_block_wire_hash: Hash',
    'finality_artifact_hash: HashOf<V2FinalityArtifact>',
-   'manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>')))
+   'manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>')),
+    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+ 'method',
+ 'ApplyFixture::new_with_options_and_retention_and_genesis',
+ ('(1_u8..=4)',
+  'Algorithm::BlsNormal',
+  'if include_lane_lifecycle {',
+  'locked_lane_work_test_kura(blocks_in_memory)',
+  'State::new_with_chain_and_network_id_for_testing(',
+  'context.network_id,',
+  'install_fixture_validator_authority(&state, &context, &validator_set_pops);',
+  'if include_native_lane {',
+  'install_fixture_native_lane(&mut state, &mut context);',
+  'quorum: wire::DualQuorum::from_roster(&roster)',
+  'da_layout: wire::recommended_data_availability_layout()',
+  'context.validate().expect("valid fixture context");')),
+)
 
 NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS = (('crates/iroha_data_model/src/block/consensus.rs',
   'struct',
@@ -487,16 +502,16 @@ NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS = (('crates/iroha_data_model/src/bl
   '        )\n'
   '    }'),
  ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
-  'method',
-  'ApplyFixture::new_with_options_and_retention',
-  'let kura = if include_lane_lifecycle { '
-  'crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(blocks_in_memory) } else { '
-  'Kura::blank_kura_for_testing_with_blocks_in_memory(blocks_in_memory) };'),
+ 'method',
+ 'ApplyFixture::new_with_options_and_retention_and_genesis',
+ 'let kura = if include_lane_lifecycle { '
+ 'crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(blocks_in_memory) } else { '
+ 'Kura::blank_kura_for_testing_with_blocks_in_memory(blocks_in_memory) };'),
  ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
-  'method',
-  'ApplyFixture::new_with_options_and_retention',
-  'install_fixture_validator_authority(&state, &context, &validator_set_pops); if '
-  'include_native_lane { install_fixture_native_lane(&mut state, &mut context); }'),
+ 'method',
+ 'ApplyFixture::new_with_options_and_retention_and_genesis',
+ 'install_fixture_validator_authority(&state, &context, &validator_set_pops); if '
+ 'include_native_lane { install_fixture_native_lane(&mut state, &mut context); }'),
  ('crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs',
   'struct',
   'NativeAmxParticipantReceiptLatestIndexV2',
@@ -603,7 +618,19 @@ NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS = (('crates/iroha_data_model/src/bl
   'sources"\n'
   '                        .to_owned(),\n'
   '                );\n'
-  '            }\n'))
+  '            }\n'),
+    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+ 'method',
+ 'ApplyFixture::new_with_options_and_retention',
+ 'Self::new_with_options_and_retention_and_genesis(\n'
+ '            include_lane_payload,\n'
+ '            include_projection_policies,\n'
+ '            include_lane_lifecycle,\n'
+ '            include_native_lane,\n'
+ '            blocks_in_memory,\n'
+ '            false,\n'
+ '        )'),
+)
 
 NATIVE_MERGE_SOURCE_BINDINGS = (
     *NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS,
@@ -794,22 +821,12 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
             "replayed_execution_commitment != finality.commit_qc.execution_commitment",
         ),
     ),
-    (
-        "crates/iroha_core/src/kura/lane_artifact_budget.rs",
-        "fn",
-        "lane_artifact_required_bytes_for_block",
-        (
-            "merge_entry: Option<&MergeLedgerEntry>",
-            "merge_lane_application_artifact_required_bytes_for_block(block, merge_entry)?",
-            "from_result_bearing_block_and_merge_entry",
-            "block,",
-            "merge_entry,",
-            "native_amx_participant_application_artifacts",
-            "NativeAmxParticipantReceiptLatestIndexV2::from_receipt",
-            "native_prune_intent_routes.insert",
-            "native_amx_evidence_prune_intent_max_bytes",
-        ),
-    ),
+    ('crates/iroha_core/src/kura/lane_artifact_budget.rs',
+ 'fn',
+ 'lane_artifact_required_bytes_for_block',
+ ('merge_entry: Option<&MergeLedgerEntry>',
+  'merge_lane_application_artifact_required_bytes_for_block(block, merge_entry)?',
+  'Ok(total)')),
     (
         "crates/iroha_core/src/kura/lane_artifact_budget.rs",
         "fn",
@@ -855,6 +872,194 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
             "native_amx_participant_receipt_matches_manifest_leaf",
         ),
     ),
+
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::lane_publication_budget_reserved_bytes',
+ ('let merge = self.post_wsv_lane_artifact_budget_reserved_bytes()?;',
+  'let native = self.native_amx_publication_capacity_reserved_bytes()?;',
+  'merge.checked_add(native).ok_or_else(||')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::native_amx_publication_capacity_reserved_bytes',
+ ('self.native_amx_publication_capacity_reservations',
+  '.try_fold(0_u64, |total, reservation| {',
+  '.checked_add(reservation.reserved_bytes().ok_or_else(||')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'NativeAmxPublicationCapacityReservation::reserved_bytes',
+ ('self.routes',
+  '.try_fold(self.index_additional_bytes, |total, route| {',
+  'total.checked_add(route.reserved_bytes()?)')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'NativeAmxRoutePublicationCapacity::reserved_bytes',
+ ('if self.cleanup_complete {\n            return Some(0);\n        }',
+  'self.outstanding_components',
+  '.try_fold(self.prune_journal_bytes, |total, kind| {',
+  'total.checked_add(*self.component_allocation_bytes.get(kind)?)')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::native_amx_publication_plan_under_prune_and_canonical_guards',
+ ('merge_entry: Option<&MergeLedgerEntry>',
+  'self.native_amx_publication_plan_for_storage_under_prune_and_canonical_guards(\n'
+  '            block,\n'
+  '            merge_entry,\n'
+  '            NativeAmxPublicationStorage::Active,')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::native_amx_publication_plan_for_storage_under_prune_and_canonical_guards',
+ ('merge_entry: Option<&MergeLedgerEntry>',
+  'if !block.has_results() {\n            return Ok(None);\n        }',
+  'NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, merge_entry)',
+  'self.validate_native_amx_participant_application_evidence_byte_budget(&manifest, None)',
+  'native_amx_participant_application_artifacts(',
+  'executed_wire_hash: manifest.executed_block_wire_hash()',
+  'self.lane_geometry_lock.lock()',
+  'self.sidecar_lock.lock()',
+  '.native_amx_route_publication_capacity_for_storage_locked(\n'
+  '                    manifest, receipt, storage,',
+  'if routes.insert(route, capacity).is_some()')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::native_amx_route_publication_capacity_for_storage_locked',
+ ('NativeAmxPublicationStorage::Active =>',
+  'self.lane_storage_entry(descriptor.lane_id)?',
+  'self.native_amx_route_publication_capacity_at_target_locked(\n'
+  '                    &entry, manifest, receipt,',
+  'NativeAmxPublicationStorage::JournalPhysical =>',
+  'self.native_amx_reservation_physical_target_from_journal(descriptor)?',
+  'self.require_native_amx_reservation_physical_target(&target)?;')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::native_amx_route_publication_capacity_at_target_locked',
+ ('self.require_active_lane_artifact(entry, descriptor)?;',
+  'lane_id: descriptor.lane_id',
+  'dataspace_id: descriptor.dataspace_id',
+  'incarnation: descriptor.lane_incarnation',
+  'NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&expected_receipt)',
+  'NativeAmxPublicationComponent::Manifest,\n'
+  '                u64::try_from(expected_manifest.encode_framed()?.len())?',
+  'NativeAmxPublicationComponent::Receipt,\n'
+  '                u64::try_from(expected_receipt.encode_framed()?.len())?',
+  'NativeAmxPublicationComponent::Latest,\n'
+  '                u64::try_from(norito::encode_canonical(&expected_latest)?.len())?',
+  'Self::plan_native_amx_evidence_prune_intent_from_artifacts(',
+  'self.native_amx_evidence_prune_intent_max_bytes()',
+  'Some(intent) => u64::try_from(norito::encode_canonical(&intent)?.len())?',
+  'component_allocation_bytes,',
+  'outstanding_components,',
+  'prune_journal_bytes,')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::admit_native_amx_publication_capacity_plan',
+ ('if publication.record.carrier != carrier',
+  'plan.index_additional_bytes = publication.additional_bytes;',
+  'old.participant_height != new.participant_height',
+  'old.proposal_hash != new.proposal_hash',
+  'old.settlement_hash != new.settlement_hash',
+  'old.component_bytes != new.component_bytes',
+  '.is_subset(&old.outstanding_components)',
+  'new.prune_journal_bytes > old.prune_journal_bytes',
+  'Native AMX exact retry gained another participant route',
+  'Native AMX route still owns an incomplete earlier publication',
+  '2 * iroha_data_model::nexus::MAX_ACTIVE_EXECUTION_LANES',
+  'reservations.insert(carrier, plan);')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards',
+ ('let used = self.kura_disk_usage_bytes()?;',
+  'let lane = self.lane_publication_budget_reserved_bytes()?;',
+  'let required = [\n'
+  '            pending,\n'
+  '            lane,\n'
+  '            certified,\n'
+  '            terminal,',
+  '.try_fold(used, |total, bytes| total.checked_add(bytes))',
+  'if required > self.max_disk_usage_bytes')),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::ensure_native_amx_publication_capacity_under_publication_guard',
+ ('self.ensure_durable_block_at_height(block.header().height().get(), block.hash())?;',
+  'self.admit_native_amx_publication_capacity_plan(carrier, plan, None, publication)?',
+  'self.check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards()?;',
+  'guard.publish_pending_index()?;')),
+
+    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs',
+ 'fn',
+ 'run_autonomous_merge_frontier_fixture',
+ ('frontier_case: MergeFrontierFixtureCase',
+  'ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()',
+  'lane_work.merge_execution_full_validation_checks_for_test(),\n            0',
+  'for _ in 0..4 {',
+  '.validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)',
+  '"the locally built execution candidate must not be fully reexecuted by the adapter"',
+  'lane_work.merge_execution_full_validation_checks_for_test(),\n            1',
+  'fail_next_native_amx_prepublication_for_tests',
+  '"pre-WSV Native AMX participant evidence publication"',
+  '"failed live Native prepublication must not stage WSV"',
+  'prepublish_native_amx_participant_application_evidence(',
+  'durable_carrier.as_ref(), None)',
+  '"live merge prepublication requires its exact staged witness"',
+  'durable_carrier.as_ref(),\n                Some(&entry),',
+  'live_prepublication.authenticates_state_frontiers',
+  'remove_latest_native_amx_participant_manifest_for_testing',
+  '"remove only the exact latest Native manifest"',
+  'remove_merge_carrier_record_for_testing',
+  'read_structural_native_amx_participant_application_receipt(',
+  '"manifest loss must retain the exact structural Native receipt"',
+  'read_native_amx_participant_application_receipt(',
+  '.is_none()',
+  '"the authoritative reader must reject a receipt without its manifest"',
+  'preflight_native_amx_participant_application_evidence_repair(',
+  'std::slice::from_ref(&native_marker),\n                None,',
+  '"startup Native repair requires a committed or planned association"',
+  'std::slice::from_ref(&native_marker),\n                Some(&entry),',
+  '"planned merge association authorizes exact Native startup repair"',
+  'plan_lane_application_evidence_repair(',
+  'apply_lane_application_evidence_repair(',
+  'native_carriers: 1',
+  'native_routes: 1',
+  'merge_carriers: 1',
+  '"startup repair must reproduce the exact retained receipt bytes"',
+  '"startup evidence repair must not mutate canonical WSV"',
+  'assert!(empty_plan.is_empty())')),
+
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::begin_native_amx_store_capacity_under_prune_and_canonical_guards',
+ ('.native_amx_publication_plan_under_prune_and_canonical_guards(block, merge_entry)?',
+  'self.prepare_native_amx_publication_index(block, merge_entry, replaced)?',
+  'self.admit_native_amx_publication_capacity_plan(carrier, plan, replaced, publication)')),
+    ('crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs',
+ 'method',
+ 'Kura::store_block_durable',
+ ('.begin_native_amx_store_capacity_under_prune_and_canonical_guards(\n'
+  '                block,\n'
+  '                merge_entry,\n'
+  '                None,',
+  'self.check_storage_budget(block, merge_entry)?;',
+  'owner.publish_pending_index()?;')),
+    ('crates/iroha_core/src/kura.rs',
+ 'method',
+ 'Kura::replace_top_block',
+ ('.begin_native_amx_store_capacity_under_prune_and_canonical_guards(\n'
+  '                &block,\n'
+  '                None,\n'
+  '                retired_native_block.as_deref(),',
+  'self.check_replace_storage_budget(block.as_ref())?;',
+  'owner.publish_pending_index()?;')),
+    ('crates/iroha_core/src/kura.rs',
+ 'method',
+ 'Kura::check_storage_budget',
+ ('let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;',
+  '.saturating_add(lane_publication_reservations)',
+  'if required > limit')),
+    ('crates/iroha_core/src/kura.rs',
+ 'method',
+ 'Kura::check_replace_storage_budget',
+ ('let lane_publication_reservations = self.lane_publication_budget_reserved_bytes()?;',
+  '.saturating_add(lane_publication_reservations)')),
 )
 
 NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
@@ -991,13 +1196,12 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry( "
         "valid_block.as_ref(), state_block.staged_merge_entry(), )",
     ),
-    (
-        "crates/iroha_core/src/kura/lane_artifact_budget.rs",
-        "fn",
-        "lane_artifact_required_bytes_for_block",
-        "let native_manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::"
-        "from_result_bearing_block_and_merge_entry( block, merge_entry, )",
-    ),
+    ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs',
+ 'method',
+ 'Kura::native_amx_publication_plan_for_storage_under_prune_and_canonical_guards',
+ 'let manifest = '
+ 'crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(block, '
+ 'merge_entry)'),
     (
         "crates/iroha_core/src/kura/lane_artifact_budget.rs",
         "fn",
@@ -1073,6 +1277,28 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         "summary.merge_carriers = kura .apply_finalized_merge_carrier_repairs( "
         "&plan.merge_carriers, plan.merge_carrier_repair_authorizations, )",
     ),
+
+    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs',
+ 'fn',
+ 'run_autonomous_merge_frontier_fixture',
+ 'let fixture = if frontier_case == MergeFrontierFixtureCase::StartupRegistryBoundaries { '
+ 'ApplyFixture::new_for_cold_merge_registry_replay() } else { '
+ 'ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle() };'),
+
+    ('crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs',
+ 'method',
+ 'Kura::store_block_durable',
+ 'let mut native_capacity = '
+ 'self.begin_native_amx_store_capacity_under_prune_and_canonical_guards(block, merge_entry, '
+ 'None)?; self.check_storage_budget(block, merge_entry)?; if let Some(owner) = &mut '
+ 'native_capacity { owner.publish_pending_index()?; }'),
+    ('crates/iroha_core/src/kura.rs',
+ 'method',
+ 'Kura::replace_top_block',
+ 'let mut native_capacity = '
+ 'self.begin_native_amx_store_capacity_under_prune_and_canonical_guards(&block, None, '
+ 'retired_native_block.as_deref())?; self.check_replace_storage_budget(block.as_ref())?; if let '
+ 'Some(owner) = &mut native_capacity { owner.publish_pending_index()?; }'),
 )
 
 NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
@@ -1160,52 +1386,51 @@ NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS = (
             ".repair_native_amx_participant_application_evidence_for_markers(",
         ),
     ),
+
+    ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs',
+ 'fn',
+ 'run_autonomous_merge_frontier_fixture',
+ ('ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()',
+  'lane_work.merge_execution_full_validation_checks_for_test(),\n            0',
+  'for _ in 0..4 {',
+  '.validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)',
+  '"the locally built execution candidate must not be fully reexecuted by the adapter"',
+  'lane_work.merge_execution_full_validation_checks_for_test(),\n            1',
+  'fail_next_native_amx_prepublication_for_tests',
+  '"pre-WSV Native AMX participant evidence publication"',
+  '"failed live Native prepublication must not stage WSV"',
+  'prepublish_native_amx_participant_application_evidence(',
+  'durable_carrier.as_ref(), None)',
+  '"live merge prepublication requires its exact staged witness"',
+  'durable_carrier.as_ref(),\n                Some(&entry),',
+  'live_prepublication.authenticates_state_frontiers',
+  'remove_latest_native_amx_participant_manifest_for_testing',
+  '"remove only the exact latest Native manifest"',
+  'remove_merge_carrier_record_for_testing',
+  'read_structural_native_amx_participant_application_receipt(',
+  '"manifest loss must retain the exact structural Native receipt"',
+  'read_native_amx_participant_application_receipt(',
+  '.is_none()',
+  '"the authoritative reader must reject a receipt without its manifest"',
+  'preflight_native_amx_participant_application_evidence_repair(',
+  'std::slice::from_ref(&native_marker),\n                None,',
+  '"startup Native repair requires a committed or planned association"',
+  'std::slice::from_ref(&native_marker),\n                Some(&entry),',
+  '"planned merge association authorizes exact Native startup repair"',
+  'plan_lane_application_evidence_repair(',
+  'apply_lane_application_evidence_repair(',
+  'native_carriers: 1',
+  'native_routes: 1',
+  'merge_carriers: 1',
+  '"startup repair must reproduce the exact retained receipt bytes"',
+  '"startup evidence repair must not mutate canonical WSV"',
+  'assert!(empty_plan.is_empty())')),
 )
 
 NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (
-    (
-        NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
-        "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
-        (
-            "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()",
-            "lane_work.merge_execution_full_validation_checks_for_test(),\n"
-            "            0",
-            "for _ in 0..4 {",
-            ".validate_merge_execution_candidate_for_test(&candidate, &parent_header, 0)",
-            '"the locally built execution candidate must not be fully reexecuted by the adapter"',
-            "lane_work.merge_execution_full_validation_checks_for_test(),\n"
-            "            1",
-            "fail_next_native_amx_prepublication_for_tests",
-            '"pre-WSV Native AMX participant evidence publication"',
-            '"failed live Native prepublication must not stage WSV"',
-            "prepublish_native_amx_participant_application_evidence(",
-            "durable_carrier.as_ref(), None)",
-            '"live merge prepublication requires its exact staged witness"',
-            "durable_carrier.as_ref(),\n                Some(&entry),",
-            "live_prepublication.authenticates_state_frontiers",
-            "remove_latest_native_amx_participant_manifest_for_testing",
-            '"remove only the exact latest Native manifest"',
-            "remove_merge_carrier_record_for_testing",
-            "read_structural_native_amx_participant_application_receipt(",
-            '"manifest loss must retain the exact structural Native receipt"',
-            "read_native_amx_participant_application_receipt(",
-            ".is_none()",
-            '"the authoritative reader must reject a receipt without its manifest"',
-            "preflight_native_amx_participant_application_evidence_repair(",
-            "std::slice::from_ref(&native_marker),\n                None,",
-            '"startup Native repair requires a committed or planned association"',
-            "std::slice::from_ref(&native_marker),\n                Some(&entry),",
-            '"planned merge association authorizes exact Native startup repair"',
-            "plan_lane_application_evidence_repair(",
-            "apply_lane_application_evidence_repair(",
-            "native_carriers: 1",
-            "native_routes: 1",
-            "merge_carriers: 1",
-            '"startup repair must reproduce the exact retained receipt bytes"',
-            '"startup evidence repair must not mutate canonical WSV"',
-            "assert!(empty_plan.is_empty())",
-        ),
-    ),
+    (Path('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs'),
+ 'historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application',
+ ('run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::HistoricalRecovery);',)),
 )
 
 NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES = (

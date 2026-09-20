@@ -195,6 +195,21 @@ fn lane(
     binding: &MergeLaneBinding,
     txs: Vec<TransactionEntrypoint>,
 ) -> MergeLaneExecution {
+    lane_for_network(
+        keys,
+        binding,
+        txs,
+        network(),
+        "permissioned:canonical-authentication-fixture",
+    )
+}
+fn lane_for_network(
+    keys: &[KeyPair],
+    binding: &MergeLaneBinding,
+    txs: Vec<TransactionEntrypoint>,
+    network_id: NetworkId,
+    mode_tag: &str,
+) -> MergeLaneExecution {
     let validators = peers(keys);
     let hashes: Vec<_> = txs.iter().map(|t| Hash::from(t.hash())).collect();
     let mut descriptor = LaneBlockDescriptorV1 {
@@ -216,7 +231,7 @@ fn lane(
         validator_set: validators.clone(),
         validator_count: 4,
         min_quorum: 3,
-        qc_mode_tag: "permissioned:canonical-authentication-fixture".to_owned(),
+        qc_mode_tag: mode_tag.to_owned(),
         descriptor_hash: h("unset descriptor"),
     };
     descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
@@ -230,7 +245,7 @@ fn lane(
     let payload_hash = h("retained autonomous payload identity");
     let ready = LanePayloadAvailabilityBodyV1 {
         version: 1,
-        network_id: network(),
+        network_id,
         epoch: 0,
         lane_id: d.lane_id,
         dataspace_id: d.dataspace_id,
@@ -334,7 +349,7 @@ fn lane(
                 proof_of_possession: iroha_crypto::bls_normal_pop_prove(k.private_key()).unwrap(),
             })
             .collect(),
-        autonomous_network_id: network(),
+        autonomous_network_id: network_id,
         autonomous_epoch: 0,
         autonomous_payload_hash: payload_hash,
         entrypoint_hashes: hashes,
@@ -366,7 +381,7 @@ pub(super) fn rehash_batch(batch: &mut MergeExecutionBatch) {
 }
 fn sign_merge(entry: &mut MergeLedgerEntry, keys: &[KeyPair]) {
     let digest = merge_qc_message_digest(
-        &network(),
+        &entry.merge_qc.network_id,
         &MergeLedgerCandidate::from(&*entry),
         1,
         entry.merge_qc.validator_set_hash,
@@ -650,5 +665,116 @@ pub(super) fn limits() -> VerificationLimits {
         heights: 8,
         requests: 64,
         leaves_per_carrier: 64,
+    }
+}
+
+// Same cryptographic fixture helpers, supplied with actual generated genesis and original
+// signed requests. This still tests offline authentication; its opaque source bundle does not
+// claim State/runtime autonomous payload admission.
+impl Fixture {
+    pub fn from_generated_genesis(
+        mut keys: Vec<KeyPair>,
+        genesis: SignedBlock,
+        authority: &iroha_core::sumeragi::GenesisMergeAuthority,
+        scheduled: &[ScheduledRequest],
+    ) -> Self {
+        keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
+        let context = authority.context().clone();
+        assert_eq!(
+            peers(&keys),
+            context
+                .roster
+                .iter()
+                .map(|v| v.validator.clone())
+                .collect::<Vec<_>>()
+        );
+        let bindings = authority.active_lanes().to_vec();
+        let mut fixture = Self::new(bindings.len());
+        fixture.keys = keys;
+        fixture.genesis = genesis;
+        fixture.first = signed_proof(&fixture.keys, context.clone(), &fixture.genesis, None);
+        fixture.requests = scheduled
+            .iter()
+            .map(|row| {
+                (
+                    row.logical_id.clone(),
+                    canonical(&row.signed_transaction).unwrap(),
+                    row.route,
+                    row.phase,
+                )
+            })
+            .collect();
+        let mut groups = vec![Vec::new(); bindings.len()];
+        for (_, transaction, route, _) in &fixture.requests {
+            let slot = bindings
+                .iter()
+                .position(|binding| {
+                    binding.lane_id == route.lane_id && binding.dataspace_id == route.dataspace_id
+                })
+                .unwrap();
+            groups[slot].push(TransactionEntrypoint::External(transaction.clone()));
+        }
+        fixture.entry.lane_catalog_hash = authority.catalog_hash();
+        fixture.entry.incarnation_root = LaneLifecycleParameterV1::incarnation_root(
+            &bindings
+                .iter()
+                .map(|b| LaneLifecycleIncarnationEntry {
+                    lane_id: b.lane_id,
+                    incarnation: b.incarnation,
+                })
+                .collect::<Vec<_>>(),
+        );
+        fixture.entry.activation_root = merge_activation_root(&bindings);
+        fixture.entry.active_lanes = bindings.clone();
+        fixture.entry.lane_authority_catalog = authority.lane_authority_catalog().clone();
+        let batch = fixture.entry.execution_batch.as_mut().unwrap();
+        batch.base_state_hash = fixture.genesis.hash();
+        batch.application_block_header = BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            Some(fixture.genesis.hash()),
+            None,
+            None,
+            100,
+            0,
+        );
+        batch.lanes = bindings
+            .iter()
+            .zip(groups)
+            .map(|(binding, txs)| {
+                lane_for_network(
+                    &fixture.keys,
+                    binding,
+                    txs,
+                    context.network_id,
+                    "npos:canonical-authentication-fixture",
+                )
+            })
+            .collect();
+        rehash_batch(batch);
+        let validators = peers(&fixture.keys);
+        fixture.entry.merge_qc = MergeQuorumCertificate::new(
+            0,
+            1,
+            2,
+            fixture.genesis.hash(),
+            context.network_id,
+            1,
+            HashOf::new(&validators),
+            validators,
+            vec![7],
+            pops(&fixture.keys)
+                .into_iter()
+                .take(3)
+                .enumerate()
+                .map(|(signer, proof_of_possession)| MergeSignerProof {
+                    signer: signer as u32,
+                    proof_of_possession,
+                })
+                .collect(),
+            Vec::new(),
+            h("unset merge signature"),
+        );
+        fixture.rebuild_carrier();
+        fixture
     }
 }

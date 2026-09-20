@@ -1,4 +1,5 @@
-fn app_with_indexed_sccp_message_for_test(
+/// Build indexed State/Kura evidence with a genuine four-validator Commit QC and DA layout.
+pub(crate) fn app_with_indexed_sccp_message_for_test(
     persist_finality: bool,
 ) -> (SharedAppState, [u8; 32], V2FinalityArtifact) {
     const HEIGHT: u64 = 1;

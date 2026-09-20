@@ -183,7 +183,7 @@ mod unix {
     fn strict_projection_has_exact_types_order_and_signed_hash_identity() {
         let disk = Disk::new(4);
         let export = disk.export().unwrap();
-        let json = export.json_projection().unwrap();
+        let json = export.json_projection(MAX_PROOF_BYTES).unwrap();
         let rows: norito::json::Value = norito::json::from_slice(&json).unwrap();
         let rows = rows.as_array().unwrap();
         let names: BTreeSet<_> = [
@@ -524,7 +524,7 @@ mod unix {
         )
         .unwrap();
         assert_eq!(exact.canonical_bytes(), initial.canonical_bytes());
-        assert!(exact.json_projection().is_ok());
+        assert!(exact.json_projection(MAX_PROOF_BYTES).is_ok());
         limits.output_bytes -= 1;
         let error = export_from_kura(
             disk.signed.plan(),
@@ -627,6 +627,78 @@ mod unix {
             .unwrap()
             .to_string(),
             "export frame exceeds admitted allocation"
+        );
+    }
+    // Independent projection response budget controls.
+    #[test]
+    fn projection_independent_cap_accepts_exact_complete_array_and_rejects_every_prefix() {
+        for lanes in [1, 4] {
+            let disk = Disk::new(lanes);
+            let export = disk.export().unwrap();
+            let canonical = export.canonical_bytes().to_vec();
+            let complete = export.json_projection(MAX_PROOF_BYTES).unwrap();
+            let exact = u64::try_from(complete.len()).unwrap();
+            assert!(exact < export.rows().len() as u64 * (ROW_RESERVATION + 1) + 2);
+            let bounded = export.json_projection(exact).unwrap();
+            assert_eq!(bounded, complete);
+            assert!(bounded.capacity() as u64 <= exact);
+            let decoded: norito::json::Value = norito::json::from_slice(&bounded).unwrap();
+            assert_eq!(decoded.as_array().unwrap().len(), export.rows().len());
+            let mut prefix = 1_u64;
+            let mut insufficient = vec![1, 2, exact - 1];
+            for (index, row) in export.rows().iter().enumerate() {
+                prefix += u64::from(index > 0) + projection_row(row).unwrap().len() as u64;
+                if index + 1 < export.rows().len() {
+                    insufficient.push(prefix + 1);
+                }
+            }
+            for maximum in insufficient {
+                assert!(maximum < exact);
+                assert_eq!(
+                    export.json_projection(maximum).unwrap_err().to_string(),
+                    "projection exceeds independent maximum",
+                    "a complete prefix must not escape at cap {maximum}",
+                );
+            }
+            assert_eq!(export.canonical_bytes(), canonical);
+            assert_eq!(export.json_projection(exact).unwrap(), complete);
+        }
+    }
+
+    #[test]
+    fn projection_independent_cap_rejects_zero_and_overflow() {
+        let disk = Disk::new(1);
+        let export = disk.export().unwrap();
+        let canonical = export.canonical_bytes().to_vec();
+        for maximum in [0, MAX_PROOF_BYTES + 1, u64::MAX] {
+            assert_eq!(
+                export.json_projection(maximum).unwrap_err().to_string(),
+                "projection maximum must be between 1 byte and 256 MiB",
+            );
+        }
+        assert_eq!(export.canonical_bytes(), canonical);
+        assert!(!export.json_projection(MAX_PROOF_BYTES).unwrap().is_empty());
+    }
+
+    #[test]
+    fn projection_independent_cap_preserves_original_plan_output_reservation() {
+        let disk = Disk::new(1);
+        let mut export = disk.export().unwrap();
+        let complete = export.json_projection(MAX_PROOF_BYTES).unwrap();
+        let reservation = export.rows().len() as u64 * (ROW_RESERVATION + 1) + 2;
+        let required = export.canonical_bytes().len() as u64 + reservation;
+        export.output_limit = required;
+        assert_eq!(
+            export.json_projection(complete.len() as u64).unwrap(),
+            complete
+        );
+        export.output_limit = required - 1;
+        assert_eq!(
+            export
+                .json_projection(complete.len() as u64)
+                .unwrap_err()
+                .to_string(),
+            "projection output reservation exceeded",
         );
     }
 }

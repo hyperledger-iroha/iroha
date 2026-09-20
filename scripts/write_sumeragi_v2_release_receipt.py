@@ -31,25 +31,51 @@ from typing import Any, BinaryIO
 
 
 _LOCALNET_MANIFEST_MODULE_PATH = Path(__file__).resolve(strict=True).with_name(
-    "sumeragi_v2_localnet_manifest.py"
-)
-_LOCALNET_MANIFEST_SPEC = importlib.util.spec_from_file_location(
-    "_sumeragi_v2_release_localnet_manifest",
-    _LOCALNET_MANIFEST_MODULE_PATH,
-)
-if _LOCALNET_MANIFEST_SPEC is None or _LOCALNET_MANIFEST_SPEC.loader is None:
-    raise RuntimeError("could not load the adjacent localnet manifest validator")
-_LOCALNET_MANIFEST_MODULE = importlib.util.module_from_spec(
-    _LOCALNET_MANIFEST_SPEC
-)
-_PREVIOUS_DONT_WRITE_BYTECODE = sys.dont_write_bytecode
-sys.dont_write_bytecode = True
-try:
-    _LOCALNET_MANIFEST_SPEC.loader.exec_module(_LOCALNET_MANIFEST_MODULE)
-finally:
-    sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
+    'sumeragi_v2_localnet_manifest.py')
+_LOCALNET_MANIFEST_SOURCE_SHA256 = 'b336b948b6a486bb3a84f57338c812468d960c75ca35c18cd7f595a0a5dfe4f1'
+
+
+def _load_localnet_manifest():
+    """Execute the bounded original source buffer, never cached bytecode."""
+    path = _LOCALNET_MANIFEST_MODULE_PATH
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        original = os.fstat(descriptor)
+        if (not stat.S_ISREG(original.st_mode) or original.st_nlink != 1
+                or original.st_uid != os.geteuid() or original.st_mode & 0o022
+                or not 0 < original.st_size <= 1024 * 1024):
+            raise RuntimeError('localnet manifest source is not one bounded protected file')
+        chunks, remaining = [], original.st_size
+        while remaining:
+            part = os.read(descriptor, min(65536, remaining))
+            if not part:
+                raise RuntimeError('localnet manifest source changed during capture')
+            chunks.append(part); remaining -= len(part)
+        data = b''.join(chunks)
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink',
+                  'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        pin = tuple(getattr(original, name) for name in fields)
+        if (os.read(descriptor, 1) or hashlib.sha256(data).hexdigest() != _LOCALNET_MANIFEST_SOURCE_SHA256
+                or tuple(getattr(os.fstat(descriptor), name) for name in fields) != pin
+                or tuple(getattr(path.lstat(), name) for name in fields) != pin):
+            raise RuntimeError('localnet manifest source identity differs')
+        spec = importlib.util.spec_from_file_location('_sumeragi_v2_release_localnet_manifest', path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError('localnet manifest module specification is absent')
+        module = importlib.util.module_from_spec(spec)
+        exec(compile(data, str(path), 'exec', dont_inherit=True), module.__dict__)
+        if (tuple(getattr(os.fstat(descriptor), name) for name in fields) != pin
+                or tuple(getattr(path.lstat(), name) for name in fields) != pin):
+            raise RuntimeError('localnet manifest source changed during execution')
+        return module
+    finally:
+        os.close(descriptor)
+
+
+_LOCALNET_MANIFEST_MODULE = _load_localnet_manifest()
 LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
 canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
+
 _RELEASE_RECEIPT_COMPONENT_FILES = (
     "write_sumeragi_v2_release_receipt_formal_artifacts.py",
     "write_sumeragi_v2_release_receipt_corridor_log.py",
@@ -61,13 +87,13 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
+        "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
+        '8cb10f1984af55194c2209d3a65a5e28e1a2ab563a5e333f49bc9184e7f83a9e'
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
+        '6d1f78d58ce2455dbd7a6426cd8d8f82f5b2752b126d04c38a81811a8fb85ec7'
     ),
 }
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
@@ -121,11 +147,6 @@ _MAX_RUNNER_TOOL_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_REPLAY_OUTPUT_BYTES = 4 * 1024 * 1024
 _MAX_LOCALNET_MANIFEST_INDEX_BYTES = 1024 * 1024
 _MAX_LOCALNET_MANIFEST_BYTES = 64 * 1024 * 1024
-_MAX_SCALING_JSON_BYTES = 16 * 1024 * 1024
-_MAX_SCALING_BUNDLE_FILE_COUNT = 256
-_MAX_SCALING_BUNDLE_DIRECTORY_COUNT = 512
-_MAX_SCALING_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
-_MAX_SCALING_BUNDLE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_G4P_TSV_BYTES = 1024 * 1024
 _MAX_G4P_LOG_BYTES = 16 * 1024 * 1024
 _MAX_G12_TSV_BYTES = 1024 * 1024
@@ -185,17 +206,15 @@ _PREBUILT_MANIFEST_FIELDS = (
         )
     ),
 )
-_SCALING_REQUIRED_TOOLING = (
-    ("localnet", "scripts/deploy_localnet.sh"),
-    ("load_generator", "scripts/tx_load.py"),
-    ("nexus_load_bundle", "scripts/nexus_lane_load_test.py"),
-)
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "fe65c02642f1eba64e6ad356e12eaf4120c7ac42bb389d10cb7a14b609de2705"
+    "76c512b2a7e345a9613b154a36dcbf88560ef0b03ade9e1de42b24d968f2d422"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
+    "scaling_plan": ("scaling-plan.json", _SIGNATURE_DATA_MODE),
+    "scaling_budget": ("scaling-budget.json", _SIGNATURE_DATA_MODE),
+    "scaling_handoff_helper": ("scaling-handoff.py", _SIGNATURE_DATA_MODE),
     "allowed_signers": ("bootstrap-allowed-signers", _SIGNATURE_DATA_MODE),
     "bash": ("bash", _SIGNATURE_TOOL_MODE),
     "bootstrap": ("trusted-bootstrap.py", _SIGNATURE_DATA_MODE),
@@ -241,21 +260,21 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "c2e96761edfb7982fd90ce10b22727fdb7a2808836376d8d14e63784cb92bbb7"
+        "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        "e4e26715212896d87dce34979756455add20d1265a6fa3cff891a22ef51010de"
+        '8cb10f1984af55194c2209d3a65a5e28e1a2ab563a5e333f49bc9184e7f83a9e'
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "a74465a49f847a03ce4c7b17997f3434b8baf3f006c78d6e535854826848232d"
+        '6d1f78d58ce2455dbd7a6426cd8d8f82f5b2752b126d04c38a81811a8fb85ec7'
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "d1cf09532bdbf00d3ed259d42895692c44aaf635899d325316488b4e42ffda56"
+        '8efda50ba816170d063ca8b4755a05189c6d5fff8ae64d5746d9bebfcb40b824'
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -295,11 +314,6 @@ _BOOTSTRAP_RUNNER_ENV_ALLOWLIST = {
     "IROHA_RELEASE_FORMAL_REPLAY_SIGNATURE_SHA256",
     "IROHA_RELEASE_FORMAL_REPLAY_SIGNER_PRINCIPAL",
     "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT",
-    "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
-    "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
-    "IROHA_RELEASE_SCALING_IROHAD_SHA256",
-    "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
-    "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
     "IROHA_RELEASE_TLA2TOOLS_JAR",
     "NIX_SSL_CERT_FILE",
     "RUSTUP_HOME",
@@ -328,8 +342,6 @@ _TLAPS_RESOURCE_MEMORY_ENFORCEMENT_MODE = "max_rss_physical_footprint"
 _TLAPS_RESOURCE_TIMESTAMP_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z"
 )
-_SCALING_REPORT_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.validation.v1"
-_SCALING_SAFE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _APALACHE_VERSION = "0.52.2"
 _APALACHE_LAUNCHER_SHA256 = (
     "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7"
@@ -728,6 +740,20 @@ _DATA_STATUS_TEST = (
 _DATA_LANE_CERTIFICATE_TEST = (
     "block::consensus::tests::lane_block_certificate_decodes_atomically_from_slice"
 )
+_RUST_ASYNC_GATE_TESTS = {'sumeragi-async-query-rust': ('query::asynchronous::tests::collects_typed_pages_with_fresh_signed_nonces_and_exact_cursor_authority',
+                               'query::asynchronous::tests::singular_parameters_preserve_json_negotiation_and_output_type',
+                               'query::asynchronous::tests::singular_shape_mismatch_is_an_error_without_panic_or_retry',
+                               'query::asynchronous::tests::start_failure_is_dispatched_once_for_transport_and_decode_errors',
+                               'query::asynchronous::tests::malformed_and_lost_continuations_terminally_consume_the_cursor',
+                               'query::asynchronous::tests::cancelled_continuation_cannot_replay_the_signed_nonce',
+                               'query::asynchronous::tests::invalid_fetch_size_fails_before_query_dispatch',
+                               'query::asynchronous::tests::singular_constraints_check_across_empty_and_nonempty_pages',
+                               'query::asynchronous::tests::compatibility_failure_uses_async_probe_and_never_submits_the_query'),
+ 'sumeragi-async-diagnostics-rust': ('client::tests::async_diagnostics_uses_async_transport_and_preserves_strict_evidence_validation',),
+ 'sumeragi-blocking-boundary-rust': ('blocking::tests::blocking_diagnostics_and_proofs_reject_async_runtime_before_io',),
+ 'query-request-wire-rust': ('query::builder::tests::encoded_request_is_shared_with_synchronous_execution',),
+ 'native-amx-typed-query-rust': ('typed_musubi_queries_distinguish_found_absent_and_stale_results',)}
+
 _RUST_SDK_DIAGNOSTICS_TESTS = (
     "client::tests::get_sumeragi_status_prefers_norito_and_handles_json",
     "client::tests::get_sumeragi_status_rejects_unknown_json_fields",
@@ -2085,7 +2111,7 @@ def _run_bounded_python_validator(
     )
     return _run_bounded_replay(
         interpreter,
-        ["-I", "-S", "-B", "-c", loader, str(checker), *arguments],
+        ["-I", "-B", "-S", "-c", loader, str(checker), *arguments],
         cwd=cwd,
         environment=environment,
         name=name,
@@ -3570,6 +3596,7 @@ def _validate_and_replay_tool_probe_closure(
         python.path,
         [
             "-I",
+            "-B",
             "-S",
             str(helper.path),
             "--tool-manifest",
@@ -3821,11 +3848,8 @@ def _validate_bootstrap_evidence(
     expected_signer_fingerprint: str,
     signature_archives: dict[str, dict[str, Any]],
     runner_logs_sealed: bool,
-    expected_scaling_manifest_path: Path,
-    expected_scaling_trial_harness_sha256: str,
-    expected_scaling_configuration_sha256: str,
-    expected_scaling_irohad_sha256: str,
-    expected_scaling_iroha_cli_sha256: str,
+    expected_scaling_execution_record_path: Path,
+    expected_scaling_execution_sha256: str,
     expected_formal_replay_source_receipt_path: Path,
     expected_formal_replay_release_root_path: Path,
     expected_formal_replay_signature_sha256: str,
@@ -4339,9 +4363,14 @@ def _validate_bootstrap_evidence(
             "size_bytes",
             "tool_directory",
             "tools",
+            "scaling_handoff",
+            "scaling_preflight_timeout_seconds",
         },
         "bootstrap runner",
     )
+    preflight_timeout = runner["scaling_preflight_timeout_seconds"]
+    if type(preflight_timeout) is not int or not 600 <= preflight_timeout <= 86400:
+        raise ReceiptError("bootstrap scaling preflight timeout is invalid")
     expected_runner_path = candidate_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
     if runner_path != expected_runner_path:
         raise ReceiptError("bootstrap runner input is not the candidate release runner")
@@ -4621,6 +4650,26 @@ def _validate_bootstrap_evidence(
             trusted_digests["sdk_dependency_bundle_manifest"]
         ),
     })
+    handoff = _require_exact_json_fields(runner['scaling_handoff'], {
+        'IROHA_RELEASE_INVOCATION_ROOT', 'IROHA_RELEASE_TEMP_BASE', 'IROHA_RELEASE_SCALING_GATE_FD',
+        'IROHA_RELEASE_SCALING_INVOCATION_SHA256', 'IROHA_RELEASE_SCALING_CHALLENGE',
+        'IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256'}, 'bootstrap scaling handoff')
+    if any(type(value) is not str or not value or '\0' in value for value in handoff.values()):
+        raise ReceiptError('bootstrap scaling handoff values are malformed')
+    invocation_root = Path(handoff['IROHA_RELEASE_INVOCATION_ROOT'])
+    temporary_base = Path(handoff['IROHA_RELEASE_TEMP_BASE'])
+    if (release_root != invocation_root / 'source'
+            or invocation_root.parent != temporary_base
+            or str(invocation_root) != os.path.abspath(invocation_root)
+            or str(temporary_base) != os.path.abspath(temporary_base)
+            or re.fullmatch(r'[A-Za-z0-9_./+-]+', str(invocation_root)) is None
+            or re.fullmatch(r'[1-9][0-9]{0,6}', handoff['IROHA_RELEASE_SCALING_GATE_FD']) is None
+            or not 3 <= int(handoff['IROHA_RELEASE_SCALING_GATE_FD']) < (1 << 20)
+            or handoff['IROHA_RELEASE_SCALING_HANDOFF_HELPER_SHA256'] != trusted_digests['scaling_handoff_helper']):
+        raise ReceiptError('bootstrap scaling handoff layout is not exact')
+    for key in ('IROHA_RELEASE_SCALING_INVOCATION_SHA256', 'IROHA_RELEASE_SCALING_CHALLENGE'):
+        _require_digest(handoff[key], 'bootstrap scaling handoff digest')
+    alias_environment.update(handoff)
     fixed_keys = set(base_environment) | set(policy_environment) | set(alias_environment)
     extras = {key: value for key, value in environment.items() if key not in fixed_keys}
     if any(
@@ -4633,25 +4682,9 @@ def _validate_bootstrap_evidence(
         "environment_sha256"
     ]:
         raise ReceiptError("bootstrap runner environment digest is not exact")
-    expected_scaling_environment = {
-        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": (
-            expected_scaling_trial_harness_sha256
-        ),
-        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": (
-            expected_scaling_configuration_sha256
-        ),
-        "IROHA_RELEASE_SCALING_IROHAD_SHA256": expected_scaling_irohad_sha256,
-        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": (
-            expected_scaling_iroha_cli_sha256
-        ),
-    }
-    if any(
-        environment.get(name) != value
-        for name, value in expected_scaling_environment.items()
-    ):
-        raise ReceiptError(
-            "bootstrap runner G-SCALE trust anchors are not the receipt trust anchors"
-        )
+    if expected_scaling_execution_record_path != directory / 'scaling-execution.json':
+        raise ReceiptError('bootstrap scaling execution publication path is not exact')
+    _require_digest(expected_scaling_execution_sha256, 'parent scaling execution digest')
     expected_formal_replay_environment = {
         "IROHA_RELEASE_FORMAL_REPLAY_SOURCE_RECEIPT": str(
             expected_formal_replay_source_receipt_path
@@ -4705,6 +4738,7 @@ def _validate_bootstrap_evidence(
             "argv": [
                 str(python_archive_path),
                 "-I",
+                "-B",
                 "-S",
                 "-c",
                 python_probe_code,
@@ -4812,6 +4846,8 @@ def _validate_bootstrap_evidence(
             "tool_directory": "runner-bin",
             "tools": runner_tools,
             "environment_sha256": runner["environment_sha256"],
+            "scaling_handoff": handoff,
+            "scaling_preflight_timeout_seconds": preflight_timeout,
             "self_digest_environment_variables": runner[
                 "self_digest_environment_variables"
             ],

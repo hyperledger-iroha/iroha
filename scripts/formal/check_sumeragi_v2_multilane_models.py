@@ -22,7 +22,9 @@ FORMAL_CHECKER_DIR = Path(__file__).resolve().parent
 if str(FORMAL_CHECKER_DIR) not in sys.path:
     sys.path.insert(0, str(FORMAL_CHECKER_DIR))
 
+import sumeragi_v2_multilane_kura_native_contract as kura_native_contract
 import sumeragi_v2_multilane_authority_recovery_contract as authority_recovery_contract
+import sumeragi_v2_multilane_state_merge_contract as state_merge_contract
 import sumeragi_v2_multilane_autonomous_terminal_contract as autonomous_terminal_contract
 from sumeragi_v2_multilane_autonomous_terminal_contract import (
     AUTONOMOUS_TERMINAL_FORBIDDEN_SOURCE_CHECKS,
@@ -263,10 +265,6 @@ _RELEASE_SOURCE_TOKEN_REBINDINGS = {
         "crates/iroha_core/src/state.rs",
         "No adapter/session cache is consulted.",
     ): "No adapter/session\n    /// cache is consulted.",
-    (
-        "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
-        "add `--check`",
-    ): "Pass `--check`",
 }
 
 
@@ -1102,6 +1100,7 @@ NATIVE_PREPUBLICATION_BINDINGS = (
         ),
     ),
 ) + reviewed_source.NATIVE_PREPUBLICATION_REVIEWED_BINDINGS
+NATIVE_PREPUBLICATION_BINDINGS = kura_native_contract.reconcile_bindings(NATIVE_PREPUBLICATION_BINDINGS)
 NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
     (
         "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -1173,7 +1172,7 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
         (
             "let latest_temp_present = self",
             "require_native_amx_latest_index_temp_recovery_unambiguous_locked(",
-            "complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)",
+            "complete_native_amx_evidence_prune_intent_locked(",
             "recover_native_amx_evidence_publication_temp_locked(",
             "let inventory = self.inventory_native_amx_evidence_files_locked",
             "let mut validated_manifests = BTreeMap::new()",
@@ -1183,7 +1182,7 @@ NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS = (
             "reconcile_native_amx_latest_index_temp_locked(",
             "let current = self.decode_bound_native_amx_participant_receipt_latest_index_locked",
             "match (expected, current)",
-            "prune_native_amx_evidence_pairs_locked(&entry, &namespace)",
+            "prune_native_amx_evidence_pairs_locked(",
         ),
     ),
     (
@@ -3378,6 +3377,8 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         '[[ "$tool_version" != "$APALACHE_VERSION" ]]', '"$RESOLVED_APALACHE_BIN" --out-dir="$out" typecheck "${module}.tla"',
         '"$RESOLVED_APALACHE_BIN" --out-dir="$out" check', "--algo=incremental",
         '--config="$config"', '--length="$length"', "--no-deadlock",
+        "--tuning-options=search.invariant.mode=after",
+        "grep -Ec '^Tuning: (search.outputTraces=false:search.invariant.mode=after|search.invariant.mode=after:search.outputTraces=false)[[:space:]]+I@'",
         'grep -Fc "The outcome is: NoError"',
         'grep -Fc "Checker reports no error up to computation length ${length}"',
         'echo "multilane formal or production sources changed during the Apalache run"',
@@ -3398,6 +3399,13 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
                 f"multilane Apalache runner must contain {token!r} exactly once, "
                 f"found {count}"
             )
+    # The complete argv binds scheduling without allowing filters or bound/invariant overrides.
+    canonical_check_command = '    "$RESOLVED_APALACHE_BIN" --out-dir="$out" check \\\n      --algo=incremental \\\n      --tuning-options=search.invariant.mode=after \\\n      --config="$config" \\\n      --length="$length" \\\n      --no-deadlock \\\n      "${module}.tla"'
+    if source.count(canonical_check_command) != 1 or source.count("--tuning-options") != 1:
+        errors.append("multilane Apalache runner must use only the canonical fixed after-join check command")
+    forbidden_override_guard = 'for forbidden_override in \\\n  APALACHE_JAR \\\n  CONFIG_FILE \\\n  OUT_DIR \\\n  RUN_DIR \\\n  SMT_ENCODING \\\n  TUNING_OPTIONS \\\n  TUNING_OPTIONS_FILE; do\n  if [[ -n "${!forbidden_override:-}" ]]; then\n    echo "${forbidden_override} is not accepted by the pinned multilane Apalache gate" >&2\n    exit 1\n  fi\ndone'
+    if source.count(forbidden_override_guard) != 1:
+        errors.append("multilane Apalache runner must reject every external tuning/encoding override")
     manifest_calls = source.count(
         'python3 -I -S "$CONTRACT_CHECKER" --print-source-manifest-sha256'
     )
@@ -4614,11 +4622,15 @@ def _validate_native_prepublication_contract(
                     f"is missing source-bound token {token!r}"
                 )
 
+    kura_native_contract.validate(root, binding_items, errors, _rust_binding_item, _extract_braced_item)
     reviewed_source._validate_native_prepublication_reviewed_kura_checks(binding_items, errors)
     native_merge_manifest.validate_native_merge_manifest_relations(root, binding_items, errors, _rust_binding_item)
     for relative, kind, symbol, tokens in (
         NATIVE_PREPUBLICATION_ORDERED_SOURCE_CHECKS
     ):
+        # Branch-specific ownership and complete phase loops are checked above.
+        if symbol in kura_native_contract.BRANCHED_SYMBOLS:
+            continue
         item = binding_items.get((relative, kind, symbol))
         if item is None:
             item = _rust_binding_item(
@@ -4675,38 +4687,6 @@ def _validate_native_prepublication_contract(
         "fn",
         "persist_native_amx_participant_application_evidence_under_publication_guard",
     )
-    persist_item = binding_items.get(persist_key)
-    if persist_item is not None:
-        normalized = " ".join(persist_item.split())
-        phase_snippets = (
-            "for (manifest, _) in &plan.artifacts { "
-            "self.write_native_amx_participant_application_manifest_artifact_"
-            "with_retention_policy_under_publication_guard( "
-            "manifest, permit_cleanup, )?; }",
-            "let manifest_readback = self."
-            "read_back_native_amx_plan_manifests_under_publication_guard(plan)?;",
-            "for (manifest, receipt) in &plan.artifacts { "
-            "self.write_native_amx_participant_application_receipt_artifact_"
-            "only_with_retention_policy_under_publication_guard( "
-            "receipt, manifest, permit_cleanup, )?; }",
-            "for ((manifest, receipt), preflight) in "
-            "plan.artifacts.iter().zip(route_preflights.iter()) { "
-            "self.write_native_amx_participant_receipt_latest_index_"
-            "for_prepublication_under_publication_guard( "
-            "receipt, manifest, permit_cleanup, preflight, )?; }",
-            "if permit_cleanup { for (_, receipt) in &plan.artifacts { "
-            "self.cleanup_native_amx_participant_application_evidence_"
-            "under_publication_guard( receipt, )?; } }",
-        )
-        for snippet in phase_snippets:
-            if snippet not in normalized:
-                errors.append(
-                    f"{root / kura_relative}: Native prepublication phase "
-                    "loops must remain manifest-all, receipt-all, latest-all, "
-                    "read-back-authenticated, then cleanup-only-after-WSV"
-                )
-                break
-
     expected_mode_methods = {
         "NativeAmxParticipantApplicationPublicationMode::requires_post_apply_metadata": (
             "const fn requires_post_apply_metadata(self) -> bool { "
@@ -5568,6 +5548,7 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     authority_recovery_contract.validate_authority_recovery_contract(
         root, models, errors, _rust_binding_item
     )
+    state_merge_contract.validate_state_merge_source_contract(root, models, errors, _rust_binding_item)
     _validate_stable_generation_diagnostics_contract(root, models, errors)
     _validate_native_participant_application_classifier_contract(
         root, models, errors

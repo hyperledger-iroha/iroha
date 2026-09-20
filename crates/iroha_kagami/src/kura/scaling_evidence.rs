@@ -7,9 +7,11 @@
 //! proofs, and intentionally are not accepted as inputs to this owner.
 //!
 //! The export adapter combines this authentication with the read-only Core owner.
-//! TODO: connect independently retained launcher inputs and secure CLI publication;
-//! the typed adapter does not grant filesystem publication authority.
+//! The command and retained filesystem owners bind independently selected launch
+//! inputs through secure publication and replay; this typed adapter alone does
+//! not grant filesystem publication authority or qualify a scaling release.
 
+pub(crate) mod command;
 pub(crate) mod export;
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -6,7 +6,7 @@ use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::{
     ffi::OsString,
     fs::File,
-    os::unix::ffi::OsStrExt as _,
+    os::unix::{ffi::OsStrExt as _, fs::FileExt as _},
     path::{Component, Path, PathBuf},
 };
 
@@ -96,8 +96,19 @@ enum Phase {
     InputRetained,
     BeforeRead,
     AfterRead,
+    BeforeRequestDecode,
+    AfterRequestDecode,
+    BeforeVerification,
+    BeforeIdentity,
+    AfterIdentity,
+    BeforeProjection,
+    AfterProjection,
     BeforeInputFinish,
     AfterVerification,
+    BeforeWrite,
+    AfterWrite,
+    BeforeReadback,
+    AfterReadback,
     BeforeCreate,
     AfterCreate,
     BeforeDirectorySync,
@@ -286,7 +297,25 @@ const READ_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::NONBLOCK)
     .union(OFlags::CLOEXEC);
 
+// Positional reads leave the retained descriptor offset untouched, including
+// when two immutable projection checks run concurrently.
+struct ContentReader<'a> {
+    file: &'a File,
+    offset: u64,
+}
+impl std::io::Read for ContentReader<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.file.read_at(bytes, self.offset)?;
+        self.offset = self
+            .offset
+            .checked_add(count as u64)
+            .ok_or_else(|| std::io::Error::other("retained read offset overflow"))?;
+        Ok(count)
+    }
+}
+
 struct BoundInput {
+    path: PathBuf,
     parent: Parent,
     name: OsString,
     file: File,
@@ -323,6 +352,7 @@ impl BoundInput {
             "input changed during descriptor admission"
         );
         let owner = Self {
+            path: binding.path,
             parent,
             name,
             file,
@@ -364,11 +394,14 @@ impl BoundInput {
         );
         Ok(bytes)
     }
-    fn recheck_content(&mut self) -> Result<()> {
+    fn recheck_content(&self) -> Result<()> {
         self.check()?;
-        self.file.seek(SeekFrom::Start(0))?;
         let (digest, size) = iroha_crypto::sha256_reader_bounded(
-            (&mut self.file).take(self.state.size + 1),
+            ContentReader {
+                file: &self.file,
+                offset: 0,
+            }
+            .take(self.state.size + 1),
             self.state.size,
         )?;
         ensure!(
@@ -387,6 +420,10 @@ pub(super) struct InputPublicationLease {
 }
 impl InputPublicationLease {
     pub(super) fn check(&self) -> Result<()> {
+        for file in &self.files {
+            file.recheck_content()?;
+        }
+        // Recheck every namespace after the last full bounded digest read.
         for file in &self.files {
             file.check()?;
         }
@@ -463,11 +500,51 @@ impl Inputs {
         self.poisoned = false;
         Ok(result)
     }
+    fn check_disjoint(&self, retained: &InputPublicationLease) -> Result<()> {
+        ensure!(
+            self.files
+                .len()
+                .checked_add(retained.files.len())
+                .is_some_and(|n| n <= MAX_INPUT_FILES),
+            "aggregate input count exceeded"
+        );
+        retained.check()?;
+        for file in &self.files {
+            file.check()?;
+            for prior in &retained.files {
+                ensure!(
+                    file.path != prior.path
+                        && (file.state.identity.dev, file.state.identity.ino)
+                            != (prior.state.identity.dev, prior.state.identity.ino),
+                    "request and proof input share a path or inode"
+                );
+            }
+        }
+        Ok(())
+    }
+    fn include_request(mut self, retained: InputPublicationLease) -> Result<Self> {
+        ensure!(
+            !self.poisoned && self.read,
+            "input owner is incomplete or poisoned"
+        );
+        self.check_disjoint(&retained)?;
+        self.files.extend(retained.files);
+        Ok(self)
+    }
     fn finish(
-        mut self,
+        self,
         proof: VerifiedExport,
         hook: &mut impl FnMut(Phase) -> Result<()>,
     ) -> Result<RetainedProof> {
+        Ok(RetainedProof {
+            input_lease: self.finish_lease(hook)?,
+            proof,
+        })
+    }
+    fn finish_lease(
+        mut self,
+        hook: &mut impl FnMut(Phase) -> Result<()>,
+    ) -> Result<InputPublicationLease> {
         ensure!(
             !self.poisoned && self.read,
             "input owner is incomplete or poisoned"
@@ -481,10 +558,7 @@ impl Inputs {
         for file in &self.files {
             file.check()?;
         }
-        Ok(RetainedProof {
-            input_lease: InputPublicationLease { files: self.files },
-            proof,
-        })
+        Ok(InputPublicationLease { files: self.files })
     }
 }
 
@@ -526,56 +600,126 @@ fn remaining_input(plan: &TrustedRunPlan, limits: VerificationLimits) -> Result<
     Ok(limits.input_bytes - reserved)
 }
 
-/// Replay the exact retained artifact through the existing anchored semantic owner.
-pub(crate) fn replay_bound_export(
-    plan: TrustedRunPlan,
-    limits: VerificationLimits,
-    bindings: &[HeightInputBinding],
+/// Admit canonical launcher facts from one independently raw-digest-bound file.
+pub(crate) fn open_launcher(input: ProofInputBinding) -> Result<RetainedLauncherRequest> {
+    open_launcher_with_hook(input, |_| Ok(()))
+}
+fn open_launcher_with_hook(
+    input: ProofInputBinding,
+    mut hook: impl FnMut(Phase) -> Result<()>,
+) -> Result<RetainedLauncherRequest> {
+    let reserved_bytes = input.max_bytes;
+    let expected_sha256 = input.sha256;
+    let mut owner = Inputs::open(vec![input], MAX_INPUT_BYTES, &mut hook)?;
+    let bytes = owner
+        .read_all(&mut hook)?
+        .pop()
+        .ok_or_else(|| eyre!("missing retained launcher request"))?;
+    hook(Phase::BeforeRequestDecode)?;
+    for file in &owner.files {
+        file.check()?;
+    }
+    let request = super::super::launcher::decode(&bytes, expected_sha256, reserved_bytes)?;
+    drop(bytes);
+    hook(Phase::AfterRequestDecode)?;
+    let input_lease = owner.finish_lease(&mut hook)?;
+    Ok(RetainedLauncherRequest {
+        input_lease,
+        request,
+        reserved_bytes,
+    })
+}
+
+/// Replay the exact retained artifact under consumed, retained launcher authority.
+pub(crate) fn replay_bound_request(
+    request: RetainedLauncherRequest,
     expected_artifact_hash: Hash,
     input: ProofInputBinding,
 ) -> Result<RetainedProof> {
-    replay_with_hook(
-        plan,
-        limits,
-        bindings,
-        expected_artifact_hash,
-        input,
-        |_| Ok(()),
-    )
+    replay_with_hook(request, expected_artifact_hash, input, |_| Ok(()))
 }
 fn replay_with_hook(
-    plan: TrustedRunPlan,
-    limits: VerificationLimits,
-    bindings: &[HeightInputBinding],
+    request: RetainedLauncherRequest,
     expected_artifact_hash: Hash,
     input: ProofInputBinding,
     mut hook: impl FnMut(Phase) -> Result<()>,
 ) -> Result<RetainedProof> {
-    let remaining = remaining_input(&plan, limits)?;
-    let mut owner = Inputs::open(vec![input], remaining, &mut hook)?;
-    let bytes = owner
-        .read_all(&mut hook)?
-        .pop()
-        .ok_or_else(|| eyre!("missing retained artifact"))?;
-    let proof =
-        super::super::replay_export(plan, limits, bindings, expected_artifact_hash, &bytes)?;
-    drop(bytes);
-    hook(Phase::AfterVerification)?;
-    owner.finish(proof, &mut hook)
+    request.input_lease.check()?;
+    let RetainedLauncherRequest {
+        input_lease,
+        request,
+        reserved_bytes,
+    } = request;
+    let (plan, limits, bindings) = request.into_parts();
+    let remaining = remaining_input(&plan, limits)?
+        .checked_sub(reserved_bytes)
+        .filter(|n| *n > 0)
+        .ok_or_else(|| eyre!("launcher and proof reservations exceed total"))?;
+    ensure!(
+        input_lease.files.iter().all(|f| f.path != input.path),
+        "duplicate request and proof input path"
+    );
+    let (owner, proof) = {
+        let mut retained_hook = |phase| {
+            hook(phase)?;
+            input_lease.check()
+        };
+        let mut owner = Inputs::open(vec![input], remaining, &mut retained_hook)?;
+        owner.check_disjoint(&input_lease)?;
+        let bytes = owner
+            .read_all(&mut retained_hook)?
+            .pop()
+            .ok_or_else(|| eyre!("missing retained artifact"))?;
+        retained_hook(Phase::BeforeVerification)?;
+        let proof =
+            super::super::replay_export(plan, limits, &bindings, expected_artifact_hash, &bytes)?;
+        drop(bytes);
+        retained_hook(Phase::AfterVerification)?;
+        (owner, proof)
+    };
+    owner.include_request(input_lease)?.finish(proof, &mut hook)
 }
 
-/// Export one mandatory ordered finality/query bundle and immutable Core interval.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn export_bound_kura(
-    plan: TrustedRunPlan,
-    limits: VerificationLimits,
+/// Export one canonical bundle and immutable Core interval under retained request authority.
+pub(crate) fn export_bound_request(
+    request: RetainedLauncherRequest,
     block_store: &Path,
     merge_log: &Path,
     reader_limits: CanonicalKuraEvidenceLimits,
-    bindings: &[HeightInputBinding],
     input: ProofInputBinding,
 ) -> Result<RetainedProof> {
-    let remaining = remaining_input(&plan, limits)?;
+    export_with_hook(
+        request,
+        block_store,
+        merge_log,
+        reader_limits,
+        input,
+        |_| Ok(()),
+    )
+}
+fn export_with_hook(
+    request: RetainedLauncherRequest,
+    block_store: &Path,
+    merge_log: &Path,
+    reader_limits: CanonicalKuraEvidenceLimits,
+    input: ProofInputBinding,
+    mut hook: impl FnMut(Phase) -> Result<()>,
+) -> Result<RetainedProof> {
+    request.input_lease.check()?;
+    let RetainedLauncherRequest {
+        input_lease,
+        request,
+        reserved_bytes,
+    } = request;
+    let (plan, limits, bindings) = request.into_parts();
+    let remaining = remaining_input(&plan, limits)?
+        .checked_sub(reserved_bytes)
+        .filter(|n| *n > 0)
+        .ok_or_else(|| eyre!("launcher and proof reservations exceed total"))?;
+    ensure!(
+        input_lease.files.iter().all(|f| f.path != input.path),
+        "duplicate request and proof input path"
+    );
     let file_reservation = remaining
         .checked_sub(reader_limits.max_output_bytes)
         .filter(|n| *n > 0)
@@ -614,58 +758,111 @@ pub(crate) fn export_bound_kura(
             "supplied query count exceeds plan limit"
         );
     }
-    let mut hook = |_| Ok(());
-    let mut owner = Inputs::open(vec![input], file_reservation, &mut hook)?;
-    let bytes = owner
-        .read_all(&mut hook)?
-        .pop()
-        .ok_or_else(|| eyre!("missing supplied bundle"))?;
-    let canonical = norito::canonical_decode_limits(bytes.len());
-    let decode = norito::DecodeLimits::new(
-        canonical.max_sequence_elements(),
-        canonical.max_field_bytes(),
-        canonical.max_total_elements(),
-        canonical.max_total_allocated_bytes().min(usize::try_from(
-            limits
-                .admitted_proof_bytes
-                .checked_mul(2)
-                .ok_or_else(|| eyre!("decode reservation overflow"))?,
-        )?),
-        64,
-    );
-    // The complete outer frame stays alive during bounded decode. The codec's
-    // sequence/element/allocation/depth guards apply before allocating declared
-    // nested vectors; semantic height/leaf cardinalities are then compared to the
-    // independent bindings. This finite decoded-memory reservation is not a claim
-    // that simultaneous outer bytes plus decoded objects fit the file byte cap.
-    let bundle: SuppliedEvidenceBundleV1 = norito::decode_canonical_with_limits(&bytes, decode)?;
-    drop(bytes);
-    ensure!(
-        bundle.version == 1 && bundle.heights.len() == bindings.len(),
-        "supplied bundle version or complete interval mismatch"
-    );
-    let mut supplied = Vec::with_capacity(bundle.heights.len());
-    for (height, binding) in bundle.heights.into_iter().zip(bindings) {
-        ensure!(
-            height.height == binding.height && height.queries.len() == binding.query_hashes.len(),
-            "supplied bundle roles differ from independent binding"
+    let (owner, proof) = {
+        let mut retained_hook = |phase| {
+            hook(phase)?;
+            input_lease.check()
+        };
+        let mut owner = Inputs::open(vec![input], file_reservation, &mut retained_hook)?;
+        owner.check_disjoint(&input_lease)?;
+        let bytes = owner
+            .read_all(&mut retained_hook)?
+            .pop()
+            .ok_or_else(|| eyre!("missing supplied bundle"))?;
+        let canonical = norito::canonical_decode_limits(bytes.len());
+        let decode = norito::DecodeLimits::new(
+            canonical.max_sequence_elements(),
+            canonical.max_field_bytes(),
+            canonical.max_total_elements(),
+            canonical.max_total_allocated_bytes().min(usize::try_from(
+                limits
+                    .admitted_proof_bytes
+                    .checked_mul(2)
+                    .ok_or_else(|| eyre!("decode reservation overflow"))?,
+            )?),
+            64,
         );
-        supplied.push(SuppliedHeightEvidence {
-            height: height.height,
-            finality: height.finality,
-            queries: height.queries,
-        });
+        // The complete outer frame stays alive during bounded decode. The codec's
+        // sequence/element/allocation/depth guards apply before allocating declared
+        // nested vectors; semantic height/leaf cardinalities are then compared to the
+        // independent bindings. This finite decoded-memory reservation is not a claim
+        // that simultaneous outer bytes plus decoded objects fit the file byte cap.
+        let bundle: SuppliedEvidenceBundleV1 =
+            norito::decode_canonical_with_limits(&bytes, decode)?;
+        drop(bytes);
+        ensure!(
+            bundle.version == 1 && bundle.heights.len() == bindings.len(),
+            "supplied bundle version or complete interval mismatch"
+        );
+        let mut supplied = Vec::with_capacity(bundle.heights.len());
+        for (height, binding) in bundle.heights.into_iter().zip(&bindings) {
+            ensure!(
+                height.height == binding.height
+                    && height.queries.len() == binding.query_hashes.len(),
+                "supplied bundle roles differ from independent binding"
+            );
+            supplied.push(SuppliedHeightEvidence {
+                height: height.height,
+                finality: height.finality,
+                queries: height.queries,
+            });
+        }
+        retained_hook(Phase::BeforeVerification)?;
+        let proof = super::super::export_from_kura(
+            plan,
+            limits,
+            block_store,
+            merge_log,
+            reader_limits,
+            &bindings,
+            supplied,
+        )?;
+        retained_hook(Phase::AfterVerification)?;
+        (owner, proof)
+    };
+    owner.include_request(input_lease)?.finish(proof, &mut hook)
+}
+
+impl RetainedProof {
+    /// Calculate both independent digests from actual canonical bytes under the retained sources.
+    pub(crate) fn identity(&self) -> Result<CanonicalProofIdentity> {
+        self.identity_with_hook(|_| Ok(()))
     }
-    let proof = super::super::export_from_kura(
-        plan,
-        limits,
-        block_store,
-        merge_log,
-        reader_limits,
-        bindings,
-        supplied,
-    )?;
-    owner.finish(proof, &mut hook)
+    fn identity_with_hook(
+        &self,
+        mut hook: impl FnMut(Phase) -> Result<()>,
+    ) -> Result<CanonicalProofIdentity> {
+        self.recheck_sources()?;
+        hook(Phase::BeforeIdentity)?;
+        self.recheck_sources()?;
+        let bytes = self.proof.canonical_bytes();
+        let identity = CanonicalProofIdentity {
+            raw_sha256: iroha_crypto::sha256(bytes),
+            iroha_hash: Hash::new(bytes),
+            byte_length: u64::try_from(bytes.len())?,
+        };
+        hook(Phase::AfterIdentity)?;
+        self.recheck_sources()?;
+        Ok(identity)
+    }
+    /// Derive the projection while all original request and evidence inputs remain retained.
+    /// The independent maximum includes array delimiters and commas.
+    pub(crate) fn json_projection(&self, maximum: u64) -> Result<Vec<u8>> {
+        self.json_projection_with_hook(maximum, |_| Ok(()))
+    }
+    fn json_projection_with_hook(
+        &self,
+        maximum: u64,
+        mut hook: impl FnMut(Phase) -> Result<()>,
+    ) -> Result<Vec<u8>> {
+        self.recheck_sources()?;
+        hook(Phase::BeforeProjection)?;
+        self.recheck_sources()?;
+        let projection = self.proof.json_projection(maximum)?;
+        hook(Phase::AfterProjection)?;
+        self.recheck_sources()?;
+        Ok(projection)
+    }
 }
 
 fn check_publication(proof: &RetainedProof, output: &Parent) -> Result<()> {
@@ -835,3 +1032,15 @@ impl ProofOutput {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[path = "prepare_pair.rs"]
+mod prepare_pair;
+pub(crate) use prepare_pair::{PreparedLaunch, PreparedOutputPair, prepare_bound};
+
+#[path = "facts.rs"]
+mod facts;
+pub(in crate::kura::scaling_evidence::export) use facts::{PublishedFacts, produce_facts};
+
+#[path = "stopped_tip.rs"]
+mod stopped_tip;
+pub(crate) use stopped_tip::{RetainedStoppedTip, observe_stopped_tip};

@@ -21,7 +21,7 @@ readonly MODULE="SumeragiV2InFlightFirstRelease.tla"
 source "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh"
 run_dir="$(python3 -I -S "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_artifacts.py" init \
   --parent "${SUMERAGI_V2_FORMAL_EVIDENCE_DIR:-${TMPDIR:-/tmp}}" \
-  --runner "${BASH_SOURCE[0]}" --expected-cases 23 \
+  --runner "${BASH_SOURCE[0]}" --expected-cases 26 \
   --support "${REPO_ROOT}/scripts/formal/sumeragi_v2_tlc_result_contract.sh" \
   --support "${REPO_ROOT}/scripts/formal/resolve_java.sh")"
 readonly run_dir

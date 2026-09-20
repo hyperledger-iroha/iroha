@@ -36,6 +36,9 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs"),
     Path("crates/iroha_core/src/kura/certified_bundle_capacity.rs"),
     Path("crates/iroha_core/src/kura/lane_artifact_budget.rs"),
+    Path("crates/iroha_core/src/kura/native_amx_publication_capacity.rs"),
+    Path("crates/iroha_core/src/kura/native_amx_publication_index.rs"),
+    Path("crates/iroha_core/src/kura/native_amx_publication_startup_pins.rs"),
     Path("crates/iroha_core/src/kura/autonomous_lifecycle_terminal_outcomes.rs"),
     Path("crates/iroha_core/src/kura/autonomous_release_authority.rs"),
     Path("crates/iroha_core/src/kura/autonomous_retired_attempt.rs"),
@@ -2363,7 +2366,7 @@ MERGE_RUNTIME_PROJECTED_FIELDS = (
 )
 
 
-def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
+def test_merge_runtime_config_inventory_is_static_and_current() -> None:
     module = load_checker()
     checker_source = "\n".join(
         path.read_text(encoding="utf-8") for path in checker_source_paths()
@@ -2380,7 +2383,7 @@ def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
     assert len(module.MERGE_RUNTIME_CONFIG_FIELDS) == 16
     assert (
         checker_source.count(
-            '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;"'
+            '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 7;"'
         )
         == 2
     )
@@ -2767,9 +2770,9 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
         (
             "crates/iroha_config/src/parameters/actual.rs",
             "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION:",
-            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;",
+            "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 7;",
             "pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 5;",
-            "merge-runtime shared-config format version 6",
+            "merge-runtime shared-config format version 7",
         ),
         (
             "crates/iroha_config/src/parameters/defaults.rs",

@@ -1,6 +1,3 @@
-// TODO: wire the independently retained launcher inputs into a CLI command before
-// including this currently test-owned scaling evidence adapter in production.
-#[cfg(test)]
 mod scaling_evidence;
 
 use crate::{Outcome, RunArgs, tui};
@@ -21,18 +18,20 @@ const BLOCK_INDEX_BATCH_LEN_U64: u64 = 256;
 /// Kura inspector
 #[derive(Debug, ClapArgs, Clone)]
 pub struct Args {
-    /// Height of the block from which start the inspection. Defaults to the latest block height
-    #[clap(short, long, name = "BLOCK_HEIGHT")]
-    from: Option<u64>,
-    #[clap()]
-    path_to_block_store: PathBuf,
     #[clap(subcommand)]
     command: Command,
 }
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
+    /// Prepare, export or independently replay canonical scaling evidence
+    ScalingEvidence(Box<scaling_evidence::command::Args>),
     /// Print contents of a certain length of the blocks
     Print {
+        /// Exact lane directory containing the canonical block journals
+        path_to_block_store: PathBuf,
+        /// Height of the block from which start the inspection. Defaults to the latest block height
+        #[clap(short, long, name = "BLOCK_HEIGHT")]
+        from: Option<u64>,
         /// Number of the blocks to print. The excess will be truncated
         #[clap(short = 'n', long, default_value_t = 1)]
         length: u64,
@@ -42,6 +41,8 @@ enum Command {
     },
     /// Print the pipeline recovery sidecar JSON for a given height
     Sidecar {
+        /// Exact lane directory containing the canonical block journals
+        path_to_block_store: PathBuf,
         /// The block height whose sidecar to print
         #[clap(short = 'H', long, value_name = "HEIGHT")]
         height: u64,
@@ -52,22 +53,26 @@ enum Command {
 }
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let args = self;
-        let from_height = args.from.map(|height| {
-            if height == 0 {
-                Err(eyre!("The genesis block has the height 1. Therefore, the \"from height\" you specify must not be 0 ({} is provided). ", height))
-            } else {
-                // Kura starts counting blocks from 0 like an array while the outside world counts the first block as number 1.
-                Ok(height - 1)
-            }
-        }).transpose()?;
-        match args.command {
-            Command::Print { length, output } => {
+        match self.command {
+            Command::ScalingEvidence(args) => (*args).run(writer),
+            Command::Print {
+                path_to_block_store,
+                from,
+                length,
+                output,
+            } => {
+                let from_height = from
+                    .map(|height| {
+                        height.checked_sub(1).ok_or_else(|| {
+                            eyre!("the first block height is 1; from must be positive")
+                        })
+                    })
+                    .transpose()?;
                 tui::status("Inspecting Kura block store");
-                write_inspection_output(writer, &args.path_to_block_store, output, |out| {
+                write_inspection_output(writer, &path_to_block_store, output, |out| {
                     print_blockchain(
                         out,
-                        &args.path_to_block_store,
+                        &path_to_block_store,
                         from_height.unwrap_or(u64::MAX),
                         length,
                     )
@@ -76,10 +81,14 @@ impl<T: Write> RunArgs<T> for Args {
                 tui::success("Block inspection complete");
                 Ok(())
             }
-            Command::Sidecar { height, output } => {
+            Command::Sidecar {
+                path_to_block_store,
+                height,
+                output,
+            } => {
                 tui::status(format!("Retrieving pipeline sidecar for height {height}"));
-                write_inspection_output(writer, &args.path_to_block_store, output, |out| {
-                    print_sidecar(out, &args.path_to_block_store, height)
+                write_inspection_output(writer, &path_to_block_store, output, |out| {
+                    print_sidecar(out, &path_to_block_store, height)
                         .wrap_err("failed to print sidecar")
                 })?;
                 tui::success("Sidecar exported");
@@ -384,9 +393,9 @@ mod tests {
         let out_path = output.path().join("out.txt");
         // Build Kagami args (use output some file; writer should be ignored in this branch)
         let args = Args {
-            from: None,
-            path_to_block_store: temp.path().to_owned(),
             command: Command::Print {
+                from: None,
+                path_to_block_store: temp.path().to_owned(),
                 length: 1,
                 output: Some(out_path.clone()),
             },
@@ -450,9 +459,8 @@ mod tests {
         let output = tempfile::tempdir().unwrap();
         let out_path = output.path().join("sidecar.json");
         let args = Args {
-            from: None,
-            path_to_block_store: block_store_path,
             command: Command::Sidecar {
+                path_to_block_store: block_store_path,
                 height: 1,
                 output: Some(out_path.clone()),
             },
@@ -556,5 +564,23 @@ mod tests {
             resolve_block_store_dir(&lane).expect("explicit lane"),
             fs::canonicalize(lane).expect("canonical lane")
         );
+    }
+    #[test]
+    fn print_from_zero_fails_before_store_or_output_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("never-created.txt");
+        let args = Args {
+            command: Command::Print {
+                path_to_block_store: directory.path().join("missing-store"),
+                from: Some(0),
+                length: 1,
+                output: Some(output.clone()),
+            },
+        };
+        let mut writer = BufWriter::new(Vec::new());
+        let error = args.run(&mut writer).unwrap_err().to_string();
+        assert!(error.contains("from must be positive"), "{error}");
+        assert!(!output.exists());
+        assert!(writer.into_inner().unwrap().is_empty());
     }
 }

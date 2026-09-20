@@ -70,14 +70,25 @@ pub(super) async fn run_mixed_dataspace_native_amx_routes_and_commits_with_recei
         .await?;
         assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
         wait_for_diagnostics_native_amx_receipt(&submitter, &receipt, context).await?;
-        submitter.submit::<InstructionBox>(
-            Log::new(
+        let account = submitter.account_client();
+        let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            [InstructionBox::from(Log::new(
                 Level::INFO,
                 "native AMX routing receipt convergence tick".to_owned(),
-            )
-            .into(),
+            ))],
             FeePaymentIntent::authority(Vec::new(), None),
-        )?;
+            Metadata::default(),
+        ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        ensure!(
+            payload.fee_payment.has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the selected payer, sponsor-program revision, or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        let transaction = account.sign_transaction(payload)?;
+        account.submit_transaction_and_wait(&transaction).await?;
         Ok(())
     }
     .await;
@@ -141,12 +152,11 @@ pub(super) async fn run_native_amx_queue_journal_replays_plan_after_restart() ->
         }
         .expect("build integration-test transaction");
         let entrypoint_hash = transaction.hash_as_entrypoint();
-        let submitter_for_submit = submitter.clone();
-        let transaction_for_submit = transaction.clone();
-        spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
+        submitter
+            .account_client()
+            .submit_transaction(&transaction)
             .await
-            .map_err(|err| eyre!("submit task join error: {err}"))?
-            .map_err(|err| eyre!("failed to submit journaled native AMX transaction: {err}"))?;
+            .wrap_err("failed to submit journaled native AMX transaction")?;
         admitting_peer.shutdown().await;
         admitting_peer
             .start_checked(config_layers.iter().cloned(), None)
@@ -267,7 +277,7 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         let commitment = musubi_fault_archive_commitment();
         let archive_id = commitment.archive_id();
         let (manifest, lock) = musubi_fault_release_manifest_and_lock();
-        let (_, latest_time_ms) = musubi_fault_snapshot_and_time(&submitter)?;
+        let (_, latest_time_ms) = musubi_fault_snapshot_and_time(&submitter).await?;
         let staging_receipt =
             musubi_fault_staging_receipt(&submitter, latest_time_ms, &commitment, &manifest);
         let archive_transaction = {
@@ -292,7 +302,7 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             "register unavailable Musubi crash-replay archive",
         )
         .await?;
-        let (snapshot, _) = musubi_fault_snapshot_and_time(&submitter)?;
+        let (snapshot, _) = musubi_fault_snapshot_and_time(&submitter).await?;
         let publication = MusubiPublicationV1 {
             manifest: manifest.clone(),
             resolution: MusubiResolutionProofV1 { snapshot, lock },
@@ -307,7 +317,8 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                 &release,
                 archive_id,
                 &format!("pre-crash peer {index}"),
-            )?;
+            )
+            .await?;
         }
         let publish_transaction = {
             let account = submitter.account_client();
@@ -333,11 +344,10 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
         for peer in peers.iter().take(PEERS - 1) {
             peer.shutdown().await;
         }
-        let submitter_for_submit = submitter.clone();
-        let publish_for_submit = publish_transaction.clone();
-        spawn_blocking(move || submitter_for_submit.submit_transaction(&publish_for_submit))
+        submitter
+            .account_client()
+            .submit_transaction(&publish_transaction)
             .await
-            .map_err(|error| eyre!("Musubi fault submit task join error: {error}"))?
             .wrap_err("submit journaled Musubi publication while below consensus quorum")?;
         admitting_peer.shutdown().await;
         // The selectable-archive three-cut matrix below covers the execution
@@ -387,7 +397,8 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                 &release,
                 archive_id,
                 &format!("post-recovery peer {index}"),
-            )?;
+            )
+            .await?;
             if let Some(expected) = canonical_snapshot.as_ref() {
                 ensure!(
                     &snapshot == expected,
@@ -396,7 +407,11 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             } else {
                 canonical_snapshot = Some(snapshot);
             }
-            let blocks = client.client().query(FindBlocks).execute_all()?;
+            let blocks = client
+                .account_client()
+                .query(FindBlocks)
+                .execute_all()
+                .await?;
             let occurrences = blocks
                 .iter()
                 .flat_map(|block| {
@@ -590,7 +605,7 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
                         &client,
                         transaction.hash_as_entrypoint(),
                         &format!("iteration {iteration}: peer {peer_index}"),
-                    )?;
+                    ).await?;
                 }
                 wait_for_grouped_native_amx_durable_application(
                     &client,
@@ -598,7 +613,7 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
                     &format!("iteration {iteration}: peer {peer_index}"),
                 )
                 .await?;
-                let diagnostics = client.client().get_sumeragi_diagnostics().wrap_err_with(|| {
+                let diagnostics = client.client().get_sumeragi_diagnostics().await.wrap_err_with(|| {
                     format!("iteration {iteration}: peer {peer_index} diagnostics")
                 })?;
                 let same_route_rows = diagnostics
@@ -738,7 +753,7 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
                     &client,
                     transaction.hash_as_entrypoint(),
                     &format!("post-pruning peer {peer_index} exact-once"),
-                )?;
+                ).await?;
             }
         }
         ensure!(

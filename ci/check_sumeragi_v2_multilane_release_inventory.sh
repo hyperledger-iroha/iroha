@@ -60,7 +60,7 @@ readonly bpng_native_bootstrap_function="${bpng_native_bootstrap_test##*::}"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 readonly canonical_production_test_count=881
 readonly canonical_production_module_count=43
-readonly canonical_corridor_leg_count=84
+readonly canonical_corridor_leg_count=88
 
 for release_support_component in \
   "$release_runner_support" \
@@ -1873,19 +1873,69 @@ if (
 ):
     reject("formal release evidence must execute only in the release profile")
 
-scaling_definition = exact_line("run_release_scaling_gate() {")
-scaling_validation = exact_line(
-    "    scripts/nexus/validate_multilane_scaling_evidence.py \\"
-)
-scaling_call = exact_line("  run_release_scaling_gate")
-g12_soak = exact_line(
-    '  verify_release_identity "after G-12P two-hour rotating-validator fault soak"'
-)
-pr_branch = exact_line('if [[ "$profile" == "--pr" ]]; then')
-if not scaling_definition < scaling_validation < g12_soak < scaling_call < pr_branch:
-    reject("scaling release evidence must run after the completed G-12P fault soak")
-if "run_release_scaling_and_formal_gates" in source:
-    reject("formal and scaling release gates must remain independent")
+def require_parent_scaling_handoff(parent_source: str) -> None:
+    """Bind scaling to successful sealed-child completion and the original parent."""
+
+    def once(fragment: str) -> int:
+        if parent_source.count(fragment) != 1:
+            reject("parent scaling contract fragment is missing or duplicated: " + repr(fragment))
+        return parent_source.index(fragment)
+
+    child_launch = once(
+        '    "$release_child_bin/bash" "$sealed_repo_root/scripts/run_sumeragi_v2_release_gates.sh" --release\n'
+        '  )\n  sealed_status=$?\n  set -e\n'
+    )
+    child_read = once('  if ((sealed_status == 0)); then\n    child_result_fields="$(\n')
+    child_soak = once('      nexus_cross_soak_completion_path child_result_extra \\\n')
+    helper = once(
+        '    || "$(sha256_file "$release_scaling_handoff_helper")" != "$release_gate_helper_sha256" ]]; then\n'
+        '    echo "protected scaling handoff helper changed" >&2\n    sealed_status=1\n'
+    )
+    handoff = once(
+        '  if ((sealed_status == 0)); then\n'
+        '    set +e\n'
+        '    "$release_python_bin" -I -B -S "$release_scaling_handoff_helper" \\\n'
+        '      --gate-fd "$release_gate_fd" \\\n'
+        '      --invocation-sha256 "$release_gate_invocation_sha256" \\\n'
+        '      --challenge "$release_gate_challenge"\n'
+        '    release_scaling_handoff_status=$?\n'
+        '    set -e\n'
+        '    if ((release_scaling_handoff_status != 0)); then\n'
+        '      sealed_status=$release_scaling_handoff_status\n'
+        '    fi\n'
+        '  fi\n'
+    )
+    closed = once('  exec {release_gate_fd}<&-\n  release_gate_active=0\n')
+    checked = once(
+        '    for release_checked_root in "$repo_root" "$sealed_repo_root"; do\n'
+        '      if [[ "$release_checked_root" == "$repo_root" ]]; then\n'
+        '        release_expected_identity="$candidate_identity_json"\n'
+        '      else\n'
+        '        release_expected_identity="$sealed_identity_json"\n'
+        '      fi\n'
+        '      if [[ "$("$release_python_bin" -I -S \\\n'
+        '        "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \\\n'
+        '        --root "$release_checked_root" --release-identity-json)" != "$release_expected_identity" ]]; then\n'
+        '        echo "source identity changed during the parent-owned scaling experiment" >&2\n'
+        '        sealed_status=1\n'
+        '      fi\n'
+        '    done\n'
+    )
+    record = once('  readonly release_scaling_execution_record="$release_bootstrap_evidence_dir/scaling-execution.json"\n')
+    receipt = once('    release_receipt_arguments=(\n')
+    outer_exit = once('  exit "$sealed_status"\nfi\n')
+    soak = once('  verify_release_identity "after G-12P two-hour rotating-validator fault soak"\n')
+    child_publication = once('release_gate_boundary "child-result:before-publication" || exit $?\n')
+    if not child_launch < child_read < child_soak < helper < handoff < closed < checked < record < receipt < outer_exit < soak < child_publication:
+        reject("scaling handoff must follow successful sealed-child/G-12P evidence and precede parent receipt publication")
+    if parent_source.count('--gate-fd "$release_gate_fd"') != 1:
+        reject("scaling requires exactly one original parent handoff")
+    for retired in ('run_release_scaling_gate', 'validate_multilane_scaling_evidence.py', 'run_release_scaling_and_formal_gates'):
+        if retired in parent_source:
+            reject("retired standalone scaling execution remains: " + retired)
+
+
+require_parent_scaling_handoff(runner_parent_source)
 
 final_proof_validation = exact_line(
     'verify_release_identity "after final proof-evidence validation"'

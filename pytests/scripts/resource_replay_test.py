@@ -1,5 +1,5 @@
 """Synthetic raw-capture replay with independently refreshed adverse digests."""
-from dataclasses import asdict, replace
+from dataclasses import FrozenInstanceError, asdict, replace
 import hashlib
 import json
 import os
@@ -67,8 +67,8 @@ def admitted_allocation(peers, geometry, policy, journal_bytes=4*budget.MIB):
         for variant in ('one_lane','four_lane'):
             prefix=f'pair{pair}.{variant}'
             files=tuple(budget.FileBudget(f'{prefix}.{role}',journal_bytes if role=='journal' else budget.MIB)
-                        for role in ('journal','trace','proof','log','raw'))
-            runs.append(budget.RunBudget(pair,variant,capture_geometry,*files,()))
+                        for role in ('journal','trace','proof','receipt','raw',*budget.RUN_FILE_FIELDS[5:]))
+            runs.append(budget.RunBudget(pair,variant,capture_geometry,*files))
     experiment=budget.admit_experiment(policy=policy,runs=tuple(runs),
         static_files=(budget.StaticFile('input',budget.MIB),),
         manifest=budget.FileBudget('manifest',budget.MIB),report=budget.FileBudget('report',budget.MIB),other_control=())
@@ -87,7 +87,7 @@ class Fixture:
         self.allocation=admitted_allocation(peers,self.geometry,self.policy)
         geometry=self.geometry
         plan={key: 1 for key in replay.PLAN_FIELDS}
-        plan.update(event='plan',schema=replay.JOURNAL_SCHEMA,scheduled_requests=1,pair_index=1,variant='one_lane',
+        plan.update(event='plan',local_applied_required=True,schema=replay.JOURNAL_SCHEMA,scheduled_requests=1,pair_index=1,variant='one_lane',
                     **{name:getattr(geometry,name) for name in ('warmup_ns','measurement_ns','drain_ns','preparation_ahead_ns')})
         self.events=[plan]
         with worker.CaptureDirectory(self.directory,self.allocation) as directory:
@@ -106,7 +106,8 @@ class Fixture:
                         {'event':'resource_collection_finished','sequence':geometry.samples+1,'start_offset_ns':end,'end_offset_ns':end+1_000_000,'sampling':geometry.sampling()},
                         {'event':'request_final','plan':{'cohort':'measurement','sequence':1,'logical_id':'b'*64,'scheduled_offset_ns':0,'account_index':0},
                          'hash':'c'*63+'1','offer_offset_ns':0,'acknowledgment_offset_ns':1,'applied_offset_ns':geometry.final,
-                         'block_height':1,'status_attempts':1,'submission_finished':True,'failure':None},
+                         'block_height':1,'local_applied_offset_ns':geometry.final,'local_block_height':1,'local_status_attempts':1,
+                         'status_attempts':1,'submission_finished':True,'failure':None},
                         {'event':'collection_finished','passed':True,'failure':None}]
         self.events = add_retention(self.events)
         self.save()
@@ -156,6 +157,89 @@ def test_actual_frozen_worker_captures_replay_exact_values_and_final_deadline(fi
     assert result.samples[0].capture.rss_after_bytes==4406
     assert result.journal_sha256==fixture.digest
     assert not hasattr(result,'transaction_deadline_extension')
+
+
+def test_actual_replay_returns_joined_signed_bytes_and_independent_applied_events(fixture):
+    # A global observation at the final deadline and an earlier local observation
+    # must retain their distinct timestamps while agreeing on application height.
+    local = next(row for row in fixture.events if row['event'] == 'local_status')
+    final = next(row for row in fixture.events if row['event'] == 'request_final')
+    local['offset_ns'] = final['local_applied_offset_ns'] = fixture.geometry.final - 1
+    result = fixture.run()
+    assert len(result.signed_requests) == len(result.applied_requests) == 1
+    signed, applied = result.signed_requests[0], result.applied_requests[0]
+    assert applied == replay.RetainedApplication(0, signed.hash, 0, 1,
+        fixture.geometry.final, 1, 1, fixture.geometry.final - 1, 1, 1)
+    assert signed.index == applied.index == 0
+    assert hashlib.sha256(signed.canonical_bytes).hexdigest() == signed.canonical_sha256
+    assert result.geometry == fixture.geometry and result.geometry is not fixture.geometry
+    assert result.allocation == fixture.allocation and result.allocation is not fixture.allocation
+    assert result.allocation.run is not fixture.allocation.run
+    assert result.allocation.run.collector_journal is not fixture.allocation.run.collector_journal
+    assert result.allocation.experiment.policy is not fixture.allocation.experiment.policy
+    with pytest.raises(FrozenInstanceError):
+        applied.local_block_height = 2
+    final['local_block_height'] = 99
+    local['block_height'] = 99
+    assert applied.local_block_height == 1
+
+
+@pytest.mark.parametrize('reader_name', ['AppliedRequestReader', 'SignedRequestReader'])
+def test_terminal_reader_failure_prevents_any_resource_result(fixture, monkeypatch, reader_name):
+    reader = getattr(replay, reader_name)
+    error = replay.AppliedJournalError if reader_name == 'AppliedRequestReader' else replay.SignedRequestError
+    calls = []
+    def failed(self):
+        calls.append(self)
+        raise error('terminal_reader_test_failure')
+    monkeypatch.setattr(reader, 'finish', failed)
+    with pytest.raises(replay.ReplayError, match='terminal_reader_test_failure'):
+        fixture.run()
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('reader_name', ['AppliedRequestReader', 'SignedRequestReader'])
+@pytest.mark.parametrize('mutation', ['missing', 'duplicate', 'list', 'wrong_type', 'index', 'bool_index', 'hash'])
+def test_actual_replay_requires_exact_complete_reader_join(fixture, monkeypatch, reader_name, mutation):
+    reader = getattr(replay, reader_name)
+    finish = reader.finish
+    def changed(self):
+        result = finish(self)
+        if mutation == 'missing': return ()
+        if mutation == 'duplicate': return result + result
+        if mutation == 'list': return list(result)
+        if mutation == 'wrong_type': return (asdict(result[0]),)
+        field, value = ('hash', 'd' * 63 + '1') if mutation == 'hash' else (
+            'index', False if mutation == 'bool_index' else 1)
+        return (replace(result[0], **{field: value}),)
+    monkeypatch.setattr(reader, 'finish', changed)
+    with pytest.raises(replay.ReplayError, match='request_join_'):
+        fixture.run()
+
+
+@pytest.mark.parametrize('field', ['geometry', 'allocation_run', 'allocation_geometry',
+                                  'allocation_file', 'allocation_policy', 'peer'])
+def test_scope_is_owned_before_first_capture_io(fixture, monkeypatch, field):
+    expected_geometry = asdict(fixture.geometry)
+    expected_allocation = asdict(fixture.allocation)
+    original = replay._Captures.__init__
+    changed = []
+    def capture(self, *args, **kwargs):
+        assert not changed
+        changed.append(field)
+        if field == 'geometry': object.__setattr__(fixture.geometry, 'preparation_ahead_ns', 1)
+        elif field == 'allocation_run': object.__setattr__(fixture.allocation.run, 'pair_index', 5)
+        elif field == 'allocation_geometry': object.__setattr__(fixture.allocation.geometry, 'drain_ns', 1)
+        elif field == 'allocation_file': object.__setattr__(fixture.allocation.journal, 'max_bytes', 1)
+        elif field == 'allocation_policy': object.__setattr__(fixture.policy, 'status_body_bytes', 1)
+        else: object.__setattr__(fixture.peers[0].identity, 'pid', 999)
+        original(self, *args, **kwargs)
+    monkeypatch.setattr(replay._Captures, '__init__', capture)
+    result = fixture.run()
+    assert changed == [field]
+    assert asdict(result.geometry) == expected_geometry
+    assert asdict(result.allocation) == expected_allocation
+    assert result.applied_requests[0].block_height == 1
 
 
 def test_six_peer_resource_namespace_uses_exact_admitted_scope(tmp_path):
@@ -255,12 +339,12 @@ def test_exact_clock_sequence_cadence_and_complete_outcomes(fixture,mutation):
     if mutation=='timeout':observation['end_offset_ns']=4_000_000
     if mutation=='final_cap':
         final=next(row for row in rows if row['event']=='resource_observation' and row['sequence']==fixture.geometry.samples)
-        final_request=rows[rows.index(final)-1]
+        final_request=next(row for row in rows if row['event']=='resource_request' and row['sequence']==final['sequence'])
         final_request['start_offset_ns']+=2_000_000;final['start_offset_ns']+=2_000_000
         final['end_offset_ns']=fixture.geometry.final+fixture.geometry.response_deadline_ns
     if mutation=='final_missing':
         final=next(row for row in rows if row['event']=='resource_observation' and row['sequence']==fixture.geometry.samples)
-        rows.remove(rows[rows.index(final)-1]);rows.remove(final)
+        rows.remove(next(row for row in rows if row['event']=='resource_request' and row['sequence']==final['sequence']));rows.remove(final)
     if mutation=='finish_missing':rows[:]=[row for row in rows if row['event']!='resource_collection_finished']
     if mutation=='finish_timeout':
         row=next(row for row in rows if row['event']=='resource_collection_finished')
@@ -279,7 +363,7 @@ def test_exact_clock_sequence_cadence_and_complete_outcomes(fixture,mutation):
 def test_inclusive_last_start_lag_and_just_before_strict_cap_is_valid(fixture):
     rows=fixture.events
     final=next(row for row in rows if row['event']=='resource_observation' and row['sequence']==fixture.geometry.samples)
-    request=rows[rows.index(final)-1]
+    request=next(row for row in rows if row['event']=='resource_request' and row['sequence']==final['sequence'])
     request['start_offset_ns']+=fixture.geometry.max_start_lag_ns
     final['start_offset_ns']=request['start_offset_ns']
     final['end_offset_ns']=fixture.geometry.final+fixture.geometry.response_deadline_ns-1

@@ -5,10 +5,12 @@
 //! carries the concrete query, predicate, selector, and pagination components.
 mod batch_downcast;
 mod iter;
-pub use self::{batch_downcast::TypedBatchDowncastError, iter::QueryIterator};
+pub use self::{
+    batch_downcast::{HasTypedBatchIter, TypedBatchDowncastError},
+    iter::QueryIterator,
+};
 use crate::query::{
     Query, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
-    builder::batch_downcast::HasTypedBatchIter,
     dsl::{
         BaseProjector, CompoundPredicate, HasProjection, HasPrototype, IntoSelectorTuple,
         PredicateMarker, SelectorMarker, SelectorTuple,
@@ -202,6 +204,38 @@ where
         Self { fetch_size, ..self }
     }
 }
+impl<'a, E, Q, T> QueryBuilder<'a, E, Q, T>
+where
+    Q: Query
+        + HasProjection<PredicateMarker>
+        + HasProjection<SelectorMarker, AtomType = ()>
+        + norito::codec::Encode
+        + 'static,
+    Q::Item: Send + Sync + crate::query::ItemKindTag,
+    T: 'static,
+{
+    /// Encode the query, filters, projection and paging settings for its executor.
+    ///
+    /// Synchronous and asynchronous SDK executors share this exact wire construction.
+    #[must_use]
+    pub fn into_request(self) -> (&'a E, QueryWithParams) {
+        let item_kind = self.query.query_item_kind();
+        let query_payload: Vec<u8> = self.query.dyn_encode();
+        let query = QueryWithParams {
+            query: (),
+            query_payload,
+            item: item_kind,
+            predicate_bytes: norito::codec::Encode::encode(&self.filter),
+            selector_bytes: norito::codec::Encode::encode(&self.selector),
+            params: QueryParams {
+                pagination: self.pagination,
+                sorting: self.sorting,
+                fetch_size: self.fetch_size,
+            },
+        };
+        (self.query_executor, query)
+    }
+}
 impl<E, Q, T> QueryBuilder<'_, E, Q, T>
 where
     Q: Query
@@ -220,22 +254,8 @@ where
     ///
     /// Returns an error if the query execution fails.
     pub fn execute(self) -> Result<QueryIterator<E, T>, E::Error> {
-        let item_kind = self.query.query_item_kind();
-        let query_payload: Vec<u8> = self.query.dyn_encode();
-        let query = QueryWithParams {
-            query: (),
-            query_payload,
-            item: item_kind,
-            predicate_bytes: norito::codec::Encode::encode(&self.filter),
-            selector_bytes: norito::codec::Encode::encode(&self.selector),
-            params: QueryParams {
-                pagination: self.pagination,
-                sorting: self.sorting,
-                fetch_size: self.fetch_size,
-            },
-        };
-        let (first_batch, _remaining_items, continue_cursor) =
-            self.query_executor.start_query(query)?;
+        let (executor, query) = self.into_request();
+        let (first_batch, _remaining_items, continue_cursor) = executor.start_query(query)?;
         let iterator =
             QueryIterator::<E, T>::new(first_batch, continue_cursor).map_err(E::Error::from)?;
         Ok(iterator)
@@ -368,6 +388,38 @@ mod tests {
         }
     }
     fn assert_domain_iterator(_: QueryIterator<RecordingExecutor, Domain>) {}
+    #[test]
+    fn encoded_request_is_shared_with_synchronous_execution() {
+        let executor = RecordingExecutor::default();
+        let builder = QueryBuilder::new(&executor, FindDomains)
+            .with_pagination(Pagination {
+                offset: 7,
+                limit: std::num::NonZeroU64::new(9),
+            })
+            .with_fetch_size(FetchSize {
+                fetch_size: std::num::NonZeroU64::new(3),
+            })
+            .select_with(|_| SelectorTuple::<Domain>::default());
+        let (bound_executor, request) = builder.clone().into_request();
+        assert!(std::ptr::eq(bound_executor, &executor));
+        builder.execute().expect("synchronous execution");
+        let recorded = executor.query.borrow();
+        let recorded = recorded.as_ref().expect("exact executor request");
+        assert_eq!(
+            norito::codec::Encode::encode(&request),
+            norito::codec::Encode::encode(recorded)
+        );
+        assert_eq!(request.params.pagination.offset, 7);
+        assert_eq!(
+            request.params.pagination.limit,
+            std::num::NonZeroU64::new(9)
+        );
+        assert_eq!(
+            request.params.fetch_size.fetch_size,
+            std::num::NonZeroU64::new(3)
+        );
+    }
+
     #[test]
     fn selecting_a_full_tuple_keeps_item_type_and_query_discriminator() {
         let executor = RecordingExecutor::default();
