@@ -69,6 +69,7 @@ from release_artifact_contract import (
     stable_open_relative,
 )
 from taira_cargo_cache import admit_source_fingerprints, local_package_names, source_fingerprints
+from taira_cargo_artifact import cargo_hash_path, cargo_open_relative
 
 
 TARGET = "aarch64-unknown-linux-gnu"
@@ -84,7 +85,7 @@ CAPTURE_HEADROOM_BYTES = 256 * 1024**2
 PROGRESS_SECONDS = 30
 SESSION_SCHEMA = "taira.local-preparation.v1"
 BUILD_SOURCES = ("scripts/taira_release.py", "scripts/taira_release_check.py",
-                 "scripts/taira_cargo_cache.py",
+                 "scripts/taira_cargo_cache.py", "scripts/taira_cargo_artifact.py",
                  "scripts/release_artifact_contract.py", "scripts/cargo_fast.sh",
                  "scripts/cargo_zigbuild_linux.sh", "scripts/zig_linux_gnu.py")
 # The native gate is authenticated with every captured build input, then loaded
@@ -333,6 +334,7 @@ def verify_controller_module_origins(root: Path) -> None:
     modules = {
         "release_artifact_contract": "scripts/release_artifact_contract.py",
         "taira_cargo_cache": "scripts/taira_cargo_cache.py",
+        "taira_cargo_artifact": "scripts/taira_cargo_artifact.py",
     }
     allowed = {root / "scripts/taira_release.py", *(root / path for path in modules.values())}
     for name, relative in modules.items():
@@ -738,8 +740,10 @@ def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
     # only after a successful build and independent source/tool revalidation.
     with exclusive_output_fd(log, mode=0o600) as output:
         try:
+            # Cargo's locks and outputs must satisfy capture custody even when
+            # the invoking Linux account has a group-writable default umask.
             child = subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL,
-                                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+                                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True, umask=0o077,
                                      pass_fds=tuple(fd for fd in (lock_fd, lane_lock_fd, mode_lock_fd) if fd is not None))
             try:
                 while True:
@@ -787,7 +791,7 @@ def freeze(path: Path, *, directory: bool = False) -> None:
 
 
 def capture_artifacts(target_dir: Path, output_dir: Path) -> list[dict[str, object]]:
-    sources = [(name, package, stable_hash_path(target_dir / TARGET / "release" / name,
+    sources = [(name, package, cargo_hash_path(target_dir / TARGET / "release" / name,
                                                 max_size=MAX_BINARY_BYTES))
                for name, package in BINARIES]
     capacity_preflight([(output_dir, sum(info.size for _, _, info in sources)
@@ -801,7 +805,7 @@ def capture_artifacts(target_dir: Path, output_dir: Path) -> list[dict[str, obje
                 "release artifact must be an executable ELF")
         require(original.stat().st_uid == os.geteuid(), "release artifact must be owner-held")
         destination = capture / name
-        with stable_open_relative(target_dir, relative, expected=expected) as source:
+        with cargo_open_relative(target_dir, relative, expected=expected) as source:
             require(valid_elf(os.read(source, 20)), "release artifact is not AArch64 Linux ELF: " + name)
             os.lseek(source, 0, os.SEEK_SET)
             with exclusive_output_fd(destination, mode=0o755) as output:

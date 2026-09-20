@@ -14,6 +14,9 @@ The existing sibling .taira-testnet-build-targets/routine lane is the default;
 lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
 Native checks retain incremental compilation unless CARGO_INCREMENTAL=0 is
 explicitly selected. This preference never changes Linux release compilation.
+Cargo and native test children create owner-private locks, directories and
+outputs independently of the caller's umask; existing unsafe artifacts still
+fail custody admission. Test fixtures retain the production custody guards.
 Temporary executable copies are released after their last subprocess exits,
 including non-CLI native network binaries and failed checks; observations and logs
 remain. The published native `iroha` CLI is retained for operator consumers; the
@@ -41,7 +44,9 @@ accept no live configuration, credentials, SSH, deployment or signing inputs.
 Repeat --focus-regression HARNESS=EXACT_TEST for prequalification: metadata-check
 and compile mandatory configuration plus only the explicitly selected harnesses,
 then execute configuration and those exact tests. Unselected harnesses wait for
-immutable preparation. The metadata pass catches type/import errors early; the
+immutable preparation. Selected Pending Kura recovery controls run immediately
+after configuration and must pass before the remaining focused regressions.
+The metadata pass catches type/import errors early; the
 selected build still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
 does not replace immutable preparation or its complete gate.
 Linux development checks default to LLVM 18, requiring executable /usr/bin/clang-18
@@ -1434,6 +1439,7 @@ KAGAMI_STAGES += (("native epoch derivation and bounded public maintenance sched
 KAGAMI_STAGES += (("typed public beacon history candidates and explicit proof limits", (
     'kura::beacon_history::tests::beacon_history_projects_only_typed_public_candidates_and_keeps_proof_limits',
     'kura::beacon_history::tests::beacon_history_distinguishes_admission_from_recorded_execution_and_nested_effects',
+    'kura::beacon_history::tests::beacon_history_projects_nested_callbacks_once_and_distinguishes_rejected_roots',
     'kura::beacon_history::tests::beacon_history_requires_exact_bounded_range_and_preserves_read_only_journals',
     'kura::beacon_history::tests::beacon_history_rejects_malformed_sidecars_and_preserves_their_source',
     'kura::beacon_history::tests::beacon_history_rejects_block_height_mismatch_without_publishing_partial_json',
@@ -2109,7 +2115,8 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
     started = time.monotonic()
     observed = set()
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child, progress.heartbeat():
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
+                          umask=0o077) as child, progress.heartbeat():
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
@@ -2148,7 +2155,8 @@ def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
     artifacts: dict[str, set[str]] = {harness: set() for harness in harnesses}
     records: dict[str, dict[str, object]] = {}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child, progress.heartbeat():
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
+                          umask=0o077) as child, progress.heartbeat():
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
@@ -2650,7 +2658,8 @@ def retire_superseded_native_test_outputs(root: Path, target: Path, current: dic
 def isolate_native_artifacts(root: Path, env: dict[str, str],
                              records: dict[str, dict[str, object]]) -> NativeArtifactCopies:
     """Execute copied artifacts, never mutable Cargo paths returned by an earlier build."""
-    from release_artifact_contract import ReleaseArtifactError, stable_hash_path, stable_open_relative
+    from release_artifact_contract import ReleaseArtifactError
+    from taira_cargo_artifact import cargo_hash_path, cargo_open_relative
     target = Path(env["CARGO_TARGET_DIR"])
     output = directory_identity = None
     published = {}
@@ -2684,9 +2693,9 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                 info = path.lstat()
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                         or not info.st_mode & stat.S_IXUSR or info.st_mode & 0o022
-                        or info.st_nlink != 1 or not 0 < info.st_size <= NATIVE_ARTIFACT_MAX_BYTES):
-                    raise CheckError("native Cargo artifact must be a bounded owner-held executable without hardlinks")
-                identities[selection] = stable_hash_path(path, max_size=NATIVE_ARTIFACT_MAX_BYTES)
+                        or not 0 < info.st_size <= NATIVE_ARTIFACT_MAX_BYTES):
+                    raise CheckError("native Cargo artifact must be a bounded owner-held executable")
+                identities[selection] = cargo_hash_path(path, max_size=NATIVE_ARTIFACT_MAX_BYTES)
             # Reuse source identities already verified above. The ledger owns
             # only final tests, never shipping binaries or Cargo cache entries.
             retire_superseded_native_test_outputs(root, target, {
@@ -2714,7 +2723,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                 expected = identities[selection]
                 destination = output / selection
                 digest, size = hashlib.sha256(), 0
-                with stable_open_relative(target, str(path.relative_to(target)), expected=expected) as source:
+                with cargo_open_relative(target, str(path.relative_to(target)), expected=expected) as source:
                     cloned = False
                     if clone is not None:
                         if shutil.disk_usage(target).free < NETWORK_FIXTURE_FREE_BYTES + min(clone_headroom, remaining_bytes):
@@ -2923,7 +2932,7 @@ def run_native_test_batch(harness: str, fixture_root: Path, env: dict[str, str],
     command = [harness, *names, "--exact", "--test-threads=1", "--format", "pretty", "--color", "never"]
     with native_test_batch_progress(len(names)):
         result = subprocess.run(command, cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
-                                text=True, capture_output=True, check=False, pass_fds=lock_fds)
+                                text=True, capture_output=True, check=False, pass_fds=lock_fds, umask=0o077)
     failures = native_test_batch_failures(names, len(available) - len(names), result)
     if failures:
         # Preserve every fixture diagnostic once; never replay successful tests after a partial batch.
@@ -2942,7 +2951,8 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
     if batch and (not names or len(set(names)) != len(names)):
         raise CheckError("CLI batch selection must be nonempty and contain unique exact test names")
     listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=fixture_root,
-                             env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, pass_fds=lock_fds)
+                             env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False,
+                             pass_fds=lock_fds, umask=0o077)
     if listing.returncode:
         raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
     require_tests(listing.stdout, stages)
@@ -2959,7 +2969,7 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
             print(f"[taira-check] start {name}", flush=True)
             result = subprocess.run([harness, name, "--exact", "--color", "never"],
                                     cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
-                                    text=True, capture_output=True, check=False, pass_fds=lock_fds)
+                                    text=True, capture_output=True, check=False, pass_fds=lock_fds, umask=0o077)
             try:
                 require_one_pass(name, result)
             except CheckError as error:
@@ -2998,7 +3008,8 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     artifacts: dict[str, str] = {}
     records: dict[str, dict[str, object]] = {}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child, progress.heartbeat():
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
+                          umask=0o077) as child, progress.heartbeat():
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
@@ -3234,7 +3245,7 @@ def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int,
     started = time.monotonic()
     print(f"[taira-check] start {description}", flush=True)
     common = dict(cwd="/", env=env, stdin=subprocess.DEVNULL, text=True,
-                  capture_output=True, check=False, pass_fds=lock_fds, timeout=120)
+                  capture_output=True, check=False, pass_fds=lock_fds, timeout=120, umask=0o077)
     compiled = subprocess.run([compiler, "--edition=2024", "--test",
         str(root / source), "-o", str(executable)], **common)
     if compiled.returncode:
@@ -3374,15 +3385,29 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         for name in selections:
             if name != "config" and name not in focused:
                 harnesses.release(name)
+        pending_kura_names = {test for _, tests in CORE_PENDING_KURA_RECOVERY_STAGES
+                              for test in tests}
+        core_stages = focused.get("core", ())
+        pending_kura = tuple((label, tuple(test for test in tests if test in pending_kura_names))
+                             for label, tests in core_stages
+                             if any(test in pending_kura_names for test in tests))
+        remaining_core = tuple((label, tuple(test for test in tests if test not in pending_kura_names))
+                               for label, tests in core_stages
+                               if any(test not in pending_kura_names for test in tests))
+        # Retain the same Core copy for its remaining tests. A partial focus must
+        # neither expand to all recovery tests nor bury their failures in later work.
+        if pending_kura:
+            run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds)
         failures = []
         for name in selections:
             if name in {"config", "network"} or name not in focused:
                 continue
+            stages = remaining_core if name == "core" else focused[name]
             try:
                 if name == "cli":
-                    run_stages(harnesses[name], fixture_root, env, focused[name], lock_fds, batch=True)
-                else:
-                    run_stages(harnesses[name], fixture_root, env, focused[name], lock_fds)
+                    run_stages(harnesses[name], fixture_root, env, stages, lock_fds, batch=True)
+                elif stages:
+                    run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
             except SelectedRegressionFailures as error:
                 failures.extend(error.failures)
             harnesses.release(name)

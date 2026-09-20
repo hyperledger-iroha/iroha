@@ -8,6 +8,10 @@ the reviewed guest controller. --prepare-artifacts creates those exact binaries
 via native cat/SSH before native supervisor generation materialization. No secret files are read. Failed attempts are never overwritten.
 An explicit --failed-start-chain authenticates every failed startup since the
 completed deployment. Unchanged binaries can be retried in a fresh operation.
+Both pinned guest and Mac backing routes are required. Storage admission runs
+before transfers and again before apply; no cleanup or alternate route is inferred.
+--bind-backing-storage authors a fresh local deployment record from an explicit
+pinned Mac SSH route and VM backing directory; it contacts no host.
 """
 import argparse
 import fcntl
@@ -61,11 +65,12 @@ def module(path, name):
 
 def validate_deployment(value):
     """Admit one explicit owner-public first-release Taira installation."""
-    need(set(value) == {'schema', 'guest_ssh', 'runtime_root', 'state_root', 'config_root',
+    need(set(value) == {'schema', 'guest_ssh', 'backing_ssh', 'backing_path',
+         'runtime_root', 'state_root', 'config_root',
          'config_release', 'genesis_manifest', 'network_id', 'public_origin', 'roles',
          'ports', 'replay_floor', 'renderer_sha256', 'current'}, 'deployment fields differ')
     need(value['schema'] == 'taira.runtime-deployment.v1', 'deployment schema differs')
-    for key in ('runtime_root', 'state_root', 'config_root', 'genesis_manifest'):
+    for key in ('runtime_root', 'state_root', 'config_root', 'genesis_manifest', 'backing_path'):
         raw = value[key]
         need(isinstance(raw, str) and raw.startswith('/') and str(Path(os.path.normpath(raw))) == raw
              and not re.search(r'[\x00-\x1f\x7f]', raw), 'invalid public runtime path')
@@ -98,7 +103,29 @@ def validate_deployment(value):
     for digest in (value['renderer_sha256'], current['local_plan_sha256']):
         need(re.fullmatch('[0-9a-f]{64}', digest) is not None, 'public evidence digest missing')
     retry.validate_ssh(value['guest_ssh'])
+    retry.validate_ssh(value['backing_ssh'])
     return value
+
+
+
+def bind_backing_storage(args):
+    """Author the required backing binding locally without altering its source record."""
+    raw = read_public(args.deployment)
+    value = retry.decode(raw)
+    need(isinstance(value, dict) and 'backing_ssh' not in value and 'backing_path' not in value,
+         'backing authoring requires an unbound source; partial or existing bindings are refused')
+    value.update(backing_ssh=retry.decode(read_public(args.backing_route)),
+                 backing_path=args.backing_path)
+    validate_deployment(value)
+    parent = args.output.parent
+    info = parent.lstat()
+    need(args.output.is_absolute() and parent.resolve() == parent and stat.S_ISDIR(info.st_mode)
+         and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
+         'fresh output below owner-private directory required')
+    # Exclusive publication also refuses the source path and existing/symlink outputs.
+    write_new(args.output, (json.dumps(value, sort_keys=True) + '\n').encode())
+    print(json.dumps({'deployment': str(args.output), 'source_sha256': sha(raw),
+                      'host_contacted': False, 'runtime_mutated': False}))
 
 
 def validate_build(build, commit):
@@ -190,6 +217,7 @@ def make_plan(build, deployment, prior, guest, operation, failed_start=None, *, 
         retained_predecessor={'attempt_name':current['attempt_name'],
             'intent_sha256':sha(json.dumps(prior, sort_keys=True, separators=(',', ':')).encode())},
         guest_sha256=sha(read_public(HERE / 'taira_update_guest.py')),
+        capacity_sha256=sha(read_public(HERE / 'taira_disk_capacity.py')),
         runner_sha256=sha(read_public(HERE / 'taira_update.py')),
         renderer_sha256=deployment['renderer_sha256'], secret_contents_read=False,
         transaction_submission=supervisor['successor_service_state'] == 'running',
@@ -217,12 +245,21 @@ def successor_deployment(plan, raw, output):
     return successor
 
 
-def transfer_code(name, create_release, plan):
+def transfer_code(name, create_release, plan, admission):
     need(name in ('iroha3d_taira', 'iroha', 'kagami'), 'unexpected transfer artifact')
+    source = capacity_source(plan)
+    need(admission['operation'] == plan['operation'] and admission['commit'] == plan['commit']
+         and admission['phase'] == 'prepare' and admission['capacity_sha256'] == plan['capacity_sha256'],
+         'artifact storage admission differs')
+    # Earlier successful transfers already consume their allocation. Keep every
+    # remaining artifact and all evidence/reserve charges until its own write.
+    earlier = ('iroha3d_taira', 'iroha', 'kagami')[:('iroha3d_taira', 'iroha', 'kagami').index(name)]
+    guest_plan = dict(admission['guest_plan'], allocations=[row for row in admission['guest_plan']['allocations']
+                      if row['label'] not in {'candidate artifact ' + item for item in earlier}])
     # stdin is inherited directly from the local artifact descriptor. Python
     # controls descriptors/paths only; /bin/cat owns the binary stream.
     return f'''
-import os,stat,fcntl
+import os,stat,fcntl,base64,hashlib
 from pathlib import Path
 base=Path({plan['deployment']['runtime_root']!r})
 assert os.geteuid()==0 and base.resolve()==base
@@ -239,6 +276,15 @@ s=os.fstat(lock);assert stat.S_ISREG(s.st_mode) and s.st_uid==s.st_gid==0 and s.
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 t=lock_path.lstat();assert (s.st_dev,s.st_ino)==(t.st_dev,t.st_ino)
 assert not os.path.lexists(state/'.reset-owner.json')
+capacity_source=base64.b64decode({base64.b64encode(source).decode()!r},validate=True)
+assert hashlib.sha256(capacity_source).hexdigest()=={plan['capacity_sha256']!r}
+capacity={{'__name__':'taira_update_capacity'}}
+exec(compile(capacity_source,'<maintained-taira-capacity>','exec'),capacity)
+for path,expected in {admission['guest_filesystems']!r}.items():
+ observed=capacity['inspect_filesystem'](Path(path))
+ assert observed['device']==expected['device'] and observed['fragment_bytes']==expected['fragment_bytes'],'guest storage filesystem changed'
+observed=capacity['evaluate']({guest_plan!r})
+assert observed['passed'],'insufficient guest capacity before artifact transfer: '+'; '.join(observed['errors'])
 os.set_inheritable(lock,True)
 release=base/{release_name(plan)!r}
 bins=release/'bin'
@@ -289,6 +335,65 @@ def verify_prepared_remote(plan, argv, output):
     return report
 
 
+def capacity_source(plan):
+    source = read_public(HERE / 'taira_disk_capacity.py')
+    need(sha(source) == plan['capacity_sha256'], 'reviewed capacity checker changed')
+    return source
+
+
+def storage_remote(route, payload, output, name):
+    """Retain bounded, metadata-only capacity observations on the exact pinned route."""
+    argv = retry.validate_ssh(route)
+    with (output / (name + '.stdout.json')).open('xb') as out, \
+         (output / (name + '.stderr')).open('xb') as err:
+        result = subprocess.run(argv, input=payload, stdout=out, stderr=err, timeout=60)
+    need(result.returncode == 0, name + ' failed; no transfer or runtime mutation admitted')
+    return retry.decode(read_public(output / (name + '.stdout.json')))
+
+
+def admit_storage(plan, phase, output):
+    """Check the Mac first, then charge the guest's actual filesystem allocation plan."""
+    source = capacity_source(plan)
+    deployment = plan['deployment']
+    guest = module(HERE / 'taira_update_guest.py', 'update_storage_admission')
+    sizes = sum(row[3] for row in guest.artifact_identity(plan['artifacts'])) if phase == 'prepare' else 0
+    def backing(required, name):
+        allocation = {'schema': 'taira.disk-capacity.plan.v1', 'allocations': [
+            {'path': deployment['backing_path'], 'label': 'guest allocation including reserve',
+             'bytes': required, 'inodes': 1},
+            {'path': deployment['backing_path'], 'label': 'Mac physical backing headroom',
+             'bytes': 2 * 1024**3, 'inodes': 1024}]}
+        payload = retry.remote_payload(source, 'evaluate', allocation, print_result=True)
+        payload = (b'import sys,os,stat\nassert sys.platform == "darwin", "backing capacity requires the approved Mac host"\n'
+                   + ('assert stat.S_ISDIR(os.lstat(' + repr(deployment['backing_path'])
+                      + ').st_mode), "explicit Mac backing directory is absent or not a directory"\n').encode()
+                   + payload)
+        result = storage_remote(deployment['backing_ssh'], payload, output, name)
+        need(result.get('schema') == 'taira.disk-capacity.result.v1'
+             and result.get('passed') is True and result.get('errors') == [],
+             'insufficient Mac physical backing capacity before ' + phase)
+    # This preliminary floor is deliberately not the full admission. It reports
+    # a full Mac even when its sparse guest can no longer complete an SSH handshake.
+    backing(sizes + 64 * 1024**2 + 2 * 1024**3, 'backing-capacity-before-' + phase)
+    guest_source = read_public(HERE / 'taira_update_guest.py')
+    need(sha(guest_source) == plan['guest_sha256'], 'reviewed guest controller changed')
+    request = dict(plan=plan, phase=phase, capacity_source=base64.b64encode(source).decode())
+    payload = guest_source + b'\nstorage_capacity_locked(' + repr(request).encode() + b')\n'
+    admission = storage_remote(deployment['guest_ssh'], payload, output, 'guest-capacity-' + phase)
+    need(admission.get('schema') == 'taira.update-storage-admission.v1'
+         and admission.get('operation') == plan['operation'] and admission.get('commit') == plan['commit']
+         and admission.get('phase') == phase and admission.get('capacity_sha256') == plan['capacity_sha256']
+         and admission.get('guest_capacity', {}).get('passed') is True,
+         'guest storage admission differs from the exact update')
+    # The checker owns grouping by actual filesystem, including one reserve per
+    # device. Existing files are already charged; only new allocation is added.
+    required = sum(row['bytes'] for row in admission['guest_plan']['allocations'])
+    need(type(required) is int and required >= sizes + 64 * 1024**2 + 2 * 1024**3,
+         'guest storage admission omitted required allocation')
+    backing(required, 'backing-capacity-' + phase)
+    return admission
+
+
 def prepare_artifacts(args, deployment, build_raw):
     """Explicit create-new artifact phase before native generation materialization."""
     build = retry.decode(build_raw)
@@ -301,13 +406,15 @@ def prepare_artifacts(args, deployment, build_raw):
         'commit': build['commit'], 'deployment': deployment, 'artifacts': artifacts,
         'build_result_path': str(args.prepared_result), 'build_result_sha256': sha(build_raw),
         'runner_sha256': sha(read_public(HERE / 'taira_update.py')),
+        'capacity_sha256': sha(read_public(HERE / 'taira_disk_capacity.py')),
         'guest_sha256': sha(read_public(HERE / 'taira_update_guest.py'))}
     retained = retained_artifacts(artifacts)
     argv = retry.validate_ssh(deployment['guest_ssh'])
     args.output.mkdir(mode=0o700)
     write_new(args.output / 'artifact-preparation.json', (json.dumps(plan, sort_keys=True) + '\n').encode())
+    admission = admit_storage(plan, 'prepare', args.output)
     for index, (artifact, path) in enumerate(retained):
-        remote = shlex.join(['/usr/bin/python3', '-I', '-c', transfer_code(artifact['name'], index == 0, plan)])
+        remote = shlex.join(['/usr/bin/python3', '-I', '-c', transfer_code(artifact['name'], index == 0, plan, admission)])
         with path.open('rb') as source, (args.output / (artifact['name'] + '-transfer.stderr')).open('xb') as error:
             result = subprocess.run(artifact_transfer_argv(argv, remote), stdin=source,
                 stdout=subprocess.DEVNULL, stderr=error, timeout=300)
@@ -328,7 +435,8 @@ def apply_plan(args):
     need(sha(build_raw) == plan['build_result_sha256'], 'bound preparation result changed')
     need(validate_build(json.loads(build_raw), plan['commit']) == plan['artifacts'],
          'plan artifacts differ from the bound completed preparation')
-    for name, field in [('taira_update_guest.py', 'guest_sha256'), ('taira_update.py', 'runner_sha256')]:
+    for name, field in [('taira_update_guest.py', 'guest_sha256'), ('taira_update.py', 'runner_sha256'),
+                        ('taira_disk_capacity.py', 'capacity_sha256')]:
         need(sha(read_public(HERE / name)) == plan[field], 'reviewed coordinator source changed')
     need(sha(read_public(ROOT / 'scripts/taira_validator_unit.py')) == plan['renderer_sha256'],
          'reviewed custody renderer changed')
@@ -358,9 +466,10 @@ def apply_plan(args):
     retained_artifacts(artifacts)
     args.output.mkdir(mode=0o700)
     write_new(args.output / 'plan.json', raw)
+    admit_storage(plan, 'apply', args.output)
     verify_prepared_remote(plan, argv, args.output)
     guest_source = read_public(HERE / 'taira_update_guest.py')
-    payload = guest_source + b'\napply_locked(' + repr(plan).encode() + b')\n'
+    payload = guest_source + b'\napply_locked(' + repr(plan).encode() + b',' + repr(capacity_source(plan)).encode() + b')\n'
     with (args.output / 'stdout.json').open('xb') as out, (args.output / 'stderr.log').open('xb') as err:
         # Bound the complete guest operation beyond its individual preflight,
         # stop/start, progress-bounded catch-up, doctor and final observation budgets.
@@ -380,9 +489,9 @@ def apply_plan(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--deployment', type=Path, required=True)
-    parser.add_argument('--prepared-result', type=Path, required=True)
+    parser.add_argument('--prepared-result', type=Path)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--operation', required=True,
+    parser.add_argument('--operation',
                         help='explicit fresh update-<32hex> already bound by supervisor preparation')
     parser.add_argument('--supervisor-plan', type=Path,
                         help='public immutable preprovisioned supervisor transition and native receipt')
@@ -391,14 +500,32 @@ def main():
     parser.add_argument('--plan-only', action='store_true', help='write the exact local plan without SSH')
     parser.add_argument('--failed-start-chain', type=Path,
                         help='ordered digest-bound failed attempts since the last completed deployment')
+    parser.add_argument('--bind-backing-storage', action='store_true',
+                        help='author a fresh local deployment record with the explicit Mac binding; no SSH')
+    parser.add_argument('--backing-route', type=Path,
+                        help='owner-public JSON containing the approved Mac SSH argv and exact host-key pins')
+    parser.add_argument('--backing-path', help='canonical absolute Mac VM backing directory')
     args = parser.parse_args()
-    need((args.prepare_artifacts and args.supervisor_plan is None and not args.plan_only
+    if args.bind_backing_storage:
+        need(args.backing_route is not None and args.backing_path is not None
+             and args.prepared_result is None and args.operation is None
+             and args.supervisor_plan is None and not args.prepare_artifacts
+             and not args.plan_only and args.failed_start_chain is None,
+             'backing authoring requires only deployment, backing-route, backing-path and fresh output')
+    else:
+        need(args.backing_route is None and args.backing_path is None
+             and args.prepared_result is not None and args.operation is not None,
+             'update requires prepared-result and operation; backing authoring is a separate local command')
+    need(args.bind_backing_storage or (args.prepare_artifacts and args.supervisor_plan is None and not args.plan_only
           and args.failed_start_chain is None)
          or (not args.prepare_artifacts and args.supervisor_plan is not None),
          'prepare-artifacts is separate; normal apply and plan-only require a supervisor plan')
     os.umask(0o077)
     need(subprocess.check_output(['git', 'branch', '--show-current'], cwd=ROOT, text=True).strip()
          == 'optimizations', 'only optimizations is allowed')
+    if args.bind_backing_storage:
+        bind_backing_storage(args)
+        return
     deployment = validate_deployment(retry.decode(read_public(args.deployment)))
     parent = args.output.parent
     info = parent.lstat()

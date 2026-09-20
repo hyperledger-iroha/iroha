@@ -178,17 +178,35 @@ class TairaPrepareTests(unittest.TestCase):
             release.capture_artifacts(self.target, self.out)
         self.assertFalse((self.out / "result.json").exists())
 
+    def test_capture_accepts_only_closed_cargo_pair_and_keeps_output_single_link(self):
+        self.binaries()
+        self.out.mkdir()
+        profile = self.target / release.TARGET / 'release'
+        deps = profile / 'deps'; deps.mkdir()
+        for name, _ in release.BINARIES:
+            os.link(profile / name, deps / (name.replace('-', '_') + '-0123456789abcdef'))
+        rows = release.capture_artifacts(self.target, self.out)
+        self.assertEqual(len(rows), len(release.BINARIES))
+        for row in rows:
+            captured = Path(row['path'])
+            self.assertEqual(captured.read_bytes(), elf())
+            self.assertEqual(captured.stat().st_nlink, 1)
+            self.assertEqual(stat.S_IMODE(captured.stat().st_mode), 0o500)
+            self.assertEqual((profile / row['name']).stat().st_nlink, 2)
+        self.assertIn('scripts/taira_cargo_artifact.py', release.BUILD_SOURCES)
+        self.assertIn('scripts/taira_cargo_artifact.py', release.BOOTSTRAP_SOURCES)
+
     def test_artifact_replacement_after_hash_is_rejected(self):
         self.binaries()
         self.out.mkdir()
         original = self.target / release.TARGET / "release" / release.BINARIES[0][0]
-        real_open = release.stable_open_relative
+        real_open = release.cargo_open_relative
         def replace_before_open(root, relative, *, expected):
             original.rename(original.with_suffix(".retained"))
             original.write_bytes(elf())
             original.chmod(0o755)
             return real_open(root, relative, expected=expected)
-        with patch.object(release, "stable_open_relative", side_effect=replace_before_open):
+        with patch.object(release, "cargo_open_relative", side_effect=replace_before_open):
             with self.assertRaises(release.ReleaseArtifactError):
                 release.capture_artifacts(self.target, self.out)
 
@@ -458,6 +476,19 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertIn("Linux build running", output.getvalue())
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
         self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+
+    def test_release_build_child_uses_private_umask_without_changing_parent(self):
+        directory, output = self.root / "cargo-profile", self.root / "cargo-profile/.cargo-lock"
+        source = (f"import os; os.mkdir({str(directory)!r}, 0o777); "
+                  f"os.close(os.open({str(output)!r}, os.O_CREAT|os.O_WRONLY, 0o666))")
+        original_umask = os.umask(0o002)
+        try:
+            release.run_build(self.root, [sys.executable, "-c", source], {}, self.root / "private-build.log")
+            self.assertEqual(os.umask(0o002), 0o002)
+        finally:
+            os.umask(original_umask)
+        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
 
     def test_environment_excludes_secrets_hooks_and_compiler_overrides(self):
         env = release.child_environment({"PATH": "/bin", "HOME": "/fixture",
@@ -769,7 +800,7 @@ class TairaPrepareTests(unittest.TestCase):
     def test_prepare_cli_does_not_import_a_mutable_gate_with_side_effects(self):
         scripts = self.root / "scripts"
         scripts.mkdir()
-        for name in ("taira_release.py", "taira_cargo_cache.py", "release_artifact_contract.py"):
+        for name in ("taira_release.py", "taira_cargo_cache.py", "taira_cargo_artifact.py", "release_artifact_contract.py"):
             (scripts / name).write_bytes((SCRIPT.parent / name).read_bytes())
         marker = self.root / "mutable-gate-executed"
         (scripts / "taira_release_check.py").write_text(
@@ -903,7 +934,7 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_controller_module_origins_reject_shadow_package(self):
         modules = {}
-        for name in ("release_artifact_contract", "taira_cargo_cache"):
+        for name in ("release_artifact_contract", "taira_cargo_cache", "taira_cargo_artifact"):
             module = types.ModuleType(name)
             module.__file__ = str(self.root / "scripts" / (name + ".py"))
             module.__spec__ = importlib.util.spec_from_file_location(name, module.__file__)

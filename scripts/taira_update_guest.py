@@ -10,6 +10,7 @@ checkpoint and a fresh anchored quorum. Heights within one process never regress
 """
 import ast
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -78,6 +79,81 @@ ENV = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': '/root', 'LC_ALL': 'C'}
 def need(value, reason):
     if not value:
         raise RuntimeError(reason)
+
+
+def load_capacity(plan, capacity_source):
+    """Load only the source-bound maintained allocation evaluator."""
+    need(hashlib.sha256(capacity_source).hexdigest() == plan['capacity_sha256'],
+         'reviewed capacity checker changed')
+    capacity = {'__name__': 'taira_update_capacity'}
+    exec(compile(capacity_source, '<maintained-taira-capacity>', 'exec'), capacity)
+    return capacity
+
+
+def storage_capacity(plan, capacity_source, phase):
+    """Observe every allocating guest filesystem through the maintained checker."""
+    need(phase in ('prepare', 'apply'), 'unknown update storage phase')
+    capacity = load_capacity(plan, capacity_source)
+    identity = artifact_identity(plan['artifacts'])
+    runtime = plan['deployment']['runtime_root']
+    # Evidence allowances are explicit working budgets, not a promise that an
+    # arbitrary service can run forever without consuming its filesystem reserve.
+    requirements = [(runtime, 'update evidence and publication', 64 * 1024**2, 1024, 8)]
+    if phase == 'prepare':
+        requirements += [(runtime, 'candidate artifact ' + name, size, 1, 1)
+                         for name, _, _, size in identity]
+    else:
+        units = sum(len(base64.b64decode(row['after'], validate=True)) for row in plan['units'])
+        units += len(plan['epoch_supervisor']['after']['unit_bytes'].encode())
+        requirements += [
+            (str(SUPERVISOR_STATE_ROOT), 'supervisor publication', 64 * 1024**2, 1024, 8),
+            ('/etc/systemd/system', 'unit publication and rollback', 2 * units, 10, 0),
+            (plan['deployment']['state_root'], 'retained validator state', 0, 0, 0),
+        ]
+    allocations, observations = [], {}
+    for path, label, size, files, directories in requirements:
+        if path not in observations:
+            observations[path] = capacity['inspect_filesystem'](Path(path))
+        observed = observations[path]
+        bound = capacity['allocation_bound'](size, files, directories, observed['fragment_bytes'])
+        allocations.append(dict(path=path, label=label, **bound))
+    devices = set()
+    for path, observed in observations.items():
+        if observed['device'] not in devices:
+            allocations.append(dict(path=path, label='guest filesystem headroom',
+                                    bytes=2 * 1024**3, inodes=1024))
+            devices.add(observed['device'])
+    guest_plan = dict(schema=capacity['PLAN_SCHEMA'], allocations=allocations)
+    result = capacity['evaluate'](guest_plan, inspect=capacity['inspect_filesystem'])
+    need(result['passed'], 'insufficient guest capacity before ' + phase + ': ' + '; '.join(result['errors']))
+    need({row['device'] for row in result['filesystems']} == devices,
+         'guest allocation filesystems changed during admission')
+    guest_filesystems = {}
+    for path, observed in observations.items():
+        current = capacity['inspect_filesystem'](Path(path))
+        expected = {key: observed[key] for key in ('device', 'fragment_bytes')}
+        need({key: current[key] for key in expected} == expected,
+             'guest allocation path changed filesystem during admission')
+        guest_filesystems[path] = expected
+    return dict(schema='taira.update-storage-admission.v1', operation=plan['operation'],
+                commit=plan['commit'], phase=phase, capacity_sha256=plan['capacity_sha256'],
+                guest_plan=guest_plan, guest_capacity=result, guest_filesystems=guest_filesystems)
+
+
+def storage_capacity_locked(request):
+    """Return a metadata-only allocation observation under the existing update locks."""
+    plan = request['plan']
+    if request['phase'] == 'prepare':
+        # First supervisor installation needs the same root that transfer_code
+        # already creates for its deployment lock. Only coordination state is
+        # created before capacity admission; artifact/runtime writes wait.
+        for ancestor in SUPERVISOR_STATE_ROOT.parents:
+            stamp(ancestor, True)
+        SUPERVISOR_STATE_ROOT.mkdir(mode=0o700, exist_ok=True)
+    with deployment_locks(plan):
+        result = storage_capacity(plan, base64.b64decode(request['capacity_source'], validate=True),
+                                  request['phase'])
+    print(json.dumps(result), flush=True)
 
 
 def validate_failed_start_inputs(deployment, baseline, failed, records, operation,
@@ -1781,13 +1857,14 @@ def retained_attempt(plan):
     return before, checkpoints
 
 
-def apply(plan):
+def apply(plan, capacity_source):
     configure(plan)
     need(os.geteuid() == 0 and plan['network_id'] == NETWORK, 'guest or network differs')
     need(plan['commit'] != PREDECESSOR['commit'], 'candidate cannot repeat the completed runtime')
     need(tuple(row['role'] for row in plan['units']) == ROLES, 'four ordered roles required')
     need([row['name'] for row in plan['artifacts']] == ['iroha3d_taira', 'iroha', 'kagami'],
          'exact same-release daemon, CLI and Kagami required')
+    capacity_before = storage_capacity(plan, capacity_source, 'apply')
     retained = retained_attempt(plan)
     # Installed unit bytes and retained config/state metadata bind the old cohort.
     # A crash-looping peer need not answer HTTP before the cohort is stopped.
@@ -1805,6 +1882,7 @@ def apply(plan):
     ATTEMPT.mkdir(mode=0o700)
     sync(BASE)
     record('intent.json', plan)
+    record('capacity-before-apply.json', capacity_before)
     record('epoch-supervisor-wrapper.json', plan['epoch_supervisor'])
     # --version reports package semver, not a source commit. The candidate digest
     # binds the approved build here; /status verifies actual source after start.
@@ -1836,6 +1914,7 @@ def apply(plan):
     command(['/usr/bin/systemd-analyze', 'verify',
              *[ATTEMPT / (f'iroha3d-{row["role"]}.service') for row in plan['units']]],
             name='verify-units')
+    record('capacity-before-stop.json', storage_capacity(plan, capacity_source, 'apply'))
     original_supervisor = supervisor_capture(plan)
     installed = []
     new_start_attempted = False
@@ -2028,8 +2107,9 @@ def verify_prepared_artifacts(plan):
         os.close(fd)
 
 
-def apply_locked(plan):
-    """Hold both update flocks across pause, publication, resume and containment."""
+@contextlib.contextmanager
+def deployment_locks(plan):
+    """Hold the same two exact owner locks for storage admission and mutation."""
     import fcntl
     global DEPLOYMENT_LOCK_FD
     held = []
@@ -2053,11 +2133,17 @@ def apply_locked(plan):
         DEPLOYMENT_LOCK_FD = held[-1]
         need(not os.path.lexists(SUPERVISOR_STATE_ROOT / '.reset-owner.json'),
              'retained reset owner blocks updater; never reclaim or clear it')
-        apply(plan)
+        yield
     finally:
+        DEPLOYMENT_LOCK_FD = None
+        for fd in reversed(held):
+            os.close(fd)
+
+
+def apply_locked(plan, capacity_source):
+    """Hold both update flocks across pause, publication, resume and containment."""
+    with deployment_locks(plan):
         try:
-            supervisor_guard_release(require_success=False)
+            apply(plan, capacity_source)
         finally:
-            DEPLOYMENT_LOCK_FD = None
-            for fd in reversed(held):
-                os.close(fd)
+            supervisor_guard_release(require_success=False)

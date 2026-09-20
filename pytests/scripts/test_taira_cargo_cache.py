@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import stat
+import sys
 import tempfile
 import unittest
 
@@ -25,6 +27,23 @@ def record(paths):
 
 
 class CargoSourceAdmissionTests(unittest.TestCase):
+    def test_metadata_child_creates_private_cache_without_changing_parent_umask(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary).resolve()
+            cargo = source / "cargo-fixture"
+            cache_file = source / "package-cache"
+            cargo.write_text("#!" + sys.executable + "\nimport os\n"
+                             f"os.close(os.open({str(cache_file)!r}, os.O_CREAT|os.O_WRONLY, 0o666))\n"
+                             "print('{\"packages\": []}')\n")
+            cargo.chmod(0o700)
+            original_umask = os.umask(0o002)
+            try:
+                self.assertEqual(cache.local_package_names(source, {"CARGO": str(cargo)}), set())
+                self.assertEqual(os.umask(0o002), 0o002)
+            finally:
+                os.umask(original_umask)
+            self.assertEqual(stat.S_IMODE(cache_file.stat().st_mode), 0o600)
+
     def test_foreign_source_retires_only_its_host_and_cross_profile_family(self):
         triple = "aarch64-unknown-linux-gnu"
         for stale_family, preserved_family in (("debug", "release"), ("release", "debug")):

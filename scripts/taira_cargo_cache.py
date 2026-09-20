@@ -77,7 +77,7 @@ def local_package_names(source: Path, environment: dict[str, str]) -> set[str]:
          "metadata", "--manifest-path", str(source / "Cargo.toml"),
          "--locked", "--offline", "--format-version=1"],
         cwd="/", env=environment, stdin=subprocess.DEVNULL, capture_output=True,
-        check=True, timeout=60,
+        check=True, timeout=60, umask=0o077,
     )
     return {package["name"] for package in json.loads(result.stdout)["packages"]
             if package["source"] is None}
