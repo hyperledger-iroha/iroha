@@ -31,6 +31,7 @@ import sumeragi_v2_multilane_membership_contract as membership_contract
 import sumeragi_v2_multilane_delegated_state_contract as delegated_state_contract
 import sumeragi_v2_multilane_native_preparation_contract as native_preparation_contract
 import sumeragi_v2_multilane_native_publication_contract as native_publication_contract
+import sumeragi_v2_multilane_native_ingress_contract as native_ingress_contract
 from sumeragi_v2_multilane_autonomous_terminal_contract import (
     AUTONOMOUS_TERMINAL_FORBIDDEN_SOURCE_CHECKS,
     AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS,
@@ -3952,6 +3953,7 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         *delegated_state_contract.DELEGATED_STATE_SOURCE_RELATIVES,
         *native_preparation_contract.NATIVE_PREPARATION_SOURCE_RELATIVES,
         *native_publication_contract.SOURCE_RELATIVES,
+        *native_ingress_contract.SOURCE_RELATIVES,
         *admission_capacity_contract.SOURCE_RELATIVES,
         Path("scripts/formal/sumeragi_v2_multilane_queue_plan_contract.py"),
         Path("pytests/scripts/sumeragi_v2_multilane_queue_plan_cases.py"),
@@ -5772,6 +5774,7 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         root, models, errors, _rust_binding_item,
     )
     native_publication_contract.validate_owners(root, models, errors, _rust_binding_item)
+    native_ingress_contract.validate_owners(root, errors, _rust_binding_item)
     admission_capacity_contract.validate_owners(root, models, errors, _rust_binding_item)
     membership_contract.validate_membership_contract(
         root, models, errors, _rust_binding_item,

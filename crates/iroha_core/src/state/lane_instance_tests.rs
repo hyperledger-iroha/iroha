@@ -190,10 +190,16 @@ state_test! { sync native_lane_instance_prepayload_failover_survives_fsync_resta
         assert_eq!(owner.tag().view(), 0, "deadline preflight cannot consume the held fsync acknowledgement");
         let LaneService::Completion(receipt) = owner.service_with_worker(state, &observed, installed).unwrap() else { panic!("durable TC ack") };
         assert_eq!(owner.tag().view(), 1);
-        assert_eq!(receipt.retired.len(), 1);
-        assert!(matches!(&receipt.retired[0].effect, core::Effect::Broadcast(core::ConsensusMessageV2::TimeoutVote(_))),
+        assert_eq!(receipt.disposition, core::StepDisposition::Applied);
+        assert_eq!(owner.retirement_count(), 1);
+        let retirement = owner.take_retirement().expect("original retained timeout packet");
+        assert_eq!(retirement.instance(), lane.instance_id());
+        assert!(retirement.belongs_to(state));
+        assert!(!retirement.requires_recovery(), "the shared reducer retired this exact obsolete timeout");
+        assert!(owner.take_retirement().is_none(), "one consuming handoff");
+        assert!(matches!(retirement.effect(), Some(core::Effect::Broadcast(core::ConsensusMessageV2::TimeoutVote(_)))),
             "the obsolete local timeout is explicitly retired only by the reducer's durable TC transition");
-        let retired_packet = receipt.retired[0].packet.as_ref().expect("full channel retained the exact native bytes");
+        let retired_packet = retirement.packet().expect("full channel retained the exact native bytes");
         assert_eq!(retired_packet.canonical_bytes, norito::encode_canonical(&retired_packet.envelope).unwrap());
         let exact_enter = owner.held_effects().find(|effect| matches!(effect, core::Effect::EnterView { .. })).unwrap().clone();
         assert!(owner.service_with_worker(state, &observed, overflow).is_err());

@@ -2730,7 +2730,7 @@ fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
         pending_kura_apply,
         leader_wire_launch_prepared,
         ..
-    } = &mut runtime_startup.state
+    } = runtime_startup.state.as_mut()
     else {
         panic!("durable-only pending Kura startup must remain recovered")
     };

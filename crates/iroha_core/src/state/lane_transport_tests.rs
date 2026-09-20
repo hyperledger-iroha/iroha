@@ -161,7 +161,8 @@ state_test! { sync native_transport_decision_reaches_global_nonmembers_and_keeps
     let guard = ConsensusOutputGuard::isolated();
     let mut transport = NativeLaneTransport::new(Arc::clone(&fixture.state),Arc::clone(&guard),lane.frozen().committee[0].clone(),nonzero!(1_usize));
     let mut changed = decision.clone();changed.commit_qc.shares[0].signature[0] ^= 1;
-    assert!(matches!(transport.retain_decision(&observed,&global,changed),NativeDecisionTransportAdmission::Rejected{..}));
+    let NativeDecisionTransportAdmission::Rejected { decision: returned, reason } = transport.retain_decision(&observed,&global,changed.clone()) else {panic!("changed Decision must be rejected before fanout")};
+    assert_eq!(returned,changed);assert!(!reason.is_empty());
     assert!(matches!(transport.retain_decision(&observed,&global,decision.clone()),NativeDecisionTransportAdmission::Retained));
     assert!(matches!(transport.retain_decision(&observed,&global,decision.clone()),NativeDecisionTransportAdmission::Retained),"duplicate proof does not consume another fanout");
     let mut owner = None;
@@ -169,13 +170,15 @@ state_test! { sync native_transport_decision_reaches_global_nonmembers_and_keeps
     transport.poll_with_global_for_test(&observed,&global,|post,ticket| {
         assert!(ticket.is_none());assert_eq!(post.peer_id,recipients[0]);
         let crate::NetworkMessage::SumeragiBlock(wire) = &post.data else {panic!("native Decision frame")};
-        assert!(matches!(wire.message().as_ref(),crate::sumeragi::message::BlockMessage::NativeLaneDecision(exact) if exact.as_ref()==&decision));
+        assert!(matches!(wire.as_message(),crate::sumeragi::message::BlockMessage::NativeLaneDecision(exact) if exact.as_ref()==&decision));
         frame = Some(Arc::clone(wire));
         let (fixture,ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);owner=Some(fixture);
         Err(NetworkActorAdmissionError::Backpressured{message:post,ticket:Some(ticket),rank:1})
     }).unwrap();
     native_process_advance(&fixture,false);
     let current = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let NativeDecisionTransportAdmission::Retry(returned) = transport.retain_decision(&current,&global,decision.clone()) else {panic!("stale global routing must return the original Decision for retry")};
+    assert_eq!(returned,decision);
     assert_eq!(transport.poll_with_global_for_test(&current,&global,|_,_|panic!("stale global routing cannot consume original output")).unwrap(),NativeTransportProgress::AwaitingGlobalRouting{instance:lane.instance_id()});
     assert_eq!(owner.as_ref().unwrap().waiter_count(),1);
     let next_global = native_transport_global_context_for_test(&fixture,&current);

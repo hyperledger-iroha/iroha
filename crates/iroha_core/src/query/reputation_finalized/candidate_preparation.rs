@@ -42,6 +42,7 @@ impl ReputationFinalizedArchive {
 
     /// Reserve the authenticated original archive cut before executing this candidate.
     /// Busy readers and writers return their actual release observation; no State is read.
+    #[cfg(test)]
     pub(crate) fn try_reserve_candidate(
         self: &Arc<Self>,
         key: ReputationFinalizedArchiveKeyV1,

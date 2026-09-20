@@ -1,10 +1,9 @@
 //! Signed cross-owner disk export and independent canonical replay controls.
 
 use super::*;
+use crate::kura::scaling_evidence::fixture;
 use iroha_core::kura::BlockStore;
 use norito::codec::Encode as _;
-#[path = "../fixture.rs"]
-mod fixture;
 
 #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
 mod unix {

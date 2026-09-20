@@ -95,6 +95,74 @@ pub(crate) struct DecisionBoundCarrierJournals<
     _binding_admission: BindingAdmission,
 }
 
+/// The one original detached carrier through decision and durability attachment.
+///
+/// Each phase owns the previous phase's journals and admissions by move. A local
+/// publication refusal returns the current phase to the same preallocated
+/// candidate slot; it must never reconstruct a ValidBlock or execute again.
+/// Checkpoint attachment still grants no publication or retirement authority.
+#[must_use = "retain the current carrier phase until authorized publication or drop"]
+pub(crate) enum RetainedCarrier<Admission, BindingAdmission> {
+    /// Original detached execution awaiting its original archive capture owners.
+    Capturing(super::StagedCarrierCapture<Admission>),
+    /// Actual detached execution, before an exact verified decision is joined.
+    Validated(PreparedCarrierJournals<Admission>),
+    /// The same journals after consuming their ValidBlock under verified finality.
+    Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>),
+    /// The same decided carrier with its actual checkpoint writer receipt.
+    Checkpointed(
+        DecisionBoundCarrierJournals<
+            Admission,
+            BindingAdmission,
+            super::DetachedCarrierComponents,
+            crate::kura::KuraWsvCheckpointReceipt,
+        >,
+    ),
+}
+
+impl<Admission, BindingAdmission> RetainedCarrier<Admission, BindingAdmission> {
+    /// Compare the original context and proposal in every retained phase.
+    pub(crate) fn matches_validation_candidate(
+        &self,
+        context: &HeightContext,
+        proposal: &SignedBlock,
+    ) -> bool {
+        match self {
+            Self::Capturing(carrier) => carrier.matches_candidate(context, proposal),
+            Self::Validated(journals) => journals.matches_validation_candidate(context, proposal),
+            Self::Decided(carrier) => carrier
+                .journals
+                .matches_validation_candidate(context, proposal),
+            Self::Checkpointed(carrier) => carrier
+                .journals
+                .matches_validation_candidate(context, proposal),
+        }
+    }
+
+    /// Expose the original prefix only after all original captures are complete.
+    pub(crate) fn ready_commitment(&self) -> Option<ExecutionCommitment> {
+        match self {
+            Self::Capturing(_) => None,
+            Self::Validated(journals) => Some(journals.execution_prefix_commitment()),
+            Self::Decided(carrier) => Some(carrier.journals.execution_prefix_commitment()),
+            Self::Checkpointed(carrier) => Some(carrier.journals.execution_prefix_commitment()),
+        }
+    }
+
+    /// Resume only the original capture; every refusal retains the current phase.
+    pub(crate) fn resume_capture(
+        self,
+    ) -> Result<Self, (Self, super::CarrierArchivePreparationError)> {
+        match self {
+            Self::Capturing(carrier) => carrier
+                .try_complete()
+                .map(Self::Validated)
+                .map_err(|(carrier, error)| (Self::Capturing(carrier), error)),
+            ready => Ok(ready),
+        }
+    }
+}
+
 /// Join canonical consensus identity, not the byte representation of a parent QC.
 /// The opaque artifact already proves its round context id equals its context's
 /// semantic id. The captured context remains the original authenticated owner.
@@ -301,6 +369,7 @@ impl<Admission, BindingAdmission> DecisionBoundCarrierJournals<Admission, Bindin
 
 #[path = "physical_publication.rs"]
 mod physical_publication;
+pub(crate) use physical_publication::PublishedNativeApply;
 
 #[path = "archive_publication.rs"]
 pub(crate) mod archive_publication;

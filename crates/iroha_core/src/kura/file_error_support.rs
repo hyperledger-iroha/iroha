@@ -349,7 +349,7 @@ pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     /// Production Kura store root resolved to an empty path
     EmptyStoreRoot,
-    /// Another exact geometry operation retains the journal and its instance references.
+    /// Another exact geometry operation retains the journal and its instance references ({wait}).
     LaneGeometryAttemptBusy {
         /// Release all physical locks before awaiting the original operation.
         wait: RawGeometryWait,

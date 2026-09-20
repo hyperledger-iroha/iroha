@@ -55,7 +55,9 @@ pub(super) struct RuntimeJournals<Admission> {
 }
 
 impl<Admission> RuntimeJournals<Admission> {
-    /// Admit all original values before capturing any of their final-value copies.
+    /// Admit retention before detaching the original current/undo allocations.
+    /// Payloads move without cloning; their earlier execution allocations need
+    /// admission before block acquisition and mutation, not at this boundary.
     /// Refusal drops every original writer; successful custody retains the guard.
     pub(super) fn capture<'state, E>(
         canonical_runtime: CellBlock<'state, SnapshotNexusRuntime>,

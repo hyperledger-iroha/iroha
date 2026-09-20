@@ -418,6 +418,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/mod_authoritative_runtime_gate_05_ownership_maintenance.rs',
         'tests/mod_authoritative_runtime_gate_06_source_isolation.rs',
         'tests/mod_authoritative_runtime_gate_07_wire_bounds.rs',
+        'tests/mod_native_ingress_rollover.rs',
         'tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs',
         'tests/mod_authoritative_runtime_gate_09_checked_dequeue.rs',
         'tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs',

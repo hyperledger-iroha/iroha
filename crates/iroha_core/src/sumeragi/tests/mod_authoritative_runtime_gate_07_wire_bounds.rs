@@ -164,3 +164,167 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
     );
     assert_eq!(outbound_short.open(), Err(outbound_error));
 }
+
+// Codec/classification fixtures only. These bytes grant no authentication;
+// the State transport tests below use the actual four-validator signed owners.
+fn native_wire_classification_fixtures() -> [BlockMessage; 2] {
+    use iroha_data_model::block::lane_consensus::{
+        LANE_MESSAGE_VERSION_V1, LaneDecisionV1, LaneManifestV1, LaneMessageEnvelopeV1,
+        LaneMessageV1, LanePhaseV1, LaneQcV1, LaneRoundV1, LaneSignatureShareV1, LaneTimeoutBodyV1,
+        LaneTimeoutVoteV1, LaneValueKindV1, LaneValueRefV1, LaneVoteStatementV1,
+    };
+    let hash = Hash::new(b"native codec and closed-ingress fixture");
+    let round = LaneRoundV1 {
+        instance_id: hash,
+        lane_height: 1,
+        voting_view: 0,
+    };
+    let share = LaneSignatureShareV1 {
+        signer: 0,
+        signature: vec![0x71; 96],
+    };
+    let value = LaneValueRefV1 {
+        instance_id: hash,
+        admitted_binding_hash: hash,
+        kind: LaneValueKindV1::Execution,
+        origin_view: 0,
+        origin_producer: 0,
+        descriptor_hash: hash,
+        payload_hash: hash,
+        availability_hash: hash,
+    };
+    [
+        BlockMessage::NativeLane(LaneMessageEnvelopeV1 {
+            version: LANE_MESSAGE_VERSION_V1,
+            message: LaneMessageV1::TimeoutVote(LaneTimeoutVoteV1 {
+                body: LaneTimeoutBodyV1 {
+                    round,
+                    highest_prepare: None,
+                },
+                share: share.clone(),
+            }),
+        }),
+        BlockMessage::NativeLaneDecision(Box::new(LaneDecisionV1 {
+            manifest: LaneManifestV1 {
+                value,
+                layout: minimal_rs16_layout(),
+                chunk_root: hash,
+                byte_len: 1,
+                chunk_count: 2,
+            },
+            commit_qc: LaneQcV1 {
+                statement: LaneVoteStatementV1 {
+                    round,
+                    phase: LanePhaseV1::Commit,
+                    value,
+                },
+                shares: (0..3)
+                    .map(|signer| LaneSignatureShareV1 {
+                        signer,
+                        ..share.clone()
+                    })
+                    .collect(),
+            },
+        })),
+    ]
+}
+
+#[test]
+fn native_wire_roundtrips_canonical_control_and_decision_without_legacy_routing() {
+    use iroha_p2p::network::message::{ClassifyTopic, Topic};
+    for (message, tag, kind) in native_wire_classification_fixtures()
+        .into_iter()
+        .zip([11_u32, 12])
+        .zip([
+            super::FairV2IngressMessageKind::NativeLane,
+            super::FairV2IngressMessageKind::NativeLaneDecision,
+        ])
+        .map(|((message, tag), kind)| (message, tag, kind))
+    {
+        assert!(message.is_native_lane());
+        assert!(!message.is_lane_local());
+        assert!(!message.is_live_auxiliary());
+        assert_eq!(message.priority(), iroha_p2p::Priority::High);
+        assert_eq!(
+            super::FairV2IngressMessageKind::classify(&message),
+            Some(kind)
+        );
+        assert_eq!(
+            super::FairV2IngressClass::classify_message(&message),
+            super::FairV2IngressClass::Progress
+        );
+        let encoded = message.encode();
+        assert_eq!(u32::from_le_bytes(encoded[..4].try_into().unwrap()), tag);
+        let frame = super::message::BlockMessageWire::try_preencoded(Arc::new(message)).unwrap();
+        let bytes = frame.encode();
+        let (decoded, consumed) =
+            <super::message::BlockMessageWire as norito::core::DecodeFromSlice>::decode_from_slice(
+                &bytes,
+            )
+            .unwrap();
+        assert_eq!(consumed, bytes.len());
+        assert_eq!(decoded.encode(), bytes);
+        assert_eq!(decoded.as_message().encode(), encoded);
+        let network = crate::NetworkMessage::SumeragiBlock(Arc::new(decoded));
+        assert_eq!(network.topic(), Topic::Consensus);
+        let network_bytes = norito::core::to_bytes(&network).unwrap();
+        let decoded: crate::NetworkMessage =
+            norito::core::decode_from_bytes(&network_bytes).unwrap();
+        assert_eq!(decoded.topic(), Topic::Consensus);
+        assert_eq!(norito::core::to_bytes(&decoded).unwrap(), network_bytes);
+    }
+}
+
+#[test]
+fn native_wire_wrong_revision_cannot_enter_cached_or_nested_frames() {
+    use iroha_p2p::network::message::{ClassifyTopic, Topic};
+    let [BlockMessage::NativeLane(mut envelope), _] = native_wire_classification_fixtures() else {
+        unreachable!("control fixture")
+    };
+    envelope.version += 1;
+    let message = BlockMessage::NativeLane(envelope);
+    assert!(super::message::BlockMessageWire::try_preencoded(Arc::new(message.clone())).is_err());
+    // Raw DTO serialization is deliberately untrusted; cached network decoding
+    // must still reject it before any native consumer can receive the value.
+    let raw = norito::core::to_bytes(&message).unwrap();
+    assert!(
+        <super::message::BlockMessageWire as norito::core::DecodeFromSlice>::decode_from_slice(
+            &raw
+        )
+        .is_err()
+    );
+    let network = crate::NetworkMessage::SumeragiBlock(Arc::new(
+        super::message::BlockMessageWire::new(message),
+    ));
+    assert_eq!(network.topic(), Topic::Other);
+    assert!(norito::core::to_bytes(&network).is_err());
+}
+
+#[test]
+fn native_wire_ingress_stays_closed_without_a_connected_native_consumer() {
+    let sender = validator_peers(1).pop().unwrap();
+    let ingress = super::FairV2Ingress::new(8, 65_536, 65_536, 16_384, 16_384);
+    ingress.configure_roster([sender.clone()]).unwrap();
+    ingress.open().unwrap();
+    for message in native_wire_classification_fixtures() {
+        let original = message.encode();
+        let original_ordinal = ingress.state.lock().last_admission_ordinal;
+        let Err(super::FairV2IngressPushError::Rejected(rejected)) = ingress.try_push(
+            InboundBlockMessage::from_authenticated_peer(message, sender.clone()),
+        ) else {
+            panic!("native ingress must remain closed until the sole runner cutover");
+        };
+        assert_eq!(
+            rejected.reason,
+            super::FairV2IngressRejectReason::UnsupportedEnvelope
+        );
+        assert_eq!(rejected.inbound.message().encode(), original);
+        assert_eq!(rejected.inbound.sender(), &sender);
+        assert_eq!(
+            ingress.state.lock().last_admission_ordinal,
+            original_ordinal
+        );
+        assert_eq!(ingress.len(), 0);
+        assert!(ingress.state.lock().open);
+    }
+}

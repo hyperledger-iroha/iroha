@@ -3552,6 +3552,38 @@ mod chained {
             let admissions = context.queue_plan_admissions()[..count].to_vec();
             Ok(self.with_execution_context(Some(context.with_queue_plan_admissions(admissions))))
         }
+        /// Retain whole native groups in their canonical first-admission order.
+        /// Rebuilding the context also recomputes the proposal input root; zero
+        /// removes this economic form while retaining independent controls.
+        pub(crate) fn retain_native_lane_decision_prefix(
+            mut self,
+            count: usize,
+        ) -> Result<Self, String> {
+            let Some(mut context) = self.0.execution_context.take() else {
+                return if count == 0 {
+                    Ok(self)
+                } else {
+                    Err("proposal has no native Decision input".into())
+                };
+            };
+            let Some(batch) = context.native_lane_decisions.as_mut() else {
+                return if count == 0 {
+                    Ok(self.with_execution_context(Some(context)))
+                } else {
+                    Err("proposal has no native Decision input".into())
+                };
+            };
+            if count > batch.groups.len() {
+                return Err("native prefix exceeds its actual group vector".into());
+            }
+            if count == 0 {
+                context.native_lane_decisions = None;
+            } else {
+                batch.groups.truncate(count);
+            }
+            context.validate_native_lane_decisions_shape()?;
+            Ok(self.with_execution_context((!context.is_empty()).then_some(context)))
+        }
         fn into_new_block(self, signature: BlockSignature) -> NewBlock {
             NewBlock {
                 signature,

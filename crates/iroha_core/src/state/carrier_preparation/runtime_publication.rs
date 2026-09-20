@@ -61,8 +61,9 @@ macro_rules! prepare_components {
 impl<Admission> RuntimeJournals<Admission> {
     /// Admit the complete installation before acquiring any original writer.
     ///
-    /// Admission must cover all four current/undo COW and staging copies,
-    /// publication identities and retained-reader installation peaks. Every
+    /// Installation reattaches the original current/undo allocations without
+    /// cloning. Admission must cover publication metadata, retained-reader and
+    /// collector resources in addition to the original retained charges. Every
     /// refusal returns the same typed journals and capture reservation after
     /// aborting earlier acquisitions. This grants no State/finality authority.
     pub(in crate::state::carrier_preparation::journals) fn try_prepare_publication<

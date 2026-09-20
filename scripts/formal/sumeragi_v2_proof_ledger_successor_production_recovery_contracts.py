@@ -1,5 +1,237 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+
+# Each row follows a consuming descriptor owner or the bounded census it owns.
+# The recovery mint may open the canonical directory; it cannot open the store,
+# substitute a path, or create a second authority at the consuming boundary.
+_CERTIFIED_SERVE_DIRECTORY_OWNER_RELATIONS = (
+    ("recovery_mint", "crates/iroha_core/src/sumeragi/v2.rs",
+     "RecoveredLifecycleStorageAuthorityV1", "mint_from_recovered_height", (), (
+        "assert!(permit.authorizes(kura, verified, signature_policy, genesis_account));",
+        "let context = verified.context();",
+        "let serve_payload_directory_authority = if kura.emergency_fast_startup_enabled() { None } else { Some(kura.mint_v2_certified_serve_payload_directory_authority(context)?) };",
+        "serve_payload_directory_authority, successor_floor: None,",
+     )),
+    ("ordinary_open", "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+     "CertifiedServePayloadStoreStartupTargetV1 < '_ >", "open", (), (
+        "self, context: &wire::HeightContext, emergency_read_only: bool,",
+        "Self::Kura { kura, authority } =>",
+        "match (emergency_read_only, authority) {",
+        "(true, None) => super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_emergency_fast_read_only( &lifecycle_root, context, ),",
+        "(false, Some(authority)) => super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open_with_kura_authority( kura, authority, context, ),",
+        "_ => { return Err(ProductionLifecycleOwnerStartupErrorV1::new( ProductionLifecycleOwnerStartupErrorKindV1::StorageLayout, )); }",
+     )),
+    ("predecessor_kura", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+     "CompleteTipPayloadStoreOpenTargetV1 < '_ >", "authorizes", (), (
+        "Self::Kura { kura, .. } => complete_tip.authorizes_predecessor_kura(kura),",
+     )),
+    ("predecessor_open", "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+     "CompleteTipPayloadStoreOpenTargetV1 < '_ >", "open", (), (
+        "self, _predecessor_root: &Path, context: &wire::HeightContext,",
+        "Self::Kura { kura, authority } => { CertifiedServePayloadStoreV1::open_with_kura_authority(kura, authority, context) }",
+     )),
+    ("directory_context", "crates/iroha_core/src/kura/bound_progress_and_retained_support.rs",
+     "KuraV2CertifiedServePayloadDirectoryAuthority", "matches_context",
+     ('#[cfg(all(unix, not(target_os = "espidf")))]',), (
+        "self.context_id == context.id() && self.height == context.height",
+     )),
+    ("directory_current", "crates/iroha_core/src/kura/bound_progress_and_retained_support.rs",
+     "KuraV2CertifiedServePayloadDirectoryAuthority", "is_current_for",
+     ('#[cfg(all(unix, not(target_os = "espidf")))]',), (
+        "self.matches_kura(kura) && self.matches_context(context) && kura.bound_storage_directory_unchanged(&self.directory)",
+     )),
+    ("directory_consume", "crates/iroha_core/src/kura/bound_progress_and_retained_support.rs",
+     "KuraV2CertifiedServePayloadDirectoryAuthority", "into_opened_directory_for",
+     ('#[cfg(all(unix, not(target_os = "espidf")))]',), (
+        "self, kura: &Kura, context: &HeightContext,",
+        "self.is_current_for(kura, context).then_some(( self.directory.expected_path, self.directory.canonical_path, self.directory.file, ))",
+     )),
+    ("store_open", "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+     "CertifiedServePayloadStoreV1", "open_with_kura_authority", (), (
+        "authority: crate::kura::KuraV2CertifiedServePayloadDirectoryAuthority, context: &wire::HeightContext,",
+        "let max_entry_bytes = Self::validate_open_parameters(context, max_entries, &expected_path)?;",
+        "BoundCertifiedServePayloadDirectory::from_kura_authority(kura, authority, context)?;",
+        "Self::open_bound(bound_directory, context, max_entries, max_entry_bytes)",
+     )),
+    ("bound_directory", "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+     "BoundCertifiedServePayloadDirectory", "from_kura_authority", (), (
+        "if !authority.matches_kura(kura) { return Err(CertifiedServePayloadStoreError::StorageBinding",
+        "if !authority.matches_context(context) { return Err(CertifiedServePayloadStoreError::StorageBinding",
+        "let (authority_path, mint_time_canonical_path, directory) = authority .into_opened_directory_for(kura, context) .ok_or_else(|| CertifiedServePayloadStoreError::StorageBinding",
+        "if authority_path != expected_path { return Err(CertifiedServePayloadStoreError::StorageBinding",
+        "return Self::from_opened_directory(expected_path, mint_time_canonical_path, directory);",
+     )),
+    ("bound_descriptor", "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+     "BoundCertifiedServePayloadDirectory", "from_opened_directory",
+     ('#[cfg(all(unix, not(target_os = "espidf")))]',), (
+        "let lexical = fs::symlink_metadata(&expected_path)",
+        "let opened = directory .metadata()",
+        "canonical_path != mint_time_canonical_path || lexical.file_type().is_symlink() || !lexical.is_dir() || !opened.is_dir()",
+        "CertifiedServeStorageIdentity::from_metadata(&lexical) != identity",
+        "rustix::fs::flock( &directory, rustix::fs::FlockOperation::NonBlockingLockExclusive, )",
+        "let bound = Self { expected_path, canonical_path, directory, identity, }; bound.verify_linked()?; Ok(bound)",
+     )),
+    ("census_scan", "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+     "CertifiedServePayloadStoreV1", "scan_payload_census", (), (
+        "self .max_entries .checked_mul(2) .and_then(|capacity| capacity.checked_add(MAX_QUARANTINED_STAGES_PER_HEIGHT)) .and_then(|capacity| capacity.checked_add(MAX_IN_FLIGHT_STAGES_PER_HEIGHT))",
+        "for leaf in self.bound_directory()?.inventory(traversal_capacity)? {",
+        "has_canonical_hash_name(name, FILE_SUFFIX) { EntryKind::Canonical } else { return Err(CertifiedServePayloadStoreError::UnexpectedEntry(path)); }",
+        "let (payload, exact_leaf) = self.load_leaf_with_bound(&leaf)?;",
+        "if expected_path != path { return Err(CertifiedServePayloadStoreError::RequestHashFilenameMismatch(path)); }",
+        "if entries.insert(id, (payload, path, exact_leaf)).is_some() { return Err(CertifiedServePayloadStoreError::DuplicateRequestHash); }",
+        "if let Some((terminal, terminal_path, _terminal_leaf)) = terminals.get(id) && !terminal_companion_matches(canonical, terminal)",
+        "if !canonicals.contains_key(id) { return Err(invalid_frame(",
+        "canonicals .len() .checked_add(removals.len()) .is_none_or(|count| count > self.max_entries)",
+        "if let Some(stage) = stages.into_iter().next() {",
+        "if !resume_staging { return Err(invalid_frame(",
+        "if terminals.contains_key(&id) || removals.contains_key(&id) || !terminal_companion_matches(canonical, &staged)",
+        "if payloads.insert(id, logical).is_some() { return Err(CertifiedServePayloadStoreError::DuplicateRequestHash); }",
+        "payloads .len() .checked_add(removed.len()) .is_none_or(|count| count > self.max_entries)",
+        "Ok(CertifiedServePayloadCensusV1 { payloads, terminal_companions, removed, quarantine, })",
+     )),
+    ("strict_reload", "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+     "CertifiedServePayloadStoreV1", "reload_payload_census_strict", (), (
+        "let census = self.scan_payload_census(false)?;",
+        "if census.terminal_companions != self.terminal_companions || census.removed != self.removed || census.quarantine != self.quarantine { return Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch); }",
+        "Ok(census.payloads)",
+     )),
+    ("directory_kura", "crates/iroha_core/src/kura/bound_progress_and_retained_support.rs",
+     "KuraV2CertifiedServePayloadDirectoryAuthority", "matches_kura",
+     ('#[cfg(all(unix, not(target_os = "espidf")))]',), (
+        "self.kura_identity.matches(kura)",
+     )),
+    ("factory_entry", "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+     "AuthenticatedRecoveredAdapterStartup", "open_production_lifecycle_owner_v1",
+     ("#[allow(\n        clippy::result_large_err,\n        clippy::too_many_arguments,\n        clippy::too_many_lines\n    )]",), (
+        "self.open_production_lifecycle_owner_with_pending_kura_v1( config, reply_route_source_capacity, factory_inputs, body_store, None, )",
+     )),
+    ("factory_inner", "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+     "AuthenticatedRecoveredAdapterStartup", "open_production_lifecycle_owner_with_pending_kura_v1",
+     ("#[allow(clippy::result_large_err, clippy::too_many_arguments)]",), (
+        "pending_kura: Option<&RecoveredPendingKuraApplyReplayV1>,",
+        "if pending_kura.is_some() && !matches!(self.authority, RecoveredWalStartupAuthorityV1::None)",
+        "if !self.effects.is_empty()",
+        "if !Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
+        "if storage.context_id != context.id() || storage.height != context.height || !body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )",
+        "if !self.adapter.wal.matches_path(&storage.wal_path)",
+        "if !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)",
+        "body_store .into_revalidated_lifecycle_startup(&apply_service, &context, validation_authority)",
+        "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, serve_payload_directory_authority, successor_floor, .. } = storage;",
+        "self.open_production_lifecycle_owner_v1_at_authenticated_roots( config, reply_route_source_capacity, &lifecycle_root, CertifiedServePayloadStoreStartupTargetV1::Kura { kura: kura.as_ref(), authority: serve_payload_directory_authority, }, body_store, &local_signer, pending_kura, )?;",
+        "owner .authenticate_recovered_successor_floor(floor)",
+        "Ok(owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service))",
+     )),
+)
+
+
+def _certified_serve_directory_owner_item(path, source, owner, name, attributes, errors):
+    """Select the defining impl, including its exact lifetime parameters."""
+    expected_context = (tuple(rust_code_tokens("impl " + owner)),)
+    matches = [item for item in rust_items(source, name)
+               if item.brace_context == expected_context]
+    if len(matches) != 1:
+        errors.append(f"{path}: retained Serve directory requires exactly one {owner}::{name}; found {len(matches)}")
+        return None
+    item = matches[0]
+    _require_rust_item_context(
+        path, item, expected_context, "retained Serve directory owner", errors,
+        expected_attributes=attributes,
+    )
+    return item
+
+
+def _certified_serve_directory_owner_errors(repo_root: Path) -> list[str]:
+    """Follow the actual recovery-minted directory into its strict census."""
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for key, relative, owner, name, attributes, sequences in _CERTIFIED_SERVE_DIRECTORY_OWNER_RELATIONS:
+        path = repo_root / relative
+        if relative not in sources:
+            try:
+                sources[relative] = path.read_text(encoding="utf-8")
+            except OSError as error:
+                errors.append(f"{path}: retained Serve directory source unreadable: {error}")
+                continue
+        item = _certified_serve_directory_owner_item(
+            path, sources[relative], owner, name, attributes, errors,
+        )
+        if item is None:
+            continue
+        tokens = rust_code_tokens(item.source)
+        cursor = 0
+        for sequence in sequences:
+            expected = rust_code_tokens(sequence)
+            found = next((position for position in range(cursor, len(tokens) - len(expected) + 1)
+                          if tokens[position:position + len(expected)] == expected), None)
+            if found is None:
+                errors.append(f"{path}: retained Serve directory {key} must preserve exact owner/order {sequence!r}")
+                break
+            cursor = found + len(expected)
+    return errors
+
+
+
+def _recovered_proposal_restart_closed_errors(repo_root: Path) -> list[str]:
+    """Armed Proposal output is never converted back into retry authority."""
+    errors: list[str] = []
+    path = repo_root / "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as error:
+        return [f"{path}: recovered Proposal settlement unreadable: {error}"]
+    for name in (
+        "settle_recovered_lifecycle_proposal_prepare_wal",
+        "settle_recovered_lifecycle_proposal_broadcast_and_sign",
+    ):
+        item = _require_qualified_rust_item(
+            path, source, "LaunchedProductionLifecycleV1", name, errors,
+            "restart-closed recovered Proposal settlement",
+            expected_attributes=("#[allow(clippy::too_many_lines)]",),
+        )
+        if item is None:
+            continue
+        for forbidden in ("output.abort_before_publication()", "retry!()"):
+            if _token_sequence_count(rust_code_tokens(item.source), rust_code_tokens(forbidden)):
+                errors.append(f"{path}: {name} may not disarm a reserved recovered Proposal output")
+        _require_rust_token_sequence(path, item, """
+assert!(pending_lifecycle_completion.is_none());
+*pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
+return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::CapacityUnavailable;
+""", "only unreserved Proposal capacity restores the exact completion", errors)
+        _require_rust_token_sequence(path, item, """
+transition.commit_after_publication();
+completion.acknowledge_after_publication();
+output.commit_after_publication();
+ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied
+""", "Proposal post-Ledger tail commits registry, completion and output in order", errors)
+        tokens = rust_code_tokens(item.source)
+        if _token_sequence_count(tokens, rust_code_tokens("drop(output);")) < 3:
+            errors.append(f"{path}: {name} must retain fail-stop output Drop on every post-reservation refusal")
+        if name.endswith("broadcast_and_sign"):
+            _require_rust_token_sequence(path, item, """
+if transition.persist_exact_successor().is_err() {
+    drop(transition);
+    owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+    assert!(pending_lifecycle_completion.is_none());
+    *pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
+    drop(output);
+    return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
+}
+""", "Proposal persistence refusal retains original completion and armed output closes admission", errors)
+        else:
+            _require_rust_token_sequence(path, item, """
+if transition.persist_exact_successor().is_err() {
+    drop(transition);
+    owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+    assert!(pending_lifecycle_completion.is_none());
+    drop(output);
+    drop(completion);
+    return ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::RestartRequired;
+}
+""", "attempted Proposal WAL failure cannot become an ordinary retry", errors)
+    return errors
+
+
 def _successor_production_recovery_source_fidelity_errors(
     repo_root: Path, errors: list[str],
     load, region,
@@ -13,6 +245,8 @@ def _successor_production_recovery_source_fidelity_errors(
     sumeragi_path: Path,
     sumeragi_source: str,
 ) -> None:
+    errors.extend(_certified_serve_directory_owner_errors(repo_root))
+    errors.extend(_recovered_proposal_restart_closed_errors(repo_root))
     lifecycle_run_inner_path, lifecycle_run_inner_source = load(
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs")
     recovery_path, recovery_source = load(
@@ -273,7 +507,7 @@ def _successor_production_recovery_source_fidelity_errors(
                     "payload_store_target: CompleteTipPayloadStoreOpenTargetV1<'_>",
                     "payload_store_target.authorizes(&complete_tip)",
                     "complete_tip.authorizes_predecessor_storage_inputs(",
-                    "Self::Kura(kura) => CertifiedServePayloadStoreV1::open_with_kura(kura, context)",
+                    "Self::Kura { kura, authority } => { CertifiedServePayloadStoreV1::open_with_kura_authority(kura, authority, context) }",
                     "payload_store_target.open(predecessor_root, verified_predecessor.context())?",
                     "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer )?",
                     "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads )?",
@@ -303,7 +537,7 @@ def _successor_production_recovery_source_fidelity_errors(
                 ledger_path,
                 ledger_source,
                 "CompleteTip restart publication authority",
-                "fn successor_descends_from_retirement(",
+                "fn frame_descends_from_retained_floor(",
                 "\n    fn matches_successor_owner_ledger(",
             )
             require_order(
@@ -311,6 +545,11 @@ def _successor_production_recovery_source_fidelity_errors(
                 "CompleteTip restart publication authority",
                 restart_publication,
                 (
+                    "ledger.context() == self.successor_store.context",
+                    "ledger.records.is_empty()",
+                    "ledger.producer_debts.is_empty() && ledger.high_water == self.retained_high_water",
+                    "record.ordinal() > self.retained_high_water",
+                    "record.owner().first_admission_ordinal() > self.retained_high_water",
                     "self.successor_ledger.frame_identity() == self.successor_frame_identity",
                     "self.frame_descends_from_retained_floor(&self.successor_ledger)",
                     "fn predecessor_remains_exact(&self) -> bool",
@@ -320,16 +559,12 @@ def _successor_production_recovery_source_fidelity_errors(
                     "fn authorizes_owner_open_successor(&self, successor: &LifecycleLedgerV1) -> bool",
                     "successor == &self.successor_ledger",
                     "self.successor_descends_from_retirement()",
-                    "self.successor_ledger.records.is_empty()",
-                    "self.successor_ledger.producer_debts.is_empty()",
-                    "self.successor_ledger.high_water == self.retained_high_water",
-                    "record.ordinal() > self.retained_high_water",
                     "fn authorizes_retained_successor(&self) -> bool",
                     "self.predecessor_remains_exact()",
                     "self.successor_descends_from_retirement()",
                     "self.complete_tip.authorizes_successor_lifecycle_target(",
                     "self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)",
-                    "fn authorizes_successor_status(",
+                    "fn authorizes_successor_status_with_decision(",
                     "self.authorizes_retained_successor()",
                     "self.complete_tip.successor_context_id() == successor.height_context_id",
                     ".checked_add(1)",
@@ -342,7 +577,6 @@ def _successor_production_recovery_source_fidelity_errors(
                 "CompleteTip restart publication authority",
                 restart_publication,
                 (
-                    "#[cfg(test)]",
                     "into_parts",
                     "fn root(",
                     "fn ledger(",
@@ -404,7 +638,7 @@ def _successor_production_recovery_source_fidelity_errors(
                     "self.authorizes_owner_open_successor(&successor_ledger)",
                     "successor.authorizes_complete_tip_owner_join(",
                     "self.matches_successor_owner_ledger(&mut owner, &successor_ledger)",
-                    "owner.timeout_supersession_successor.take()",
+                    "owner.owner_open_successor.take()",
                     "self.successor_frame_identity = successor_ledger.frame_identity()",
                     "self.successor_ledger = successor_ledger",
                     "self.exactly_matches_successor_owner(&mut owner)",
@@ -454,7 +688,7 @@ def _successor_production_recovery_source_fidelity_errors(
                     "self.authorizes_owner_open_successor(&successor_ledger)",
                     "successor.authorizes_complete_tip_owner_join(",
                     "self.matches_successor_owner_ledger(&mut owner, &successor_ledger)",
-                    "owner.timeout_supersession_successor.take()",
+                    "owner.owner_open_successor.take()",
                     "self.successor_frame_identity = successor_ledger.frame_identity()",
                     "self.successor_ledger = successor_ledger",
                     "self.exactly_matches_successor_owner(&mut owner)",
@@ -605,13 +839,11 @@ def _successor_production_recovery_source_fidelity_errors(
                 adapter_path,
                 adapter_source,
                 "AuthenticatedRecoveredAdapterStartup",
-                "open_production_lifecycle_owner_v1",
+                "open_production_lifecycle_owner_with_pending_kura_v1",
                 errors,
                 "canonical Kura-bound lifecycle-owner factory",
                 expected_attributes=(
-                    "#[allow(\n        clippy::result_large_err,\n"
-                    "        clippy::too_many_arguments,\n"
-                    "        clippy::too_many_lines\n    )]",
+                    "#[allow(clippy::result_large_err, clippy::too_many_arguments)]",
                 ),
             )
             require_order(
@@ -631,7 +863,7 @@ def _successor_production_recovery_source_fidelity_errors(
                     "storage.genesis_account.clone()",
                     "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
                     "body_store.into_revalidated_lifecycle_startup( &apply_service, &context, validation_authority )",
-                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, successor_floor, .. } = storage",
+                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, lifecycle_root, serve_payload_directory_authority, successor_floor, .. } = storage",
                     "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
                     "let owner = match successor_floor",
                     "owner.authenticate_recovered_successor_floor(floor)",
@@ -687,10 +919,9 @@ def _successor_production_recovery_source_fidelity_errors(
             )
             reject_tokens(
                 adapter_path,
-                "side-effect-free recovered lifecycle storage mint",
+                "recovery-minted retained lifecycle directory owner",
                 storage_mint.source if storage_mint is not None else "",
                 (
-                    "mint_v2_certified_serve_payload_directory_authority",
                     "CertifiedServePayloadStoreV1::open",
                     "create_dir",
                 ),
@@ -708,7 +939,7 @@ def _successor_production_recovery_source_fidelity_errors(
             factory_regression = _require_rust_item(
                 adapter_path,
                 adapter_source,
-                "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout",
+                "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body",
                 errors,
             )
             require_literals(
@@ -786,7 +1017,7 @@ def _successor_production_recovery_source_fidelity_errors(
             activation_behavior = _require_rust_item(
                 lifecycle_startup_test_path,
                 lifecycle_startup_test_source,
-                "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout",
+                "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body",
                 errors,
             )
             if activation_behavior is not None:
@@ -816,7 +1047,7 @@ def _successor_production_recovery_source_fidelity_errors(
             finalization_behavior = _require_rust_item(
                 lifecycle_startup_test_path,
                 lifecycle_startup_test_source,
-                "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+                "exercise_production_marker_replay_cases",
                 errors,
             )
             if finalization_behavior is not None:
@@ -884,7 +1115,7 @@ def _successor_production_recovery_source_fidelity_errors(
                 )
             for literal in (
                 '"a caller-promoted marker cannot enter production quarantine"',
-                '"pre-promoted marker rejection must precede lifecycle-store creation"',
+                '"pre-promoted marker rejection must not create or change lifecycle storage"',
                 '"a body store outside the Kura layout must fail closed"',
                 '"a wrong body signature policy must fail closed"',
             ):
@@ -1329,7 +1560,7 @@ self.io.is_some()
                     "self.executor.successor_activation_status_snapshot()",
                     "self.completion_observer_activation.take()",
                     "self.services.activate_effect_completion_observer(observer)",
-                    "publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)?",
+                    "publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status, recovered_decision,)?",
                     "activation.complete()",
                     "ActivatedProductionLifecycleV1 { runner_activation, local_proposal, launched: self, }",
                 ),
@@ -1495,10 +1726,10 @@ self.io.is_some()
                     "self.ingress_ready.store(false, Ordering::Release)",
                     "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
                     "self.block_ingress.close()",
-                    "retirement.authorizes_successor_status(&successor)",
+                    "retirement.authorizes_successor_status_with_decision(&successor, decision.as_ref())",
                     "self.block_ingress.close()",
                     "self.block_ingress.open()",
-                    "super::super::status::activate_recovered_complete_tip_v2_height(retirement, successor)",
+                    "super::super::status::activate_recovered_complete_tip_v2_height_with_decision( retirement, successor, decision, )",
                     "self.block_ingress.close()",
                     "self.ingress_ready.store(true, Ordering::Release)",
                 ),
@@ -2628,9 +2859,9 @@ self.io.is_some()
                     "body_store_identity: body_store_identity.clone()",
                     "output_guard: Arc::clone(&authority_output_guard)",
                     "RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(",
-                    "payload.into_parts()",
                     "let sender = proposal.proposer",
-                    "sign_payload_chunks(&manifest, chunks, sender)",
+                    "let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;",
+                    "let manifest = validated.into_manifest();",
                     "Self::preencode_v2_network_message",
                     "let peers = self.remote_voters()",
                     "let control = PendingExactFanout::claimed(",
@@ -2724,7 +2955,8 @@ self.io.is_some()
                     "vec![Some(expected_batch_first_fifo), expected_batch_first_fifo.checked_add(1),]",
                     "fanout.peers.iter().cloned().collect::<BTreeSet<_>>()",
                     "wire::ConsensusMessageV2Payload::PayloadChunk(chunk)",
-                    "chunk.validate(&service.context, manifest)",
+                    "wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())",
+                    "chunk.validate_for_authentication(&validated)",
                     "Signature::try_from_bytes(&chunk.signature)",
                     "signature.verify(signer.public_key()",
                     "capture_recovered_lifecycle_proposal_exact_output(retirement_authority).is_err()",
@@ -3499,12 +3731,11 @@ self.io.is_some()
                     "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied",
                 ),
             )
-            require_token_count(
+            reject_tokens(
                 launch_path,
-                "typed recovered Proposal pre-fsync output release",
+                "restart-closed recovered Proposal reserved output",
                 recovered_proposal_two_child_settlement,
-                "output.abort_before_publication()",
-                2,
+                ("output.abort_before_publication()", "retry!()"),
             )
             require_tokens(
                 launch_path,
@@ -4719,50 +4950,16 @@ self.io.is_some()
             and lifecycle_open_source
             and coordinator_source
         ):
-            require_literal_count(
-                payload_store_startup_path,
-                "ordinary production Serve payload Kura open",
+            require_token_count(
+                payload_store_startup_path, "ordinary production Serve payload Kura open",
                 payload_store_startup_source,
-                "CertifiedServePayloadStoreV1::open_with_kura(",
-                1,
+                "CertifiedServePayloadStoreV1::open_with_kura_authority(", 1,
             )
-            require_literal_count(
-                ledger_path,
-                "CompleteTip production Serve payload Kura open",
+            require_token_count(
+                ledger_path, "CompleteTip production Serve payload Kura open",
                 ledger_source,
-                "CertifiedServePayloadStoreV1::open_with_kura(",
-                1,
+                "CertifiedServePayloadStoreV1::open_with_kura_authority(", 1,
             )
-            payload_store_production_source = payload_store_source.split(
-                "\n#[cfg(test)]\nmod tests",
-                1,
-            )[0]
-            for path, role, source in (
-                (
-                    payload_store_startup_path,
-                    "ordinary production Serve payload Kura open",
-                    payload_store_startup_source,
-                ),
-                (
-                    ledger_path,
-                    "CompleteTip production Serve payload Kura open",
-                    ledger_source,
-                ),
-                (
-                    payload_store_path,
-                    "descriptor-bound Serve payload store implementation",
-                    payload_store_production_source,
-                ),
-            ):
-                reject_tokens(
-                    path,
-                    role,
-                    source,
-                    (
-                        "Self::open_with_kura_authority(",
-                        "CertifiedServePayloadStoreV1::open_with_kura_authority(",
-                    ),
-                )
             retirement_authenticate = _require_qualified_rust_item(
                 payload_store_path,
                 payload_store_source,
@@ -4813,14 +5010,12 @@ self.io.is_some()
                 "CompleteTip Serve payload directory census",
                 payload_census,
                 (
-                    "self.max_entries.checked_mul(2)",
-                    "self.bound_directory()?.inventory(traversal_capacity)?",
-                    "!has_canonical_hash_name(name, FILE_SUFFIX)",
-                    "payloads.len() >= self.max_entries",
-                    "self.load_leaf(&leaf)?",
-                    "self.path_for(payload.id()) != path",
-                    "payloads.insert(payload.id(), payload).is_some()",
-                    "Ok(payloads)",
+                    "let census = self.scan_payload_census(false)?",
+                    "census.terminal_companions != self.terminal_companions",
+                    "census.removed != self.removed",
+                    "census.quarantine != self.quarantine",
+                    "CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch",
+                    "Ok(census.payloads)",
                 ),
             )
             require_tokens(

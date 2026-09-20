@@ -35,6 +35,7 @@ pub(super) struct PreparedGeometryJournalTransition {
 }
 
 impl PreparedGeometryJournalTransition {
+    #[cfg(test)]
     pub(super) fn prepare(
         kura: &Kura,
         journal: LaneGeometryJournal,

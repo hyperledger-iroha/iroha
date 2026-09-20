@@ -1533,6 +1533,18 @@ def test_canonical_queue_plan_retry_accepts_actual_sources() -> None:
     assert errors == [], errors
 
 
+def test_canonical_queue_plan_retry_literal_bindings_match_actual_owners() -> None:
+    """Literal full-gate obligations and normalized semantic checks share one owner."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = canonical_queue_plan_retry_items()
+    for path, kind, symbol, tokens in contract.QUEUE_PLAN_CANONICAL_RETRY_BINDINGS:
+        item = items[(path, kind, symbol)]
+        for token in tokens:
+            assert token in item, (path, symbol, token)
+
+
 @pytest.mark.parametrize("symbol,old,new", [
     ("State::canonical_queue_plan_admitted_input", "Self::queue_plan_admission_registry_value_in_view(&view, entrypoint_hash)?;", ""),
     ("State::canonical_queue_plan_admitted_input", "if application == QueuePlanAdmissionApplicationState::PendingStale", "if false"),
@@ -1628,7 +1640,10 @@ def test_canonical_queue_plan_retry_rejects_semantic_mutation(symbol: str, old: 
 
 @pytest.mark.parametrize("symbol,first,last", [
     ("State::canonical_queue_plan_admitted_input", "let Some((record, carrier_hash)) = observe()?", "let result = (|| {"),
-    ("execute_incoming_torii_proxy_request_with_admission_inner", "let accepted_tx = match routing::accept_transaction_for_ingress(", "if let Some(response) = canonical_queue_plan_synced_response("),
+    ("execute_incoming_torii_proxy_request_with_admission_inner", "AuthenticatedQueuePlanRetry::from_entrypoint(", "if let Some(response) = canonical_queue_plan_synced_response("),
+    ("execute_incoming_torii_proxy_request_with_admission_inner", "if let Some(response) = canonical_queue_plan_synced_response(", "let accepted_tx = match routing::accept_transaction_for_ingress("),
+    ("submit_signed_transaction_for_ingress_queue_plan_certified", "canonical_queue_plan_submission_response(", "let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress("),
+    ("handler_post_transaction_entrypoint", "canonical_queue_plan_submission_response(", "routing::accept_transaction_for_ingress(state, transaction, &telemetry)"),
     ("canonical_queue_plan_synced_response", "let reservation = match proxy_memory", "let read = match tokio::runtime::Handle::try_current()"),
     ("canonical_queue_plan_synced_response", "if tokio::time::Instant::now() >= read_deadline", "let mut response = ("),
 ])
@@ -1650,6 +1665,99 @@ def test_canonical_queue_plan_retry_rejects_owner_reordering(symbol: str, first:
     assert any(symbol in error and "order" in error for error in errors), errors
 
 
+@pytest.mark.parametrize("symbol,old,new", [
+    ("submit_signed_transaction_for_ingress_queue_plan_certified", "prepare_fresh_transaction_ingress(&app, accepted_tx)?", "unchecked_prepare(&app, accepted_tx)?"),
+    ("handler_post_transaction_entrypoint", "prepare_fresh_transaction_ingress(&app, accepted_tx)?", "unchecked_prepare(&app, accepted_tx)?"),
+    ("submit_signed_transaction_for_ingress_queue_plan_certified", "submit_prepared_transaction_ingress(", "direct_queue_push("),
+    ("handler_post_transaction_entrypoint", "submit_prepared_transaction_ingress(", "direct_queue_push("),
+    ("PreparedFreshTransactionIngress", "transaction: iroha_core::tx::AcceptedTransaction<'static>", "transaction: TransactionEntrypoint"),
+    ("prepare_fresh_transaction_ingress", "routing::reject_ingress_if_queue_capacity_saturated(", "unbounded_queue_admission("),
+    ("prepare_fresh_transaction_ingress", ".durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())", ".durable_plan_admission_claim_with_state(&transaction, foreign_state)"),
+    ("prepare_fresh_transaction_ingress", "if !durable_retry_claim", "if durable_retry_claim"),
+    ("prepare_fresh_transaction_ingress", ".is_some_and(|claim| claim.global_admission_identity.is_some())", ".is_some_and(|_| true)"),
+    ("prepare_fresh_transaction_ingress", "claim.routing_plan.clone()", "fresh_route"),
+    ("prepare_fresh_transaction_ingress", ".route_plan_with_state(&transaction, app.state.as_ref())", ".route_plan_without_state(&transaction)"),
+    ("submit_prepared_transaction_ingress", "AuthenticatedQueuePlanRetry::from_accepted(app.state.network_id_ref(), &transaction)?", "Some(unverified_identity)"),
+    ("submit_prepared_transaction_ingress", "canonical_queue_plan_submission_response(", "skip_canonical_refresh("),
+    ("submit_prepared_transaction_ingress", "return Ok(response);", "drop(response);"),
+    ("submit_prepared_transaction_ingress", ".durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())", ".durable_plan_admission_claim_with_state(&transaction, foreign_state)"),
+    ("submit_prepared_transaction_ingress", ".or(durable_retry_claim);", ".or(None);"),
+    ("submit_prepared_transaction_ingress", ".map_or(routing_plan, |claim| claim.routing_plan.clone())", ".map_or(routing_plan, |_| fresh_route)"),
+    ("submit_prepared_transaction_ingress", ".is_some_and(|claim| claim.global_admission_identity.is_some())", ".is_some_and(|_| true)"),
+    ("submit_prepared_transaction_ingress", "reserve_verified_transaction_authority(", "unreserved_authority("),
+    ("submit_prepared_transaction_ingress", "transaction.authority_opt()", "None"),
+    ("submit_prepared_transaction_ingress", "execute_torii_transaction_via_proxy(", "direct_ordinary_queue_push("),
+    ("submit_prepared_transaction_ingress", "if response.status() == StatusCode::ACCEPTED", "if true"),
+    ("submit_prepared_transaction_ingress", "reservation.commit();", "drop(reservation);"),
+    ("submit_prepared_transaction_ingress", "queue_plan_synced_transport_unavailable", "accept_without_transport"),
+    ("execute_torii_transaction_via_proxy", "threshold_key_lifecycle_ingress::submit(", "direct_ordinary_queue_push("),
+    ("execute_torii_transaction_via_proxy", "durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some())", "durable_retry_claim"),
+    ("execute_torii_transaction_via_proxy", "let already_durably_admitted = durable_retry_claim.is_some();", "let already_durably_admitted = true;"),
+    ("execute_torii_transaction_via_proxy", "queue_plan_binding_from_durable_admission(&claim)", "new_binding_from_fresh_route(&claim)"),
+    ("execute_torii_transaction_via_proxy", "if binding.request_id != request_id", "if false"),
+    ("execute_torii_transaction_via_proxy", "validate_queue_plan_binding_for_request(", "validate_binding_structure_only("),
+    ("execute_torii_transaction_via_proxy", "queue_plan_admission_binding_registry_match(&binding)", "queue_plan_admission_binding_registry_match(&foreign_binding)"),
+    ("execute_torii_transaction_via_proxy", "if !already_durably_admitted", "if already_durably_admitted"),
+    ("execute_torii_transaction_via_proxy", "admission_binding: Some(binding)", "admission_binding: None"),
+])
+def test_canonical_queue_plan_retry_rejects_delegated_ingress_mutation(symbol: str, old: str, new: str) -> None:
+    """A helper extraction must retain exact accepted custody and durable admission checks."""
+    test_canonical_queue_plan_retry_rejects_semantic_mutation(symbol, old, new)
+
+
+@pytest.mark.parametrize("symbol,first,last", [
+    ("submit_signed_transaction_for_ingress_queue_plan_certified", "let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;", "submit_prepared_transaction_ingress("),
+    ("handler_post_transaction_entrypoint", "let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;", "submit_prepared_transaction_ingress("),
+    ("prepare_fresh_transaction_ingress", ".durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())", "routing::reject_ingress_if_queue_capacity_saturated("),
+    ("submit_prepared_transaction_ingress", "AuthenticatedQueuePlanRetry::from_accepted(", "canonical_queue_plan_submission_response("),
+    ("submit_prepared_transaction_ingress", "canonical_queue_plan_submission_response(", ".durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())"),
+    ("submit_prepared_transaction_ingress", ".durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())", "reserve_verified_transaction_authority("),
+    ("submit_prepared_transaction_ingress", "reserve_verified_transaction_authority(", "execute_torii_transaction_via_proxy("),
+    ("submit_prepared_transaction_ingress", "execute_torii_transaction_via_proxy(", "if response.status() == StatusCode::ACCEPTED"),
+    ("execute_torii_transaction_via_proxy", "durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some())", "let already_durably_admitted = durable_retry_claim.is_some();"),
+    ("execute_torii_transaction_via_proxy", "queue_plan_admission_binding_registry_match(&binding)", "routing::reject_ingress_if_queue_capacity_saturated("),
+    ("execute_torii_transaction_via_proxy", "routing::reject_ingress_if_queue_capacity_saturated(", "execute_torii_proxy_request_with_fallback("),
+])
+def test_canonical_queue_plan_retry_rejects_delegated_ingress_reordering(symbol: str, first: str, last: str) -> None:
+    """Caller and helper ordering must remain connected across the exact consuming cut."""
+    test_canonical_queue_plan_retry_rejects_owner_reordering(symbol, first, last)
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("PreparedBatchEntry", "Fresh(PreparedFreshTransactionIngress)", "Fresh(TransactionEntrypoint)"),
+    ("transaction_batch_submission_response", "StatusCode::ACCEPTED", "StatusCode::OK"),
+    ("handler_post_transactions_batch", "validate_transaction_batch_body_size(", "unbounded_batch("),
+    ("handler_post_transactions_batch", "AuthenticatedQueuePlanRetry::from_signed(", "unverified_retry("),
+    ("handler_post_transactions_batch", "canonical_queue_plan_submission_response(", "assume_canonical("),
+    ("handler_post_transactions_batch", "routing::accept_decoded_signed_transaction_for_ingress_with_precheck(", "accept_without_authentication("),
+    ("handler_post_transactions_batch", "prepare_fresh_transaction_ingress(&worker_app, transaction)?", "unchecked_route(transaction)"),
+    ("handler_post_transactions_batch", "threshold_key_lifecycle_ingress::authenticate(", "allow_ordinary_economic_input("),
+    ("handler_post_transactions_batch", ".collect::<Result<Vec<_>, Error>>()", ".filter_map(Result::ok).collect::<Vec<_>>()"),
+    ("handler_post_transactions_batch", "let hash = transaction.hash();", "let hash = transaction.hash(); submit_prepared_transaction_ingress(unprepared);"),
+    ("handler_post_transactions_batch", "drop(permit);", "drop(permit); routing::push_accepted_transaction(unchecked);"),
+    ("handler_post_transactions_batch", "Ok(result) => result.unwrap_or_else(IntoResponse::into_response)", "Ok(result) => result?"),
+    ("handler_post_transactions_batch", "signed_transaction_hash: hash", "signed_transaction_hash: foreign_hash"),
+    ("handler_post_transactions_batch", "status: response.status().as_u16()", "status: 202"),
+    ("handler_post_transactions_batch", "let accepted = outcomes.iter()", "return Err(late_aggregate_failure); let accepted = outcomes.iter()"),
+    ("handler_post_transactions_batch", "if accepted == outcomes.len()", "if accepted != 0"),
+    ("handler_post_transactions_batch", "StatusCode::MULTI_STATUS", "StatusCode::ACCEPTED"),
+])
+def test_canonical_queue_plan_retry_rejects_batch_caller_mutation(symbol: str, old: str, new: str) -> None:
+    """Batch preflight and each durable result use the same authenticated admission owner."""
+    test_canonical_queue_plan_retry_rejects_semantic_mutation(symbol, old, new)
+
+
+@pytest.mark.parametrize("first,last", [
+    ("AuthenticatedQueuePlanRetry::from_signed(", "prepare_fresh_transaction_ingress("),
+    ("threshold_key_lifecycle_ingress::authenticate(", "drop(permit);"),
+    (".collect::<Result<Vec<_>, Error>>()", "for (hash, entry) in prepared"),
+    ("outcomes.push(TransactionBatchEntryOutcome", "let accepted = outcomes.iter()"),
+])
+def test_canonical_queue_plan_retry_rejects_batch_caller_reordering(first: str, last: str) -> None:
+    """No first dispatch or aggregate response may precede the complete original cut."""
+    test_canonical_queue_plan_retry_rejects_owner_reordering("handler_post_transactions_batch", first, last)
+
+
 @pytest.mark.parametrize("mutation", ["missing", "duplicate", "weakened"])
 def test_canonical_queue_plan_retry_requires_exact_ledger(tmp_path: Path, mutation: str) -> None:
     """The canonical reader cannot disappear from the authenticated owner inventory."""
@@ -1666,3 +1774,224 @@ def test_canonical_queue_plan_retry_requires_exact_ledger(tmp_path: Path, mutati
         row["required_tokens"].pop()
     errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
     assert any("State::canonical_queue_plan_admitted_input" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("AuthenticatedQueuePlanRetry::from_signed", "Self::check_network(network_id, signed)?;", ""),
+    ("AuthenticatedQueuePlanRetry::from_signed", "signed.verify_signature()", "Ok::<(), String>(())"),
+    ("AuthenticatedQueuePlanRetry::from_signed", "if signed.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced", "if false"),
+    ("AuthenticatedQueuePlanRetry::from_signed", "entrypoint_hash: signed.hash_as_entrypoint()", "entrypoint_hash: foreign_hash"),
+    ("AuthenticatedQueuePlanRetry::from_signed", "signed_transaction_hash: signed.hash()", "signed_transaction_hash: foreign_hash"),
+    ("AuthenticatedQueuePlanRetry::from_entrypoint", "Self::from_signed(network_id, signed)?", "Some(unverified_identity)"),
+    ("AuthenticatedQueuePlanRetry::from_entrypoint", "authenticated.entrypoint_hash = entrypoint.hash();", ""),
+    ("AuthenticatedQueuePlanRetry::from_entrypoint", "TransactionEntrypoint::SealedCommitment(_) => return Ok(None)", "TransactionEntrypoint::SealedCommitment(_) => return Ok(Some(unverified_identity))"),
+    ("AuthenticatedQueuePlanRetry::from_accepted", "accepted: &AcceptedTransaction<'_>", "accepted: &TransactionEntrypoint"),
+    ("AuthenticatedQueuePlanRetry::from_accepted", "Self::check_network(network_id, signed)?;", ""),
+    ("AuthenticatedQueuePlanRetry::check_network", "if signed.domain() != &expected", "if false"),
+    ("canonical_queue_plan_synced_response", "authenticated.entrypoint_hash() != binding.entrypoint_hash", "false"),
+    ("canonical_queue_plan_synced_response", "Some(authenticated.signed_transaction_hash()) != binding.signed_transaction_hash", "false"),
+    ("handler_post_transaction_entrypoint", "AuthenticatedQueuePlanRetry::from_entrypoint(state.network_id_ref(), &transaction)?", "Some(unverified_identity)"),
+    ("submit_signed_transaction_for_ingress_queue_plan_certified", "AuthenticatedQueuePlanRetry::from_signed(", "unverified_identity("),
+])
+def test_canonical_queue_plan_retry_rejects_authentication_substitution(symbol: str, old: str, new: str) -> None:
+    """A canonical hash never substitutes for the independently checked signature/network."""
+    test_canonical_queue_plan_retry_rejects_semantic_mutation(symbol, old, new)
+
+
+@pytest.mark.parametrize("policy", ["transaction_admission_limits(", "admission_snapshot(", "allowed_signing", "PrecheckedSingleEd25519", "AcceptedTransaction::"])
+def test_canonical_queue_plan_retry_rejects_fresh_policy_or_authority(policy: str) -> None:
+    """The retry identity can acknowledge custody but cannot create a fresh Queue input."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+    items = canonical_queue_plan_retry_items().copy()
+    symbol = "AuthenticatedQueuePlanRetry::from_signed"
+    key, = [key for key in items if key[2] == symbol]
+    items[key] = items[key].replace("Self::check_network(network_id, signed)?;", policy + " Self::check_network(network_id, signed)?;", 1)
+    errors = []
+    contract.validate_canonical_queue_plan_retry(items, errors)
+    assert any(symbol in error and "fresh admission" in error for error in errors), errors
+
+
+@_retained_route_cache(maxsize=1)
+def replay_terminal_queue_plan_items() -> dict:
+    """Read the original claim and release owners for the executable custody contract."""
+    module = load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    sources, items = {}, {}
+    for path, kind, symbol, _ in contract.QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS:
+        source = sources.setdefault(path, (ROOT_DIR / path).read_text())
+        owner, = module._extract_rust_binding_items(source, kind, symbol)
+        items[(path, kind, symbol)] = owner
+    return items
+
+
+def test_replay_terminal_queue_plan_custody_accepts_actual_sources() -> None:
+    """Exact canonical evidence survives ordinary selection without becoming Kura proof."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = replay_terminal_queue_plan_items()
+    errors = []
+    contract.validate_queue_plan_replay_terminal_custody(items, errors)
+    assert errors == [], errors
+    for path, kind, symbol, tokens in contract.QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS:
+        for token in tokens:
+            assert token in items[(path, kind, symbol)], (symbol, token)
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("QueuePlanDurableClaimIndexEntry", "local_custody: QueuePlanLocalCustody", "local_custody: bool"),
+    ("Queue::replay_terminal_cleanup_pending", "== QueuePlanLocalCustody::ReplayTerminalPending", "!= QueuePlanLocalCustody::Autonomous"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "&& self.transaction_selection_durability_faulted()", "&& false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if &indexed_binding != binding", "if false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if reservation_owned", "if false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| indexed_claim.local_custody == QueuePlanLocalCustody::Autonomous", "|| false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", ".local_custody = QueuePlanLocalCustody::ReplayTerminalPending", ".local_custody = QueuePlanLocalCustody::Available"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", ".store(true, Ordering::Release)", ".store(false, Ordering::Release)"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "if self.global_selection_owners.lock().contains_key(&hash)", "if false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| self.inflight_guards.load(Ordering::Acquire) != 0", "|| false"),
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "|| self.selection_attempts.load(Ordering::Acquire) != 0", "|| false"),
+    ("Queue::resume_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),
+    ("Queue::resume_replay_terminal_cleanup", "claim.global_admission_binding()", "replacement.global_admission_binding()"),
+    ("Queue::resume_replay_terminal_cleanup", "self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)", "self.reject_exact_queue_plan_admission_claim(&binding)"),
+    ("Queue::resume_replay_terminal_cleanup", "self.mark_accepted_work_validation_fault(", "ignore_fault("),
+    ("Queue::resume_unowned_replay_terminal_cleanup", ".swap(false, Ordering::AcqRel)", ".load(Ordering::Acquire)"),
+    ("Queue::resume_unowned_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),
+    ("GlobalQueueSelectionLease::retain_only", "\n        drop(owners);", ""),
+    ("GlobalQueueSelectionLease::retain_only", "\n        drop(queue_guard);", ""),
+    ("GlobalQueueSelectionLease::retain_only", "queue.resume_replay_terminal_cleanup(hash);", ""),
+    ("GlobalQueueSelectionLease::retain_only", "!queue.transaction_selection_durability_faulted()", "true"),
+    ("GlobalQueueSelectionLease::drop", "drop(owners);", ""),
+    ("GlobalQueueSelectionLease::drop", "drop(queue_guard);", ""),
+    ("GlobalQueueSelectionLease::drop", "queue.resume_replay_terminal_cleanup(*hash);", ""),
+    ("QueueSelectionAttempt<'_>::drop", "if previous == 1", "if previous == 0"),
+    ("QueueSelectionAttempt<'_>::drop", "self.queue.resume_unowned_replay_terminal_cleanup();", ""),
+    ("TransactionGuard::drop", "self.queue.resume_unowned_replay_terminal_cleanup();", ""),
+    ("Queue::reserve_transactions_for_lane_bounded", "if self.replay_terminal_cleanup_pending(hash)", "if false"),
+    ("Queue::reserve_transactions_for_lane_bounded", ".local_custody = QueuePlanLocalCustody::Autonomous", ".local_custody = QueuePlanLocalCustody::Available"),
+    ("Queue::prepare_plan_journal_replay_locked", "if has_durable_reservation_owner {\n                claim.local_custody", "if false {\n                claim.local_custody"),
+    ("Queue::push_with_lane_internal_with_state_and_routing", "if existing.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "if false"),
+    ("Queue::push_with_lane_internal_with_state_and_routing", "local_custody: existing.local_custody", "local_custody: QueuePlanLocalCustody::Available"),
+    ("Queue::enqueue_prepared_admissions", "local_custody: if restored_reservation", "local_custody: if false"),
+    ("Queue::bounded_pending_snapshot", "if self.replay_terminal_cleanup_pending(*hash)", "if false"),
+    ("Queue::pop_queued_hash", "|| self.replay_terminal_cleanup_pending(hash)", "|| false"),
+    ("Queue::release_pre_kura_autonomous_reservation_batch", "let authorized_projection = checked.into_projection();", "let authorized_projection = projection;"),
+    ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", ".first_key_value()", ".pop_first()"),
+    ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", "batch.pre_kura_direct_release_context()?", "batch.pre_kura_direct_release_context().unwrap_or_default()"),
+    ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", ".map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?", ".unwrap_or_default()"),
+])
+def test_replay_terminal_queue_plan_custody_rejects_semantic_mutation(symbol: str, old: str, new: str) -> None:
+    """No local release may bypass exact State proof, autonomous custody, or held writers."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = replay_terminal_queue_plan_items().copy()
+    key, = [key for key in items if key[2] == symbol]
+    assert items[key].count(old) == 1, (symbol, old)
+    items[key] = items[key].replace(old, new, 1)
+    errors = []
+    contract.validate_queue_plan_replay_terminal_custody(items, errors)
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol,before,after", [
+    ("Queue::reject_exact_queue_plan_admission_claim_inner", "self.replay_terminal_cleanup_dirty\n                    .store(true, Ordering::Release);", "self.tombstone_conflicting_global_admission(binding)?;"),
+    ("GlobalQueueSelectionLease::drop", "drop(queue_guard);", "queue.resume_replay_terminal_cleanup(*hash);"),
+    ("TransactionGuard::drop", "self.queue.release_inflight_guard();", "self.queue.resume_unowned_replay_terminal_cleanup();"),
+    ("V2LaneWorkAdapter::release_pending_autonomous_reservation_batches", ".release_pre_kura_autonomous_reservation_batch(context)", "self.pending_autonomous_reservation_batches.remove(&route);"),
+])
+def test_replay_terminal_queue_plan_custody_rejects_release_order_drift(symbol: str, before: str, after: str) -> None:
+    """Presence alone cannot replace publish-before-observe and unlock-before-resume order."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = replay_terminal_queue_plan_items().copy()
+    key, = [key for key in items if key[2] == symbol]
+    assert items[key].count(before) == items[key].count(after) == 1
+    items[key] = items[key].replace(before, "", 1).replace(after, after + "\n" + before, 1)
+    errors = []
+    contract.validate_queue_plan_replay_terminal_custody(items, errors)
+    assert any(symbol in error for error in errors), errors
+
+
+def test_replay_terminal_queue_plan_low_level_guard_release_cannot_reenter() -> None:
+    """The counter helper is also called while Queue locks are held."""
+    load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    items = replay_terminal_queue_plan_items().copy()
+    key, = [key for key in items if key[2] == "Queue::release_inflight_guard"]
+    items[key] = items[key].replace("let prev =", "self.resume_unowned_replay_terminal_cleanup(); let prev =", 1)
+    errors = []
+    contract.validate_queue_plan_replay_terminal_custody(items, errors)
+    assert any("reenter held Queue locks" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("old,new", [
+    ("matches!(&gate, LaneQueueDirectReleaseGate::StrictAbsence(_))", "true"),
+    ("if checked_direct_release {", "if true {"),
+])
+def test_replay_terminal_queue_plan_direct_release_requires_exact_custody_reset(
+    tmp_path: Path, monkeypatch, old: str, new: str,
+) -> None:
+    """Refreshing the digest cannot authorize a raw-key custody reset."""
+    module = load_checker()
+    import check_sumeragi_v2_proof_ledger as ledger
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    for relative in ("crates/iroha_core/src/queue.rs", "crates/iroha_core/src/queue/reservation_journal.rs"):
+        copy_reviewed_rust_source_fixture(tmp_path, module, relative)
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    source = path.read_text()
+    symbol = "release_lane_reservations_in_order_inner"
+    owner, = ledger.rust_items(source, symbol)
+    assert owner.source.count(old) == 1
+    mutated = owner.source.replace(old, new, 1)
+    path.write_text(source.replace(owner.source, mutated, 1))
+    current = path.read_text()
+    refreshed = {
+        name: ledger._rust_item_token_sha256(ledger.rust_items(current, name)[0])
+        for name in contract._DIRECT_RELEASE_PRODUCTION_ITEM_SHA256
+    }
+    monkeypatch.setattr(contract, "_DIRECT_RELEASE_PRODUCTION_ITEM_SHA256", refreshed)
+    errors = []
+    contract.validate_direct_release_authority_contract(tmp_path, errors, module._rust_binding_item)
+    assert any("direct-release authority must be mandatory" in error for error in errors), errors
+    assert not any("source seal" in error for error in errors), errors
+
+
+def test_replay_terminal_queue_plan_startup_contract_accepts_actual_sources() -> None:
+    """The startup consumer and live custody consumer share the exact reviewed ledger."""
+    module = load_checker()
+    errors = []
+    with module._reviewed_rust_source_cache():
+        module._validate_queue_plan_startup_replay_contract(ROOT_DIR, canonical_models(), errors)
+    assert errors == [], errors
+
+
+@pytest.mark.parametrize("symbol", [
+    "Queue::prepare_plan_journal_replay_locked",
+    "Queue::reject_exact_queue_plan_admission_claim_inner",
+    "Queue::remove_state_committed_replay_owners_preserving_globally_bound",
+])
+def test_replay_terminal_queue_plan_shared_startup_ledger_retains_every_obligation(symbol: str) -> None:
+    """Replacing a shared row by only its added custody tokens must fail startup review."""
+    module = load_checker()
+    import sumeragi_v2_multilane_queue_plan_contract as contract
+
+    startup, = [row for row in contract.QUEUE_PLAN_STARTUP_REPLAY_BINDINGS if row[2] == symbol]
+    live, = [row for row in contract.QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS if row[2] == symbol]
+    addition, = [row for row in contract.QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS if row[2] == symbol]
+    assert startup == live
+    assert len(startup[3]) > len(addition[3])
+    assert startup[3][-len(addition[3]):] == addition[3]
+    models = canonical_models()
+    model, = [model for model in models if model['module'] == contract.QUEUE_PLAN_STARTUP_REPLAY_MODULE]
+    binding, = [row for row in model['production_symbols'] if row['symbol'] == symbol]
+    assert binding['required_tokens'] == list(startup[3])
+    binding['required_tokens'] = list(addition[3])
+    errors = []
+    with module._reviewed_rust_source_cache():
+        module._validate_queue_plan_startup_replay_contract(ROOT_DIR, models, errors)
+    assert any('reviewed startup replay tokens changed' in error and symbol in error for error in errors), errors

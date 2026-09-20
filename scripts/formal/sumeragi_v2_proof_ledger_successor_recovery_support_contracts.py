@@ -812,7 +812,7 @@ def _check_successor_snapshot_authority(
         "recover_active_height_with_plan snapshot authority",
         recovery,
         (
-            "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
+            "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan, &V2SnapshotStartupPolicy::from_state(state)?, )?;",
             "if record.context() != &bootstrap.context || record.proofs_of_possession() != bootstrap.validator_set_pops",
             "let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;",
             "RecoveredSuccessorActivationAuthority::SnapshotBootstrap( SnapshotSuccessorActivationAuthority::new(bootstrap), )",

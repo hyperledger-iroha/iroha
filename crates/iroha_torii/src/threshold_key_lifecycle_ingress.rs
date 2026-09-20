@@ -34,7 +34,7 @@ fn certificate(transaction: &TransactionEntrypoint) -> Option<&ThresholdKeyLifec
         .map(|instruction| &instruction.certificate)
 }
 
-fn authenticate(
+pub(super) fn authenticate(
     app: &AppState,
     transaction: &TransactionEntrypoint,
     routing_plan: &RoutingPlan,

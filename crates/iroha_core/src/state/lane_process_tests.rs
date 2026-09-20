@@ -407,7 +407,7 @@ state_test! { sync native_process_full_queue_foreign_completion_and_global_advan
 
 #[cfg(all(unix, not(target_os = "espidf")))]
 state_test! { sync native_process_authenticated_closure_drains_body_and_wal_without_apply_ack
-    use crate::sumeragi::{output_guard::ConsensusOutputGuard,v2_lane_instance::{LaneProcessOwner,LanePhysicalPool,LaneWorkerClass,LaneProcessProgress,LaneService,LaneCurrentGate}};
+    use crate::sumeragi::{output_guard::ConsensusOutputGuard,v2_lane_instance::{LaneProcessOwner,LanePhysicalPool,LaneWorkerClass,LaneProcessProgress,LaneService,LaneCurrentGate,LaneBodyProgress}};
     use std::{sync::mpsc,time::Instant};
     let now=Instant::now();let due=now+Duration::from_secs(1);let fixture=native_process_fixture(false,now);
     let observed=fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();let lane=&observed.contexts()[0];
@@ -418,7 +418,7 @@ state_test! { sync native_process_authenticated_closure_drains_body_and_wal_with
     native_process_open_for_test(&mut table,&pool,&fixture,&observed,lane,leader,now);
     table.prepare_body(lane.instance_id(),&observed).unwrap();
     let (entered,entered_rx)=mpsc::sync_channel(0);let (release,release_rx)=mpsc::sync_channel(0);
-    table.hold_next_job_for_test(lane.instance_id(),LaneWorkerClass::Body,move||{entered.send(()).unwrap();release_rx.recv().unwrap();}).unwrap();
+    table.hold_next_completion_for_test(lane.instance_id(),LaneWorkerClass::Body,move||{entered.send(()).unwrap();release_rx.recv().unwrap();}).unwrap();
     table.dispatch_one(&pool,LaneWorkerClass::Body).unwrap();entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     table.poll_clock(lane.instance_id(),&observed,due).unwrap();table.prepare_persistence(lane.instance_id()).unwrap();table.dispatch_one(&pool,LaneWorkerClass::Wal).unwrap();
     assert!(matches!(table.accept_completion(native_process_receive(&pool),&observed).unwrap(),LaneProcessProgress::Persistence(LaneService::PersistedAwaitingAck)));
@@ -427,13 +427,19 @@ state_test! { sync native_process_authenticated_closure_drains_body_and_wal_with
     assert_eq!(table.reconcile(&closed),LaneCurrentGate::Current);
     assert!(table.poll_clock(lane.instance_id(),&closed,due).is_err());
     table.prepare_closed_drain(lane.instance_id()).unwrap();assert_eq!(table.occupancy().transferred,1,"actual body handle still belongs to worker");
-    release.send(()).unwrap();table.accept_completion(native_process_receive(&pool),&closed).unwrap();
+    release.send(()).unwrap();
+    assert!(matches!(table.accept_completion(native_process_receive(&pool),&closed).unwrap(),
+        LaneProcessProgress::Body(LaneBodyProgress::Retired)),
+        "original closed body retires without consuming the actual pending WAL acknowledgement");
+    assert_eq!(table.instance(lane.instance_id()).unwrap().retirement_count(), 1);
     table.prepare_closed_drain(lane.instance_id()).unwrap();table.dispatch_one(&pool,LaneWorkerClass::Body).unwrap();
     assert!(matches!(table.accept_completion(native_process_receive(&pool),&closed).unwrap(),LaneProcessProgress::ClosedDrained));
     assert_eq!(table.occupancy().closed,1);assert_eq!(table.occupancy().instances,1,"unconsumed protocol custody remains capacity-accounted");
     let retired:crate::sumeragi::v2_lane_instance::LaneClosedInstance=table.take_closed(lane.instance_id()).unwrap();assert_eq!(table.occupancy().instances,0);
     assert_eq!(retired.instance().native_records().len(),1);assert_eq!(retired.instance().tag().view(),0);
     assert!(retired.unacknowledged_control().is_some(),"physical fsync does not fabricate a reducer/global Apply ack on closure");
+    assert_eq!(retired.instance().retirement_count(), 1,
+        "neutral physical-result retirement preserves the separate unacknowledged control");
     assert!(retired.instance().native_decision().unwrap().is_none());
     assert!(!guard.restart_required());drop(table);
     assert!(!guard.restart_required(),"explicit retirement consumer now owns all closed obligations");
@@ -550,3 +556,5 @@ state_test! { sync native_process_actual_body_receipt_and_native_decision_remain
 }
 
 include!("lane_driver_tests.rs");
+
+include!("lane_transport_tests.rs");

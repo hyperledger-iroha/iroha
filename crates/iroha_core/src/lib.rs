@@ -962,6 +962,16 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                         }
                     }
                 }
+                BlockMessage::NativeLane(envelope) => {
+                    if envelope.version
+                        == iroha_data_model::block::lane_consensus::LANE_MESSAGE_VERSION_V1
+                    {
+                        T::Consensus
+                    } else {
+                        T::Other
+                    }
+                }
+                BlockMessage::NativeLaneDecision(_) => T::Consensus,
                 BlockMessage::LaneExecutablePayload(_)
                 | BlockMessage::LaneHistoricalRecoveryResponse(_) => T::ConsensusPayload,
                 BlockMessage::LaneBlockProposal(_)

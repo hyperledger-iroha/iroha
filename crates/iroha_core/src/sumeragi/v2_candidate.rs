@@ -16,6 +16,7 @@ use super::{
     output_guard::ConsensusOutputGuard,
     v2::LocalProposalDirective,
     v2_chunks::{EncodedV2Payload, encode_payload},
+    v2_lane_driver::NativeLaneCandidateBatch,
 };
 use crate::{
     block::{BlockBuilder, Chained},
@@ -165,6 +166,9 @@ impl<'candidate> CandidateDescriptor<'candidate> {
 /// Lane-local, Native AMX, and autonomous control-anchor material for a candidate.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PreparedCandidateWork {
+    /// Input-only Decisions rejoined to the original State observation. The
+    /// reducer's Apply effects remain with the process-lived lane owner.
+    pub(crate) native_lane_decisions: Option<NativeLaneCandidateBatch>,
     /// One receipt slot per descriptor. Native AMX plans require `Some` and
     /// single-route plans require `None`.
     pub(crate) native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
@@ -180,6 +184,7 @@ impl PreparedCandidateWork {
     #[cfg(test)]
     pub(crate) fn single_route_batch(candidate_count: usize) -> Self {
         Self {
+            native_lane_decisions: None,
             native_amx_receipts: vec![None; candidate_count],
             lane_payload_ownerships: Vec::new(),
             autonomous_lane_payloads: Vec::new(),
@@ -239,6 +244,8 @@ impl CandidateWorkUnavailable {
 /// Why the complete snapshot cannot currently produce a useful carrier, independently of its row count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CandidateWorkDeferral {
+    /// The authenticated native source or its applying State is not available.
+    NativeLaneSource,
     /// The exact committed merge frontier or installed reducer view is moving.
     MergeFrontier,
     /// Only optional evidence remains and none fits this carrier. Preserve the
@@ -374,6 +381,10 @@ pub(crate) struct CandidateScanReport {
     pub(crate) admission_deferred: usize,
     /// Optional evidence proofs left with their original pending owner.
     pub(crate) evidence_deferred: usize,
+    /// Decided native groups retained by their original lane owners.
+    pub(crate) native_deferred: usize,
+    /// Decided native groups included as the sole economic input form.
+    pub(crate) native_selected: usize,
     /// Entries skipped because certified lane/AMX work was unavailable.
     pub(crate) work_deferred: usize,
     /// Ordinary FIFO entries excluded by an exact-empty certified execution carrier.
@@ -571,7 +582,7 @@ impl V2CandidateAssembler {
                 .iter()
                 .map(CandidateRecord::descriptor)
                 .collect::<Vec<_>>();
-            let prepared_work =
+            let mut prepared_work =
                 match request
                     .work_provider
                     .prepare(request.context, view, &descriptors)
@@ -611,6 +622,17 @@ impl V2CandidateAssembler {
                     }
                 };
             validate_prepared_work(request.context, view, &descriptors, &prepared_work)?;
+            if let Some(native) = prepared_work.native_lane_decisions.as_mut() {
+                if !native.is_current(request.state, request.context) {
+                    return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                        report,
+                        reason: CandidateWorkDeferral::NativeLaneSource,
+                    });
+                }
+                report.native_deferred = native.deferred_groups()
+                    + native.batch().groups.len().saturating_sub(selection_max);
+                native.retain_prefix(native.batch().groups.len().min(selection_max));
+            }
             report.selected = selected.len();
             let candidate_header = BlockHeader::new(
                 NonZeroU64::new(request.context.height)
@@ -699,6 +721,7 @@ impl V2CandidateAssembler {
                 .map_err(CandidateError::CanonicalEncoding)?;
             let mut chunk_count = encoded_chunk_count(request.context.da_layout, encoded_bytes)?;
             let mut first_admission_size = None;
+            let mut first_native_size = None;
             if encoded_bytes > exact_payload_limit
                 || chunk_count > request.context.da_layout.max_chunk_count as usize
             {
@@ -707,6 +730,61 @@ impl V2CandidateAssembler {
                     // Keep a canonical FIFO prefix. No private-key operation has
                     // occurred and every removed row retains queue ownership.
                     continue;
+                }
+                // Native groups are indivisible economic inputs. Fit a strict
+                // admission-priority prefix on the actual fully framed builder;
+                // never split a group or acknowledge its retained Apply effect.
+                if let Some(native) = prepared_work.native_lane_decisions.as_ref() {
+                    let native_base = builder
+                        .clone()
+                        .retain_queue_plan_admission_prefix(0)
+                        .map_err(CandidateError::CanonicalEncoding)?;
+                    let original_count = native.batch().groups.len();
+                    let mut low = 0;
+                    let mut high = original_count;
+                    while low < high {
+                        let mid = low + (high - low).div_ceil(2);
+                        let trial = native_base
+                            .clone()
+                            .retain_native_lane_decision_prefix(mid)
+                            .map_err(CandidateError::CanonicalEncoding)?;
+                        let bytes = trial
+                            .canonical_proposal_wire_len(
+                                u64::from(request.local_validator),
+                                algorithm,
+                            )
+                            .map_err(CandidateError::CanonicalEncoding)?;
+                        let chunks = encoded_chunk_count(request.context.da_layout, bytes)?;
+                        if mid == 1 {
+                            first_native_size = Some((bytes, chunks));
+                        }
+                        if bytes <= exact_payload_limit
+                            && chunks <= request.context.da_layout.max_chunk_count as usize
+                        {
+                            low = mid;
+                        } else {
+                            high = mid - 1;
+                        }
+                    }
+                    if low < original_count {
+                        builder = builder
+                            .retain_native_lane_decision_prefix(low)
+                            .map_err(CandidateError::CanonicalEncoding)?;
+                        report.native_deferred += original_count - low;
+                        if low == 0 {
+                            prepared_work.native_lane_decisions = None;
+                        } else if let Some(native) = prepared_work.native_lane_decisions.as_mut() {
+                            native.retain_prefix(low);
+                        }
+                        encoded_bytes = builder
+                            .canonical_proposal_wire_len(
+                                u64::from(request.local_validator),
+                                algorithm,
+                            )
+                            .map_err(CandidateError::CanonicalEncoding)?;
+                        chunk_count =
+                            encoded_chunk_count(request.context.da_layout, encoded_bytes)?;
+                    }
                 }
                 let original_count = request.attachments.queue_plan_admissions.len();
                 let mut low = 0usize;
@@ -752,7 +830,9 @@ impl V2CandidateAssembler {
                     // If no admission fits, report the smallest non-empty
                     // candidate rather than the stripped empty envelope.
                     let (encoded_bytes, chunk_count) = if low == 0 {
-                        first_admission_size.unwrap_or((encoded_bytes, chunk_count))
+                        first_native_size
+                            .or(first_admission_size)
+                            .unwrap_or((encoded_bytes, chunk_count))
                     } else {
                         (encoded_bytes, chunk_count)
                     };
@@ -809,8 +889,9 @@ impl V2CandidateAssembler {
                 }
                 // Required admission work still reports its real non-empty
                 // envelope before entering the fail-stop signing region.
-                let (encoded_bytes, chunk_count) =
-                    first_admission_size.unwrap_or((encoded_bytes, chunk_count));
+                let (encoded_bytes, chunk_count) = first_native_size
+                    .or(first_admission_size)
+                    .unwrap_or((encoded_bytes, chunk_count));
                 return Err(CandidateError::ProposalFramingExceedsPayloadLimits {
                     encoded_bytes,
                     encoded_chunks: chunk_count,
@@ -820,6 +901,20 @@ impl V2CandidateAssembler {
             }
             // Candidate signing begins only after the complete actual carrier
             // fits. The sizing projection never signs or publishes placeholder bytes.
+            let _native_publication = prepared_work
+                .native_lane_decisions
+                .as_ref()
+                .map(|_| request.state.consensus_publication_lease());
+            if prepared_work
+                .native_lane_decisions
+                .as_ref()
+                .is_some_and(|native| !native.is_current(request.state, request.context))
+            {
+                return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                    report,
+                    reason: CandidateWorkDeferral::NativeLaneSource,
+                });
+            }
             let signing = request
                 .output_guard
                 .begin_fail_stop_operation()
@@ -864,6 +959,10 @@ impl V2CandidateAssembler {
             // concurrent block-sync commit cannot publish a stale candidate.
             validate_request(&request)?;
             report.selected = selected.len();
+            report.native_selected = prepared_work
+                .native_lane_decisions
+                .as_ref()
+                .map_or(0, |native| native.batch().groups.len());
             let selected_hashes = selected
                 .iter()
                 .map(|record| record.transaction.hash_as_entrypoint())
@@ -1058,6 +1157,19 @@ impl V2CandidateAssembler {
         prepared_work: &PreparedCandidateWork,
         candidate_creation_time: Duration,
     ) -> Result<BlockBuilder<Chained>, CandidateError> {
+        // TODO: compose DA/pin/SCCP with the recorded Native consumer before
+        // production activation. Refuse unsupported input before any signing;
+        // a shape-valid bundle alone does not prove executable carrier controls.
+        if prepared_work.native_lane_decisions.is_some()
+            && (attachments.da_commitments.is_some()
+                || attachments.da_pin_intents.is_some()
+                || attachments.sccp_commitment_root.is_some())
+        {
+            return Err(CandidateError::NativeLaneDecisionInvalid(
+                "native execution does not support additional carrier controls (DA, pin or SCCP)"
+                    .into(),
+            ));
+        }
         let transactions = selected
             .iter()
             .map(|candidate| candidate.transaction.clone())
@@ -1146,10 +1258,17 @@ impl V2CandidateAssembler {
             .with_autonomous_lane_payloads(prepared_work.autonomous_lane_payloads.clone())
             .with_lane_payload_ownerships(prepared_work.lane_payload_ownerships.clone())
             .with_queue_plan_admissions(attachments.queue_plan_admissions.clone());
+        if let Some(native) = prepared_work.native_lane_decisions.as_ref() {
+            execution_context =
+                execution_context.with_native_lane_decisions(native.batch().clone());
+        }
         if let Some(entry) = attachments.certified_merge_entry.as_ref() {
             execution_context =
                 execution_context.with_merge_entry(CertifiedMergeLedgerReference::new(entry));
         }
+        execution_context
+            .validate_native_lane_decisions_shape()
+            .map_err(CandidateError::NativeLaneDecisionInvalid)?;
         builder = builder
             .with_execution_context((!execution_context.is_empty()).then_some(execution_context));
         Ok(builder)
@@ -1261,6 +1380,7 @@ fn candidate_has_proposal_work(
     prepared_work: &PreparedCandidateWork,
 ) -> bool {
     !selected.is_empty()
+        || prepared_work.native_lane_decisions.is_some()
         || !prepared_work.autonomous_lane_payloads.is_empty()
         || attachments.time_trigger_clock_progress_required
         || attachments
@@ -1297,6 +1417,10 @@ pub(crate) fn candidate_block_has_proposal_work(
     block.external_entrypoints_cloned().next().is_some()
         || block.execution_context().is_some_and(|context| {
             !context.autonomous_lane_payloads.is_empty()
+                || context
+                    .native_lane_decisions
+                    .as_ref()
+                    .is_some_and(|batch| !batch.groups.is_empty())
                 || context.merge_entry.is_some()
                 || !context.queue_plan_admissions().is_empty()
         })
@@ -1516,6 +1640,26 @@ fn validate_prepared_work(
     candidates: &[CandidateDescriptor<'_>],
     prepared: &PreparedCandidateWork,
 ) -> Result<(), CandidateError> {
+    if let Some(native) = prepared.native_lane_decisions.as_ref() {
+        if !candidates.is_empty()
+            || !prepared.native_amx_receipts.is_empty()
+            || !prepared.lane_payload_ownerships.is_empty()
+            || !prepared.autonomous_lane_payloads.is_empty()
+        {
+            return Err(CandidateError::NativeLaneDecisionInvalid(
+                "native Decisions cannot share another economic input form".into(),
+            ));
+        }
+        native
+            .batch()
+            .canonical_hash()
+            .map_err(CandidateError::NativeLaneDecisionInvalid)?;
+        if native.batch().base_state_height.checked_add(1) != Some(context.height) {
+            return Err(CandidateError::NativeLaneDecisionInvalid(
+                "native Decisions belong to another applying height".into(),
+            ));
+        }
+    }
     if prepared.native_amx_receipts.len() != candidates.len() {
         return Err(CandidateError::NativeAmxReceiptCountMismatch {
             candidates: candidates.len(),
@@ -1890,6 +2034,9 @@ pub(crate) enum CandidateError {
     /// Non-empty lane ownerships do not cover every selected entrypoint.
     #[error("lane-local ownerships do not cover the complete candidate batch")]
     LaneOwnershipIncompleteCoverage,
+    /// Native input form, exact base or certified group structure is invalid.
+    #[error("invalid native lane Decision candidate: {0}")]
+    NativeLaneDecisionInvalid(String),
     /// Frozen DA layout cannot deterministically encode chunks.
     #[error("invalid Sumeragi v2 data-availability layout")]
     InvalidDataAvailabilityLayout,
@@ -4554,6 +4701,7 @@ pub(super) mod tests {
             ),
         ];
         let prepared = PreparedCandidateWork {
+            native_lane_decisions: None,
             native_amx_receipts: Vec::new(),
             lane_payload_ownerships: Vec::new(),
             autonomous_lane_payloads: envelopes,

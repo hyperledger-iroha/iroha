@@ -3,8 +3,9 @@
 //! This is a bounded physical fanout, not a reducer or an acknowledgement of
 //! economic Apply. A blocked destination retains its original post and actor
 //! ticket while other destinations and other instances continue to progress.
-//! TODO: register together with native wire/ingress and the candidate consumer;
-//! the legacy fresh signer must retire at that same connected activation.
+//! Native framing is registered, but live ingress stays closed. TODO: connect
+//! the sole process-lifetime consumer and candidate handoff, retiring the legacy
+//! fresh lane signer at that same connected activation.
 
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -328,19 +329,6 @@ impl NativeLaneTransport {
         context.network_id == *self.state.network_id_ref()
             && observed.carrier_height().checked_add(1) == Some(context.height)
             && parent == self.state.latest_block_hash_fast()
-    }
-
-    /// Use the real recoverable actor API. One blocked peer cannot monopolize
-    /// either its fanout or the native process's next control turn.
-    pub(crate) fn poll(
-        &mut self,
-        observed: &VerifiedLaneContexts,
-        global: Option<&VerifiedHeightContext>,
-        network: &crate::IrohaNetwork,
-    ) -> Result<NativeTransportProgress, String> {
-        self.poll_with(observed, global, |post, ticket| {
-            network.post_recoverable(post, ticket)
-        })
     }
 
     #[cfg(test)]

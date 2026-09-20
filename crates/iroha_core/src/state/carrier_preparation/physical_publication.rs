@@ -24,6 +24,8 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Admission(E),
     /// Equal bytes or paths cannot replace the captured original Kura owner.
     ForeignKura,
+    /// The target State or block header differs from the captured original geometry.
+    ForeignTarget,
     /// The original Kura is busy or requires storage repair before acquisition.
     Kura(KuraPublicationPreparationError),
     /// The retained durable checkpoint/finality no longer matches its original owner.
@@ -63,6 +65,7 @@ impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> 
         match self {
             Self::Admission(error) => f.debug_tuple("Admission").field(error).finish(),
             Self::ForeignKura => f.write_str("ForeignKura"),
+            Self::ForeignTarget => f.write_str("ForeignTarget"),
             Self::Kura(error) => f.debug_tuple("Kura").field(error).finish(),
             Self::Checkpoint(error) => f.debug_tuple("Checkpoint").field(error).finish(),
             Self::Source(error) => f.debug_tuple("Source").field(error).finish(),
@@ -275,8 +278,9 @@ impl AcquiredCarrierComponents<'_> {
 
 /// A complete decided carrier holding every original storage writer together.
 ///
-/// The private terminal consumer refuses outstanding geometry and participant
-/// durability work. TODO: complete those owners and production resource admission.
+/// The private terminal consumer completes retained nonretiring geometry before
+/// visibility. TODO: join original Queue retirement and participant durability
+/// owners, and complete production resource admission.
 /// Acquiring these writers neither advances State visibility nor grants finality,
 /// retirement or Kura permission. No physical guard may cross an async wait.
 #[must_use = "keep the complete carrier until authorized publication or abort"]
@@ -341,6 +345,17 @@ impl<Admission, BindingAdmission>
         if !target.matches_kura_instance(&original.journals.kura) {
             drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignKura));
+        }
+        // The original geometry pins the State identity as well as its header.
+        // Reject another State sharing this Kura before any durable side effect;
+        // physical predecessor and terminal geometry checks still follow below.
+        if !original
+            .journals
+            .geometry
+            .matches_publication_target(target, original.block().header())
+        {
+            drop(installation);
+            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));
         }
         // Reject substituted execution or archive custody before any derived
         // persistence can modify its durable namespace. Release the temporary
@@ -566,47 +581,33 @@ impl<Admission, BindingAdmission>
 impl<Admission, BindingAdmission, Installation>
     PhysicallyPreparedCarrier<'_, Admission, BindingAdmission, Installation>
 {
-    /// Private preparation seam for the future source-authorized consumer.
-    /// Merely acquiring the carrier never calls this or grants permission to do so.
-    /// Every local error releases all writers and returns the exact journals,
-    /// archive captures and partially completed raw/tiered operations together.
-    fn try_resume_geometry(
-        mut self,
-    ) -> Result<
-        Self,
-        (
-            DecisionBoundCarrierJournals<
-                Admission,
-                BindingAdmission,
-                DetachedCarrierComponents,
-                KuraWsvCheckpointReceipt,
-            >,
-            crate::state::LaneLifecycleError,
-        ),
-    > {
-        let result = match self.target.tiered_backend.try_lock_or_wait() {
-            Ok(mut backend) => {
-                let journals = &mut self.decision.journals;
-                // Explicit preparation still needs the future pre-vote resource
-                // owner. Resume itself must never create replacement descriptors.
-                journals
-                    .geometry
-                    .prepare_under(&backend, &journals.components._fences._kura)
-                    .and_then(|()| {
-                        journals
-                            .geometry
-                            .resume_under(&mut backend, &journals.components._fences._kura)
-                    })
-            }
-            Err(wait) => Err(crate::state::LaneLifecycleError::PublicationBusy {
+    /// Complete only the original nonretiring storage transition. The terminal
+    /// publisher checks exact source and lifecycle authority before calling this.
+    /// No retry state or replacement descriptor is introduced here; local refusal
+    /// is returned to that publisher, which releases all writers with the owner.
+    fn try_complete_geometry(&mut self) -> Result<bool, crate::state::LaneLifecycleError> {
+        let journals = &mut self.decision.journals;
+        if !journals.geometry.requires_storage_transition() {
+            return Ok(false);
+        }
+        let mut backend = self
+            .target
+            .tiered_backend
+            .try_lock_or_wait()
+            .map_err(|wait| crate::state::LaneLifecycleError::PublicationBusy {
                 field: "tiered_backend",
                 wait,
-            }),
-        };
-        match result {
-            Ok(()) => Ok(self),
-            Err(error) => Err((self.abort(), error)),
-        }
+            })?;
+        journals
+            .geometry
+            .prepare_under(&backend, &journals.components._fences._kura)?;
+        let completed = journals.geometry.complete_under(
+            self.target,
+            journals.effects.header,
+            &mut backend,
+            &journals.components._fences._kura,
+        )?;
+        Ok(completed.updated_da_mapping().is_some())
     }
 
     /// Release all physical ownership and return the complete original decision.
@@ -654,6 +655,7 @@ impl<Admission, BindingAdmission, Installation>
 
 #[path = "publication.rs"]
 mod publication;
+pub(crate) use publication::PublishedNativeApply;
 
 #[cfg(test)]
 #[path = "physical_publication_tests.rs"]

@@ -919,19 +919,21 @@ fn autonomous_merge_commit_authorization_fixture_inner(
 
 fn install_exact_merge_beacon_fixture(
     state: &State,
+    world: &mut WorldBlock<'_>,
     validators: &[KeyPair],
     parent: &SignedBlock,
 ) -> iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1 {
     use crate::governance::parliament::{
-        ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1,
+        parliament_attempt_policy_v1,
     };
     use iroha_data_model::{
         consensus::GlobalThresholdBeaconChainAnchorV1,
         governance::types::{
             BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
             GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceExpectedHeadAbsentV1,
-            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, ProposalContentId,
-            RiskTierV1, SortitionRequestV1, parliament_candidate_root_v1,
+            GovernanceExpectedHeadV1, GovernanceStageV1, ProposalContentId, SortitionRequestV1,
+            parliament_candidate_root_v1,
         },
         isi::governance::ParliamentSortitionRequestRegistrationV1,
     };
@@ -962,28 +964,29 @@ fn install_exact_merge_beacon_fixture(
     let next = pulses[1];
     let link = crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(&prior)
         .expect("real roster-bound prior pulse");
-    let proposal_content_id = ProposalContentId::new([0x71; 32]);
+    let proposal = indexed_deploy_contract_proposal(1);
+    let proposal_content_id = ProposalContentId::new(proposal.kind.fingerprint());
     let attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
-    let body = ParliamentBody::PolicyJury;
+    let (risk_tier, requirements) = parliament_attempt_policy_v1(&proposal.kind);
     let mut attempt = ParliamentAttemptStateV1::try_new(
         GovernanceAttemptV1 {
             id: attempt_id,
             proposal_content_id,
             sequence: 0,
-            risk_tier: RiskTierV1::Standard,
+            risk_tier,
             stage: GovernanceStageV1::Qualification,
             status: GovernanceAttemptStatusV1::Active,
         },
-        1,
+        PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
         height - 1,
-        [0x72; 32],
+        proposal.kind.effect_preimage_hash_v1(),
         GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
-            subject_id: [0x73; 32],
+            subject_id: proposal
+                .kind
+                .governed_subject_id_v1()
+                .expect("exact proposal subject"),
         }),
-        vec![RequiredParliamentBodyV1 {
-            body,
-            decision_mode: ParliamentDecisionModeV1::HiddenBindingBallot,
-        }],
+        requirements.clone(),
     )
     .expect("native pending Parliament attempt");
     attempt
@@ -994,41 +997,55 @@ fn install_exact_merge_beacon_fixture(
         .map(|peer| AccountId::new(peer.public_key().clone()))
         .collect::<Vec<_>>();
     candidates.sort();
-    let request = SortitionRequestV1::try_new_canonical(
-        attempt_id,
-        BodyElectionAttemptId::derive_v1(attempt_id, body, 0),
-        body,
-        parliament_candidate_root_v1(attempt_id, body, &candidates),
-        u32::try_from(candidates.len()).expect("four native validator candidates"),
-        u32::try_from(state.gov.policy_jury_size).expect("configured Policy Jury target fits u32"),
-        1,
-        height,
-        BeaconSessionId::for_network_v1(state.network_id_ref()),
-        None,
-    )
-    .expect("exact committed request for carrier-height pulse");
-    // A Policy Jury alone is the smallest canonical required-body pipeline. The
-    // complete initial batch must be present before the native reducer persists it.
-    attempt
-        .register_sortition_request_batch(
-            attempt_id,
-            vec![ParliamentSortitionRequestRegistrationV1 {
+    let registrations = requirements
+        .iter()
+        .map(|requirement| {
+            let body = requirement.body;
+            let request = SortitionRequestV1::try_new_canonical(
+                attempt_id,
+                BodyElectionAttemptId::derive_v1(attempt_id, body, 0),
+                body,
+                parliament_candidate_root_v1(attempt_id, body, &candidates),
+                u32::try_from(candidates.len()).expect("four native validator candidates"),
+                u32::try_from(crate::governance::draw::body_committee_size(
+                    &state.gov, body,
+                ))
+                .expect("configured Parliament body target fits u32"),
+                proposal.created_height,
+                height,
+                BeaconSessionId::for_network_v1(state.network_id_ref()),
+                None,
+            )
+            .expect("exact committed request for carrier-height pulse");
+            ParliamentSortitionRequestRegistrationV1 {
                 sequence: 0,
                 request,
-            }],
-            candidates,
-        )
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut request_ids = registrations
+        .iter()
+        .map(|registration| registration.request.id)
+        .collect::<Vec<_>>();
+    request_ids.sort();
+    // The typed proposal determines the complete initial body pipeline. Persist
+    // every request together so snapshot restore verifies that same policy.
+    attempt
+        .register_sortition_request_batch(attempt_id, registrations, candidates)
         .expect("complete native pending request batch");
     attempt
         .validate()
         .expect("canonical pending Parliament state");
+    attempt
+        .validate_proposal_bindings_v1(&proposal.kind)
+        .expect("pending attempt retains the exact typed proposal policy");
     // Prove the exact candidates and configured target admit a native assignment
     // using the genuine next pulse, without consuming the persisted pending slot.
     let mut drawn = attempt.clone();
     drawn
         .consume_sortition_pulse_batch(
             attempt_id,
-            vec![request.id],
+            request_ids,
             BeaconSessionId::for_network_v1(state.network_id_ref()),
             height,
             BeaconPulseId::new(next.pulse_id),
@@ -1040,7 +1057,12 @@ fn install_exact_merge_beacon_fixture(
     drawn
         .validate()
         .expect("drawn assignment satisfies native invariants");
-    let mut world = state.world.block();
+    drawn
+        .validate_proposal_bindings_v1(&proposal.kind)
+        .expect("drawn assignment retains the exact typed proposal policy");
+    world
+        .governance_proposals
+        .insert(*proposal_content_id.as_bytes(), proposal);
     let old_session = *world
         .global_beacon_active_session
         .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
@@ -1089,7 +1111,6 @@ fn install_exact_merge_beacon_fixture(
             .expect("persist native required-slot indexes");
         transaction.apply();
     }
-    world.commit();
     next
 }
 
@@ -1119,7 +1140,11 @@ fn autonomous_native_beacon_composition_fixture() -> (
             let keys = (0xD3_u8..=0xD6)
                 .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
                 .collect::<Vec<_>>();
-            pulse = Some(install_exact_merge_beacon_fixture(state, &keys, parent));
+            let mut world = state.world.block();
+            pulse = Some(install_exact_merge_beacon_fixture(
+                state, &mut world, &keys, parent,
+            ));
+            world.commit();
         },
     );
     let mut carrier = native_consumer_stage_carrier(&fixture);
@@ -1204,8 +1229,13 @@ fn unpersisted_autonomous_merge_commit_fixture(
     };
     // Install the exact public session/history/request before any admission,
     // pre-execution or QC commits the parent state. Never mutate the certified base.
-    let requested_beacon = with_beacon
-        .then(|| install_exact_merge_beacon_fixture(&state, &validator_keypairs, &parent));
+    let requested_beacon = with_beacon.then(|| {
+        let mut world = state.world.block();
+        let pulse =
+            install_exact_merge_beacon_fixture(&state, &mut world, &validator_keypairs, &parent);
+        world.commit();
+        pulse
+    });
     let authority_height = parent.header().height().get();
     let carrier_height = authority_height
         .checked_add(1)

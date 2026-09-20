@@ -79,7 +79,7 @@ pub(crate) enum NativeLaneAdmission {
     },
 }
 
-fn message_instance(message: &LaneMessageV1) -> Hash {
+pub(super) fn message_instance(message: &LaneMessageV1) -> Hash {
     match message {
         LaneMessageV1::Proposal(proposal) => proposal.body.round.instance_id,
         LaneMessageV1::Vote(vote) => vote.statement.round.instance_id,
@@ -104,6 +104,8 @@ pub(crate) struct NativeLaneDriver {
     send: mpsc::SyncSender<LaneOutbound>,
     receive: mpsc::Receiver<LaneOutbound>,
     last_serviced: Option<HeightContextId>,
+    #[cfg(test)]
+    held_body: Option<(HeightContextId, Box<dyn FnOnce() + Send>)>,
 }
 
 impl NativeLaneDriver {
@@ -131,6 +133,8 @@ impl NativeLaneDriver {
             send,
             receive,
             last_serviced: None,
+            #[cfg(test)]
+            held_body: None,
         })
     }
 
@@ -353,6 +357,16 @@ impl NativeLaneDriver {
             // Only the complete authenticated set can retire an obsolete ingress
             // occurrence. This never retires the instance's Decision/Apply owner.
         }
+        #[cfg(test)]
+        if self.held_body.as_ref().is_some_and(|(id, _)| {
+            self.process
+                .has_queued_job_for_test(*id, LaneWorkerClass::Body)
+        }) {
+            let (id, before) = self.held_body.take().expect("one exact queued body hook");
+            self.process
+                .hold_next_completion_for_test(id, LaneWorkerClass::Body, before)
+                .map_err(|error| error.to_string())?;
+        }
         for class in [
             LaneWorkerClass::Opening,
             LaneWorkerClass::Wal,
@@ -363,6 +377,24 @@ impl NativeLaneDriver {
                 .map_err(|error| error.to_string())?;
         }
         Ok(())
+    }
+
+    /// Hold the next real body completion before delivery, retaining its original result.
+    #[cfg(test)]
+    pub(crate) fn hold_next_body_completion_for_test(
+        &mut self,
+        id: HeightContextId,
+        before: impl FnOnce() + Send + 'static,
+    ) {
+        assert!(self.held_body.is_none());
+        self.held_body = Some((id, Box::new(before)));
+    }
+
+    /// Keep original real obligations while removing only test capacity headroom.
+    #[cfg(test)]
+    pub(crate) fn restrict_effect_capacity_to_retained_for_test(&mut self, id: HeightContextId) {
+        self.process
+            .restrict_effect_capacity_to_retained_for_test(id);
     }
 
     /// Deadline belongs to native instances, independently of global view changes.
@@ -380,7 +412,7 @@ impl NativeLaneDriver {
         }
     }
 
-    /// Borrow actual local custody for recovery and exact future Apply settlement.
+    /// Borrow actual local custody for recovery and exact publication settlement.
     pub(crate) fn process(&self) -> &LaneProcessOwner {
         &self.process
     }
@@ -389,6 +421,16 @@ impl NativeLaneDriver {
     /// remain indefinitely in the bounded effect queue behind ordinary traffic.
     pub(crate) fn take_diagnostic(&mut self, id: HeightContextId) -> Option<core::Effect> {
         self.process.take_diagnostic(id)
+    }
+
+    /// Move one original retired operation/packet to its explicit consumer.
+    /// Poll results are non-owning: every producer keeps these values in the
+    /// original instance and under that instance's existing descriptor capacity.
+    pub(crate) fn take_retirement(
+        &mut self,
+        id: HeightContextId,
+    ) -> Option<super::v2_lane_instance::LaneRetirement> {
+        self.process.take_retirement(id)
     }
 
     /// Transfer closed obligations explicitly; absence from the current set alone
@@ -432,6 +474,18 @@ impl NativeLaneDriver {
         }))
     }
 
+    /// Settle only the original local Apply using genuine global publication.
+    /// Inclusion, rollover and a missing current opening cannot call this API.
+    pub(crate) fn settle_published_apply(
+        &mut self,
+        id: HeightContextId,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> Result<Option<super::v2_lane_instance::LaneApplySettlement>> {
+        self.process
+            .settle_published_apply(id, published)
+            .map_err(|error| error.to_string())
+    }
+
     /// Stop physical admission; the returned join owner belongs on a blocking
     /// shutdown worker. Original process custody remains fail-stop on drop.
     pub(crate) fn shutdown(self) -> LanePhysicalShutdown {
@@ -454,6 +508,58 @@ pub(crate) struct NativeLaneDecisionPreparation {
 }
 
 impl NativeLaneDecisionHandoff {
+    /// Prepare candidate input on a worker while preserving original reducer
+    /// Decisions and Apply effects. The proof retains the exact observed State;
+    /// global assembly rechecks it under the publication lease before signing.
+    pub(crate) fn prepare_candidate(&self) -> Result<NativeLaneCandidatePreparation> {
+        let Some(observed) = self.state.verified_lane_consensus_contexts()? else {
+            return Ok(NativeLaneCandidatePreparation {
+                work: None,
+                waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged],
+            });
+        };
+        let prepared = self.prepare_groups()?;
+        let batch = (|| -> Result<_> {
+            let Some(first) = prepared.groups.first() else {
+                return Ok(None);
+            };
+            let mut batch = self
+                .state
+                .prepare_lane_decision_batch(std::slice::from_ref(first))
+                .map_err(|error| error.to_string())?;
+            // The protocol source cap precedes the actual carrier cap. A full
+            // aggregate must not strand individually feasible decided groups.
+            for group in &prepared.groups[1..] {
+                batch.groups.push(group.to_wire());
+                batch.validate_structure()?;
+                if norito::encode_canonical(&batch)
+                    .map_err(|error| error.to_string())?
+                    .len()
+                    > iroha_data_model::merge::MAX_MERGE_EXECUTION_BATCH_BYTES
+                {
+                    batch.groups.pop();
+                    break;
+                }
+            }
+            let deferred_groups = prepared.groups.len() - batch.groups.len();
+            Ok(Some((batch, deferred_groups)))
+        })();
+        if !observed.is_current(&self.state) {
+            return Ok(NativeLaneCandidatePreparation {
+                work: None,
+                waits: vec![LaneDecisionGroupPreparationV1::ObservationChanged],
+            });
+        }
+        Ok(NativeLaneCandidatePreparation {
+            work: batch?.map(|(batch, deferred_groups)| NativeLaneCandidateBatch {
+                state: Arc::clone(&self.state),
+                observed: Arc::new(observed),
+                batch,
+                deferred_groups,
+            }),
+            waits: prepared.waits,
+        })
+    }
     /// Reauthenticate the current set and complete first-carrier/input/RS16 join
     /// on the original State. Expensive canonical-body and crypto work stays off
     /// the runner control turn; a stale handoff cannot open a replacement slot.
@@ -522,5 +628,92 @@ impl NativeLaneDecisionHandoff {
             });
         }
         Ok(NativeLaneDecisionPreparation { groups, waits })
+    }
+}
+
+/// Complete immutable source preparation plus exact recoverable dependencies.
+/// A partial group is never inserted into `work` or converted to ordinary input.
+pub(crate) struct NativeLaneCandidatePreparation {
+    pub(crate) work: Option<NativeLaneCandidateBatch>,
+    pub(crate) waits: Vec<LaneDecisionGroupPreparationV1>,
+}
+
+/// Candidate-only proof minted after the complete first-carrier/Decision join.
+/// It contains no execution result or authority to settle the native Apply owner.
+#[derive(Clone)]
+pub(crate) struct NativeLaneCandidateBatch {
+    state: Arc<State>,
+    observed: Arc<VerifiedLaneContexts>,
+    batch: iroha_data_model::block::lane_decision_batch::LaneDecisionBatchV1,
+    deferred_groups: usize,
+}
+
+impl std::fmt::Debug for NativeLaneCandidateBatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeLaneCandidateBatch")
+            .field("batch", &self.batch)
+            .finish_non_exhaustive()
+    }
+}
+
+impl NativeLaneCandidateBatch {
+    pub(crate) fn batch(
+        &self,
+    ) -> &iroha_data_model::block::lane_decision_batch::LaneDecisionBatchV1 {
+        &self.batch
+    }
+
+    pub(crate) fn deferred_groups(&self) -> usize {
+        self.deferred_groups
+    }
+
+    pub(crate) fn is_current(
+        &self,
+        state: &State,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+    ) -> bool {
+        std::ptr::eq(self.state.as_ref(), state)
+            && self.observed.is_current(state)
+            && context.network_id == *state.network_id_ref()
+            && self.batch.base_state_height == self.observed.carrier_height()
+            && self.batch.base_state_height.checked_add(1) == Some(context.height)
+    }
+
+    pub(crate) fn retain_prefix(&mut self, count: usize) {
+        self.batch.groups.truncate(count);
+    }
+}
+
+impl super::v2_candidate::CandidateWorkProvider for &NativeLaneCandidateBatch {
+    fn prepare(
+        &mut self,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+        _view: u64,
+        candidates: &[super::v2_candidate::CandidateDescriptor<'_>],
+    ) -> std::result::Result<
+        super::v2_candidate::PreparedCandidateWork,
+        super::v2_candidate::CandidateWorkError,
+    > {
+        use super::v2_candidate::{
+            CandidateWorkDeferral, CandidateWorkError, CandidateWorkUnavailable,
+            PreparedCandidateWork,
+        };
+        if !self.is_current(&self.state, context) {
+            return Err(CandidateWorkError::Deferred(
+                CandidateWorkDeferral::NativeLaneSource,
+            ));
+        }
+        if !candidates.is_empty() {
+            return Err(CandidateWorkUnavailable::new(
+                (0..candidates.len()).collect(),
+                "native Decisions are the sole economic form in this candidate",
+            )
+            .into());
+        }
+        Ok(PreparedCandidateWork {
+            native_lane_decisions: Some((*self).clone()),
+            ..PreparedCandidateWork::default()
+        })
     }
 }

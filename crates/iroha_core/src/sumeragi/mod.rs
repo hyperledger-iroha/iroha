@@ -547,6 +547,8 @@ pub(crate) mod v2_lane_body_store;
 )]
 pub(crate) mod v2_lane_driver;
 pub(crate) mod v2_lane_frame_bounds;
+// TODO: connect this process-owned fanout and the sole native ingress consumer
+// in the same cutover that retires the legacy fresh lane signer.
 #[cfg_attr(
     not(test),
     expect(
@@ -563,6 +565,14 @@ pub(crate) mod v2_lane_instance;
     )
 )]
 pub(crate) mod v2_lane_payload;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "native transport is compiled but awaits the sole runner cutover"
+    )
+)]
+pub(crate) mod v2_lane_transport;
 #[cfg_attr(
     not(test),
     expect(
@@ -822,6 +832,8 @@ impl<T> SumeragiIngressDisposition<T> {
 enum FairV2IngressSource {
     Validator(PeerId),
     Authenticated(PeerId),
+    /// Process-lived Native transport; never borrows global-roster privileges.
+    Native(PeerId),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FairV2IngressSourceClass {
@@ -829,13 +841,21 @@ enum FairV2IngressSourceClass {
     Authenticated,
 }
 impl FairV2IngressSource {
+    const fn is_native(&self) -> bool {
+        matches!(self, Self::Native(_))
+    }
+    const fn uses_authenticated_capacity(&self) -> bool {
+        matches!(self, Self::Authenticated(_) | Self::Native(_))
+    }
     const fn class(&self) -> FairV2IngressSourceClass {
         match self {
             Self::Validator(_) => FairV2IngressSourceClass::Validator,
-            Self::Authenticated(_) => FairV2IngressSourceClass::Authenticated,
+            Self::Authenticated(_) | Self::Native(_) => FairV2IngressSourceClass::Authenticated,
         }
     }
 }
+mod fair_v2_ingress_native;
+
 struct FairV2IngressState {
     roster: BTreeSet<PeerId>,
     lanes: BTreeMap<FairV2IngressSource, FairV2IngressLane>,
@@ -1063,6 +1083,8 @@ enum FairV2IngressMessageKind {
     LaneBlockCertificate,
     LaneHistoricalRecoveryRequest,
     LaneHistoricalRecoveryResponse,
+    NativeLane,
+    NativeLaneDecision,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum FairV2IngressControlKind {
@@ -1731,6 +1753,8 @@ impl FairV2IngressMessageKind {
             Self::LaneHistoricalRecoveryRequest => 18,
             Self::LaneHistoricalRecoveryResponse => 19,
             Self::V2GlobalBeaconPartialSignature => 20,
+            Self::NativeLane => 21,
+            Self::NativeLaneDecision => 22,
         }
     }
     fn classify(message: &BlockMessage) -> Option<Self> {
@@ -1771,6 +1795,8 @@ impl FairV2IngressMessageKind {
                 Some(Self::LaneHistoricalRecoveryResponse)
             }
             BlockMessage::KuraReplicaAdvert(_) => Some(Self::KuraReplicaAdvert),
+            BlockMessage::NativeLane(_) => Some(Self::NativeLane),
+            BlockMessage::NativeLaneDecision(_) => Some(Self::NativeLaneDecision),
         }
     }
     const fn is_v2(self) -> bool {
@@ -1815,6 +1841,8 @@ fn fair_v2_ingress_projection_codes_are_dense() {
         FairV2IngressMessageKind::LaneHistoricalRecoveryRequest,
         FairV2IngressMessageKind::LaneHistoricalRecoveryResponse,
         FairV2IngressMessageKind::V2GlobalBeaconPartialSignature,
+        FairV2IngressMessageKind::NativeLane,
+        FairV2IngressMessageKind::NativeLaneDecision,
     ];
     for (expected, kind) in (0_u8..).zip(kinds) {
         assert_eq!(kind.projection_code(), expected);
@@ -1922,9 +1950,9 @@ struct FairV2IngressOwnershipOccurrence {
     physical_admission_ordinal: u64,
     /// Actor-global lifecycle position retained across the runtime handoff.
     ///
-    /// Test-only ungated ingress may omit this owner. Every production-bound
-    /// occurrence carries either its special gate ordinal or one freshly
-    /// minted from the same internal source.
+    /// Global-height production work carries its special gate ordinal or one
+    /// minted from the same internal source. Native physical occurrences and
+    /// test-only ungated ingress have no global lifecycle ordinal.
     lifecycle_ordinal: Option<u128>,
     wire_key: FairV2IngressWireKey,
     semantic_origin: PeerId,
@@ -2026,6 +2054,10 @@ fn fair_v2_ingress_append_source_identity(
         }
         FairV2IngressSource::Authenticated(peer) => {
             projection.push(1);
+            append_peer(projection, peer);
+        }
+        FairV2IngressSource::Native(peer) => {
+            projection.push(2);
             append_peer(projection, peer);
         }
     }
@@ -2700,14 +2732,21 @@ impl FairV2IngressOwnershipOccurrence {
             && self.encoded_len == self.encoded_bytes.len()
             && self.canonical_wire.class == self.class
             && self.canonical_wire.message_kind == self.message_kind;
-        let source_exact = match &self.authenticated_source {
-            FairV2IngressSource::Validator(source) => {
-                self.authenticated_via_is_validator && source == &self.authenticated_via
-            }
-            FairV2IngressSource::Authenticated(source) => {
-                !self.authenticated_via_is_validator && source == &self.authenticated_via
-            }
-        };
+        let native = matches!(
+            self.message_kind,
+            FairV2IngressMessageKind::NativeLane | FairV2IngressMessageKind::NativeLaneDecision
+        );
+        let source_exact = native == self.authenticated_source.is_native()
+            && (!native || self.lifecycle_ordinal.is_none())
+            && match &self.authenticated_source {
+                FairV2IngressSource::Validator(source) => {
+                    self.authenticated_via_is_validator && source == &self.authenticated_via
+                }
+                FairV2IngressSource::Authenticated(source)
+                | FairV2IngressSource::Native(source) => {
+                    !self.authenticated_via_is_validator && source == &self.authenticated_via
+                }
+            };
         let capacities_exact = self.resource_before.message_capacity
             == self.resource_after.message_capacity
             && self.resource_before.global_byte_capacity
@@ -2910,7 +2949,7 @@ impl FairV2IngressClass {
             return match message {
                 BlockMessage::LaneExecutablePayload(_)
                 | BlockMessage::LaneHistoricalRecoveryResponse(_) => Self::TransportCompletion,
-                message if message.is_lane_local() => Self::Progress,
+                message if message.is_lane_local() || message.is_native_lane() => Self::Progress,
                 _ => Self::Auxiliary,
             };
         };
@@ -3240,7 +3279,7 @@ fn fair_v2_ingress_current_protected_slots(
         let materialized_authenticated = state
             .lanes
             .keys()
-            .filter(|source| matches!(source, FairV2IngressSource::Authenticated(_)))
+            .filter(|source| source.uses_authenticated_capacity())
             .count();
         capacity
             .checked_sub(materialized_authenticated)
@@ -4309,7 +4348,7 @@ impl FairV2Ingress {
                         }
                     ));
                 } else {
-                    debug_assert!(matches!(source, FairV2IngressSource::Authenticated(_)));
+                    debug_assert!(source.uses_authenticated_capacity());
                     debug_assert_eq!(lane.timeout_vote_bytes, 0);
                     let reserved_bytes = lane
                         .certified_fence_escape_bytes
@@ -4406,8 +4445,8 @@ impl FairV2Ingress {
     }
     /// Close admission and atomically install the next height's frozen roster.
     ///
-    /// Queued messages belong to the preceding immutable height and are
-    /// discarded while the public ingress gate is closed. The caller may open
+    /// Global messages retire with their immutable height. Native transport
+    /// retains its exact process-lived ownership while the gate is closed. Open
     /// the queue only after context and safety-WAL recovery complete.
     #[cfg(any(
         test,
@@ -4500,28 +4539,22 @@ impl FairV2Ingress {
             roster.len(),
             self.authenticated_non_validator_source_capacity,
         );
-        let mut lanes = BTreeMap::new();
-        for peer in &roster {
-            lanes.insert(
-                FairV2IngressSource::Validator(peer.clone()),
-                FairV2IngressLane::default(),
-            );
-        }
         let _service_guard = self.service_lock.lock();
         let mut state = self.state.lock();
         state.open = false;
+        state.retain_native_ingress();
         state.roster = roster;
-        state.lanes = lanes;
-        state.pending_wire_owners.clear();
+        let peers = state.roster.iter().cloned().collect::<Vec<_>>();
+        for peer in peers {
+            state.lanes.insert(
+                FairV2IngressSource::Validator(peer),
+                FairV2IngressLane::default(),
+            );
+        }
         state.leader_wire_lifecycles.clear();
         state.configured_network_id = configured_network_id;
-        // Keep `last_admission_ordinal`: queued ownership is reset at rollover,
-        // but occurrence order remains monotone for the lifetime of this ingress.
-        state.ready.clear();
-        state.len = 0;
-        state.bytes = 0;
-        state.nonempty_since = None;
-        state.last_service_attempt_at = None;
+        // Native entries retain original occurrence and byte/slot custody.
+        // All new occurrences remain monotone across global roster changes.
         state.required_ordinary_bytes = required_ordinary_bytes;
         state.required_certified_fence_escape_bytes = required_certified_fence_escape_bytes;
         state.required_transport_completion_bytes = required_transport_completion_bytes;
@@ -4536,6 +4569,12 @@ impl FairV2Ingress {
                 kind: FairV2IngressCapacityKind::Messages,
             });
         };
+        let required = required.max(state.len.saturating_add(
+            fair_v2_ingress_current_protected_slots(
+                &state,
+                self.authenticated_non_validator_source_capacity,
+            ),
+        ));
         if required > self.capacity {
             return Err(FairV2IngressCapacityError {
                 configured: self.capacity,
@@ -4669,9 +4708,10 @@ impl FairV2Ingress {
         height: iroha_data_model::block::consensus_v2::Height,
     ) -> Result<(), String> {
         let mut state = self.state.lock();
-        if state.open || state.len != 0 {
+        if state.open || state.has_global_ingress() {
             return Err(
-                "leader-wire lifecycle gate can bind only to an empty closed ingress".to_owned(),
+                "leader-wire lifecycle gate requires closed ingress without global-height owners"
+                    .to_owned(),
             );
         }
         if state.leader_wire_lifecycle_gate.is_some()
@@ -4839,8 +4879,8 @@ impl FairV2Ingress {
     /// `service_lock` excludes a consumer whose predicate snapshot temporarily
     /// lives outside the state mutex. Closing under the state mutex then excludes
     /// every producer. Productive carriers are returned to Dormant before any
-    /// volatile queue bytes disappear; auxiliary and future packets own no
-    /// height lifecycle and may be retransmitted into the successor ingress.
+    /// global queue bytes disappear. Native entries retain their independent
+    /// frozen instances, original occurrences and charged physical ownership.
     pub(crate) fn retire_leader_wire_lifecycle_gate(
         &self,
         gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
@@ -4900,24 +4940,14 @@ impl FairV2Ingress {
         }
         let retirement = bound.park_sealed_ingress(carriers)?;
 
-        let empty_lanes = state
-            .roster
-            .iter()
-            .cloned()
-            .map(|peer| {
-                (
-                    FairV2IngressSource::Validator(peer),
-                    FairV2IngressLane::default(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        state.lanes = empty_lanes;
-        state.pending_wire_owners.clear();
-        state.ready.clear();
-        state.len = 0;
-        state.bytes = 0;
-        state.nonempty_since = None;
-        state.last_service_attempt_at = None;
+        state.retain_native_ingress();
+        let peers = state.roster.iter().cloned().collect::<Vec<_>>();
+        for peer in peers {
+            state.lanes.insert(
+                FairV2IngressSource::Validator(peer),
+                FairV2IngressLane::default(),
+            );
+        }
         state.leader_wire_lifecycles.clear();
         state.leader_wire_lifecycle_gate = None;
         state.leader_wire_lifecycle_ordinals = None;
@@ -4950,6 +4980,12 @@ impl FairV2Ingress {
                 kind: FairV2IngressCapacityKind::Messages,
             });
         };
+        let required = required.max(state.len.saturating_add(
+            fair_v2_ingress_current_protected_slots(
+                &state,
+                self.authenticated_non_validator_source_capacity,
+            ),
+        ));
         if required > self.capacity {
             return Err(FairV2IngressCapacityError {
                 configured: self.capacity,
@@ -5368,6 +5404,24 @@ impl FairV2Ingress {
     }
     fn try_push_at(
         &self,
+        inbound: InboundBlockMessage,
+        enqueued_at: Instant,
+    ) -> Result<FairV2IngressPushDisposition, FairV2IngressPushError> {
+        // TODO: admit native evidence only when its sole process-lifetime
+        // consumer is installed and the legacy fresh signer is retired.
+        // Classification is not permission to route it into the old lane path.
+        if inbound.message().is_native_lane() {
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::UnsupportedEnvelope,
+            ));
+        }
+        self.try_push_owned_at(inbound, enqueued_at)
+    }
+    // One bounded physical admission path. Native remains unreachable from the
+    // production entrypoint until its process-lived consumer replaces the signer.
+    fn try_push_owned_at(
+        &self,
         mut inbound: InboundBlockMessage,
         enqueued_at: Instant,
     ) -> Result<FairV2IngressPushDisposition, FairV2IngressPushError> {
@@ -5390,7 +5444,7 @@ impl FairV2Ingress {
                 }
                 Arc::<[u8]>::from(message.encode())
             }
-            message if message.is_lane_local() => {
+            message if message.is_lane_local() || message.is_native_lane() => {
                 let encoded = Arc::<[u8]>::from(message.encode());
                 let encoded_len = encoded.len();
                 let lane_limit = match message {
@@ -5469,7 +5523,9 @@ impl FairV2Ingress {
         let history_serve_request = history_serve_request.filter(|request| {
             request.matches_configured_network(state.configured_network_id.as_ref())
         });
-        let source = if state.roster.contains(inbound.via()) {
+        let source = if inbound.message().is_native_lane() {
+            FairV2IngressSource::Native(inbound.via.clone())
+        } else if state.roster.contains(inbound.via()) {
             FairV2IngressSource::Validator(inbound.via.clone())
         } else {
             FairV2IngressSource::Authenticated(inbound.via.clone())
@@ -5641,7 +5697,7 @@ impl FairV2Ingress {
             return Ok(FairV2IngressPushDisposition::Coalesced);
         }
         let source_lane_is_new = !state.lanes.contains_key(&source);
-        if source_lane_is_new && !matches!(source, FairV2IngressSource::Authenticated(_)) {
+        if source_lane_is_new && !source.uses_authenticated_capacity() {
             return Err(FairV2IngressPushError::rejected(
                 inbound,
                 FairV2IngressRejectReason::SourceLaneInvalid,
@@ -5833,7 +5889,7 @@ impl FairV2Ingress {
             let retained_authenticated_non_validator_sources = state
                 .lanes
                 .keys()
-                .filter(|source| matches!(source, FairV2IngressSource::Authenticated(_)))
+                .filter(|source| source.uses_authenticated_capacity())
                 .count();
             if self
                 .authenticated_non_validator_source_capacity
@@ -5925,7 +5981,7 @@ impl FairV2Ingress {
         let Some(materialized_authenticated_after) = state
             .lanes
             .keys()
-            .filter(|source| matches!(source, FairV2IngressSource::Authenticated(_)))
+            .filter(|source| source.uses_authenticated_capacity())
             .count()
             .checked_add(usize::from(source_lane_is_new))
         else {
@@ -6120,7 +6176,10 @@ impl FairV2Ingress {
                 reject_after_leader_wire_admission!();
             }
         }
-        occurrence.lifecycle_ordinal = if let Some(token) = leader_wire_token.as_ref() {
+        occurrence.lifecycle_ordinal = if source.is_native() {
+            // Its immutable Native context outlives this global-height scheduler.
+            None
+        } else if let Some(token) = leader_wire_token.as_ref() {
             Some(token.scheduler_ordinal())
         } else {
             match fair_v2_ingress_reserve_ordinary_lifecycle_ordinal(&state) {
@@ -6673,7 +6732,7 @@ impl FairV2Ingress {
             .extend(ready_sources.iter().take(selected_source_index).cloned());
         if remains_ready {
             state.ready.push_back(source.clone());
-        } else if matches!(&source, FairV2IngressSource::Authenticated(_)) {
+        } else if source.uses_authenticated_capacity() {
             let removed = state.lanes.remove(&source).expect(
                 "an emptied authenticated non-validator lane remains indexed until dequeue",
             );
@@ -9405,6 +9464,7 @@ mod authoritative_runtime_gate_tests {
         ));
     }
     include!("tests/mod_authoritative_runtime_gate_07_wire_bounds.rs");
+    include!("tests/mod_native_ingress_rollover.rs");
     #[test]
     fn fair_v2_ingress_exact_max_chunk_bound_matches_canonical_wire() {
         let layout = wire::DataAvailabilityLayout {

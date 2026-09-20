@@ -13,7 +13,7 @@ use ivm::{
     parallel::{Block, Scheduler, StateAccessSet, Transaction, TxResult},
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     convert::TryFrom,
     fs,
     hint::black_box,

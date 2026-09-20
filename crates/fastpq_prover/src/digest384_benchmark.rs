@@ -401,7 +401,9 @@ mod tests {
             2,
         )
         .unwrap();
+        assert_eq!(report.operation, "digest384_trace_columns");
         assert_eq!(report.columns, 2);
+        assert_eq!(report.input_len, 4);
         assert_eq!(report.output_bytes, 96);
         assert_eq!(report.input_bytes, 80);
         assert_eq!(report.cpu_samples_ms.len(), 2);

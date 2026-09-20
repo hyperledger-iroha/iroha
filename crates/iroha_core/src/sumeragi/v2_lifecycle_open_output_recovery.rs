@@ -9,7 +9,9 @@ pub(in crate::sumeragi) struct PreparedLifecycleOutputRecoveryV1 {
     entries: BTreeMap<u128, super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1>,
     // Passive: the native PendingKura executor, never ordinary output settlement,
     // owns execution. This exact row survives until verified application and fsync.
-    pending_apply: Option<(u128, super::PendingKuraApplyComparisonV1)>,
+    // Transfer the pipeline's exact heap owner; absent native Apply must not
+    // reserve its full comparison on every recursive output-decoding frame.
+    pending_apply: Option<(u128, Box<super::PendingKuraApplyComparisonV1>)>,
 }
 
 /// Copy seal for one cold-open Broadcast retained outside the concrete registry.
@@ -144,7 +146,7 @@ impl PreparedLifecycleOutputRecoveryV1 {
         &mut self,
         ledger: &LifecycleLedgerV1,
         verified: &VerifiedHeightContext,
-        mut comparison: super::PendingKuraApplyComparisonV1,
+        mut comparison: Box<super::PendingKuraApplyComparisonV1>,
     ) -> Result<(), LifecycleRecoveryAssemblyErrorKind> {
         let mut live = ledger.records().iter().filter(|record| {
             record.terminal() == Some(None)

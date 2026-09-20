@@ -4291,7 +4291,11 @@ required|token|drop(local_proposal_attempt)|recovery token omitted {required}
 required|token|enum RecoveredWalStartupAuthorityV1|recovery token omitted {required}
 required|token|PhaseVote(RecoveredWalVoteSign)|recovery token omitted {required}
 required|token|ControlSign(RecoveredWalControlSign)|recovery token omitted {required}
-required|token|ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(|recovery token omitted {required}
+required|token|ProductionLifecycleOwnerV1::open_storage_only_recovered_startup_with_pending_apply(|recovery token omitted exact storage-only pending-Apply owner
+region|pending_storage_open|ledger|at|pub(in crate::sumeragi) fn open_storage_only_recovered_startup_with_pending_apply(|before|    /// Repair/coalesce and open one exact Proposal/Timeout control Sign.
+required|token|.pending_kura_apply_comparison(&verified, replay)|pending Kura replay must authenticate exact Decision and revalidated body before owner opening
+required|pending_storage_open|pending_apply: Option<super::PendingKuraApplyComparisonV1>|storage-only startup accepts only the sealed exact pending Apply comparison
+order|pending_storage_open|3|LifecycleLedgerStoreV1::open(ledger_root, context)|.into_durable_certified_body_pipeline_storage_recovery_cut(|storage.open_production_owner_with_pending_apply(|exact ledger and body census must precede storage-only pending Apply owner opening
 required|token|.persist_repair()|recovery token omitted {required}
 required|token|fn authenticate_recovered_phase_vote_stage<'registry>(|recovery token omitted {required}
 required|token|fn persist_recovered_phase_vote_stage<'registry>(|recovery token omitted {required}

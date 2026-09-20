@@ -4662,11 +4662,11 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
-    "ordinary_loop": "8237c66bbcd94c915b00ed1c9c26c70f1515b65e7c2c8a33e0cacf79d4eb8d95",
-    "pending_loop": "f5a66ac1013261981500568d175c6985481de1bc1f2a9b76a73f1cd31e2590c6",
+    "ordinary_loop": "b08190fa2d04fd5ed07b95279d8d140eb54d2dd2c6ed2e66551807dc88e0348c",
+    "pending_loop": "dc570cddd922a131c48c820168b14b37255bd97a0821a4cc9f6d2815be8ec039",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "0aa74369f7b8a2e6bccbdd374cd71e3815bc592355974ea74d2c7fb0c3bc1e01",
-    "pending_active": "2108692d12f6804279f5835936786c85f4c667a33ddb2ab8f72c8a1d57eb7eff",
+    "ordinary_active": "b484fc049ff55e29f5a12d78493a8bd431be96f528ee4404ca502a4f9cf03dcc",
+    "pending_active": "c5bbb6dc22c2cef26c89dfca2e10f0b26248d5f624986a3e8435bceea0ddda1f",
 }
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "7b911718b152f7a0e15f78f3fb607a1a0c0f7b067fc566f53841f2530de2223f"
 
@@ -4707,8 +4707,8 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "0aa74369f7b8a2e6bccbdd374cd71e3815bc592355974ea74d2c7fb0c3bc1e01",
-    "pending:run_pending_active_height": "2108692d12f6804279f5835936786c85f4c667a33ddb2ab8f72c8a1d57eb7eff",
+    "ordinary:run_lifecycle_active_height": "b484fc049ff55e29f5a12d78493a8bd431be96f528ee4404ca502a4f9cf03dcc",
+    "pending:run_pending_active_height": "c5bbb6dc22c2cef26c89dfca2e10f0b26248d5f624986a3e8435bceea0ddda1f",
     "height:drain_lifecycle_v2_ingress": "9c5e311adff6cb0bad70ecec5b233f59b6a304786fbca1c3abe79bd276acc511",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",

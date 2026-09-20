@@ -593,7 +593,10 @@ impl RecoveredLifecycleLocalProposalAttemptV1 {
 /// neither recovery branch can release a free-standing adapter startup.
 #[must_use = "adapter startup authority must remain inside its lifecycle owner"]
 pub(crate) struct ProductionLifecycleAdapterStartupV1 {
-    state: ProductionLifecycleAdapterStartupStateV1,
+    // Recovery passes this move-only authority through several fallible
+    // storage joins. Keep its large adapter/pending continuations on the heap;
+    // moving the authority must not duplicate their inline stack footprint.
+    state: Box<ProductionLifecycleAdapterStartupStateV1>,
 }
 /// One exact reducer input that must be replayed before a durable ordinary
 /// certified-body successor can become executable after restart.
@@ -1095,7 +1098,7 @@ impl ProductionLifecycleAdapterStartupV1 {
         &self,
         verified: &VerifiedHeightContext,
     ) -> Result<Option<LeaderWireRecoveryAuthority>, &'static str> {
-        let adapter = match &self.state {
+        let adapter = match self.state.as_ref() {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
@@ -1123,13 +1126,13 @@ impl ProductionLifecycleAdapterStartupV1 {
 
     fn recovered(adapter: SumeragiV2Adapter, effects: Vec<AdapterEffect>) -> Self {
         Self {
-            state: ProductionLifecycleAdapterStartupStateV1::Recovered {
+            state: Box::new(ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
                 pending_kura_apply: None,
                 local_proposal_attempt: None,
                 leader_wire_launch_prepared: false,
-            },
+            }),
         }
     }
 
@@ -1144,7 +1147,7 @@ impl ProductionLifecycleAdapterStartupV1 {
     pub(in crate::sumeragi) fn into_adapter_for_test(
         self,
     ) -> (SumeragiV2Adapter, Vec<AdapterEffect>) {
-        match self.state {
+        match *self.state {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
@@ -1161,13 +1164,13 @@ impl ProductionLifecycleAdapterStartupV1 {
         local_proposal_attempt: Option<RecoveredLifecycleLocalProposalAttemptV1>,
     ) -> Self {
         Self {
-            state: ProductionLifecycleAdapterStartupStateV1::Recovered {
+            state: Box::new(ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
                 pending_kura_apply: None,
                 local_proposal_attempt,
                 leader_wire_launch_prepared: false,
-            },
+            }),
         }
     }
     /// Retain the Apply role of this adapter's exact recovered Decision before
@@ -1184,7 +1187,7 @@ impl ProductionLifecycleAdapterStartupV1 {
             pending_kura_apply: None,
             local_proposal_attempt: None,
             leader_wire_launch_prepared: false,
-        } = &mut self.state
+        } = self.state.as_mut()
         else {
             return Err("recovered Decision Apply source requires pristine adapter startup");
         };
@@ -1246,7 +1249,7 @@ impl ProductionLifecycleAdapterStartupV1 {
             pending_kura_apply,
             local_proposal_attempt,
             leader_wire_launch_prepared,
-        ) = match self.state {
+        ) = match *self.state {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
@@ -1267,7 +1270,7 @@ impl ProductionLifecycleAdapterStartupV1 {
                     .all(CertifiedBodyPipelineColdReplayStepV1::is_structurally_exact_for_test)
                 {
                     return Ok(Self {
-                        state: ProductionLifecycleAdapterStartupStateV1::Fixture,
+                        state: Box::new(ProductionLifecycleAdapterStartupStateV1::Fixture),
                     });
                 }
                 return Err("fixture adapter cannot replay certified body pipeline");
@@ -1357,13 +1360,13 @@ impl ProductionLifecycleAdapterStartupV1 {
             }
         }
         Ok(Self {
-            state: ProductionLifecycleAdapterStartupStateV1::Recovered {
+            state: Box::new(ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
                 pending_kura_apply,
                 local_proposal_attempt,
                 leader_wire_launch_prepared,
-            },
+            }),
         })
     }
 
@@ -1376,7 +1379,7 @@ impl ProductionLifecycleAdapterStartupV1 {
         steps: &[CertifiedBodyPipelineColdReplayStepV1],
     ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), &'static str> {
         let replayed = Self::recovered(adapter, effects).replay_certified_body_pipeline(steps)?;
-        match replayed.state {
+        match *replayed.state {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
@@ -1396,7 +1399,7 @@ impl ProductionLifecycleAdapterStartupV1 {
         &self,
         verified: &VerifiedHeightContext,
     ) -> bool {
-        match &self.state {
+        match self.state.as_ref() {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter, effects, ..
             } => {
@@ -1430,7 +1433,7 @@ impl ProductionLifecycleAdapterStartupV1 {
             pending_kura_apply: None,
             local_proposal_attempt,
             leader_wire_launch_prepared: false,
-        } = self.state
+        } = *self.state
         else {
             return Err("recovered Broadcast-and-Sign preview startup is not pristine");
         };
@@ -1579,7 +1582,7 @@ impl ProductionLifecycleAdapterStartupV1 {
             pending_kura_apply: None,
             local_proposal_attempt: None,
             leader_wire_launch_prepared: false,
-        } = self.state
+        } = *self.state
         else {
             return Err("recovered Decision Store adapter startup is not pristine");
         };
@@ -1624,7 +1627,7 @@ impl ProductionLifecycleAdapterStartupV1 {
             pending_kura_apply: None,
             local_proposal_attempt,
             leader_wire_launch_prepared: false,
-        } = self.state
+        } = *self.state
         else {
             return Err("recovered signed Broadcast adapter startup is not pristine");
         };
@@ -1775,7 +1778,7 @@ impl ProductionLifecycleAdapterStartupV1 {
             pending_kura_apply: None,
             local_proposal_attempt,
             leader_wire_launch_prepared: false,
-        } = self.state
+        } = *self.state
         else {
             return Err("recovered Broadcast-and-Sign adapter startup is not pristine");
         };
@@ -1931,7 +1934,7 @@ impl ProductionLifecycleAdapterStartupV1 {
         &mut self,
         expected_wal_path: &std::path::Path,
     ) -> Result<ProductionLeaderWireLaunchAuthorityV1, &'static str> {
-        match &mut self.state {
+        match self.state.as_mut() {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,
@@ -1983,7 +1986,7 @@ impl ProductionLifecycleAdapterStartupV1 {
         mut self,
         lifecycle_ordinals: crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource,
     ) -> crate::sumeragi::v2_runtime::SerializedV2Runtime {
-        match &mut self.state {
+        match self.state.as_mut() {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 effects,
                 pending_kura_apply,
@@ -2015,14 +2018,14 @@ impl ProductionLifecycleAdapterStartupV1 {
         runtime
     }
     #[cfg(test)]
-    pub(in crate::sumeragi) const fn fixture_for_test() -> Self {
+    pub(in crate::sumeragi) fn fixture_for_test() -> Self {
         Self {
-            state: ProductionLifecycleAdapterStartupStateV1::Fixture,
+            state: Box::new(ProductionLifecycleAdapterStartupStateV1::Fixture),
         }
     }
     #[cfg(test)]
     pub(in crate::sumeragi) fn is_exact_for_test(&self) -> bool {
-        match &self.state {
+        match self.state.as_ref() {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter, effects, ..
             } => {
@@ -4949,7 +4952,7 @@ impl PreparedRecoveredLifecycleSignedBroadcastAndSignColdPreviewV1 {
             pending_kura_apply: None,
             local_proposal_attempt: _,
             leader_wire_launch_prepared: false,
-        } = &startup.state
+        } = startup.state.as_ref()
         else {
             return Err("cold next-Vote adapter startup changed after preview");
         };

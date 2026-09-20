@@ -27,6 +27,7 @@ use std::{
 
 // Immutable routing identity only. No key secret, mutable view, vote or lock copy.
 struct IssuedOpening {
+    state_owner: crate::state::NativeLaneStateOwner,
     instance: HeightContextId,
     signer: u32,
     peer: PeerId,
@@ -34,7 +35,10 @@ struct IssuedOpening {
 }
 
 struct OpeningResources {
-    verified: VerifiedLaneContext,
+    state_owner: crate::state::NativeLaneStateOwner,
+    // One immutable allocation follows this accepted opening into its instance;
+    // body jobs and retirement tokens borrow it through shared ownership.
+    verified: Arc<VerifiedLaneContext>,
     key: KeyPair,
     now: Instant,
     base_timeout: Duration,
@@ -76,6 +80,7 @@ impl OpeningResources {
             return Err((bad("completed opening lost a physical owner"), self));
         }
         Ok(Box::new(LaneInstance {
+            state_owner: self.state_owner,
             verified: self.verified,
             reducer,
             wal: self.wal.take(),
@@ -94,6 +99,7 @@ impl OpeningResources {
             base_timeout: self.base_timeout,
             retransmit_interval: self.retransmit_interval,
             held: Vec::new(),
+            retired: std::collections::VecDeque::new(),
             completion: None,
             effect_limit: self.effect_limit,
             failed: false,
@@ -216,6 +222,16 @@ impl LaneOpeningDrain {
     }
 }
 impl LaneOpeningJob {
+    /// Borrow the original accepted context before physical opening/adoption.
+    #[cfg(test)]
+    pub(super) fn context_for_test(&self) -> &Arc<VerifiedLaneContext> {
+        &self
+            .resources
+            .as_ref()
+            .expect("queued opening resources")
+            .verified
+    }
+
     /// Hold the real worker after WAL open but before body open/authenticated replay.
     #[cfg(test)]
     pub(crate) fn after_wal_open_for_test(mut self, hook: impl FnOnce() + Send + 'static) -> Self {
@@ -295,7 +311,9 @@ impl LaneOpening {
         if !Arc::ptr_eq(&self.issued, &completed.issued) {
             return Err((bad("foreign native opening completion"), self, completed));
         }
-        if !state.matches_kura_instance(&self.issued.kura) {
+        if !self.issued.state_owner.matches_state(state)
+            || !state.matches_kura_instance(&self.issued.kura)
+        {
             return Err((
                 bad("opening adoption has a foreign State storage owner"),
                 self,
@@ -477,7 +495,9 @@ impl LaneInstance {
         let Some(operation) = guard.begin_fail_stop_operation() else {
             return Err(bad("consensus output is closed"));
         };
+        let state_owner = state.native_lane_state_owner();
         let issued = Arc::new(IssuedOpening {
+            state_owner: state_owner.clone(),
             instance: verified.instance_id(),
             signer,
             peer: PeerId::new(key.public_key().clone()),
@@ -493,7 +513,8 @@ impl LaneInstance {
             after_wal_open: None,
             issued,
             resources: Some(OpeningResources {
-                verified: verified.clone(),
+                state_owner,
+                verified: Arc::new(verified.clone()),
                 key,
                 now,
                 base_timeout,

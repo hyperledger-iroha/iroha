@@ -387,7 +387,9 @@ mod carrier_geometry_preparation;
 mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
-pub(crate) use carrier_preparation::{PreparedCarrier, PreparedCarrierJournals};
+pub(crate) use carrier_preparation::{
+    PreparedCarrier, PreparedCarrierJournals, PublishedNativeApply, RetainedCarrier,
+};
 mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;
@@ -409,13 +411,6 @@ pub use fastpq_source_inventory::{
     FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
     FastpqSourceStatementUsageV1,
 };
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: connect the shared native lane owner to the production runner"
-    )
-)]
 mod lane_admitted_input;
 #[cfg_attr(
     not(test),
@@ -1670,6 +1665,25 @@ pub struct BlockHashes {
 // Process-local identities are neither serializable nor caller-constructible.
 struct BlockHashOwner;
 struct BlockHashPublication;
+
+/// Original process-local State family retained by a native lane's physical owner.
+/// This opaque identity is never reconstructed from wire or finalized context bytes.
+#[derive(Clone)]
+pub(crate) struct NativeLaneStateOwner(Arc<BlockHashOwner>);
+
+impl NativeLaneStateOwner {
+    /// Check the actual State family without depending on its advancing generation.
+    pub(crate) fn matches_state(&self, state: &State) -> bool {
+        Arc::ptr_eq(&self.0, &state.block_hashes.owner)
+    }
+}
+
+impl State {
+    /// Retain this exact State family across native physical opening and closure.
+    pub(crate) fn native_lane_state_owner(&self) -> NativeLaneStateOwner {
+        NativeLaneStateOwner(Arc::clone(&self.block_hashes.owner))
+    }
+}
 
 enum BlockHashStorage {
     Owned {
@@ -14375,11 +14389,6 @@ impl<'state> StateBlock<'state> {
             &mut self.verified_lane_relay_records,
             &pending.catalog_update.lanes_to_reset,
         );
-    }
-    #[inline]
-    #[cfg(test)]
-    pub(crate) fn pipeline_thread_pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
-        self.state_ref.pipeline_parallelism.pool()
     }
     #[inline]
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -27834,18 +27843,6 @@ impl State {
         }
         reset_heights
     }
-    fn canonical_lane_reset_height(&self, lane_id: LaneId) -> Option<u64> {
-        let cursor_reset = self
-            .da_shard_cursors
-            .read()
-            .canonical_reset_height_for_lane(lane_id);
-        let incarnation_reset = self
-            .lane_incarnation_activation_heights_snapshot()
-            .get(&lane_id)
-            .copied()
-            .filter(|height| *height > 0);
-        cursor_reset.into_iter().chain(incarnation_reset).max()
-    }
     /// Fence queue admission and durable reservation ownership against lane
     /// lifecycle publication.
     ///
@@ -28272,18 +28269,6 @@ impl State {
                 "failed to persist DA shard cursor journal"
             );
         }
-    }
-    fn schedule_da_shard_cursor_journal_persist(&self) {
-        let path = self.da_shard_cursor_journal_path();
-        if path.as_os_str().is_empty() {
-            return;
-        }
-        let lane_config = self.nexus_snapshot().lane_config.clone();
-        let snapshot = {
-            let cursors = self.da_shard_cursors.read().clone();
-            DaShardCursorJournal::from_index(&lane_config, &cursors, &path)
-        };
-        self.da_shard_cursor_persistor.schedule(snapshot);
     }
     fn journal_reset_heights_at_or_below(
         journal: &DaShardCursorJournal,
@@ -28724,16 +28709,6 @@ impl State {
         }
         inserted
     }
-    /// Return whether evidence proposed at `proposal_height` is newer than the
-    /// lane's canonical global-height reset watermark.
-    pub(crate) fn da_lane_visible_after_reset(
-        &self,
-        proposal_height: u64,
-        lane_id: LaneId,
-    ) -> bool {
-        self.canonical_lane_reset_height(lane_id)
-            .is_none_or(|reset_height| proposal_height > reset_height)
-    }
     fn active_reset_lanes(
         lanes_to_reset: &BTreeSet<LaneId>,
         lane_config: &iroha_config::parameters::actual::LaneConfig,
@@ -28758,6 +28733,7 @@ impl State {
         }
         self.persist_da_shard_cursor_journal();
     }
+    #[cfg(test)]
     pub(crate) fn advance_da_shard_cursors_from_bundle(
         &self,
         block_height: u64,
@@ -28881,22 +28857,6 @@ impl State {
             }
         }
         result.map(|_| ())
-    }
-    fn record_confidential_compute_from_bundle_with_filter(
-        &self,
-        block_height: u64,
-        records: &[iroha_data_model::da::commitment::DaCommitmentRecord],
-        include: impl FnMut(&iroha_data_model::da::commitment::DaCommitmentRecord) -> bool,
-    ) -> Result<(), ConfidentialComputeError> {
-        let lane_config = self.nexus_snapshot().lane_config.clone();
-        let mut store = self.da_confidential_compute.write();
-        Self::record_confidential_compute_into(
-            &mut store,
-            &lane_config,
-            block_height,
-            records,
-            include,
-        )
     }
     fn record_confidential_compute_into(
         store: &mut ConfidentialComputeStore,

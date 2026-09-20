@@ -925,8 +925,21 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         foreign_state_error.to_string(),
         "recovered lifecycle execution dependencies changed identity"
     );
-    let wrong_network_state =
-        lifecycle_factory_state_for_test(Arc::clone(&kura), test_network_id(0xFE));
+    // Build the foreign State before attaching its physical lane storage. The
+    // factory must reject this network mismatch; the test constructor would
+    // instead attempt to rebind Kura's already authenticated lane journal.
+    let wrong_network_state = Arc::new(
+        crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+            crate::state::World::default(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            "sumeragi-v2-lifecycle-test"
+                .parse()
+                .expect("fixture chain id"),
+            test_network_id(0xFE),
+        )
+        .expect("construct the foreign State before physical storage attachment"),
+    );
     let wrong_network_error = match try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage(),

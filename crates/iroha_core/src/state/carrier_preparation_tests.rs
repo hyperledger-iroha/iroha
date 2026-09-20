@@ -79,20 +79,21 @@ fn genesis(
 }
 
 #[inline(never)]
-fn state_for(genesis: &SignedBlock) -> Box<State> {
+fn state_for(genesis: &SignedBlock, nexus: &iroha_config::parameters::actual::Nexus) -> Box<State> {
     let account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let world = World::with(
         [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&account)],
         [Account::new(account.clone()).build(&account)],
         [],
     );
-    let state = Box::new(State::new_with_chain_and_network_id_for_testing(
+    let mut state = Box::new(State::new_with_chain_and_network_id_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
         ChainId::from("carrier-preparation"),
         NetworkId::from_genesis_hash(genesis.hash()),
     ));
+    state.set_nexus(nexus.clone()).unwrap();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -130,10 +131,20 @@ pub(super) fn fixture() -> (Box<State>, SignedBlock, Topology, HeightContext) {
 pub(super) fn fixture_with_instructions(
     instructions: &[InstructionBox],
 ) -> (Box<State>, SignedBlock, Topology, HeightContext) {
+    fixture_with_instructions_and_nexus(
+        instructions,
+        &iroha_config::parameters::actual::Nexus::default(),
+    )
+}
+
+pub(super) fn fixture_with_instructions_and_nexus(
+    instructions: &[InstructionBox],
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> (Box<State>, SignedBlock, Topology, HeightContext) {
     let mut parameters = SumeragiV2GenesisContextParameters::recommended();
     {
         let (proposal, topology) = genesis(parameters, instructions);
-        let state = state_for(&proposal);
+        let state = state_for(&proposal, nexus);
         let (_, staged) = signed_genesis_execution(&state, proposal, &topology);
         parameters.nexus_amx_context_hash =
             *crate::sumeragi::staged_genesis_nexus_amx_context_hash(&staged).as_ref();
@@ -143,7 +154,7 @@ pub(super) fn fixture_with_instructions(
                 .as_ref();
     }
     let (proposal, topology) = genesis(parameters, instructions);
-    let state = state_for(&proposal);
+    let state = state_for(&proposal, nexus);
     let context = {
         let (_, staged) = signed_genesis_execution(&state, proposal.clone(), &topology);
         crate::sumeragi::freeze_staged_genesis_v2(

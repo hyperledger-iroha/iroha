@@ -16,6 +16,16 @@ pub struct RawGeometryWait {
     released: watch::Receiver<bool>,
 }
 
+impl std::fmt::Display for RawGeometryWait {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(if *self.released.borrow() {
+            "released; retry acquisition"
+        } else {
+            "release pending"
+        })
+    }
+}
+
 impl RawGeometryWait {
     /// Wait only after releasing every Kura and State physical fence.
     pub async fn wait_for_release(&mut self) {

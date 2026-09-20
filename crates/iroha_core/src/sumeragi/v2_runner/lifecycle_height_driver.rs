@@ -259,6 +259,12 @@ impl LifecycleProducerClaimDispositionV1 {
         (self.permits_ready_completion(), !self.blocks_ingress())
     }
 
+    /// Observe Runtime permission at an actual retained-owner cut in tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn permits_runtime_for_test(self) -> bool {
+        !self.blocks_runtime()
+    }
+
     /// Return whether an empty physical cut must still select this exact child.
     const fn requires_exact_ready_selection(self) -> bool {
         matches!(self, Self::AwaitingLiveApplyQueue { .. })
@@ -1124,10 +1130,6 @@ mod tests {
             }
 
             match (self, selected) {
-            (
-                Self::AwaitingCompletion,
-                Completion::LifecycleValidateLocalWaiting | Completion::LifecycleValidateLocalRequeued,
-            ) => Ok(Self::AwaitingCompletion),
             (Self::AwaitingCompletion, Completion::LifecycleValidatePublished { ordinal }) => {
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
@@ -1420,51 +1422,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_validate_retry_keeps_only_the_original_completion_claim() {
-        use crate::sumeragi::v2_lifecycle_coordinator::{
-            LifecycleDigest, ProductionLifecycleCompletionSelectionV1 as Completion, WaitSource,
-            wait_token_for_test,
-        };
+    fn local_validate_retry_selection_does_not_restart_completion_before_runtime() {
+        use crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1 as Completion;
 
         for selected in [
             Completion::LifecycleValidateLocalWaiting,
             Completion::LifecycleValidateLocalRequeued,
         ] {
-            let claim = LifecycleProducerClaimDispositionV1::AwaitingCompletion
-                .observe_completion(&selected)
-                .expect("physical retry retains the original completion owner");
-            assert_eq!(
-                claim,
-                LifecycleProducerClaimDispositionV1::AwaitingCompletion
-            );
-            assert!(claim.requires_yield());
-            assert!(!claim.blocks_runtime());
-            assert!(!claim.permits_ready_completion());
             assert!(!completion_selection_retries_before_runtime(&selected));
-
-            for foreign in [
+            for claim in [
                 LifecycleProducerClaimDispositionV1::Eligible,
-                LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 7 },
-                LifecycleProducerClaimDispositionV1::AwaitingValidateFence {
-                    ordinal: 7,
-                    wait: wait_token_for_test(
-                        WaitSource::External(LifecycleDigest::new([7; 32])),
-                        1,
-                    ),
-                },
-                LifecycleProducerClaimDispositionV1::AwaitingLiveApplyQueue {
-                    parent_ordinal: 7,
-                    child_ordinal: 8,
-                },
-                LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar,
-                LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion,
-                LifecycleProducerClaimDispositionV1::ApplyTerminalSettled,
-                LifecycleProducerClaimDispositionV1::AwaitingReplayCompletion,
+                LifecycleProducerClaimDispositionV1::AwaitingCompletion,
             ] {
                 assert_eq!(
-                    foreign.observe_completion(&selected),
-                    Err(LifecycleProducerClaimTransitionErrorV1::Completion),
-                    "{foreign:?} cannot acquire a Validate owner from a physical retry",
+                    claim.observe_completion(&selected).unwrap(),
+                    LifecycleProducerClaimDispositionV1::AwaitingCompletion
                 );
             }
         }

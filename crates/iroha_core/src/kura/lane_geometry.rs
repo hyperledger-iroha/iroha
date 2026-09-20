@@ -303,6 +303,7 @@ enum LaneGeometryRecoveryCursor {
     #[cfg(test)]
     Catalog,
     AtHeight(u64),
+    #[cfg(test)]
     BeforeTransition(u64),
     BeforeFirstTransitionAtHeight(u64),
 }
@@ -2733,6 +2734,7 @@ impl Kura {
             None,
         )
     }
+    #[cfg(test)]
     pub(super) fn validate_certified_lane_drain_frontier(
         &self,
         lane_id: LaneId,
@@ -2816,79 +2818,6 @@ impl Kura {
             }
         }
         Ok(())
-    }
-    /// Apply an exact-height retained-lineage transition with signed drain frontiers.
-    #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn apply_lane_geometry_transition_at_height_with_lineage_roots_and_certified_drain_frontiers(
-        &self,
-        previous: &LaneConfig,
-        updated: &LaneConfig,
-        previous_incarnations: &BTreeMap<LaneId, Hash>,
-        updated_incarnations: &BTreeMap<LaneId, Hash>,
-        previous_activation_heights: &BTreeMap<LaneId, u64>,
-        updated_activation_heights: &BTreeMap<LaneId, u64>,
-        previous_lineage_root: Hash,
-        updated_lineage_root: Hash,
-        replaced_lane_ids: &BTreeSet<LaneId>,
-        certified_frontiers: &BTreeMap<(LaneId, DataSpaceId, Hash), LaneDrainFrontierV1>,
-        transition_height: u64,
-    ) -> Result<()> {
-        let mut certified_retirements = BTreeSet::new();
-        for (&(lane_id, dataspace_id, lane_incarnation), frontier) in certified_frontiers {
-            self.validate_certified_lane_drain_frontier(
-                lane_id,
-                dataspace_id,
-                lane_incarnation,
-                frontier,
-            )?;
-            certified_retirements.insert((lane_id, dataspace_id, lane_incarnation));
-        }
-        self.apply_lane_geometry_transition_at_height_with_lineage_roots_and_certified_retirements(
-            previous,
-            updated,
-            previous_incarnations,
-            updated_incarnations,
-            previous_activation_heights,
-            updated_activation_heights,
-            previous_lineage_root,
-            updated_lineage_root,
-            replaced_lane_ids,
-            &certified_retirements,
-            transition_height,
-        )
-    }
-    /// Apply an exact-height retained-lineage transition with certified retirements.
-    #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn apply_lane_geometry_transition_at_height_with_lineage_roots_and_certified_retirements(
-        &self,
-        previous: &LaneConfig,
-        updated: &LaneConfig,
-        previous_incarnations: &BTreeMap<LaneId, Hash>,
-        updated_incarnations: &BTreeMap<LaneId, Hash>,
-        previous_activation_heights: &BTreeMap<LaneId, u64>,
-        updated_activation_heights: &BTreeMap<LaneId, u64>,
-        previous_lineage_root: Hash,
-        updated_lineage_root: Hash,
-        replaced_lane_ids: &BTreeSet<LaneId>,
-        certified_retirements: &BTreeSet<(LaneId, DataSpaceId, Hash)>,
-        transition_height: u64,
-    ) -> Result<()> {
-        self.apply_lane_geometry_transition_with_lineage_roots_and_certified_retirements_inner(
-            previous,
-            updated,
-            previous_incarnations,
-            updated_incarnations,
-            previous_activation_heights,
-            updated_activation_heights,
-            previous_lineage_root,
-            updated_lineage_root,
-            replaced_lane_ids,
-            certified_retirements,
-            Some(transition_height),
-            None,
-        )
     }
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
@@ -3207,6 +3136,7 @@ impl Kura {
         )
     }
     /// Recover the authenticated cursor immediately before its transition.
+    #[cfg(test)]
     pub(crate) fn recover_lane_geometry_journal_before_transition_with_lineage_root(
         &self,
         authoritative: &LaneConfig,
@@ -3376,6 +3306,7 @@ impl Kura {
                     desired_applied_count,
                 )?;
             }
+            #[cfg(test)]
             LaneGeometryRecoveryCursor::BeforeTransition(transition_height) => {
                 let mut matching =
                     journal
@@ -4255,6 +4186,7 @@ impl Kura {
     fn fail_lane_geometry_gc_stage_for_test(&self, _stage: usize) -> Result<()> {
         Ok(())
     }
+    #[cfg(test)]
     fn reconcile_lane_geometry_history(
         &self,
         journal: &mut LaneGeometryJournal,
@@ -4552,6 +4484,7 @@ impl Kura {
     ///
     /// The caller holds prune, canonical, geometry and sidecar guards. The census
     /// is a read result, never retained publication or retirement authority.
+    #[cfg(test)]
     fn observe_lane_retirement_locked(
         &self,
         retiring: &[LaneRetirementIdentity],
@@ -4649,6 +4582,7 @@ impl Kura {
             }
             Ok(())
         };
+        #[cfg(test)]
         let routes = entries
             .iter()
             .map(|(lane, entry)| (*lane, entry.identity))
@@ -6006,21 +5940,22 @@ impl Kura {
             }
         }
         Ok(LaneRetirementCensus {
+            #[cfg(test)]
             routes,
+            #[cfg(test)]
             retiring,
+            #[cfg(test)]
             certified_retirements: certified_retirements.clone(),
+            #[cfg(test)]
             autonomous,
+            #[cfg(test)]
             inputs,
-            preflights,
+            #[cfg(test)]
             certified,
-            merge_bundles,
+            #[cfg(test)]
             receipts,
-            native_manifests,
-            native_receipts,
-            historical_recoveries,
-            artifact_files_seen,
+            #[cfg(test)]
             work_items_seen,
-            historical_recovery_bytes_seen,
         })
     }
     /// Exercise the production first-release retirement policy from parent-module tests.
@@ -7905,6 +7840,7 @@ impl Kura {
         }
         Ok(bytes)
     }
+    #[cfg(test)]
     fn ensure_archived_lane_work_released(
         &self,
         blocks_path: &Path,
@@ -11441,6 +11377,7 @@ impl Kura {
             None => self.write_lane_geometry_journal(journal),
         }
     }
+    #[cfg(test)]
     fn remove_accounted_geometry_file(&self, path: &Path) -> Result<()> {
         let before = Self::file_len_or_zero(path)?;
         let accounting_mutation = self

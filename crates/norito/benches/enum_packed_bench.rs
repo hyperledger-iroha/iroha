@@ -1,8 +1,10 @@
+//! Benchmarks for framed and bare encoding of packed enum payloads.
+
 #[cfg(feature = "bench-internal")]
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(feature = "bench-internal")]
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload, codec, decode_from_bytes, to_bytes,
+    NoritoDeserialize, NoritoSchema, NoritoSerialize, codec, decode_from_bytes, to_bytes,
 };
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
@@ -27,7 +29,8 @@ struct NestedPayload {
     res: Result<u32, String>,
 }
 #[cfg(feature = "bench-internal")]
-#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, NoritoSchema)]
+#[norito_schema(name = "norito.bench.enum_packed.PackedEnum")]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 enum PackedEnum {
     Unit,

@@ -253,7 +253,12 @@ fn typed_wrappers_retain_actual_named_storage_cell_and_trigger_values() {
             .unwrap(),
         )
     };
-    let touches = storage.journal.touched_entries().collect::<Vec<_>>();
+    let touches = storage
+        .journal
+        .as_ref()
+        .unwrap()
+        .touched_entries()
+        .collect::<Vec<_>>();
     assert_eq!(touches.len(), 2);
     let changed = touches
         .iter()
@@ -267,11 +272,13 @@ fn typed_wrappers_retain_actual_named_storage_cell_and_trigger_values() {
         .unwrap();
     assert_eq!(noop.before, None);
     assert_eq!(noop.after, None);
-    let touch = cell.journal.touched_value().unwrap();
+    let touch = cell.journal.as_ref().unwrap().touched_value().unwrap();
     assert_eq!(*touch.before, Some(10));
     assert_eq!(*touch.after, Some(22));
     let trigger = triggers
         .journal
+        .as_ref()
+        .unwrap()
         .by_call_triggers()
         .touched_entries()
         .next()
@@ -279,10 +286,21 @@ fn typed_wrappers_retain_actual_named_storage_cell_and_trigger_values() {
     assert_eq!(trigger.key.to_string(), "typed_trigger");
     assert!(trigger.before.is_none());
     assert!(trigger.after.is_some());
-    assert_eq!(triggers.journal.ids().touched_entries().len(), 1);
     assert_eq!(
         triggers
             .journal
+            .as_ref()
+            .unwrap()
+            .ids()
+            .touched_entries()
+            .len(),
+        1
+    );
+    assert_eq!(
+        triggers
+            .journal
+            .as_ref()
+            .unwrap()
             .active_by_call_trigger_ids()
             .touched_entries()
             .len(),

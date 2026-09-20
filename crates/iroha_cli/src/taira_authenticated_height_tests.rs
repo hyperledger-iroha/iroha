@@ -505,7 +505,7 @@ fn authenticated_height_verifies_contiguous_chain_and_fresh_four_peer_evidence()
         panic!("expected authenticated height")
     };
     assert_eq!(evidence.committed_height().get(), 2);
-    assert_eq!(evidence.block_hash(), fixture.proofs[1].block_header.hash());
+    assert_eq!(evidence.block_hash, fixture.proofs[1].block_header.hash());
     assert_eq!(evidence.proofs, fixture.proofs[..2]);
     for height in 1..=2 {
         assert_eq!(
@@ -779,7 +779,7 @@ fn authenticated_height_accepts_independent_certificate_witnesses() {
         panic!("independent valid quorum witnesses must certify one checkpoint")
     };
     assert_eq!(evidence.committed_height().get(), 3);
-    assert_eq!(evidence.block_hash(), fixture.proofs[2].block_header.hash());
+    assert_eq!(evidence.block_hash, fixture.proofs[2].block_header.hash());
     assert_eq!(*reads.proof_calls.lock().unwrap(), vec![2, 3]);
     assert_ne!(evidence.proofs[0], fixture.proofs[0]);
     for peer in evidence.peers {

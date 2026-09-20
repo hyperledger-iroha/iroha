@@ -55,11 +55,11 @@ pub struct JsAuthenticatedBlockProofInputV1 {
 /// Authenticated native verdict for one Torii `BlockProofs` response.
 ///
 /// Finality is valid whenever this object is returned. `valid` additionally
-/// states whether the requested entry/result proofs match the finality-bound
+/// states whether the requested input/output proofs match the finality-bound
 /// executed block. A malformed or unauthenticated input rejects the promise.
 #[napi(object)]
 pub struct JsAuthenticatedBlockProofVerdictV1 {
-    /// Whether all entry, result, geometry, root, and transcript checks passed.
+    /// Whether all input, output, geometry, root, and transcript checks passed.
     pub valid: bool,
     /// Stable verdict code (`valid` or `block_proofs_mismatch`).
     pub code: String,
@@ -412,7 +412,9 @@ fn enforce_archive_size(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair, MerkleTreeCommitment, Signature, SignatureOf};
+    use iroha_crypto::{
+        Algorithm, KeyPair, MerkleTree, MerkleTreeCommitment, Signature, SignatureOf,
+    };
     use iroha_data_model::{
         account::AccountId,
         block::{
@@ -422,6 +424,8 @@ mod tests {
                 ExecutionCommitment, GlobalPhase, HeightContext, PayloadEncoding,
                 QuorumCertificate, ValidatorPower, Vote, finality::V2FinalityArtifact,
             },
+            execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+            output_budget::ExecutionOutputLimits,
             proofs::ExecutionReceiptProof,
         },
         bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof},
@@ -433,6 +437,12 @@ mod tests {
     };
     use iroha_model_base::peer::PeerId;
     use std::num::NonZeroU64;
+    const FIXTURE_OUTPUT_LIMITS: ExecutionOutputLimits = ExecutionOutputLimits {
+        max_outputs: 16,
+        max_output_bytes: 1024 * 1024,
+        max_total_output_bytes: 4 * 1024 * 1024,
+        max_executed_wire_bytes: 32 * 1024 * 1024,
+    };
     const FIXTURE_NETWORK_ID: &str =
         "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7";
     struct Fixture {
@@ -472,7 +482,10 @@ mod tests {
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
-            None,
+            [entry_hash, alternate_entry_hash]
+                .into_iter()
+                .collect::<MerkleTree<_>>()
+                .root(),
             0,
             0,
         );
@@ -484,20 +497,33 @@ mod tests {
         let mut block =
             SignedBlock::presigned(signature, header, vec![transaction, alternate_transaction]);
         block
-            .set_transaction_results(
+            .set_execution_outputs(
+                [0, 1]
+                    .into_iter()
+                    .map(|input_index| {
+                        ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                            input_index,
+                            result: TransactionResult::new(TransactionResultInner::Ok(
+                                DataTriggerSequence::default(),
+                            )),
+                            completions: Vec::new(),
+                        })
+                    })
+                    .collect(),
+                0,
+                Default::default(),
                 Vec::new(),
-                &[entry_hash, alternate_entry_hash],
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &FIXTURE_OUTPUT_LIMITS,
             )
-            .expect("fixture block results align");
+            .expect("fixture typed outputs align with the immutable inputs");
         let block_proofs = block
-            .proofs_for_entry_hash(&entry_hash)
+            .network_execution_proof(&entry_hash)
             .expect("fixture block proof exists");
         let alternate_block_proofs = block
-            .proofs_for_entry_hash(&alternate_entry_hash)
+            .network_execution_proof(&alternate_entry_hash)
             .expect("alternate fixture block proof exists");
         let executed_block_wire = block
             .encode_wire()
@@ -670,8 +696,17 @@ mod tests {
         );
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
         block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("empty successor fixture accepts empty results");
+            .set_execution_outputs(
+                Vec::new(),
+                0,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &FIXTURE_OUTPUT_LIMITS,
+            )
+            .expect("empty successor fixture accepts empty outputs");
         let executed_block_wire = block
             .encode_wire()
             .expect("encode successor fixture block wire");
@@ -996,9 +1031,12 @@ mod tests {
         );
         assert_invalid(&wrong_geometry);
         let mut wrong_result = fixture.block_proofs.clone();
-        wrong_result.result_proof = ExecutionReceiptProof::new(
-            HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(b"forged result")),
-            wrong_result.result_proof.proof().clone(),
+        let ExecutionOutputV1::Network(row) = wrong_result.output_proof.output() else {
+            panic!("fixture proof authenticates a network output");
+        };
+        wrong_result.output_proof = ExecutionReceiptProof::new(
+            ExecutionOutputV1::network_output_limit_rejection(row.input_index),
+            wrong_result.output_proof.proof().clone(),
         );
         assert_invalid(&wrong_result);
         let mut wrong_transcript = fixture.block_proofs.clone();

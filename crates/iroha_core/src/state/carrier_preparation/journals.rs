@@ -26,6 +26,7 @@ mod runtime_journals;
 
 #[path = "decision_binding.rs"]
 pub(crate) mod decision_binding;
+pub(crate) use decision_binding::{PublishedNativeApply, RetainedCarrier};
 #[cfg(test)]
 use runtime_journals::RuntimeJournalInputs;
 use runtime_journals::RuntimeJournals;
@@ -106,6 +107,16 @@ pub(crate) struct StagedCarrierCapture<Admission> {
 }
 
 impl<Admission> StagedCarrierCapture<Admission> {
+    /// Match the original executed proposal while archive capture remains incomplete.
+    pub(crate) fn matches_candidate(
+        &self,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+        proposal: &iroha_data_model::block::SignedBlock,
+    ) -> bool {
+        self.journals
+            .matches_validation_candidate(context, proposal)
+    }
+
     /// Resume only archive insertion preparation on the exact detached execution.
     /// Local refusal returns this complete original owner unchanged for release-driven retry.
     pub(crate) fn try_complete(
@@ -215,7 +226,6 @@ struct RetainedCarrierEffects {
     verified_lane_relay_records: Vec<VerifiedLaneRelayRecord>,
     da_commitments: Option<carrier_da_effects::PreparedDaCommitmentEffects>,
     lifecycle: Option<carrier_lifecycle_effects::PreparedLaneLifecycleEffects>,
-    pending_autoscale_lifecycle: Option<PendingAutoscaleLaneLifecycle>,
     staged_merge_entry: Option<MergeLedgerEntry>,
     canonical_wsv_merge_commit_authorization: Option<CanonicalWsvMergeCommitAuthorization>,
     canonical_carrier_commit_metadata_authorization:
@@ -242,8 +252,10 @@ impl<'state> PreparedCarrier<'state> {
     ///
     /// StateReadOnly is used only before decomposition. No surrogate State,
     /// reconstructed membership writer or second World tail is introduced.
-    /// The required admission callback sees the complete original StateBlock and retained execution prefix
-    /// before any final journal value is copied. Its returned reservation stays
+    /// The required admission callback sees the complete original StateBlock and
+    /// retained execution prefix before projections and journal detachment.
+    /// Detachment moves original MV allocations without cloning; execution's
+    /// earlier allocations require their own prior admission. The reservation stays
     /// alive until all journals and deferred effects have been released. Archive
     /// arguments must be the exact predecessor owners reserved before execution.
     /// Admission refusal returns the original borrowed carrier and these owners
@@ -357,7 +369,7 @@ impl<'state> PreparedCarrier<'state> {
             sccp_registry,
             verified_lane_relay_records,
             pending_da_commitments: _,
-            pending_autoscale_lifecycle,
+            pending_autoscale_lifecycle: _,
             staged_merge_entry,
             native_lane_stage: _,
             execution_output_plan: _,
@@ -414,7 +426,6 @@ impl<'state> PreparedCarrier<'state> {
                 verified_lane_relay_records,
                 da_commitments,
                 lifecycle,
-                pending_autoscale_lifecycle,
                 staged_merge_entry,
                 canonical_wsv_merge_commit_authorization,
                 canonical_carrier_commit_metadata_authorization,
@@ -449,7 +460,9 @@ impl<'state> PreparedCarrier<'state> {
     }
 }
 
-impl<Admission> PreparedCarrierJournals<Admission> {
+impl<Admission, Block: AsRef<iroha_data_model::block::SignedBlock>, Components>
+    PreparedCarrierJournals<Admission, Block, Components>
+{
     /// Match a retry against the original context and resultless proposal wire.
     /// Results remain owned by this carrier; they are not supplied by a retry.
     pub(crate) fn matches_validation_candidate(
@@ -468,7 +481,9 @@ impl<Admission> PreparedCarrierJournals<Admission> {
             _ => false,
         }
     }
+}
 
+impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Components> {
     /// Inspect Native custody after every State writer has been released.
     #[cfg(test)]
     pub(in crate::state) fn native_source_for_test(&self) -> Option<&NativeExecutionCustody> {
@@ -481,9 +496,7 @@ impl<Admission> PreparedCarrierJournals<Admission> {
     ) -> iroha_data_model::block::consensus_v2::ExecutionCommitment {
         self.execution_prefix
     }
-}
 
-impl<Admission, Block, Components> PreparedCarrierJournals<Admission, Block, Components> {
     /// Borrow the original source owners after State journal detachment.
     pub(in crate::state) fn source_prefix(&self) -> &ValidatedExecutionPrefix {
         &self.source_prefix

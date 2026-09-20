@@ -403,6 +403,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/mod_authoritative_runtime_gate_05_ownership_maintenance.rs'),
         Path('tests/mod_authoritative_runtime_gate_06_source_isolation.rs'),
         Path('tests/mod_authoritative_runtime_gate_07_wire_bounds.rs'),
+        Path('tests/mod_native_ingress_rollover.rs'),
         Path('tests/mod_authoritative_runtime_gate_08_capacity_and_control.rs'),
         Path('tests/mod_authoritative_runtime_gate_09_checked_dequeue.rs'),
         Path('tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs'),

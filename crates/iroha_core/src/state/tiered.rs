@@ -5,22 +5,26 @@
 //! payloads using the canonical Norito encoding, and emits a manifest so hosts can hydrate cold
 //! shards lazily. Snapshots can be built incrementally from per-block diffs to avoid full WSV
 //! scans, and heavy snapshot work can be offloaded after commit to reduce block latency.
+#[cfg(test)]
 use super::World;
 use crate::telemetry::StateTelemetry;
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_model_base::state_path::StatePath;
+#[cfg(test)]
 use mv::storage::StorageReadOnly;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use std::io::ErrorKind;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
-    io::{BufWriter, ErrorKind, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -28,9 +32,12 @@ mod geometry_attempt;
 pub(crate) use geometry_attempt::TieredGeometryAttempt;
 
 const WSV_COLD_COMPONENT: &str = "wsv_cold";
+#[cfg(test)]
 const DA_CACHE_HIT: &str = "hit";
+#[cfg(test)]
 const DA_CACHE_MISS: &str = "miss";
 const DA_CHURN_EVICTED: &str = "evicted";
+#[cfg(test)]
 const DA_CHURN_REHYDRATED: &str = "rehydrated";
 /// Lightweight handle describing a hot/cold storage split.
 #[derive(Debug, Clone, Default)]
@@ -158,6 +165,7 @@ where
         json::to_vec(self).wrap_err("failed to encode snapshot value as JSON")
     }
 }
+#[cfg(test)]
 struct CollectContext<'a> {
     snapshot_idx: u64,
     scores: &'a mut Vec<EntryScore>,
@@ -167,6 +175,7 @@ impl TieredStateBackend {
     /// Construct a backend with explicit limits.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn new(
         enabled: bool,
         hot_retained_keys: usize,
@@ -204,7 +213,8 @@ impl TieredStateBackend {
     pub fn attach_telemetry(&mut self, telemetry: StateTelemetry) {
         self.telemetry = Some(telemetry);
     }
-    /// Record a snapshot of the current world.
+    /// Build the full-World reference snapshot used to check retained-payload snapshots.
+    #[cfg(test)]
     pub fn record_world_snapshot(&mut self, world: &World) -> Result<()> {
         if let Some(plan) = self.plan_world_snapshot(world)? {
             self.execute_snapshot_plan(plan, world)?;
@@ -427,6 +437,7 @@ impl TieredStateBackend {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn plan_world_snapshot(&mut self, world: &World) -> Result<Option<TieredSnapshotPlan>> {
         let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
             return Ok(None);
@@ -771,6 +782,7 @@ impl TieredStateBackend {
         Ok(cache)
     }
     #[allow(clippy::too_many_lines)]
+    #[cfg(test)]
     fn execute_snapshot_plan(&mut self, mut plan: TieredSnapshotPlan, world: &World) -> Result<()> {
         self.ensure_cold_roots()
             .wrap_err("failed to prepare cold tier root directory")?;
@@ -1135,11 +1147,6 @@ impl TieredStateBackend {
         self.prune_to_cold_bytes(&plan.root)?;
         Ok(())
     }
-    /// Returns the currently configured hot key retention limit.
-    #[must_use]
-    pub fn hot_retained_keys(&self) -> usize {
-        self.hot_retained_keys
-    }
     /// Returns the currently configured hot byte retention limit.
     #[must_use]
     pub fn hot_retained_bytes(&self) -> u64 {
@@ -1214,6 +1221,7 @@ impl TieredStateBackend {
         Ok(Some(total))
     }
     /// Load a cold payload from the configured cold roots.
+    #[cfg(test)]
     pub fn read_cold_payload(
         &self,
         snapshot_index: u64,
@@ -1280,6 +1288,7 @@ impl TieredStateBackend {
         }
         Ok(None)
     }
+    #[cfg(test)]
     fn try_rehydrate_cold_payload(
         &self,
         snapshot_index: u64,
@@ -1358,6 +1367,7 @@ impl TieredStateBackend {
         }
         Ok(Some(u64::try_from(payload.len()).unwrap_or(u64::MAX)))
     }
+    #[cfg(test)]
     fn record_da_cache(&self, outcome: &'static str) {
         if let Some(telemetry) = self.telemetry.as_ref() {
             telemetry.inc_storage_da_cache(WSV_COLD_COMPONENT, outcome);
@@ -1373,6 +1383,7 @@ impl TieredStateBackend {
     }
     /// Update configuration knobs at runtime.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn reconfigure(
         &mut self,
         enabled: bool,
@@ -1572,6 +1583,7 @@ impl TieredStateBackend {
         Ok(())
     }
     #[allow(clippy::too_many_lines)]
+    #[cfg(test)]
     fn collect_world_entries(
         &mut self,
         world: &World,
@@ -1956,6 +1968,7 @@ impl TieredStateBackend {
         );
         Ok(())
     }
+    #[cfg(test)]
     fn collect_entry<K, V>(
         &mut self,
         segment: TieredSegment,
@@ -1971,6 +1984,7 @@ impl TieredStateBackend {
         let key_encoded = norito::codec::Encode::encode(key);
         self.collect_entry_with_encoded_key(segment, key_handle, key_encoded, value, ctx)
     }
+    #[cfg(test)]
     fn collect_entry_with_encoded_key<V>(
         &mut self,
         segment: TieredSegment,
@@ -2417,6 +2431,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     out.copy_from_slice(&Sha256::digest(bytes));
     out
 }
+#[cfg(test)]
 fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usize)> {
     let encoded = json::to_vec(value).wrap_err("failed to encode snapshot value as JSON")?;
     Ok((sha256(&encoded), encoded.len()))
@@ -2435,6 +2450,7 @@ pub(crate) trait MeasuredBytes {
     }
 }
 #[allow(clippy::unnecessary_wraps)]
+#[cfg(test)]
 fn compute_hot_bytes(value: &impl MeasuredBytes) -> Result<usize> {
     Ok(value.measured_bytes())
 }
@@ -4280,6 +4296,7 @@ impl EntryScore {
         ));
         path
     }
+    #[cfg(test)]
     fn encode_value(&self, world: &World) -> Result<Vec<u8>> {
         self.key.encode_value(world)
     }
@@ -4762,6 +4779,7 @@ impl TieredKeyHandle {
             }
         }
     }
+    #[cfg(test)]
     fn encode_value(&self, world: &World) -> Result<Vec<u8>> {
         macro_rules! fetch {
             ($storage:expr, $key:expr) => {{

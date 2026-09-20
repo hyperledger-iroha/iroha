@@ -11,6 +11,8 @@ fn native_driver_limits_for_test() -> crate::sumeragi::v2_lane_driver::NativeLan
     }
 }
 
+include!("native_lane_candidate_tests.rs");
+
 fn native_driver_control_for_test(
     fixture: &NativeProcessFixture,
     lane: &VerifiedLaneContext,
@@ -304,15 +306,21 @@ state_test! { sync native_driver_nonmember_decision_handoff_requires_every_exact
         assert!(matches!(driver.admit(&observed, NativeLaneInput::Decision(decision.clone())), NativeLaneAdmission::Accepted));
         assert!(matches!(driver.admit(&observed, NativeLaneInput::Decision(decision)), NativeLaneAdmission::Accepted));
         let handoff = driver.capture_decisions(&observed).unwrap().unwrap();
-        let prepared = std::thread::spawn(move || handoff.prepare_groups()).join().unwrap().unwrap();
+        let (prepared, candidate) = std::thread::spawn(move || (
+            handoff.prepare_groups().unwrap(), handoff.prepare_candidate().unwrap(),
+        )).join().unwrap();
         if index + 1 < observed.contexts().len() {
             assert!(prepared.groups.is_empty());
             assert!(matches!(prepared.waits.as_slice(), [LaneDecisionGroupPreparationV1::MissingDecisions(_)]));
+            assert!(candidate.work.is_none());
+            assert!(matches!(candidate.waits.as_slice(), [LaneDecisionGroupPreparationV1::MissingDecisions(_)]));
         } else {
             assert!(prepared.waits.is_empty());
             assert_eq!(prepared.groups.len(), 1);
             assert_eq!(prepared.groups[0].body().canonical_bytes(), body.canonical_bytes());
             assert_eq!(prepared.groups[0].decisions().len(), 3);
+            assert!(candidate.waits.is_empty());
+            assert_eq!(candidate.work.unwrap().batch().groups, vec![prepared.groups[0].to_wire()]);
         }
     }
     assert_eq!(driver.process().occupancy().instances, 0, "a global consumer outside the committee receives no signing instance");
@@ -339,5 +347,193 @@ state_test! { sync native_driver_admits_complete_control_envelope_before_opening
     assert_eq!(driver.process().occupancy().instances,0);
     assert_eq!(driver.process().occupancy().queued,0);
     assert!(!guard.restart_required());
+    driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_retains_retired_body_capacity_and_exact_closed_handoff
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_core as core,
+        v2_lane_driver::{NativeLaneAdmission, NativeLaneDriver, NativeLaneInput},
+        v2_lane_wire::LaneWalRecordV1,
+    };
+    use std::{sync::mpsc, time::Instant};
+
+    let now = Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    assert_eq!(observed.contexts().len(), 3);
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let other = observed.contexts()[1].instance_id();
+    let leader = lane.reducer_context().roster().iter()
+        .position(|validator| validator.id() == lane.reducer_context().leader(0)).unwrap();
+    let FirstLaneAdmittedInputReadV1::Ready(source) = fixture.state.first_lane_admitted_input(&observed, lane).unwrap()
+        else { panic!("original complete first-carrier source"); };
+    let LaneInputBodyPreparationV1::Ready(body) = fixture.state.prepare_lane_input_body(&observed, lane, &source).unwrap()
+        else { panic!("actual all-route body"); };
+    let guard = ConsensusOutputGuard::isolated();
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, leader), native_driver_limits_for_test()).unwrap();
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    driver.hold_next_body_completion_for_test(id, move || {
+        entered.send(()).unwrap();
+        // Dropping the sender on a failed assertion releases the real worker.
+        let _ = release_rx.recv();
+    });
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        driver.poll(&observed, now).unwrap();
+        if entered_rx.try_recv().is_ok() { break; }
+        assert!(Instant::now() < until, "genuine body completion must enter the held boundary");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let original = std::ptr::from_ref(driver.process().instance(id).unwrap());
+    let original_tag = driver.process().instance(id).unwrap().tag();
+    // Three actual BLS timeout shares advance only this same reducer. The
+    // physical body operation retains its original view-zero purpose/result.
+    for signer in 0..3 {
+        assert!(matches!(driver.admit(&observed,
+            NativeLaneInput::Control(native_driver_control_for_test(&fixture, lane, signer))),
+            NativeLaneAdmission::Accepted));
+    }
+    while driver.process().instance(id).unwrap().tag().view() != 1
+        || driver.process().instance(id).unwrap().timeout_deadline() != Some(now + Duration::from_secs(2))
+    {
+        driver.poll(&observed, now).unwrap();
+        assert!(Instant::now() < until, "real WAL completion must install and enter certified view one");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(driver.process().instance(id).unwrap().native_records().iter()
+        .any(|row| matches!(row.record, LaneWalRecordV1::InstallTimeout(_))));
+    release.send(()).unwrap();
+    while driver.process().instance(id).unwrap().retirement_count() == 0 {
+        driver.poll(&observed, now).unwrap();
+        assert!(Instant::now() < until, "returned body must remain owned after its exact tag becomes obsolete");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(std::ptr::from_ref(driver.process().instance(id).unwrap()), original);
+    assert_ne!(driver.process().instance(id).unwrap().tag(), original_tag);
+    assert!(!driver.process().instance(id).unwrap().held_effects()
+        .any(|effect| matches!(effect, core::Effect::Apply { .. })));
+    assert!(driver.take_retirement(other).is_none(), "another instance cannot consume this body");
+    driver.restrict_effect_capacity_to_retained_for_test(id);
+    let held = driver.process().instance(id).unwrap().held_effects().cloned().collect::<Vec<_>>();
+    let retained = driver.process().instance(id).unwrap().retirement_count();
+    let records = driver.process().instance(id).unwrap().native_records().to_vec();
+    let due = now + Duration::from_secs(3);
+    while driver.process().instance(other).is_none_or(|owner| owner.native_records().is_empty()) {
+        driver.poll(&observed, due).unwrap();
+        assert!(Instant::now() < until, "one full retirement owner cannot block another lane's WAL");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(driver.process().instance(id).unwrap().held_effects().cloned().collect::<Vec<_>>(), held);
+    assert_eq!(driver.process().instance(id).unwrap().retirement_count(), retained);
+    assert_eq!(driver.process().instance(id).unwrap().tag().view(), 1);
+    assert_eq!(driver.process().instance(id).unwrap().native_records(), records);
+    assert!(!guard.restart_required());
+    while observed.contexts().iter().any(|lane| driver.process().instance(lane.instance_id()).is_none()) {
+        driver.poll(&observed, due).unwrap();
+        assert!(Instant::now() < until, "all three original opens must complete before closure");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    // The authentic State closure carries the same escrow through the original
+    // physical drain and LaneClosedInstance transfer, without Ready or Apply.
+    native_process_advance(&fixture, true);
+    let closed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    assert!(closed.contexts().is_empty());
+    while driver.process().occupancy().closed != 3 {
+        driver.poll(&closed, due).unwrap();
+        assert!(Instant::now() < until, "actual physical owners must drain");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let mut owner = driver.take_closed(id).expect("same original owner transfers");
+    assert_eq!(std::ptr::from_ref(owner.instance()), original);
+    assert!(driver.take_closed(id).is_none());
+    assert!(driver.take_retirement(id).is_none(), "Driver cannot consume from the transferred owner");
+    let retirement = owner.take_retirement().expect("actual returned body is still owned");
+    assert_eq!(retirement.instance(), id);
+    assert!(retirement.belongs_to(&fixture.state));
+    assert_eq!(retirement.body_bytes(), Some(body.canonical_bytes()));
+    assert!(!retirement.requires_recovery(), "the real TC already obsoleted this body tag before closure");
+    assert!(retirement.effect().is_none() && retirement.proposal().is_none());
+    assert!(owner.take_retirement().is_none(), "the exact body transfers once");
+    assert!(!owner.instance().held_effects().any(|effect| matches!(effect, core::Effect::Apply { .. })));
+    assert!(!guard.restart_required());
+    drop(owner);
+    assert!(guard.restart_required(), "closed-owner discard never acknowledges unfinished obligations");
+    driver.shutdown().join().unwrap();
+}
+
+#[cfg(all(unix, not(target_os = "espidf")))]
+state_test! { sync native_driver_taken_unfinished_closed_body_keeps_original_output_fence
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_core as core,
+        v2_lane_driver::NativeLaneDriver,
+    };
+    use std::{sync::mpsc, time::Instant};
+    let now = Instant::now();
+    let fixture = native_process_fixture(false, now);
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let id = lane.instance_id();
+    let leader = lane.reducer_context().roster().iter()
+        .position(|validator| validator.id() == lane.reducer_context().leader(0)).unwrap();
+    let FirstLaneAdmittedInputReadV1::Ready(source) = fixture.state.first_lane_admitted_input(&observed, lane).unwrap()
+        else { panic!("original complete carrier"); };
+    let LaneInputBodyPreparationV1::Ready(body) = fixture.state.prepare_lane_input_body(&observed, lane, &source).unwrap()
+        else { panic!("actual all-route body"); };
+    let guard = ConsensusOutputGuard::isolated();
+    let mut driver = NativeLaneDriver::new(Arc::clone(&fixture.state), Arc::clone(&guard),
+        native_process_key(&fixture, lane, leader), native_driver_limits_for_test()).unwrap();
+    let (entered, entered_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    driver.hold_next_body_completion_for_test(id, move || {
+        entered.send(()).unwrap();
+        let _ = release_rx.recv();
+    });
+    let until = Instant::now() + Duration::from_secs(30);
+    loop {
+        driver.poll(&observed, now).unwrap();
+        if entered_rx.try_recv().is_ok() { break; }
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let original_tag = driver.process().instance(id).unwrap().tag();
+    let original_records = driver.process().instance(id).unwrap().native_records().to_vec();
+    let original_effects = driver.process().instance(id).unwrap().held_effects().cloned().collect::<Vec<_>>();
+    assert_eq!(driver.process().instance(id).unwrap().retirement_count(), 0);
+    // The real completed job still owns its single original descriptor. There is
+    // no spare slot for the productive reserve_ingress path at completion return.
+    driver.restrict_effect_capacity_to_retained_for_test(id);
+    native_process_advance(&fixture, true);
+    let closed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    assert!(closed.contexts().is_empty());
+    release.send(()).unwrap();
+    while driver.process().instance(id).is_none_or(|owner| owner.retirement_count() == 0) {
+        driver.poll(&closed, now).unwrap();
+        assert!(Instant::now() < until, "original return must enter retained closure custody");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(driver.process().instance(id).unwrap().retirement_count(), 1,
+        "the original completed descriptor moves once into retirement without headroom");
+    assert_eq!(driver.process().instance(id).unwrap().native_records(), original_records);
+    assert_eq!(driver.process().instance(id).unwrap().held_effects().cloned().collect::<Vec<_>>(), original_effects);
+    let retirement = driver.take_retirement(id).expect("Driver transfers the original completion once");
+    assert!(driver.take_retirement(id).is_none());
+    assert_eq!(retirement.instance(), id);
+    assert!(retirement.belongs_to(&fixture.state));
+    assert!(retirement.requires_recovery());
+    assert_eq!(retirement.body_bytes(), Some(body.canonical_bytes()));
+    assert_eq!(driver.process().instance(id).unwrap().tag(), original_tag);
+    assert!(!driver.process().instance(id).unwrap().held_effects()
+        .any(|effect| matches!(effect, core::Effect::Apply { .. })));
+    assert!(!guard.restart_required(), "taking custody is not loss");
+    drop(retirement);
+    assert!(guard.restart_required(), "dropping the taken unfinished body still fences original output");
     driver.shutdown().join().unwrap();
 }

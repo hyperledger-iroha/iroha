@@ -287,22 +287,23 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         ..Default::default()
     })?;
     for entry in lane_config.entries() {
-        let blocks_dir = entry.blocks_dir(&store_dir);
+        let identity = state
+            .lane_storage_identity(entry.lane_id)
+            .expect("configured lane has an authenticated storage identity");
+        let blocks_dir = identity.blocks_dir(&store_dir);
         assert!(
-            blocks_dir.exists(),
+            blocks_dir.is_dir(),
             "lane {} blocks dir should be created",
             entry.lane_id.as_u32()
         );
-        assert!(
-            blocks_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("lane_")),
-            "blocks dir should use lane slug naming"
+        assert_eq!(
+            blocks_dir.parent(),
+            Some(store_dir.join("blocks/instances").as_path()),
+            "lane storage must use the exact instance namespace"
         );
-        let merge_log = entry.merge_log_path(&store_dir);
+        let merge_log = identity.merge_log_path(&store_dir);
         assert!(
-            merge_log.exists(),
+            merge_log.is_file(),
             "lane {} merge log should be created",
             entry.lane_id.as_u32()
         );

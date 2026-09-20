@@ -5,12 +5,16 @@ struct NativeControlExecutionFixture {
     economic: Box<NativeEconomicFixture>,
     later: iroha_data_model::block::lane_admission::LaneAdmittedInputV1,
     applying: crate::sumeragi::v2::VerifiedHeightContext,
+    requested_beacon: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
 }
 
 // Finish economic fixture construction before reserving the later admission
 // overlay frame. The same boxed State moves into the second phase.
 #[inline(never)]
-fn native_control_execution_fixture(atomic: bool) -> NativeControlExecutionFixture {
+fn native_control_execution_fixture(
+    atomic: bool,
+    with_beacon: bool,
+) -> NativeControlExecutionFixture {
     let economic = native_economic_fixture_with_genesis_layout(
         &[NativeEconomicCase::Transfer(25)],
         atomic,
@@ -23,7 +27,7 @@ fn native_control_execution_fixture(atomic: bool) -> NativeControlExecutionFixtu
             max_chunk_count: 512,
         }),
     );
-    native_control_execution_fixture_from_economic(economic, atomic)
+    native_control_execution_fixture_from_economic(economic, atomic, with_beacon)
 }
 
 // This continuation owns the original economic fixture; no State is cloned or
@@ -32,6 +36,7 @@ fn native_control_execution_fixture(atomic: bool) -> NativeControlExecutionFixtu
 fn native_control_execution_fixture_from_economic(
     mut economic: Box<NativeEconomicFixture>,
     atomic: bool,
+    with_beacon: bool,
 ) -> NativeControlExecutionFixture {
     let state = &economic.native.state;
     let original = state.verified_lane_consensus_contexts().unwrap().unwrap();
@@ -126,6 +131,15 @@ fn native_control_execution_fixture_from_economic(
     let mut overlay = state
         .block_with_queue_plan_admissions(block.header(), &[control])
         .unwrap();
+    // Seed the exact pending pulse in this carrier's original World journal.
+    // A later World-only commit would overwrite the genuine H-1 undo record,
+    // making snapshot recovery pair old lane contexts with new admissions.
+    let requested_beacon = with_beacon.then(|| {
+        let validators = (0xD3_u8..=0xD6)
+            .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
+            .collect::<Vec<_>>();
+        install_exact_merge_beacon_fixture(state, &mut overlay.world, &validators, &block)
+    });
     overlay
         .finalize_lane_consensus_contexts(&block, Some(&opening))
         .unwrap();
@@ -189,6 +203,7 @@ fn native_control_execution_fixture_from_economic(
         economic,
         later,
         applying,
+        requested_beacon,
     }
 }
 
@@ -336,7 +351,7 @@ fn assert_native_control_suffix(
 
 state_test! { sync native_recorded_control_suffix_requires_opening_after_real_later_admission
     for atomic in [false, true] {
-        let fixture = native_control_execution_fixture(atomic);
+        let fixture = native_control_execution_fixture(atomic, false);
         let state = &fixture.economic.native.state;
         let mut carrier = native_consumer_stage_carrier(&fixture.economic);
         let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
@@ -367,7 +382,7 @@ state_test! { sync native_recorded_control_suffix_requires_opening_after_real_la
 state_test! { sync native_recorded_control_suffix_opens_exact_next_context_and_retains_pending_work
     use super::NativeLaneBatchSourcePreparationV1;
     for atomic in [false, true] {
-        let fixture = native_control_execution_fixture(atomic);
+        let fixture = native_control_execution_fixture(atomic, false);
         let state = &fixture.economic.native.state;
         let carrier = native_consumer_stage_carrier(&fixture.economic);
         let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
@@ -387,7 +402,7 @@ state_test! { sync native_recorded_control_suffix_opens_exact_next_context_and_r
 
 state_test! { sync native_recorded_control_rejects_changed_opening_and_stale_verified_height
     use super::NativeLaneBatchSourcePreparationV1;
-    let fixture = native_control_execution_fixture(true);
+    let fixture = native_control_execution_fixture(true, false);
     let state = &fixture.economic.native.state;
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
@@ -451,11 +466,9 @@ fn native_control_requested_beacon(
             .collect::<Vec<_>>(),
         "beacon authority is the authentic global committee, not a lane committee",
     );
-    let pulse = install_exact_merge_beacon_fixture(
-        &fixture.economic.native.state,
-        &validators,
-        &fixture.economic.native.block,
-    );
+    let pulse = fixture
+        .requested_beacon
+        .expect("beacon setup belongs to the original carrier commit");
     assert_eq!(pulse.height, fixture.applying.context().height);
     assert_eq!(pulse.network_id, fixture.applying.context().network_id);
     assert_eq!(
@@ -494,10 +507,33 @@ fn native_control_attach_beacon(
     carrier.validate_proposal_commitments().unwrap();
 }
 
+state_test! { sync native_recorded_control_beacon_preserves_complete_snapshot_and_predecessor
+    for atomic in [false, true] {
+        let fixture = native_control_execution_fixture(atomic, true);
+        let state = &fixture.economic.native.state;
+        let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+        let pulse = native_control_requested_beacon(&fixture);
+        assert_eq!(native_control_requested_beacon(&fixture), pulse);
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before,
+            "reading the requested pulse cannot publish a replacement World undo");
+        let restored = deserialize::KuraSeed {
+            kura: Arc::clone(&state.kura),
+            lane_manifests: state.lane_manifests.read().clone(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }.into_state_from_json(norito::json::to_value(state).unwrap())
+            .expect("restore the exact finalized beacon/admission carrier and its H-1 predecessor");
+        assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&restored).unwrap(), before);
+        assert_eq!(restored.lane_consensus_contexts.view().get(), state.lane_consensus_contexts.view().get());
+        assert_eq!(restored.lane_consensus_contexts.predecessor_view().get(), state.lane_consensus_contexts.predecessor_view().get());
+    }
+}
+
 state_test! { sync native_recorded_control_executes_requested_beacon_before_suffix_and_retains_witness
     use super::NativeLaneBatchSourcePreparationV1;
     for atomic in [false, true] {
-        let fixture = native_control_execution_fixture(atomic);
+        let fixture = native_control_execution_fixture(atomic, true);
         let pulse = native_control_requested_beacon(&fixture);
         let state = &fixture.economic.native.state;
         let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
@@ -530,7 +566,7 @@ state_test! { sync native_recorded_control_executes_requested_beacon_before_suff
 
 state_test! { sync native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon
     use super::NativeLaneBatchSourcePreparationV1;
-    let fixture = native_control_execution_fixture(true);
+    let fixture = native_control_execution_fixture(true, true);
     let pulse = native_control_requested_beacon(&fixture);
     let state = &fixture.economic.native.state;
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
@@ -561,7 +597,7 @@ state_test! { sync native_recorded_control_rejects_missing_corrupt_and_foreign_p
 
 state_test! { sync native_recorded_control_admits_same_carrier_input_without_executing_it
     use super::NativeLaneBatchSourcePreparationV1;
-    let fixture = native_control_execution_fixture(true);
+    let fixture = native_control_execution_fixture(true, false);
     let state = &fixture.economic.native.state;
     let signer = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).unwrap();
     let mut builder = TransactionBuilder::new(

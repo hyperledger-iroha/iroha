@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Focused fake-process and tamper tests for replay receipt V1.
 
-Run with the supported Xcode interpreter:
+Run with the current Python interpreter:
 
-    /usr/bin/python3 scripts/formal/sumeragi_v2_replay_receipt_test.py
+    python3 scripts/formal/sumeragi_v2_replay_receipt_test.py
 """
 
 from __future__ import annotations
@@ -170,6 +170,23 @@ def canonical_tlc_log() -> str:
     return "\n".join(items) + "\n"
 
 
+class InterpreterSnapshotTest(unittest.TestCase):
+    def test_collector_accepts_canonical_interpreter_and_rejects_symlink(self) -> None:
+        interpreter = Path(sys.executable).resolve(strict=True)
+        snapshot = COLLECTOR._read_snapshot(
+            interpreter, "tool/python", executable=True
+        )
+        self.assertEqual(snapshot.path, interpreter)
+        with tempfile.TemporaryDirectory(prefix="sumeragi-python-test.") as temporary:
+            alias = Path(temporary).resolve() / "python"
+            alias.symlink_to(interpreter)
+            with self.assertRaisesRegex(
+                COLLECTOR.CollectionError,
+                "tool/python must have a canonical non-symlink path",
+            ):
+                COLLECTOR._read_snapshot(alias, "tool/python", executable=True)
+
+
 class ReplayReceiptTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -226,10 +243,11 @@ class ReplayReceiptTest(unittest.TestCase):
             f"tlapm-projection/{name}": digest for name, digest in module_hashes.items()
         }
         cls.output = cls.work / "receipt"
+        python_bin = Path(sys.executable).resolve(strict=True)
         args = argparse.Namespace(
             root=ROOT,
             java_bin=cls.fake_java,
-            python_bin=Path("/usr/bin/python3"),
+            python_bin=python_bin,
             tla2tools_jar=cls.fake_jar,
             tlapm_projection=cls.projection,
             output_root=cls.output,
@@ -241,7 +259,7 @@ class ReplayReceiptTest(unittest.TestCase):
             str(FORMAL / "collect_sumeragi_v2_replay_receipt.py"),
             "--root", str(ROOT),
             "--java-bin", str(cls.fake_java),
-            "--python-bin", "/usr/bin/python3",
+            "--python-bin", str(python_bin),
             "--tla2tools-jar", str(cls.fake_jar),
             "--tlapm-projection", str(cls.projection),
             "--output-root", str(cls.output),

@@ -936,7 +936,8 @@ mod tests {
             .expect("finality preserves signed genesis authority");
             kura.store_block(Arc::new(genesis.as_ref().clone()))
                 .expect("store executed genesis");
-            kura.store_v2_finality_artifact(&genesis_finality)
+            let _ = kura
+                .store_v2_finality_artifact(&genesis_finality)
                 .expect("store exact genesis finality");
             let _ = genesis_state.apply_without_execution(&genesis, topology.as_ref().to_vec());
             // TODO: complete the canonical State publication owner. The output seal

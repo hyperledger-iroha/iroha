@@ -25,7 +25,7 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install --require-hashes -r python/iroha_python/requirements-ci.lock
 cd python/iroha_native
-maturin build --release --out ../../dist/python-native
+IROHA_PYTHON_SKIP_RUNTIME_LINK=1 maturin build --release --out ../../dist/python-native
 cd ../..
 python -m pip wheel --no-build-isolation --no-deps python/iroha_python -w dist/python-sdk
 python -m pip install dist/python-native/*.whl dist/python-sdk/*.whl
@@ -1291,6 +1291,11 @@ The client uses its immutable typed `NetworkId` for the signed query and sends
 the nonce-bearing body once, with redirects and transport retries disabled. Torii verifies the
 exact transaction predicate, signature, freshness, nonce, and involved-account/operator
 authorization.
+
+`get_verified_committed_transaction(...)` verifies the network input and its complete
+execution output against the carrier block. Its `VerifiedCommittedTransaction.output_hash`
+binds the full output, including the result and execution context. Scheduled `Time`
+outputs are separate from network transactions and cannot be returned by this helper.
 
 Native instructions and deployed-contract calls can share one ordered, atomic
 batch. Any batch containing a contract call must bind a positive `gas_limit`

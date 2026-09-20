@@ -6,6 +6,36 @@ use norito::{
     SerializePayload,
     codec::{Decode, Encode},
 };
+/// One input-ordered result from a dispatched transaction batch.
+///
+/// Status 202 acknowledges durable admission. Other statuses retain the exact
+/// single-submit HTTP result; `PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN` requires
+/// reconciliation of this signed hash before another submission. A batch is
+/// transport aggregation, not an atomic execution or admission protocol.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate::DeriveJsonSerialize,
+    crate::DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome")]
+pub struct TransactionBatchEntryOutcome {
+    /// Exact caller-signed transaction identity, in original request order.
+    pub signed_transaction_hash: HashOf<SignedTransaction>,
+    /// HTTP status produced by this entry's canonical admission owner.
+    pub status: u16,
+    /// Original single-submit rejection or ambiguity code, when supplied.
+    #[norito(required)]
+    pub reject_code: Option<String>,
+}
+
 fn verify_signature_for_signer(
     signature: &Signature,
     signer: &PublicKey,
@@ -147,6 +177,27 @@ mod tests {
         submitted_at_ms: u64,
         submitted_at_height: u64,
         signer: PublicKey,
+    }
+
+    #[test]
+    fn batch_entry_outcome_roundtrips_norito_and_json() {
+        let outcome = TransactionBatchEntryOutcome {
+            signed_transaction_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                [0xD5; 32],
+            )),
+            status: 503,
+            reject_code: Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()),
+        };
+        let bytes = norito::to_bytes(&outcome).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<TransactionBatchEntryOutcome>(&bytes).unwrap(),
+            outcome
+        );
+        let json = norito::json::to_vec(&outcome).unwrap();
+        assert_eq!(
+            norito::json::from_slice::<TransactionBatchEntryOutcome>(&json).unwrap(),
+            outcome
+        );
     }
 
     fn checked_random_keypair() -> KeyPair {

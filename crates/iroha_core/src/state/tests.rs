@@ -11399,12 +11399,19 @@ fn stage_autoscale_scale_out_for_commit_revalidation<'state>(
         elastic_snapshot_dir,
     }
 }
-state_test! { sync autoscale_catalog_publication_failure_rolls_back_prepared_geometry_in_process
+state_test! { sync autoscale_catalog_publication_failure_retains_original_geometry_for_explicit_rollback
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
     install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
     *state.tiered_backend.lock() =
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
     let_row! { AutoscaleCommitRevalidationStage { state_block, elastic_blocks_dir, elastic_snapshot_dir, } = stage_autoscale_scale_out_for_commit_revalidation(&state, &kura, &store_root, &cold_root) };
+    let pending = state_block
+        .pending_autoscale_lifecycle
+        .clone()
+        .expect("retain exact transition inputs for explicit cancellation");
+    let runtime_before = state.canonical_runtime.view().get().clone();
+    let cursors_before = format!("{:?}", state.da_shard_cursors.read());
+    let cold_before = exact_test_tree_fingerprint(&cold_root);
     kura.fail_next_lane_geometry_publication_for_test();
     let_row! { err = state_block .commit() .expect_err("publication failure must abort before transaction/catalog commit") };
     assert!(matches!(err, TransactionsBlockError::LocalLaneGeometry(_)));
@@ -11424,6 +11431,32 @@ state_test! { sync autoscale_catalog_publication_failure_rolls_back_prepared_geo
         "failed publication retains its exact journal-owned instance for recovery"
     );
     assert!(state.lane_storage_identity(LaneId::new(1)).is_none());
+    assert_eq!(state.canonical_runtime.view().get(), &runtime_before);
+    assert_eq!(kura.lane_geometry_journal_state_for_test().unwrap().1, vec!["files_applied"]);
+    {
+        let slot = state.geometry_publication.lock();
+        let retained = slot.as_ref().expect("catalog refusal retains the original operation");
+        assert_eq!(retained.raw.as_ref().unwrap().phase(), crate::kura::RawGeometryPhase::FilesApplied);
+        assert!(!retained.raw.as_ref().unwrap().has_pending_journal_write());
+        assert!(retained.tiered.as_ref().unwrap().is_applied());
+    }
+    assert!(elastic_snapshot_dir.is_dir(), "catalog refusal retains applied tiered geometry");
+    // A local refusal does not choose a new storage direction. Explicit
+    // cancellation must reverse the original owner and its exact predecessor.
+    let update = &pending.catalog_update;
+    state.rollback_lane_geometry_updates(
+        &update.previous_lane_config,
+        &update.updated_lane_config,
+        &update.previous_lane_incarnations,
+        &update.previous_lane_incarnation_activation_heights,
+        &update.previous_lane_incarnation_lineage,
+        &update.replaced_lane_ids,
+        pending.transition_height,
+    ).expect("explicit rollback consumes the retained original geometry owner");
+    assert!(state.geometry_publication.lock().is_none());
+    assert_eq!(state.canonical_runtime.view().get(), &runtime_before);
+    assert_eq!(format!("{:?}", state.da_shard_cursors.read()), cursors_before);
+    assert_eq!(exact_test_tree_fingerprint(&cold_root), cold_before);
     assert_eq!(kura.lane_geometry_journal_state_for_test().unwrap().1, vec!["rolled_back"]);
     assert!(
         !elastic_snapshot_dir.exists(),
@@ -12381,7 +12414,7 @@ state_test! { sync autoscale_commit_scale_in_kura_preflight_failure_does_not_pub
 state_test! { sync autoscale_commit_scale_in_tiered_preflight_failure_does_not_publish_staged_da_or_kura_state assert_autoscale_scale_in_preflight_failure_is_atomic(LaneRetirementStorageConflict::Tiered); }
 #[test]
 fn autoscale_local_observation_retry_retains_sample_and_requires_complete_evaluation() {
-    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
+    autoscale_storage_fixture!(temp_dir, store_root, _cold_root, kura, query_handle, state);
     let lane = LaneId::new(1);
     state
         .set_nexus(autoscale_transition_test_nexus(

@@ -15,7 +15,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "8ad1236ac1728e777706855b7fe53bdaf43e85bfe1e613d2fd0efd18ff9eac50"
     ),
     "fair_v2_ingress_current_protected_slots": (
-        "cfa5470ddd16fb8d4c0be612b70b2510ce417c5a5bc63455185034cd357dd83e"
+        "fad0c50d2afc6436fe0d4176cc29cd099f6ffa712db4695f401491d6b6b02f28"
     ),
     "fair_v2_ingress_lane_protected_slots": (
         "3bdb6bf94f55225abbf41e692404c4d2556bc3a867e57922d24594ce32055bd6"
@@ -747,13 +747,16 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "db4aa3f011c020f74565d1d710186e7d179b5a2184063a588699b032b7af1cda"
     ),
     "configure_roster_with_byte_requirements": (
-        "72e5badbe5ad46ee780ae2d07380c696550a2b52e4dd69850c9c6ffc6c511bf0"
+        "9c8322875fc22a1db1f9f7a9d60063db71d3da54f2772d3bd112d831df50d5f8"
     ),
     "open": (
-        "5009fc5c34fbcd3f75897ef7f37e7c331e948ac00e555b749ca1a4bff85cadf7"
+        "9c4f5b0f0579bc27e6ab6f26b47f5c083ef711d7648dc1787b9b148d6bfbdc18"
+    ),
+    "try_push_owned_at": (
+        "7418c83585b3c57da168e169002856860c25727efd3759f7cce8ae045b7e0bc6"
     ),
     "try_push_at": (
-        "c62e141f38dc2621b341aaf57338ed36c065fc38061fcc11e616ee14206d95c1"
+        "301de9367a6a40e81a1da39ed10242f0e9cab09c3822357eebc48bbfc0849643"
     ),
     "try_recv_if_at_checked": (
         "73722eaedc36f6ef5265f77198fb95ea520b686ea71406cca9326a8376c2c13b"
@@ -762,7 +765,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "ca657eaedc48fdfdf96aeca1558d4b17774762c22fd0cd7e8cce82270aff5487"
     ),
     "dequeue_selected_locked": (
-        "09219d6ee0f38a277e24a57d4cc9938be2902ec9f7cb45f2aea9e421bb5a24d3"
+        "444464e91ac713ee423b41c7cbb6277dae8f711ad69174461a9748af47180450"
     ),
 }
 _PRODUCTION_FAIR_V2_INGRESS_HISTORY_ITEM_SHA256 = {

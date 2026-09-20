@@ -85,6 +85,8 @@ struct PhysicalWork {
     job: Job,
     #[cfg(test)]
     before: Option<Box<dyn FnOnce() + Send>>,
+    #[cfg(test)]
+    after: Option<Box<dyn FnOnce() + Send>>,
 }
 impl PhysicalWork {
     fn run(self, state: &State, guard: Arc<ConsensusOutputGuard>) -> LanePhysicalCompletion {
@@ -104,6 +106,10 @@ impl PhysicalWork {
                 Completed::ClosedDrained(closed)
             }
         };
+        #[cfg(test)]
+        if let Some(after) = self.after {
+            after();
+        }
         LanePhysicalCompletion {
             issued: self.issued,
             result: Some(result),
@@ -293,6 +299,8 @@ impl Entry {
             job,
             #[cfg(test)]
             before: None,
+            #[cfg(test)]
+            after: None,
         };
         self.work.insert(
             kind,
@@ -316,12 +324,43 @@ impl Entry {
 #[must_use]
 pub(crate) struct LaneClosedInstance {
     owner: Box<LaneInstance>,
+    // Written only by the consuming proof-bound terminal operation, after all
+    // fallible checks and original retirement consumption have succeeded.
+    published_terminal: bool,
 }
 impl LaneClosedInstance {
+    /// Consume this original drained owner after actual global publication.
+    /// Held Apply must first pass the separate shared-reducer settlement path.
+    /// Every refusal returns the same owner and leaves its output fence armed.
+    pub(crate) fn retire_published(
+        mut self,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> std::result::Result<(), (Self, LaneInstanceError)> {
+        let authorized = match self.owner.authorize_terminal_retirement(published) {
+            Ok(authorized) => authorized,
+            Err(error) => return Err((self, error)),
+        };
+        self.owner.consume_published_retirements(&authorized);
+        self.published_terminal = true;
+        Ok(())
+    }
     /// Exact returned-but-unacknowledged control event retained through closure.
     pub(crate) fn unacknowledged_control(&self) -> Option<&reducer::Event> {
         self.owner.completion.as_ref()
     }
+    /// Move one exact retirement from this same closed owner, without reopening.
+    pub(crate) fn take_retirement(&mut self) -> Option<super::LaneRetirement> {
+        self.owner.take_retirement()
+    }
+    /// Settle the original Apply after transfer, without reopening this signer.
+    /// The caller still owns every other retained output and recovery obligation.
+    pub(crate) fn settle_published_apply(
+        &mut self,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> Result<super::LaneApplySettlement> {
+        self.owner.settle_published_apply(published)
+    }
+
     /// Read immutable witnesses/held effects for the future exact retirement consumer.
     pub(crate) fn instance(&self) -> &LaneInstance {
         &self.owner
@@ -329,8 +368,10 @@ impl LaneClosedInstance {
 }
 impl Drop for LaneClosedInstance {
     fn drop(&mut self) {
-        // No generic discard can acknowledge Apply or transport custody.
-        self.owner.output_guard.close_admission_for_restart();
+        // No generic discard can acknowledge Apply or terminal custody.
+        if !self.published_terminal {
+            self.owner.output_guard.close_admission_for_restart();
+        }
     }
 }
 /// Counts actual owned entries/jobs, including closed obligations awaiting retrieval.
@@ -344,7 +385,7 @@ pub(crate) struct LaneProcessOccupancy {
     pub(crate) closing: usize,
     pub(crate) limit: usize,
 }
-/// One explicit action result; semantic retirements remain returned to the caller.
+/// Non-owning progress; exact retired custody stays inside the original instance.
 pub(crate) enum LaneProcessProgress {
     Idle,
     QueueFull,
@@ -414,6 +455,22 @@ impl LaneProcessOwner {
             _ => None,
         }
     }
+    /// Settle the exact retained owner, including closed nonproductive custody.
+    /// This neither reconstructs an instance nor opens a new signing authority.
+    pub(crate) fn settle_published_apply(
+        &mut self,
+        id: HeightContextId,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> Result<Option<super::LaneApplySettlement>> {
+        match self.entries.get_mut(&id).map(|entry| &mut entry.owner) {
+            Some(Owner::Active(owner) | Owner::Closing(owner)) => {
+                owner.settle_published_apply(published).map(Some)
+            }
+            Some(Owner::Closed(closed)) => closed.owner.settle_published_apply(published).map(Some),
+            _ => Ok(None),
+        }
+    }
+
     /// Actual owned identities, including opening/closing/drain occurrences.
     pub(crate) fn instance_ids(&self) -> impl Iterator<Item = HeightContextId> + '_ {
         self.entries.keys().copied()
@@ -831,7 +888,10 @@ impl LaneProcessOwner {
         entry.queue(
             id,
             Kind::ClosedDrain,
-            Job::ClosedDrain(LaneClosedInstance { owner }),
+            Job::ClosedDrain(LaneClosedInstance {
+                owner,
+                published_terminal: false,
+            }),
         );
         Ok(LaneProcessProgress::Idle)
     }
@@ -847,6 +907,15 @@ impl LaneProcessOwner {
         }
         match self.entries.remove(&id)?.owner {
             Owner::Closed(closed) => Some(closed),
+            _ => None,
+        }
+    }
+    /// Consume the same retained retirement regardless of productive/closed state.
+    /// Physical draining keeps the original owner in flight until it returns.
+    pub(crate) fn take_retirement(&mut self, id: HeightContextId) -> Option<super::LaneRetirement> {
+        match &mut self.entries.get_mut(&id)?.owner {
+            Owner::Active(owner) | Owner::Closing(owner) => owner.take_retirement(),
+            Owner::Closed(closed) => closed.take_retirement(),
             _ => None,
         }
     }
@@ -877,7 +946,7 @@ impl LaneProcessOwner {
         let state = Arc::clone(&self.state);
         self.active(id)?.poll_clock(&state, observed, now)
     }
-    /// One same-reducer control action, returning any retired effect custody.
+    /// One same-reducer control action; retired custody remains capacity-accounted.
     pub(crate) fn service_one(
         &mut self,
         id: HeightContextId,
@@ -923,6 +992,70 @@ impl LaneProcessOwner {
     ) -> Result<()> {
         self.active(id)?.complete_source_recovery(request, response)
     }
+    /// Whether an original physical job is still queued, used by a one-shot test hold.
+    #[cfg(test)]
+    pub(crate) fn has_queued_job_for_test(
+        &self,
+        id: HeightContextId,
+        class: LaneWorkerClass,
+    ) -> bool {
+        self.entries.get(&id).is_some_and(|entry| {
+            entry
+                .work
+                .values()
+                .any(|pending| pending.issued.kind.class() == class && pending.queued.is_some())
+        })
+    }
+
+    /// Borrow a real queued opening/body job's retained immutable context.
+    #[cfg(test)]
+    pub(crate) fn queued_context_for_test(
+        &self,
+        id: HeightContextId,
+        class: LaneWorkerClass,
+    ) -> Option<&Arc<VerifiedLaneContext>> {
+        self.entries.get(&id)?.work.values().find_map(|pending| {
+            if pending.issued.kind.class() != class {
+                return None;
+            }
+            match &pending.queued.as_ref()?.job {
+                Job::Opening(job) => Some(job.context_for_test()),
+                Job::Body(job) => Some(job.context_for_test()),
+                _ => None,
+            }
+        })
+    }
+
+    /// Exhaust only this fixture instance's descriptor headroom, retaining all owners.
+    #[cfg(test)]
+    pub(crate) fn restrict_effect_capacity_to_retained_for_test(&mut self, id: HeightContextId) {
+        let owner = self.active(id).expect("exact active fixture owner");
+        assert!(owner.completion.is_none() && owner.persistence.is_none());
+        owner.restrict_effect_capacity_to_retained_for_test();
+    }
+
+    /// Hold an actual completed operation before its private result is delivered.
+    #[cfg(test)]
+    pub(crate) fn hold_next_completion_for_test(
+        &mut self,
+        id: HeightContextId,
+        class: LaneWorkerClass,
+        after: impl FnOnce() + Send + 'static,
+    ) -> Result<()> {
+        let work = self
+            .entries
+            .get_mut(&id)
+            .and_then(|entry| {
+                entry.work.values_mut().find(|pending| {
+                    pending.issued.kind.class() == class && pending.queued.is_some()
+                })
+            })
+            .and_then(|pending| pending.queued.as_mut())
+            .ok_or_else(|| bad("no queued physical owner to hold its completion"))?;
+        work.after = Some(Box::new(after));
+        Ok(())
+    }
+
     /// Test control holds a real queued job before its physical operation.
     #[cfg(test)]
     pub(crate) fn hold_next_job_for_test(

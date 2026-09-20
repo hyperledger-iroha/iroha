@@ -71,6 +71,15 @@ fn app_with_indexed_sccp_message_for_test(
     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
     builder.push_transaction(tx);
     let mut block = builder.build_with_signature(0, keypair.private_key());
+    let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
+    assert_eq!(messages.len(), 1);
+    let message = &messages[0];
+    let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
+        .expect("SCCP commitment root");
+    block.set_sccp_commitment_root(Some(commitment_root));
+    // Finalize the proposal before attaching outputs: changing its SCCP root
+    // invalidates any previously attached execution result.
+    let proposal = block.canonical_resultless_proposal();
     crate::test_utils::attach_fixture_execution_outputs(
         &mut block,
         vec![
@@ -83,30 +92,17 @@ fn app_with_indexed_sccp_message_for_test(
             ),
         ],
     );
-    let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
-    assert_eq!(messages.len(), 1);
-    let message = &messages[0];
-    let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
-        .expect("SCCP commitment root");
-    // Changing a proposal commitment invalidates its attached execution outputs.
-    // Bind the same declared successful fixture rows to the final SCCP proposal
-    // before deriving the executed-wire commitment and its genuine Commit QC.
-    let outputs = block.execution_outputs().to_vec();
-    block.set_sccp_commitment_root(Some(commitment_root));
-    assert!(
-        !block.has_results(),
-        "proposal mutation must discard stale outputs"
-    );
-    let proposal = block.canonical_resultless_proposal();
-    crate::test_utils::attach_fixture_execution_outputs(&mut block, outputs);
+    assert!(block.has_results());
     assert_eq!(block.canonical_resultless_proposal(), proposal);
     assert_eq!(block.execution_outputs().len(), 1);
     block
         .validate_output_merkle_cache()
-        .expect("complete fixture output tree");
+        .expect("SCCP fixture retains its exact Network output");
     assert_eq!(
-        iroha_core::bridge::collect_sccp_messages_from_signed_block(&block),
-        messages
+        iroha_core::bridge::sccp_commitment_root_from_messages(
+            &iroha_core::bridge::collect_sccp_messages_from_signed_block(&block),
+        ),
+        Some(commitment_root),
     );
     block
         .replace_signatures(

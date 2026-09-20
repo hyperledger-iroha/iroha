@@ -3476,7 +3476,21 @@ fn committed_block_wire_requires_exact_canonical_executed_height() -> Result<()>
         "a canonical proposal is not a committed executed body"
     );
 
-    block.set_transaction_results(Vec::new(), &[], Vec::new())?;
+    block.set_execution_outputs(
+        Vec::new(),
+        0,
+        Default::default(),
+        Vec::new(),
+        Default::default(),
+        Default::default(),
+        Vec::new(),
+        &iroha::data_model::block::output_budget::ExecutionOutputLimits {
+            max_outputs: 1,
+            max_output_bytes: 1024,
+            max_total_output_bytes: 1024,
+            max_executed_wire_bytes: 64 * 1024,
+        },
+    )?;
     block.replace_signatures(BTreeSet::from([BlockSignature::new(
         0,
         SignatureOf::try_from_hash(key_pair.private_key(), block.hash())?,

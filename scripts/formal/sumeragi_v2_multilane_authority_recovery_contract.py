@@ -1095,9 +1095,9 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
             { return Ok(None); } matching.push(LaneBlockTip {"""
         for predicate in (pending, current):
             if _code(predicate) not in code:
-                errors.append("Native lane tip must abstain on the highest pending, stale or future application")
+                errors.append("authority/recovery item Native lane tip must abstain on the highest pending, stale or future application")
         if code.count(_code("read_native_amx_participant_application_history(")) != 1:
-            errors.append("Native lane tip must read one authenticated complete history")
+            errors.append("authority/recovery item Native lane tip must read one authenticated complete history")
     if symbol == "V2LaneWorkAdapter::bind_locked_global_body_from_origin":
         # The storage failure may be logged, but cannot become a successful
         # canonical match or reach any retention/reservation mutation.
@@ -1112,7 +1112,7 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
             }
         };"""
         if _code(rejection) not in code:
-            errors.append("canonical recovery storage failure must reject before mutation")
+            errors.append("authority/recovery item canonical recovery storage failure must reject before mutation")
 
 
 def validate_authority_recovery_contract(

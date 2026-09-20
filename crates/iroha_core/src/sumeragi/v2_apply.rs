@@ -3517,7 +3517,7 @@ fn submit_fastpq_witness_job(
 
 /// Typed candidate custody awaiting the complete reserved publisher integration.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(super) mod validation_custody;
+pub(crate) mod validation_custody;
 
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {

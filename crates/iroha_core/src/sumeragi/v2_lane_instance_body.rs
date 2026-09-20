@@ -62,7 +62,7 @@ pub(crate) enum LaneBodyLaunch {
     Wait(LaneBodyWait),
 }
 
-/// Completion dispositions retain the exact source or retired operation.
+/// Non-owning completion dispositions; the original instance retains retired custody.
 #[derive(Debug)]
 pub(crate) enum LaneBodyProgress {
     /// A corresponding reducer-issued tagged operation completed.
@@ -77,24 +77,11 @@ pub(crate) enum LaneBodyProgress {
     /// Physical validation completed for an already durable body-sign intent.
     SignReady,
     /// Physical custody returned after the core tag changed or the instance closed.
-    Retired {
-        effect: Option<reducer::Effect>,
-        proposal: Option<LaneProposalV1>,
-    },
+    Retired,
     /// Exact source/earlier dependency retained; clocks and certificates still run.
     Waiting(LaneBodyWait),
     /// A signed proposal failed deterministic input checking before core admission.
-    RejectedProposal {
-        proposal: LaneProposalV1,
-        #[cfg_attr(
-            test,
-            expect(
-                dead_code,
-                reason = "TODO: consume retained native lane progress through the production driver"
-            )
-        )]
-        reason: String,
-    },
+    RejectedProposal,
 }
 
 #[derive(Clone)]
@@ -130,6 +117,77 @@ impl Purpose {
     }
 }
 
+/// One returned original worker operation/result, retained without an ack.
+/// The private result keeps authenticated source and canonical body allocations
+/// alive even when closure prevents the reducer from consuming them.
+pub(super) struct RetiredBody {
+    purpose: Purpose,
+    result: WorkResult,
+    origin: BodyRetirementOrigin,
+}
+
+// Only the original producer can classify these facts. Closure is not a Ready,
+// Apply or terminal cleanup acknowledgement; its original guard remains armed.
+enum BodyRetirementOrigin {
+    ObsoleteTag,
+    RejectedProposal,
+    ClosedInstance(Arc<ConsensusOutputGuard>),
+    // Only the private proof-bound terminal consumer constructs this state.
+    PublishedInstance,
+}
+impl Drop for RetiredBody {
+    fn drop(&mut self) {
+        if let BodyRetirementOrigin::ClosedInstance(guard) = &self.origin {
+            // Merely taking or dropping custody never acknowledges terminal
+            // retirement. Only the proof-bound consuming method below can do so.
+            guard.close_admission_for_restart();
+        }
+    }
+}
+impl RetiredBody {
+    // The permission is private to the original instance module and can only
+    // follow actual PublishedNativeApply authentication. There is no generic
+    // public disarm or replacement State/context argument at this boundary.
+    pub(super) fn retire_published(
+        mut self,
+        _authorized: &super::PublishedTerminalRetirement<'_, '_>,
+    ) {
+        if matches!(self.origin, BodyRetirementOrigin::ClosedInstance(_)) {
+            self.origin = BodyRetirementOrigin::PublishedInstance;
+        }
+    }
+    pub(super) fn requires_recovery(&self) -> bool {
+        matches!(&self.origin, BodyRetirementOrigin::ClosedInstance(_))
+    }
+    pub(super) fn effect(&self) -> Option<&reducer::Effect> {
+        self.purpose.effect()
+    }
+    pub(super) fn proposal(&self) -> Option<&LaneProposalV1> {
+        if let Purpose::Ingress { proposal, .. } = &self.purpose {
+            Some(proposal)
+        } else {
+            None
+        }
+    }
+    pub(super) fn rejection(&self) -> Option<&str> {
+        if let WorkResult::RejectedProposal(reason) = &self.result {
+            Some(reason)
+        } else {
+            None
+        }
+    }
+    pub(super) fn body_bytes(&self) -> Option<&[u8]> {
+        match &self.result {
+            WorkResult::Body(
+                Materialized::Prepared(prepared)
+                | Materialized::Stored(prepared, _)
+                | Materialized::Validated(prepared, _),
+            ) => Some(prepared.body.canonical_bytes()),
+            _ => None,
+        }
+    }
+}
+
 struct Ticket {
     identity: Arc<()>,
     purpose: Purpose,
@@ -157,7 +215,7 @@ pub(super) struct BodyCustody {
 pub(crate) struct LaneBodyJob {
     identity: Arc<()>,
     purpose: Purpose,
-    lane: VerifiedLaneContext,
+    lane: Arc<VerifiedLaneContext>,
     source: Option<VerifiedFirstLaneAdmittedInputV1>,
     target: Option<LaneValueRefV1>,
     manifest: Option<LaneManifestV1>,
@@ -213,6 +271,12 @@ impl Drop for LaneBodyCompletion {
 }
 
 impl LaneBodyJob {
+    /// Borrow the same immutable context allocation as the original instance.
+    #[cfg(test)]
+    pub(super) fn context_for_test(&self) -> &Arc<VerifiedLaneContext> {
+        &self.lane
+    }
+
     /// Run on an existing bounded worker, with no caller-held State/MV lease.
     /// Every ordinary result returns the physical store, including errors/waits.
     pub(crate) fn run(mut self, state: &State) -> LaneBodyCompletion {
@@ -473,7 +537,77 @@ fn effect_subject(effect: &reducer::Effect) -> Option<reducer::Subject> {
     }
 }
 
+/// Result of settling the original Apply effect from an actual global publication.
+#[derive(Debug)]
+pub(crate) enum LaneApplySettlement {
+    /// The shared reducer accepted completion of exactly the original effect.
+    Applied(LaneStepReceipt),
+    /// This same subject was already completed; no effect is consumed twice.
+    AlreadyApplied,
+    /// Durable Decision/body readiness has not yet produced its original Apply.
+    NotReady,
+    /// Original control completion or persistence custody must drain first.
+    Backpressured,
+}
+
 impl LaneInstance {
+    /// Complete only the original held Apply from the publisher's borrowed proof.
+    /// Current opening/absence is irrelevant: publication can close this instance.
+    pub(crate) fn settle_published_apply(
+        &mut self,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> Result<LaneApplySettlement> {
+        self.check_open()?;
+        let Some(decision) = self.native_decision()? else {
+            return Ok(LaneApplySettlement::NotReady);
+        };
+        published
+            .authorizes(&self.state_owner, &self.verified, &decision)
+            .map_err(bad)?;
+        let certificate = LaneAuthenticator::new(&self.verified)
+            .decision_certificate(&decision)
+            .map_err(bad)?;
+        let subject = certificate.subject();
+        if self.reducer.applied_subject() == Some(subject) {
+            return Ok(LaneApplySettlement::AlreadyApplied);
+        }
+        let Some(index) = self.held.iter().position(|held| matches!(&held.effect,
+            reducer::Effect::Apply { tag, subject: held_subject, certificate: held_certificate }
+                if *tag == self.tag() && *held_subject == subject && *held_certificate == certificate))
+        else {
+            return Ok(LaneApplySettlement::NotReady);
+        };
+        if self.completion.is_some() || self.persistence.is_some() {
+            return Ok(LaneApplySettlement::Backpressured);
+        }
+        let original = self.held[index].effect.clone();
+        let guard = Arc::clone(&self.output_guard);
+        let operation = guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| bad("consensus output is closed"))?;
+        let receipt = self.step(
+            reducer::Event::ApplicationCompleted {
+                tag: self.tag(),
+                subject,
+            },
+            None,
+        )?;
+        let remaining = self.held.iter().position(|held| held.effect == original);
+        if receipt.disposition != reducer::StepDisposition::Applied
+            || self.reducer.applied_subject() != Some(subject)
+            || remaining.is_none()
+        {
+            self.failed = true;
+            return Err(bad(
+                "original Native Apply completion lost exact reducer custody",
+            ));
+        }
+        self.held
+            .remove(remaining.expect("checked original Apply custody"));
+        operation.complete();
+        Ok(LaneApplySettlement::Applied(receipt))
+    }
+
     /// Original first-carrier proof requiring the existing global body owner.
     /// It remains held until an exact authenticated response settles it.
     pub(crate) fn source_recovery_requirement(
@@ -616,7 +750,7 @@ impl LaneInstance {
         Ok(LaneBodyLaunch::Job(LaneBodyJob {
             identity,
             purpose,
-            lane: self.verified.clone(),
+            lane: Arc::clone(&self.verified),
             source: self.body.source.clone(),
             target,
             manifest,
@@ -683,14 +817,28 @@ impl LaneInstance {
         }
     }
 
-    /// Settle actual completed work after outstanding control custody is serviced.
-    /// The physical handle has already returned; no worker retry or extra disk I/O.
+    /// Retire an obsolete or closed result using its original descriptor; current
+    /// productive results still wait for control custody and full effect admission.
+    /// The physical handle has already returned; no retry or extra disk I/O occurs.
     pub(crate) fn service_body_completion(
         &mut self,
         state: &State,
         observed: &VerifiedLaneContexts,
     ) -> Result<LaneBodyProgress> {
         self.check_open()?;
+        let gate = self.current_gate(state, observed);
+        if self.body.completed.as_ref().is_some_and(|(purpose, _)| {
+            purpose.tag() != self.tag() || gate == LaneCurrentGate::InstanceClosed
+        }) {
+            let (purpose, result) = self
+                .body
+                .completed
+                .take()
+                .expect("checked original body result");
+            // This is one descriptor moving from completed to retired. No core
+            // event, control acknowledgement or new effect capacity is needed.
+            return Ok(self.retain_retired_body_result(purpose, result, gate));
+        }
         if self.completion.is_some() || self.clock.tag != self.tag() || !self.reserve_ingress() {
             return Ok(LaneBodyProgress::Waiting(LaneBodyWait::ControlCompletion));
         }
@@ -705,6 +853,33 @@ impl LaneInstance {
         result
     }
 
+    // The caller established obsolete-tag or authenticated-closure authority.
+    // This moves the original completed descriptor without changing core state.
+    fn retain_retired_body_result(
+        &mut self,
+        purpose: Purpose,
+        result: WorkResult,
+        gate: LaneCurrentGate,
+    ) -> LaneBodyProgress {
+        if matches!(&purpose, Purpose::Ingress { .. }) {
+            self.body.ingress = None;
+        }
+        // Move the same completed-job descriptor into retirement. Keep the
+        // actual result/source/body allocation, not just a copied summary.
+        let origin = if gate == LaneCurrentGate::InstanceClosed {
+            BodyRetirementOrigin::ClosedInstance(Arc::clone(&self.output_guard))
+        } else {
+            BodyRetirementOrigin::ObsoleteTag
+        };
+        self.retired
+            .push_back(super::RetirementKind::Body(RetiredBody {
+                purpose,
+                result,
+                origin,
+            }));
+        LaneBodyProgress::Retired
+    }
+
     fn accept_body_result(
         &mut self,
         purpose: Purpose,
@@ -714,15 +889,7 @@ impl LaneInstance {
     ) -> Result<LaneBodyProgress> {
         let gate = self.current_gate(state, observed);
         if purpose.tag() != self.tag() || gate == LaneCurrentGate::InstanceClosed {
-            let (effect, proposal) = match purpose {
-                Purpose::Issued(effect) => (Some(effect), None),
-                Purpose::Ingress { proposal, .. } => {
-                    self.body.ingress = None;
-                    (None, Some(proposal))
-                }
-                Purpose::Local { .. } => (None, None),
-            };
-            return Ok(LaneBodyProgress::Retired { effect, proposal });
+            return Ok(self.retain_retired_body_result(purpose, result, gate));
         }
         match result {
             WorkResult::Recovery(source) => {
@@ -743,11 +910,17 @@ impl LaneInstance {
                 Ok(LaneBodyProgress::Waiting(LaneBodyWait::CurrentSet(gate)))
             }
             WorkResult::RejectedProposal(reason) => {
-                let Purpose::Ingress { proposal, .. } = purpose else {
+                if !matches!(&purpose, Purpose::Ingress { .. }) {
                     return Err(bad("invalid unsigned worker rejection"));
-                };
+                }
                 self.body.ingress = None;
-                Ok(LaneBodyProgress::RejectedProposal { proposal, reason })
+                self.retired
+                    .push_back(super::RetirementKind::Body(RetiredBody {
+                        purpose,
+                        result: WorkResult::RejectedProposal(reason),
+                        origin: BodyRetirementOrigin::RejectedProposal,
+                    }));
+                Ok(LaneBodyProgress::RejectedProposal)
             }
             WorkResult::Body(materialized) => {
                 let prepared = match &materialized {
@@ -1011,7 +1184,8 @@ impl LaneInstance {
     }
 
     /// Borrow exact durable native Decisions promptly for the read-only group join.
-    /// Apply remains owned here until the eventual exact global application contract.
+    /// Apply remains owned here until `settle_published_apply` consumes a genuine
+    /// completed global publication proof for this immutable value.
     pub(crate) fn native_decision(&self) -> Result<Option<LaneDecisionV1>> {
         let Some(qc) = self
             .native_records

@@ -16,7 +16,7 @@ impl ProductionLifecycleAdapterStartupV1 {
             pending_kura_apply: None,
             local_proposal_attempt: None,
             leader_wire_launch_prepared: false,
-        } = self.state
+        } = *self.state
         else {
             return Err("recovered Decision Validate adapter startup is not pristine");
         };

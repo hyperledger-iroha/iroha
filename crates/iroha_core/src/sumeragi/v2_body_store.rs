@@ -2331,6 +2331,8 @@ fn rename_body_store_leaf_noreplace(
 #[cfg_attr(not(test), allow(dead_code))]
 #[path = "v2_body_store/retained_validation.rs"]
 mod retained_validation;
+#[cfg(test)]
+pub(crate) use retained_validation::{fail_next_marker_directory_sync, fail_next_marker_file_sync};
 
 /// Persistent exact-body store for one immutable height context.
 ///
