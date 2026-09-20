@@ -2122,7 +2122,7 @@ CONCREAD_STAGES = (
         'bptree::admission::tests::retained_edits_keep_the_original_cursor_and_refused_tracking_then_publish_once',
         'bptree::admission::tests::tracking_growth_checks_overflow_before_changing_demand_or_allocating',
     )),
-    ('allocation-free original B+ tree writer start', (
+    ('admitted original B+ tree writer start', (
         'bptree::admission::tests::writer_start::start_plan_is_only_two_shells_and_empty_tracking_with_checked_generation',
         'bptree::admission::tests::writer_start::empty_and_populated_starts_keep_exact_tree_and_zero_buffers_without_payload_work',
         'bptree::admission::tests::writer_start::start_busy_and_admission_refusal_allocate_nothing_and_preserve_published_state',

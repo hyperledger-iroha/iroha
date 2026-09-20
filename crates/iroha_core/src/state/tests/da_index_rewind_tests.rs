@@ -92,6 +92,10 @@ fn block_and_revert_rewinds_da_indexes() {
         hashes.push(signed_second.hash());
         hashes.commit_for_tests();
     }
+    // Initial hydration derives pins from authoritative World state, not from
+    // an un-applied header sidecar. Seed the same committed pin and its indexes
+    // before exercising replacement-block rewind.
+    seed_da_pin_intent_world_indexes_for_test(&state, pin_intent, 2, 0);
     state
         .ensure_da_indexes_hydrated()
         .expect("initial hydration should succeed");

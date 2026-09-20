@@ -2878,7 +2878,7 @@ impl QueuePlanMarkerStorage for StorageBlock<'_, StatePath, Vec<u8>> {
         let _ = self.remove(key);
     }
 }
-impl QueuePlanMarkerStorage for StorageTransaction<'_, '_, StatePath, Vec<u8>> {
+impl QueuePlanMarkerStorage for StorageTransaction<'_, StatePath, Vec<u8>> {
     fn insert_queue_plan_marker(&mut self, key: StatePath, payload: Vec<u8>) {
         let _ = self.insert(key, payload);
     }
@@ -7381,304 +7381,278 @@ pub struct WorldTransaction<'block, 'world> {
     /// Identifications of discovered peers.
     pub(crate) peers: CellTransaction<'block, 'world, Peers>,
     /// Registered consensus/committee keys.
-    pub(crate) consensus_keys:
-        StorageTransaction<'block, 'world, ConsensusKeyId, ConsensusKeyRecord>,
+    pub(crate) consensus_keys: StorageTransaction<'block, ConsensusKeyId, ConsensusKeyRecord>,
     /// Secondary index from public key to consensus key identifiers.
-    pub(crate) consensus_keys_by_pk:
-        StorageTransaction<'block, 'world, String, Vec<ConsensusKeyId>>,
+    pub(crate) consensus_keys_by_pk: StorageTransaction<'block, String, Vec<ConsensusKeyId>>,
     /// Domain endorsement committees keyed by committee identifier.
-    pub(crate) domain_committees: StorageTransaction<'block, 'world, String, DomainCommittee>,
+    pub(crate) domain_committees: StorageTransaction<'block, String, DomainCommittee>,
     /// Endorsement policy per domain.
     pub(crate) domain_endorsement_policies:
-        StorageTransaction<'block, 'world, DomainId, DomainEndorsementPolicy>,
+        StorageTransaction<'block, DomainId, DomainEndorsementPolicy>,
     /// Recorded domain endorsements keyed by endorsement body hash.
     pub(crate) domain_endorsements:
-        StorageTransaction<'block, 'world, HashOf<DomainEndorsement>, DomainEndorsementRecord>,
+        StorageTransaction<'block, HashOf<DomainEndorsement>, DomainEndorsementRecord>,
     /// Index of endorsement ids by domain.
     pub(crate) domain_endorsements_by_domain:
-        StorageTransaction<'block, 'world, DomainId, Vec<HashOf<DomainEndorsement>>>,
+        StorageTransaction<'block, DomainId, Vec<HashOf<DomainEndorsement>>>,
     /// Registered domains.
-    pub(crate) domains: StorageTransaction<'block, 'world, DomainId, Domain>,
+    pub(crate) domains: StorageTransaction<'block, DomainId, Domain>,
     /// Read-side index from domain owner account to owned domain ids.
-    pub(crate) domains_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
+    pub(crate) domains_by_owner: StorageTransaction<'block, AccountId, BTreeSet<DomainId>>,
     /// Derived index from Kaigi relay account ids to authoritative metadata domains.
-    pub(crate) kaigi_relay_registry: StorageTransaction<'block, 'world, AccountId, DomainId>,
+    pub(crate) kaigi_relay_registry: StorageTransaction<'block, AccountId, DomainId>,
     /// Derived reverse index from raw Kaigi account references to typed metadata locations.
     pub(crate) kaigi_account_dependencies:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<(u8, DomainId, Name)>>,
+        StorageTransaction<'block, AccountId, BTreeSet<(u8, DomainId, Name)>>,
     /// Registered accounts.
-    pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
+    pub(crate) accounts: StorageTransaction<'block, AccountId, AccountValue>,
     /// Index from UAID to bound account (1:1).
-    pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
+    pub(crate) uaid_accounts: StorageTransaction<'block, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
-    pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountAlias, AccountId>,
+    pub(crate) account_aliases: StorageTransaction<'block, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
+        StorageTransaction<'block, AccountId, BTreeSet<AccountAlias>>,
     /// Read-side account scope directory keyed by canonical I105 account id.
     pub(crate) account_scope_directory:
-        StorageTransaction<'block, 'world, AccountId, AccountScopeDirectoryEntry>,
+        StorageTransaction<'block, AccountId, AccountScopeDirectoryEntry>,
     /// Reverse read-side account scope index keyed by `(dataspace, alias-domain)`.
     pub(crate) account_scope_accounts:
-        StorageTransaction<'block, 'world, (DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>,
+        StorageTransaction<'block, (DataSpaceId, AccountAliasDomain), BTreeSet<AccountId>>,
     /// Index from opaque identifiers to UAIDs.
-    pub(crate) opaque_uaids:
-        StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
+    pub(crate) opaque_uaids: StorageTransaction<'block, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
     pub(crate) ram_lfe_program_policies:
-        StorageTransaction<'block, 'world, RamLfeProgramId, RamLfeProgramPolicy>,
+        StorageTransaction<'block, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies:
-        StorageTransaction<'block, 'world, IdentifierPolicyId, IdentifierPolicy>,
+        StorageTransaction<'block, IdentifierPolicyId, IdentifierPolicy>,
     /// Sponsor-owned fee program registry.
     pub(crate) fee_sponsor_programs:
-        StorageTransaction<'block, 'world, FeeSponsorProgramId, FeeSponsorProgram>,
+        StorageTransaction<'block, FeeSponsorProgramId, FeeSponsorProgram>,
     /// Immutable sponsor-program revision registry.
     pub(crate) fee_sponsor_program_revisions:
-        StorageTransaction<'block, 'world, FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision>,
+        StorageTransaction<'block, FeeSponsorProgramRevisionKey, FeeSponsorProgramRevision>,
     /// Sponsor-program enrollment registry.
     pub(crate) fee_sponsor_enrollments:
-        StorageTransaction<'block, 'world, FeeSponsorEnrollmentKey, FeeSponsorEnrollment>,
+        StorageTransaction<'block, FeeSponsorEnrollmentKey, FeeSponsorEnrollment>,
     /// Sponsor-program vault allocation registry.
-    pub(crate) fee_sponsor_vaults:
-        StorageTransaction<'block, 'world, FeeSponsorVaultKey, FeeSponsorVault>,
+    pub(crate) fee_sponsor_vaults: StorageTransaction<'block, FeeSponsorVaultKey, FeeSponsorVault>,
     /// Sponsor-program durable budget-counter registry.
     pub(crate) fee_sponsor_budget_counters:
-        StorageTransaction<'block, 'world, FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter>,
+        StorageTransaction<'block, FeeSponsorBudgetCounterKey, FeeSponsorBudgetCounter>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims:
-        StorageTransaction<'block, 'world, OpaqueAccountId, IdentifierClaimRecord>,
+        StorageTransaction<'block, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
-    pub(crate) account_rekey_records:
-        StorageTransaction<'block, 'world, AccountAlias, AccountRekeyRecord>,
+    pub(crate) account_rekey_records: StorageTransaction<'block, AccountAlias, AccountRekeyRecord>,
     /// Derived reverse occurrence index from rekey-history account ids to supporting aliases.
     pub(crate) account_rekey_records_by_account:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
+        StorageTransaction<'block, AccountId, BTreeSet<AccountAlias>>,
     /// Alias-keyed account recovery policies.
     pub(crate) account_recovery_policies:
-        StorageTransaction<'block, 'world, AccountAlias, AccountRecoveryPolicy>,
+        StorageTransaction<'block, AccountAlias, AccountRecoveryPolicy>,
     /// Alias-keyed account recovery requests.
     pub(crate) account_recovery_requests:
-        StorageTransaction<'block, 'world, AccountAlias, AccountRecoveryRequest>,
+        StorageTransaction<'block, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
-    pub(crate) asset_definitions:
-        StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
+    pub(crate) asset_definitions: StorageTransaction<'block, AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
     pub(crate) asset_definition_aliases:
-        StorageTransaction<'block, 'world, AssetDefinitionAlias, AssetDefinitionId>,
+        StorageTransaction<'block, AssetDefinitionAlias, AssetDefinitionId>,
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
-        StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+        StorageTransaction<'block, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Index mapping contract alias literals to canonical contract addresses.
-    pub(crate) contract_aliases: StorageTransaction<'block, 'world, ContractAlias, ContractAddress>,
+    pub(crate) contract_aliases: StorageTransaction<'block, ContractAlias, ContractAddress>,
     /// Alias lease metadata keyed by canonical contract address.
     pub(crate) contract_alias_bindings:
-        StorageTransaction<'block, 'world, ContractAddress, ContractAliasBindingRecord>,
+        StorageTransaction<'block, ContractAddress, ContractAliasBindingRecord>,
     /// Authoritative domain ownership context for canonical asset definition ids.
-    pub(crate) asset_definition_domains:
-        StorageTransaction<'block, 'world, AssetDefinitionId, DomainId>,
+    pub(crate) asset_definition_domains: StorageTransaction<'block, AssetDefinitionId, DomainId>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
-        StorageTransaction<'block, 'world, DomainId, BTreeSet<AssetDefinitionId>>,
+        StorageTransaction<'block, DomainId, BTreeSet<AssetDefinitionId>>,
     /// Asset-definition index keyed by owner account.
     pub(crate) asset_definitions_by_owner:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<AssetDefinitionId>>,
+        StorageTransaction<'block, AccountId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
     pub(crate) asset_definition_holders:
-        StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AccountId>>,
+        StorageTransaction<'block, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Asset-id index keyed by asset definition id.
     pub(crate) asset_definition_assets:
-        StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AssetId>>,
+        StorageTransaction<'block, AssetDefinitionId, BTreeSet<AssetId>>,
     /// Exact asset-id index keyed by owner account.
-    pub(crate) assets_by_account: StorageTransaction<'block, 'world, AccountId, BTreeSet<AssetId>>,
+    pub(crate) assets_by_account: StorageTransaction<'block, AccountId, BTreeSet<AssetId>>,
     /// Exact asset-id index keyed by asset-definition domain.
-    pub(crate) assets_by_domain: StorageTransaction<'block, 'world, DomainId, BTreeSet<AssetId>>,
+    pub(crate) assets_by_domain: StorageTransaction<'block, DomainId, BTreeSet<AssetId>>,
     /// Non-zero holder index keyed by asset definition id.
     pub(crate) asset_definition_nonzero_holders:
-        StorageTransaction<'block, 'world, AssetDefinitionId, BTreeSet<AccountId>>,
+        StorageTransaction<'block, AssetDefinitionId, BTreeSet<AccountId>>,
     /// Registered assets.
-    pub(crate) assets: StorageTransaction<'block, 'world, AssetId, AssetValue>,
+    pub(crate) assets: StorageTransaction<'block, AssetId, AssetValue>,
     /// Metadata attached to concrete asset balances.
-    pub(crate) asset_metadata: StorageTransaction<'block, 'world, AssetId, Metadata>,
+    pub(crate) asset_metadata: StorageTransaction<'block, AssetId, Metadata>,
     /// Registered NFTs.
-    pub(crate) nfts: StorageTransaction<'block, 'world, NftId, NftValue>,
+    pub(crate) nfts: StorageTransaction<'block, NftId, NftValue>,
     /// Read-side index from NFT owner account to owned NFT ids.
-    pub(crate) nfts_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<NftId>>,
+    pub(crate) nfts_by_owner: StorageTransaction<'block, AccountId, BTreeSet<NftId>>,
     /// Exact NFT-id index keyed by NFT domain.
-    pub(crate) nfts_by_domain: StorageTransaction<'block, 'world, DomainId, BTreeSet<NftId>>,
+    pub(crate) nfts_by_domain: StorageTransaction<'block, DomainId, BTreeSet<NftId>>,
     /// Registered RWA lots.
-    pub(crate) rwas: StorageTransaction<'block, 'world, RwaId, RwaValue>,
+    pub(crate) rwas: StorageTransaction<'block, RwaId, RwaValue>,
     /// Read-side index from RWA owner account to owned RWA lot ids.
-    pub(crate) rwas_by_owner: StorageTransaction<'block, 'world, AccountId, BTreeSet<RwaId>>,
+    pub(crate) rwas_by_owner: StorageTransaction<'block, AccountId, BTreeSet<RwaId>>,
     /// Read-side index from RWA status to RWA lot ids.
-    pub(crate) rwas_by_status: StorageTransaction<'block, 'world, Option<Name>, BTreeSet<RwaId>>,
+    pub(crate) rwas_by_status: StorageTransaction<'block, Option<Name>, BTreeSet<RwaId>>,
     /// Read-side index from RWA frozen state to RWA lot ids.
-    pub(crate) rwas_by_frozen: StorageTransaction<'block, 'world, bool, BTreeSet<RwaId>>,
+    pub(crate) rwas_by_frozen: StorageTransaction<'block, bool, BTreeSet<RwaId>>,
     /// Roles. [`Role`] pairs.
-    pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
+    pub(crate) roles: StorageTransaction<'block, RoleId, Role>,
     /// Permission tokens of an account.
-    pub(crate) account_permissions: StorageTransaction<'block, 'world, AccountId, Permissions>,
+    pub(crate) account_permissions: StorageTransaction<'block, AccountId, Permissions>,
     /// Roles of an account.
-    pub(crate) account_roles: StorageTransaction<'block, 'world, RoleIdWithOwner, ()>,
+    pub(crate) account_roles: StorageTransaction<'block, RoleIdWithOwner, ()>,
     /// Oracle feed configurations.
     pub(crate) oracle_feeds: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::oracle::FeedId,
         iroha_data_model::oracle::FeedConfig,
     >,
     /// Buffered oracle observations.
     pub(crate) oracle_observations: StorageTransaction<
         'block,
-        'world,
         crate::oracle::ObservationWindowKey,
         crate::oracle::ObservationWindow,
     >,
     /// Bounded oracle feed history.
     pub(crate) oracle_history: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::oracle::FeedId,
         Vec<iroha_data_model::events::data::oracle::FeedEventRecord>,
     >,
     /// Per-provider aggregation statistics.
     pub(crate) oracle_provider_stats:
-        StorageTransaction<'block, 'world, OracleProviderKey, OracleProviderStats>,
+        StorageTransaction<'block, OracleProviderKey, OracleProviderStats>,
     /// Oracle dispute records.
-    pub(crate) oracle_disputes: StorageTransaction<
-        'block,
-        'world,
-        OracleDisputeId,
-        iroha_data_model::oracle::OracleDispute,
-    >,
+    pub(crate) oracle_disputes:
+        StorageTransaction<'block, OracleDisputeId, iroha_data_model::oracle::OracleDispute>,
     /// Oracle change proposals.
     pub(crate) oracle_changes: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::oracle::OracleChangeId,
         iroha_data_model::oracle::OracleChangeProposal,
     >,
     /// Retained DeFi oracle attestations.
     pub(crate) defi_oracle_attestations:
-        StorageTransaction<'block, 'world, DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
+        StorageTransaction<'block, DefiOracleAttestationKey, Vec<DefiOracleAttestation>>,
     /// Twitter follow binding attestations keyed by binding digest.
-    pub(crate) twitter_bindings: StorageTransaction<'block, 'world, Hash, TwitterBindingRecord>,
+    pub(crate) twitter_bindings: StorageTransaction<'block, Hash, TwitterBindingRecord>,
     /// Inverted index from UAID to binding digests.
-    pub(crate) twitter_bindings_by_uaid:
-        StorageTransaction<'block, 'world, UniversalAccountId, Vec<Hash>>,
+    pub(crate) twitter_bindings_by_uaid: StorageTransaction<'block, UniversalAccountId, Vec<Hash>>,
     /// Rolling reward budget for viral incentive payouts.
     pub(crate) viral_reward_budget: CellTransaction<'block, 'world, ViralRewardBudget>,
     /// Campaign-wide budget for viral incentives.
     pub(crate) viral_campaign_budget: CellTransaction<'block, 'world, ViralCampaignBudget>,
     /// Daily reward counters keyed by UAID.
     pub(crate) viral_daily_counters:
-        StorageTransaction<'block, 'world, UniversalAccountId, ViralDailyCounter>,
+        StorageTransaction<'block, UniversalAccountId, ViralDailyCounter>,
     /// Lifetime reward claims keyed by binding digest.
-    pub(crate) viral_binding_claims: StorageTransaction<'block, 'world, Hash, u32>,
+    pub(crate) viral_binding_claims: StorageTransaction<'block, Hash, u32>,
     /// Pending escrows for unbound handles keyed by binding digest.
-    pub(crate) viral_escrows: StorageTransaction<'block, 'world, Hash, ViralEscrowRecord>,
+    pub(crate) viral_escrows: StorageTransaction<'block, Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
-    pub(crate) viral_bonus_paid: StorageTransaction<'block, 'world, Hash, bool>,
+    pub(crate) viral_bonus_paid: StorageTransaction<'block, Hash, bool>,
     /// Native asset escrows keyed by escrow identifier.
-    pub(crate) asset_escrows: StorageTransaction<'block, 'world, EscrowId, AssetEscrowRecord>,
+    pub(crate) asset_escrows: StorageTransaction<'block, EscrowId, AssetEscrowRecord>,
     /// Native asset escrows grouped by seller account.
-    pub(crate) asset_escrows_by_seller:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
+    pub(crate) asset_escrows_by_seller: StorageTransaction<'block, AccountId, BTreeSet<EscrowId>>,
     /// Native asset escrows grouped by buyer account.
-    pub(crate) asset_escrows_by_buyer:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<EscrowId>>,
+    pub(crate) asset_escrows_by_buyer: StorageTransaction<'block, AccountId, BTreeSet<EscrowId>>,
     /// Native asset escrows grouped by lifecycle status.
     pub(crate) asset_escrows_by_status:
-        StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
+        StorageTransaction<'block, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Registered immutable compiled execution-proof profiles.
-    pub(crate) execution_proof_profiles:
-        StorageTransaction<'block, 'world, Hash, ExecutionProofProfileV1>,
+    pub(crate) execution_proof_profiles: StorageTransaction<'block, Hash, ExecutionProofProfileV1>,
     /// Successfully verified mathematical statements, distinct from settlement.
     pub(crate) execution_proof_verifications:
-        StorageTransaction<'block, 'world, Hash, ExecutionProofVerificationV1>,
-    pub(crate) game_sessions: StorageTransaction<'block, 'world, Hash, GameSessionRecordV1>,
+        StorageTransaction<'block, Hash, ExecutionProofVerificationV1>,
+    pub(crate) game_sessions: StorageTransaction<'block, Hash, GameSessionRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
-    pub(crate) nft_sale_offers: StorageTransaction<'block, 'world, Hash, NftSaleRecordV1>,
+    pub(crate) nft_sale_offers: StorageTransaction<'block, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
-    pub(crate) nft_custody_records:
-        StorageTransaction<'block, 'world, AccountId, NftCustodyRecordV1>,
+    pub(crate) nft_custody_records: StorageTransaction<'block, AccountId, NftCustodyRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
-    pub(crate) nft_custody_by_nft: StorageTransaction<'block, 'world, NftId, AccountId>,
+    pub(crate) nft_custody_by_nft: StorageTransaction<'block, NftId, AccountId>,
     /// Native NFT sale/custody state or derived reservation guard.
-    pub(crate) nft_custody_owner_refs: StorageTransaction<'block, 'world, AccountId, u32>,
+    pub(crate) nft_custody_owner_refs: StorageTransaction<'block, AccountId, u32>,
     /// Native NFT sale/custody state or derived reservation guard.
-    pub(crate) nft_custody_domain_refs: StorageTransaction<'block, 'world, DomainId, u32>,
+    pub(crate) nft_custody_domain_refs: StorageTransaction<'block, DomainId, u32>,
     /// Exact permanent game custody ownership.
-    pub(crate) game_custody_by_account: StorageTransaction<'block, 'world, AccountId, Hash>,
+    pub(crate) game_custody_by_account: StorageTransaction<'block, AccountId, Hash>,
     /// Number of funded game sessions retaining each participant wallet.
-    pub(crate) game_account_references: StorageTransaction<'block, 'world, AccountId, u32>,
+    pub(crate) game_account_references: StorageTransaction<'block, AccountId, u32>,
     /// Number of funded game sessions retaining each asset definition.
-    pub(crate) game_asset_references: StorageTransaction<'block, 'world, AssetDefinitionId, u32>,
+    pub(crate) game_asset_references: StorageTransaction<'block, AssetDefinitionId, u32>,
     /// Native SoraNet VPN leases.
-    pub(crate) vpn_leases: StorageTransaction<'block, 'world, [u8; 32], VpnLeaseRecordV1>,
+    pub(crate) vpn_leases: StorageTransaction<'block, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
-    pub(crate) vpn_active_lease_by_account: StorageTransaction<'block, 'world, AccountId, [u8; 32]>,
+    pub(crate) vpn_active_lease_by_account: StorageTransaction<'block, AccountId, [u8; 32]>,
     /// Exact active VPN lease claim held on each address slot.
     pub(crate) vpn_active_lease_by_address_slot:
-        StorageTransaction<'block, 'world, VpnAddressSlotV1, [u8; 32]>,
+        StorageTransaction<'block, VpnAddressSlotV1, [u8; 32]>,
     /// Newest settled VPN lease ids per client, ordered by settlement timestamp and lease id.
     pub(crate) vpn_settled_leases_by_account:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<(u64, [u8; 32])>>,
+        StorageTransaction<'block, AccountId, BTreeSet<(u64, [u8; 32])>>,
     /// UAID dataspace bindings maintained by the Space Directory.
     pub(crate) uaid_dataspaces:
-        StorageTransaction<'block, 'world, UniversalAccountId, UaidDataspaceBindings>,
+        StorageTransaction<'block, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records maintained by the Space Directory.
     pub(crate) space_directory_manifests:
-        StorageTransaction<'block, 'world, UniversalAccountId, SpaceDirectoryManifestSet>,
+        StorageTransaction<'block, UniversalAccountId, SpaceDirectoryManifestSet>,
     /// Per-dataspace AXT policy entries derived from Space Directory manifests.
-    pub(crate) axt_policies: StorageTransaction<'block, 'world, DataSpaceId, AxtPolicyEntry>,
+    pub(crate) axt_policies: StorageTransaction<'block, DataSpaceId, AxtPolicyEntry>,
     /// Permanent per-dataspace AXT handle-counter ratchets.
-    pub(crate) axt_handle_counters:
-        StorageTransaction<'block, 'world, DataSpaceId, AxtHandleCounterRecord>,
+    pub(crate) axt_handle_counters: StorageTransaction<'block, DataSpaceId, AxtHandleCounterRecord>,
     /// Live asset-definition incarnations for this transaction.
     pub(crate) axt_asset_incarnations:
-        StorageTransaction<'block, 'world, AssetDefinitionId, AxtAssetIncarnationV1>,
+        StorageTransaction<'block, AssetDefinitionId, AxtAssetIncarnationV1>,
     /// Bounded replay ledger for AXT handles.
-    pub(crate) axt_replay_ledger:
-        StorageTransaction<'block, 'world, AxtHandleReplayKey, AxtReplayRecord>,
+    pub(crate) axt_replay_ledger: StorageTransaction<'block, AxtHandleReplayKey, AxtReplayRecord>,
     /// Consensus-persisted cumulative AXT handle-family spend for this transaction.
     pub(crate) axt_handle_budget_ledger:
-        StorageTransaction<'block, 'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
+        StorageTransaction<'block, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry for this transaction.
     pub(crate) sccp_registry:
         CellTransaction<'block, 'world, iroha_data_model::bridge::SccpRegistryV1>,
     /// Outstanding SCCP route liabilities for this transaction.
     pub(crate) sccp_route_liabilities:
-        StorageTransaction<'block, 'world, SccpRouteKeyV1, SccpRouteLiabilityV1>,
+        StorageTransaction<'block, SccpRouteKeyV1, SccpRouteLiabilityV1>,
     /// Latest TON breaker observations for this transaction.
     pub(crate) sccp_ton_breaker_observations:
-        StorageTransaction<'block, 'world, SccpRouteKeyV1, SccpTonBreakerObservationRecordV1>,
+        StorageTransaction<'block, SccpRouteKeyV1, SccpTonBreakerObservationRecordV1>,
     /// SCCP sparse-Merkle replay forests for this transaction.
     pub(crate) sccp_replay_forests:
-        StorageTransaction<'block, 'world, SccpReplayAccumulatorIdV1, SccpReplayForestV1>,
+        StorageTransaction<'block, SccpReplayAccumulatorIdV1, SccpReplayForestV1>,
     /// Exact pending outbox usage for this transaction.
     pub(crate) sccp_outbound_pending_usage:
         CellTransaction<'block, 'world, SccpOutboundPendingUsageV1>,
     /// Payload-bearing pending outbox registry for this transaction.
-    pub(crate) sccp_outbound_pending_messages: StorageTransaction<
-        'block,
-        'world,
-        SccpOutboundMessageKeyV1,
-        SccpOutboundPendingMessageRecordV1,
-    >,
+    pub(crate) sccp_outbound_pending_messages:
+        StorageTransaction<'block, SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1>,
     /// Global exact message-id locator for this transaction.
     pub(crate) sccp_outbound_message_locator:
-        StorageTransaction<'block, 'world, [u8; 32], SccpOutboundMessageKeyV1>,
+        StorageTransaction<'block, [u8; 32], SccpOutboundMessageKeyV1>,
     /// Height-ordered outbound discovery index for this transaction.
     pub(crate) sccp_outbound_message_index:
-        StorageTransaction<'block, 'world, SccpOutboundMessageIndexKeyV1, ()>,
+        StorageTransaction<'block, SccpOutboundMessageIndexKeyV1, ()>,
     /// Native admission high-water index for this transaction.
     pub(crate) sccp_inbound_anchor_high_water:
-        StorageTransaction<'block, 'world, SccpInboundAnchorHighWaterKeyV1, u64>,
+        StorageTransaction<'block, SccpInboundAnchorHighWaterKeyV1, u64>,
     /// Latest committed transaction sequence per account.
-    pub(crate) tx_sequences: StorageTransaction<'block, 'world, AccountId, u64>,
+    pub(crate) tx_sequences: StorageTransaction<'block, AccountId, u64>,
     /// Triggers
-    pub(crate) triggers: TriggerSetTransaction<'block, 'world>,
+    pub(crate) triggers: TriggerSetTransaction<'block>,
     /// Runtime IVM executor
     pub(crate) executor: CellTransaction<'block, 'world, Executor>,
     /// Executor-defined data model
@@ -7686,31 +7660,27 @@ pub struct WorldTransaction<'block, 'world> {
     /// Registry of verifying keys (per-backend namespace).
     pub(crate) verifying_keys: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::proof::VerifyingKeyId,
         iroha_data_model::proof::VerifyingKeyRecord,
     >,
     /// Secondary index from `(circuit_id, version)` to verifying-key identifier.
     pub(crate) verifying_keys_by_circuit:
-        StorageTransaction<'block, 'world, (String, u32), iroha_data_model::proof::VerifyingKeyId>,
+        StorageTransaction<'block, (String, u32), iroha_data_model::proof::VerifyingKeyId>,
     /// Registry of Pedersen parameter sets for confidential operations.
     pub(crate) pedersen_params: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PedersenParams,
     >,
     /// Registry of Poseidon parameter sets for confidential operations.
     pub(crate) poseidon_params: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::confidential::ConfidentialParamsId,
         iroha_data_model::confidential::PoseidonParams,
     >,
     /// Registry of runtime upgrades
     pub(crate) runtime_upgrades: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
@@ -7726,251 +7696,198 @@ pub struct WorldTransaction<'block, 'world> {
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: StorageTransaction<
         'block,
-        'world,
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
     /// Public private-settlement governance projections without restricted openings.
     pub(crate) private_settlement_governance: StorageTransaction<
         'block,
-        'world,
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
     >,
     /// Authoritative private-settlement pool frontiers.
-    pub(crate) private_settlement_pools: StorageTransaction<
-        'block,
-        'world,
-        PrivateSettlementPoolKeyV1,
-        PrivateSettlementPoolStateV1,
-    >,
+    pub(crate) private_settlement_pools:
+        StorageTransaction<'block, PrivateSettlementPoolKeyV1, PrivateSettlementPoolStateV1>,
     /// Retained private-settlement root history.
-    pub(crate) private_settlement_roots: StorageTransaction<
-        'block,
-        'world,
-        PrivateSettlementRootKeyV1,
-        PrivateSettlementRootProvenanceV1,
-    >,
+    pub(crate) private_settlement_roots:
+        StorageTransaction<'block, PrivateSettlementRootKeyV1, PrivateSettlementRootProvenanceV1>,
     /// Consumed private-settlement nullifiers.
     pub(crate) private_settlement_nullifiers: StorageTransaction<
         'block,
-        'world,
         PrivateSettlementNullifierKeyV1,
         PrivateSettlementFinalizationReferenceV1,
     >,
     /// Encrypted private-settlement outputs.
-    pub(crate) private_settlement_outputs: StorageTransaction<
-        'block,
-        'world,
-        PrivateSettlementOutputKeyV1,
-        PrivateSettlementOutputRecordV1,
-    >,
+    pub(crate) private_settlement_outputs:
+        StorageTransaction<'block, PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
     /// Derived one-time private-settlement recipient index.
     pub(crate) private_settlement_recipient_index: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::privacy::PrivacyRecipientIdV1,
         PrivateSettlementFinalizationReferenceV1,
     >,
     /// Globally replicated complete-bundle and resource Prepare locks.
     pub(crate) private_settlement_staged_locks: StorageTransaction<
         'block,
-        'world,
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
     >,
     /// Public finalized private-settlement receipts.
-    pub(crate) private_settlement_receipts: StorageTransaction<
-        'block,
-        'world,
-        Hash,
-        iroha_data_model::nexus::PrivateSettlementReceiptV1,
-    >,
+    pub(crate) private_settlement_receipts:
+        StorageTransaction<'block, Hash, iroha_data_model::nexus::PrivateSettlementReceiptV1>,
     /// Public private-settlement abort and expiry markers.
-    pub(crate) private_settlement_aborts: StorageTransaction<
-        'block,
-        'world,
-        Hash,
-        iroha_data_model::nexus::PrivateSettlementAbortReceiptV1,
-    >,
+    pub(crate) private_settlement_aborts:
+        StorageTransaction<'block, Hash, iroha_data_model::nexus::PrivateSettlementAbortReceiptV1>,
     /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
     pub(crate) privacy_pgc_accounts: StorageTransaction<
         'block,
-        'world,
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
     >,
     /// Immutable verified supply and audit binding for each Anonymous PGC pool.
     pub(crate) privacy_pgc_pool_invariants: StorageTransaction<
         'block,
-        'world,
         crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
         crate::privacy_state::PrivacyPgcPoolInvariantV1,
     >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: StorageTransaction<
         'block,
-        'world,
         crate::privacy_state::PrivacyNullifierKeyV1,
         crate::privacy_state::PrivacyStateItemRecordV1,
     >,
     /// Scoped commitments admitted by successfully verified privacy actions.
     pub(crate) privacy_commitments: StorageTransaction<
         'block,
-        'world,
         crate::privacy_state::PrivacyCommitmentKeyV1,
         crate::privacy_state::PrivacyStateItemRecordV1,
     >,
     /// Ordered exact root membership retained for privacy proof admission.
     pub(crate) privacy_roots: StorageTransaction<
         'block,
-        'world,
         crate::privacy_state::PrivacyRootKeyV1,
         crate::privacy_state::PrivacyRootProvenanceV1,
     >,
     /// Single current root for each independent namespace and semantic role.
     pub(crate) privacy_root_heads: StorageTransaction<
         'block,
-        'world,
         crate::privacy_state::PrivacyRootHeadKeyV1,
         crate::privacy_state::PrivacyRootHeadRecordV1,
     >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::proof::ProofId,
         iroha_data_model::proof::ProofRecord,
     >,
     /// Inverted index from proof status to proof ids.
     pub(crate) proofs_by_status: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::proof::ProofStatus,
         BTreeSet<iroha_data_model::proof::ProofId>,
     >,
     /// ZK1 TLV tags per proof id.
     pub(crate) proof_tags:
-        StorageTransaction<'block, 'world, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
+        StorageTransaction<'block, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag:
-        StorageTransaction<'block, 'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
+        StorageTransaction<'block, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
     /// Persisted consensus evidence records keyed by deterministic digest.
-    pub(crate) consensus_evidence: StorageTransaction<'block, 'world, Hash, EvidenceRecord>,
+    pub(crate) consensus_evidence: StorageTransaction<'block, Hash, EvidenceRecord>,
     /// Contract manifests
     pub(crate) contract_manifests: StorageTransaction<
         'block,
-        'world,
         iroha_crypto::Hash,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
-    pub(crate) contract_code: StorageTransaction<'block, 'world, iroha_crypto::Hash, Vec<u8>>,
-    pub(crate) contract_code_uploads: StorageTransaction<
-        'block,
-        'world,
-        SmartContractCodeUploadKey,
-        SmartContractCodeUploadDescriptor,
-    >,
+    pub(crate) contract_code: StorageTransaction<'block, iroha_crypto::Hash, Vec<u8>>,
+    pub(crate) contract_code_uploads:
+        StorageTransaction<'block, SmartContractCodeUploadKey, SmartContractCodeUploadDescriptor>,
     pub(crate) contract_code_upload_chunks:
-        StorageTransaction<'block, 'world, SmartContractCodeUploadChunkKey, Vec<u8>>,
+        StorageTransaction<'block, SmartContractCodeUploadChunkKey, Vec<u8>>,
     pub(crate) contract_instances: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::smart_contract::ContractAddress,
         iroha_crypto::Hash,
     >,
     pub(crate) contract_subject_bindings: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::smart_contract::ContractAddress,
         crate::smartcontracts::code::ContractSubjectBinding,
     >,
-    pub(crate) contract_subject_addresses: StorageTransaction<
-        'block,
-        'world,
-        AccountId,
-        iroha_data_model::smart_contract::ContractAddress,
-    >,
+    pub(crate) contract_subject_addresses:
+        StorageTransaction<'block, AccountId, iroha_data_model::smart_contract::ContractAddress>,
     /// Durable smart-contract state keyed by logical path.
-    pub(crate) smart_contract_state: StorageTransaction<'block, 'world, StatePath, Vec<u8>>,
+    pub(crate) smart_contract_state: StorageTransaction<'block, StatePath, Vec<u8>>,
     /// Immutable public namespace bindings.
     pub(crate) musubi_namespace_bindings:
-        StorageTransaction<'block, 'world, MusubiNamespaceV1, MusubiNamespaceBindingV1>,
+        StorageTransaction<'block, MusubiNamespaceV1, MusubiNamespaceBindingV1>,
     /// Monotonic domain-owner generations used by Musubi delegation validation.
-    pub(crate) musubi_domain_ownership_generations:
-        StorageTransaction<'block, 'world, DomainId, u64>,
+    pub(crate) musubi_domain_ownership_generations: StorageTransaction<'block, DomainId, u64>,
     /// Authoritative package records.
     pub(crate) musubi_packages:
-        StorageTransaction<'block, 'world, MusubiPackageIdV1, MusubiPackageRecordV1>,
+        StorageTransaction<'block, MusubiPackageIdV1, MusubiPackageRecordV1>,
     /// Mutable package metadata records.
     pub(crate) musubi_package_metadata:
-        StorageTransaction<'block, 'world, MusubiPackageIdV1, MusubiPackageMetadataRecordV1>,
+        StorageTransaction<'block, MusubiPackageIdV1, MusubiPackageMetadataRecordV1>,
     /// Accepted package members.
     pub(crate) musubi_package_members:
-        StorageTransaction<'block, 'world, MusubiPackageMemberKeyV1, MusubiPackageMemberV1>,
+        StorageTransaction<'block, MusubiPackageMemberKeyV1, MusubiPackageMemberV1>,
     /// Package governance invitations.
     pub(crate) musubi_package_invitations:
-        StorageTransaction<'block, 'world, MusubiInviteIdV1, MusubiMaintainerInvitationV1>,
+        StorageTransaction<'block, MusubiInviteIdV1, MusubiMaintainerInvitationV1>,
     /// Accepted members and pending invitations ordered for package queries.
     pub(crate) musubi_maintainer_directory: StorageTransaction<
         'block,
-        'world,
         MusubiMaintainerDirectoryKeyV1,
         MusubiMaintainerDirectoryEntryV1,
     >,
     /// Immutable release records and mutable governance projections.
     pub(crate) musubi_releases:
-        StorageTransaction<'block, 'world, MusubiReleaseIdV1, MusubiReleaseRecordV1>,
+        StorageTransaction<'block, MusubiReleaseIdV1, MusubiReleaseRecordV1>,
     /// Canonical source archive commitments.
-    pub(crate) musubi_archives:
-        StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveRecordV1>,
+    pub(crate) musubi_archives: StorageTransaction<'block, ArchiveId, MusubiArchiveRecordV1>,
     /// Immutable provider bundle attestations.
     pub(crate) musubi_provider_bundle_attestations: StorageTransaction<
         'block,
-        'world,
         MusubiProviderBundleAttestationKeyV1,
         MusubiProviderBundleAttestationRecordV1,
     >,
     /// Renewable archive locations.
     pub(crate) musubi_archive_locations:
-        StorageTransaction<'block, 'world, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
+        StorageTransaction<'block, MusubiArchiveLocationKeyV1, MusubiArchiveLocationV1>,
     /// Exact pin-manifest reverse index.
     pub(crate) musubi_locations_by_pin:
-        StorageTransaction<'block, 'world, ManifestDigest, MusubiPinLocationReferenceV1>,
+        StorageTransaction<'block, ManifestDigest, MusubiPinLocationReferenceV1>,
     /// Exact replication-order reverse index.
-    pub(crate) musubi_locations_by_replication_order: StorageTransaction<
-        'block,
-        'world,
-        ReplicationOrderId,
-        MusubiReplicationOrderLocationReferenceV1,
-    >,
+    pub(crate) musubi_locations_by_replication_order:
+        StorageTransaction<'block, ReplicationOrderId, MusubiReplicationOrderLocationReferenceV1>,
     /// Ordered provider/location reverse index.
     pub(crate) musubi_locations_by_provider:
-        StorageTransaction<'block, 'world, MusubiProviderLocationKeyV1, ()>,
+        StorageTransaction<'block, MusubiProviderLocationKeyV1, ()>,
     /// Finalized aggregate archive availability.
     pub(crate) musubi_archive_availability:
-        StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveAvailabilityV1>,
+        StorageTransaction<'block, ArchiveId, MusubiArchiveAvailabilityV1>,
     /// Reverse references from archives to bound releases.
     pub(crate) musubi_archive_reverse_references:
-        StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveReverseReferencesV1>,
+        StorageTransaction<'block, ArchiveId, MusubiArchiveReverseReferencesV1>,
     /// Compact universal exact-resolution index.
     pub(crate) musubi_resolver_index:
-        StorageTransaction<'block, 'world, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
+        StorageTransaction<'block, MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
     /// Block-final resolver-index revision activation anchors.
     pub(crate) musubi_resolver_index_checkpoints:
-        StorageTransaction<'block, 'world, MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
+        StorageTransaction<'block, MusubiResolverIndexRevisionV1, MusubiRegistrySnapshotV1>,
     /// Public ordered package directory.
     pub(crate) musubi_public_directory:
-        StorageTransaction<'block, 'world, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
+        StorageTransaction<'block, MusubiPackageSelectorV1, MusubiOrderedPackageEntryV1>,
     /// Permanent global aliases.
-    pub(crate) musubi_aliases:
-        StorageTransaction<'block, 'world, MusubiAliasNameV1, MusubiAliasRecordV1>,
+    pub(crate) musubi_aliases: StorageTransaction<'block, MusubiAliasNameV1, MusubiAliasRecordV1>,
     /// Complete permanent-alias history.
     pub(crate) musubi_alias_history:
-        StorageTransaction<'block, 'world, MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
+        StorageTransaction<'block, MusubiAliasHistoryKeyV1, MusubiAliasHistoryEntryV1>,
     /// Replayed enacted governance decisions.
     pub(crate) musubi_governance_decisions:
-        StorageTransaction<'block, 'world, [u8; 32], MusubiGovernanceDecisionConsumptionV1>,
+        StorageTransaction<'block, [u8; 32], MusubiGovernanceDecisionConsumptionV1>,
     /// Active registry admission and alias-pricing policy.
     pub(crate) musubi_registry_policy: CellTransaction<'block, 'world, MusubiRegistryPolicyV1>,
     /// Universal sparse-index revision.
@@ -7982,153 +7899,138 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) soracloud_sequence_watermark: CellTransaction<'block, 'world, u64>,
     /// Admitted Soracloud service revisions.
     pub(crate) soracloud_service_revisions:
-        StorageTransaction<'block, 'world, (String, String), SoraDeploymentBundleV1>,
+        StorageTransaction<'block, (String, String), SoraDeploymentBundleV1>,
     /// Current Soracloud deployment state keyed by service name.
     pub(crate) soracloud_service_deployments:
-        StorageTransaction<'block, 'world, Name, SoraServiceDeploymentStateV1>,
+        StorageTransaction<'block, Name, SoraServiceDeploymentStateV1>,
     /// Current Soracloud app topology state keyed by app name.
-    pub(crate) soracloud_app_infra_states:
-        StorageTransaction<'block, 'world, Name, SoraAppInfraStateV1>,
+    pub(crate) soracloud_app_infra_states: StorageTransaction<'block, Name, SoraAppInfraStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime:
-        StorageTransaction<'block, 'world, Name, SoraServiceRuntimeStateV1>,
+        StorageTransaction<'block, Name, SoraServiceRuntimeStateV1>,
     /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
-    pub(crate) soracloud_inrou_replica_runtime: StorageTransaction<
-        'block,
-        'world,
-        (String, String, String),
-        SoraInrouReplicaRuntimeStateV1,
-    >,
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageTransaction<'block, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events:
-        StorageTransaction<'block, 'world, u64, SoraServiceAuditEventV1>,
+        StorageTransaction<'block, u64, SoraServiceAuditEventV1>,
     /// Soracloud app topology audit events keyed by deterministic sequence.
     pub(crate) soracloud_app_infra_audit_events:
-        StorageTransaction<'block, 'world, u64, SoraAppInfraAuditEventV1>,
+        StorageTransaction<'block, u64, SoraAppInfraAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
     pub(crate) soracloud_service_state_entries:
-        StorageTransaction<'block, 'world, (String, String, String), SoraServiceStateEntryV1>,
+        StorageTransaction<'block, (String, String, String), SoraServiceStateEntryV1>,
     /// Recorded decryption requests keyed by `(service_name, request_id)`.
     pub(crate) soracloud_decryption_request_records:
-        StorageTransaction<'block, 'world, (String, String), SoraDecryptionRequestRecordV1>,
+        StorageTransaction<'block, (String, String), SoraDecryptionRequestRecordV1>,
     /// Authoritative agent apartments keyed by apartment name.
     pub(crate) soracloud_agent_apartments:
-        StorageTransaction<'block, 'world, String, SoraAgentApartmentRecordV1>,
+        StorageTransaction<'block, String, SoraAgentApartmentRecordV1>,
     /// Agent-apartment audit events keyed by deterministic sequence.
     pub(crate) soracloud_agent_apartment_audit_events:
-        StorageTransaction<'block, 'world, u64, SoraAgentApartmentAuditEventV1>,
+        StorageTransaction<'block, u64, SoraAgentApartmentAuditEventV1>,
     /// Authoritative training jobs keyed by `(service_name, job_id)`.
     pub(crate) soracloud_training_jobs:
-        StorageTransaction<'block, 'world, (String, String), SoraTrainingJobRecordV1>,
+        StorageTransaction<'block, (String, String), SoraTrainingJobRecordV1>,
     /// Training-job audit events keyed by deterministic sequence.
     pub(crate) soracloud_training_job_audit_events:
-        StorageTransaction<'block, 'world, u64, SoraTrainingJobAuditEventV1>,
+        StorageTransaction<'block, u64, SoraTrainingJobAuditEventV1>,
     /// Model registries keyed by `(service_name, model_name)`.
     pub(crate) soracloud_model_registries:
-        StorageTransaction<'block, 'world, (String, String), SoraModelRegistryV1>,
+        StorageTransaction<'block, (String, String), SoraModelRegistryV1>,
     /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
-    pub(crate) soracloud_model_weight_versions: StorageTransaction<
-        'block,
-        'world,
-        (String, String, String),
-        SoraModelWeightVersionRecordV1,
-    >,
+    pub(crate) soracloud_model_weight_versions:
+        StorageTransaction<'block, (String, String, String), SoraModelWeightVersionRecordV1>,
     /// Model-weight audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_weight_audit_events:
-        StorageTransaction<'block, 'world, u64, SoraModelWeightAuditEventV1>,
+        StorageTransaction<'block, u64, SoraModelWeightAuditEventV1>,
     /// Model artifacts keyed by `(service_name, training_job_id)`.
     pub(crate) soracloud_model_artifacts:
-        StorageTransaction<'block, 'world, (String, String), SoraModelArtifactRecordV1>,
+        StorageTransaction<'block, (String, String), SoraModelArtifactRecordV1>,
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
-        StorageTransaction<'block, 'world, u64, SoraModelArtifactAuditEventV1>,
+        StorageTransaction<'block, u64, SoraModelArtifactAuditEventV1>,
     /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
     pub(crate) soracloud_uploaded_model_bundles:
-        StorageTransaction<'block, 'world, (String, String, String), SoraUploadedModelBundleV1>,
+        StorageTransaction<'block, (String, String, String), SoraUploadedModelBundleV1>,
     /// Active Inrou validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_inrou_host_capabilities:
-        StorageTransaction<'block, 'world, AccountId, SoraInrouHostCapabilityRecordV1>,
+        StorageTransaction<'block, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
-    pub(crate) soracloud_hf_sources: StorageTransaction<'block, 'world, Hash, SoraHfSourceRecordV1>,
+    pub(crate) soracloud_hf_sources: StorageTransaction<'block, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
     pub(crate) soracloud_hf_shared_lease_pools:
-        StorageTransaction<'block, 'world, Hash, SoraHfSharedLeasePoolV1>,
+        StorageTransaction<'block, Hash, SoraHfSharedLeasePoolV1>,
     /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
     pub(crate) soracloud_hf_shared_lease_members:
-        StorageTransaction<'block, 'world, (String, String), SoraHfSharedLeaseMemberV1>,
+        StorageTransaction<'block, (String, String), SoraHfSharedLeaseMemberV1>,
     /// Shared lease audit events keyed by deterministic sequence.
     pub(crate) soracloud_hf_shared_lease_audit_events:
-        StorageTransaction<'block, 'world, u64, SoraHfSharedLeaseAuditEventV1>,
+        StorageTransaction<'block, u64, SoraHfSharedLeaseAuditEventV1>,
     /// Active Inrou placement records keyed by `(service_name, service_version)`.
     pub(crate) soracloud_inrou_service_placements:
-        StorageTransaction<'block, 'world, (String, String), SoraInrouServicePlacementRecordV1>,
+        StorageTransaction<'block, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages:
-        StorageTransaction<'block, 'world, Hash, SoraServiceMailboxMessageV1>,
+        StorageTransaction<'block, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
-    pub(crate) soracloud_runtime_receipts:
-        StorageTransaction<'block, 'world, Hash, SoraRuntimeReceiptV1>,
+    pub(crate) soracloud_runtime_receipts: StorageTransaction<'block, Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations:
-        StorageTransaction<'block, 'world, ProviderId, CapacityDeclarationRecord>,
+        StorageTransaction<'block, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
-    pub(crate) capacity_fee_ledger:
-        StorageTransaction<'block, 'world, ProviderId, CapacityFeeLedgerEntry>,
+    pub(crate) capacity_fee_ledger: StorageTransaction<'block, ProviderId, CapacityFeeLedgerEntry>,
     /// Capacity disputes keyed by dispute identifier.
     pub(crate) capacity_disputes:
-        StorageTransaction<'block, 'world, CapacityDisputeId, CapacityDisputeRecord>,
+        StorageTransaction<'block, CapacityDisputeId, CapacityDisputeRecord>,
     /// Governance-controlled `SoraFS` pricing schedule.
     pub sorafs_pricing: CellTransaction<'block, 'world, PricingScheduleRecord>,
     /// Provider credit ledger entries per provider.
-    pub(crate) provider_credit_ledger:
-        StorageTransaction<'block, 'world, ProviderId, ProviderCreditRecord>,
+    pub(crate) provider_credit_ledger: StorageTransaction<'block, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
-    pub(crate) provider_owners: StorageTransaction<'block, 'world, ProviderId, AccountId>,
+    pub(crate) provider_owners: StorageTransaction<'block, ProviderId, AccountId>,
     /// Chain-authoritative completion-owner and signer-policy bindings.
     pub(crate) provider_ingest_completion_authorities:
-        StorageTransaction<'block, 'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
+        StorageTransaction<'block, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     pub(crate) da_pin_intents_by_ticket:
-        StorageTransaction<'block, 'world, StorageTicketId, DaPinIntentWithLocation>,
+        StorageTransaction<'block, StorageTicketId, DaPinIntentWithLocation>,
     /// Alias index for DA pin intents (`alias` -> `ticket`).
-    pub(crate) da_pin_intents_by_alias: StorageTransaction<'block, 'world, String, StorageTicketId>,
+    pub(crate) da_pin_intents_by_alias: StorageTransaction<'block, String, StorageTicketId>,
     /// Manifest index for DA pin intents (`manifest digest` -> `ticket`).
     pub(crate) da_pin_intents_by_manifest:
-        StorageTransaction<'block, 'world, ManifestDigest, StorageTicketId>,
+        StorageTransaction<'block, ManifestDigest, StorageTicketId>,
     /// Lane/epoch/sequence index for DA pin intents.
     pub(crate) da_pin_intents_by_lane_epoch:
-        StorageTransaction<'block, 'world, (LaneId, u64, u64), StorageTicketId>,
+        StorageTransaction<'block, (LaneId, u64, u64), StorageTicketId>,
     /// `SoraFS` pin manifest registry keyed by manifest digest.
-    pub(crate) pin_manifests: StorageTransaction<'block, 'world, ManifestDigest, PinManifestRecord>,
+    pub(crate) pin_manifests: StorageTransaction<'block, ManifestDigest, PinManifestRecord>,
     /// Active alias bindings keyed by alias identifier.
-    pub(crate) manifest_aliases:
-        StorageTransaction<'block, 'world, ManifestAliasId, ManifestAliasRecord>,
+    pub(crate) manifest_aliases: StorageTransaction<'block, ManifestAliasId, ManifestAliasRecord>,
     /// Outstanding replication orders keyed by order identifier.
     pub(crate) replication_orders:
-        StorageTransaction<'block, 'world, ReplicationOrderId, ReplicationOrderRecord>,
+        StorageTransaction<'block, ReplicationOrderId, ReplicationOrderRecord>,
     /// Content bundles keyed by bundle identifier.
-    pub(crate) content_bundles:
-        StorageTransaction<'block, 'world, ContentBundleId, ContentBundleRecord>,
+    pub(crate) content_bundles: StorageTransaction<'block, ContentBundleId, ContentBundleRecord>,
     /// Chunk storage backing content bundles (deduplicated).
-    pub(crate) content_chunks: StorageTransaction<'block, 'world, [u8; 32], ContentChunk>,
+    pub(crate) content_chunks: StorageTransaction<'block, [u8; 32], ContentChunk>,
     /// Resolver directory records keyed by directory identifier.
     pub(crate) soradns_directory_records:
-        StorageTransaction<'block, 'world, DirectoryId, ResolverDirectoryRecordV1>,
+        StorageTransaction<'block, DirectoryId, ResolverDirectoryRecordV1>,
     /// Pending resolver directory drafts awaiting publication.
     pub(crate) soradns_directory_pending:
-        StorageTransaction<'block, 'world, DirectoryId, PendingDirectoryDraftV1>,
+        StorageTransaction<'block, DirectoryId, PendingDirectoryDraftV1>,
     /// Latest published resolver directory identifier.
     pub(crate) soradns_directory_latest: CellTransaction<'block, 'world, Option<DirectoryId>>,
     /// Historical directory identifiers keyed by rotation index.
-    pub(crate) soradns_directory_history: StorageTransaction<'block, 'world, u64, DirectoryId>,
+    pub(crate) soradns_directory_history: StorageTransaction<'block, u64, DirectoryId>,
     /// Reverse pointer from directory identifier to its predecessor.
-    pub(crate) soradns_directory_prev_of:
-        StorageTransaction<'block, 'world, DirectoryId, DirectoryId>,
+    pub(crate) soradns_directory_prev_of: StorageTransaction<'block, DirectoryId, DirectoryId>,
     /// Resolver revocation records applied as hotfixes.
     pub(crate) soradns_directory_revocations:
-        StorageTransaction<'block, 'world, ResolverId, ResolverRevocationRecordV1>,
+        StorageTransaction<'block, ResolverId, ResolverRevocationRecordV1>,
     /// Release-signing keys authorized to submit drafts.
-    pub(crate) soradns_release_signers: StorageTransaction<'block, 'world, PublicKey, ()>,
+    pub(crate) soradns_release_signers: StorageTransaction<'block, PublicKey, ()>,
     /// Directory rotation policy enforced by governance.
     pub(crate) soradns_rotation_policy: CellTransaction<'block, 'world, DirectoryRotationPolicyV1>,
     /// Timestamp (ms) when the last directory publish was recorded.
@@ -8136,87 +8038,70 @@ pub struct WorldTransaction<'block, 'world> {
     /// Next rotation history index.
     pub(crate) soradns_history_len: CellTransaction<'block, 'world, u64>,
     /// Active repo agreements keyed by agreement id.
-    pub(crate) repo_agreements: StorageTransaction<'block, 'world, RepoAgreementId, RepoAgreement>,
+    pub(crate) repo_agreements: StorageTransaction<'block, RepoAgreementId, RepoAgreement>,
     /// Repo agreement ids keyed by initiating account.
     pub(crate) repo_agreements_by_initiator:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
     /// Repo agreement ids keyed by counterparty account.
     pub(crate) repo_agreements_by_counterparty:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
     /// Repo agreement ids keyed by custodian account.
     pub(crate) repo_agreements_by_custodian:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+        StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
-    pub(crate) settlement_receipts:
-        StorageTransaction<'block, 'world, SettlementId, SettlementReceipt>,
+    pub(crate) settlement_receipts: StorageTransaction<'block, SettlementId, SettlementReceipt>,
     /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
     pub(crate) kagemusha_reserve_pools:
-        StorageTransaction<'block, 'world, [u8; 32], KagemushaReservePoolV1>,
+        StorageTransaction<'block, [u8; 32], KagemushaReservePoolV1>,
     /// Idempotent Kagemusha V1 operation records keyed by operation id.
     pub(crate) kagemusha_reserve_operations:
-        StorageTransaction<'block, 'world, [u8; 32], KagemushaReserveOperationRecordV1>,
+        StorageTransaction<'block, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) kagemusha_mint_credit_operations:
-        StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations: StorageTransaction<'block, [u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) kagemusha_issuance_operations:
-        StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations: StorageTransaction<'block, [u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) kagemusha_redemption_id_operations:
-        StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations: StorageTransaction<'block, [u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
     pub(crate) kagemusha_terminal_nullifier_operations:
-        StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
+        StorageTransaction<'block, [u8; 32], [u8; 32]>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
-        StorageTransaction<'block, 'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
+        StorageTransaction<'block, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
-        StorageTransaction<'block, 'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
+        StorageTransaction<'block, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
     pub(crate) public_lane_rewards:
-        StorageTransaction<'block, 'world, (LaneId, u64), PublicLaneRewardRecord>,
+        StorageTransaction<'block, (LaneId, u64), PublicLaneRewardRecord>,
     pub(crate) public_lane_reward_claims:
-        StorageTransaction<'block, 'world, (LaneId, AccountId, AssetId), u64>,
+        StorageTransaction<'block, (LaneId, AccountId, AssetId), u64>,
     /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
-        StorageTransaction<'block, 'world, LaneId, LaneRelayEmergencyValidatorSet>,
+        StorageTransaction<'block, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
-    pub(crate) zk_assets: StorageTransaction<'block, 'world, AssetDefinitionId, ZkAssetState>,
+    pub(crate) zk_assets: StorageTransaction<'block, AssetDefinitionId, ZkAssetState>,
     /// Pending confidential-policy transitions keyed by effective height and definition.
     pub(crate) confidential_policy_transition_index:
-        StorageTransaction<'block, 'world, (u64, AssetDefinitionId), ()>,
+        StorageTransaction<'block, (u64, AssetDefinitionId), ()>,
     /// Exact pending confidential-policy transition cardinality at each effective height.
-    pub(crate) confidential_policy_transition_counts: StorageTransaction<'block, 'world, u64, u32>,
+    pub(crate) confidential_policy_transition_counts: StorageTransaction<'block, u64, u32>,
     /// Elections state
-    pub(crate) elections: StorageTransaction<'block, 'world, String, ElectionState>,
+    pub(crate) elections: StorageTransaction<'block, String, ElectionState>,
     /// Registered citizens keyed by account id.
-    pub(crate) citizens: StorageTransaction<'block, 'world, AccountId, CitizenshipRecord>,
+    pub(crate) citizens: StorageTransaction<'block, AccountId, CitizenshipRecord>,
     /// Submitted Ministry agenda proposals keyed by `proposal_id`.
-    pub(crate) ministry_agenda_proposals: StorageTransaction<
-        'block,
-        'world,
-        String,
-        iroha_data_model::ministry::AgendaProposalRecordV1,
-    >,
-    pub(crate) governance_proposals:
-        StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord>,
+    pub(crate) ministry_agenda_proposals:
+        StorageTransaction<'block, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
+    pub(crate) governance_proposals: StorageTransaction<'block, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
-    pub(crate) governance_referenda:
-        StorageTransaction<'block, 'world, String, GovernanceReferendumRecord>,
-    pub(crate) governance_locks:
-        StorageTransaction<'block, 'world, String, GovernanceLocksForReferendum>,
+    pub(crate) governance_referenda: StorageTransaction<'block, String, GovernanceReferendumRecord>,
+    pub(crate) governance_locks: StorageTransaction<'block, String, GovernanceLocksForReferendum>,
     /// Expiry-height buckets for governance locks.
-    pub(crate) governance_lock_expiry_index: StorageTransaction<
-        'block,
-        'world,
-        u64,
-        BTreeSet<(String, iroha_data_model::account::AccountId)>,
-    >,
+    pub(crate) governance_lock_expiry_index:
+        StorageTransaction<'block, u64, BTreeSet<(String, iroha_data_model::account::AccountId)>>,
     /// Ordered validation-fee proposal index.
-    pub(crate) validation_fee_proposal_index:
-        StorageTransaction<'block, 'world, (u64, [u8; 32]), ()>,
+    pub(crate) validation_fee_proposal_index: StorageTransaction<'block, (u64, [u8; 32]), ()>,
     /// Governance slashing ledger per referendum id.
-    pub(crate) governance_slashes:
-        StorageTransaction<'block, 'world, String, GovernanceSlashLedger>,
+    pub(crate) governance_slashes: StorageTransaction<'block, String, GovernanceSlashLedger>,
     /// Height at which governance locks were last swept.
     pub(crate) governance_last_unlock_sweep_height: CellTransaction<'block, 'world, u64>,
     /// O(1) statistics snapshot produced by the latest unlock sweep.
@@ -8224,7 +8109,6 @@ pub struct WorldTransaction<'block, 'world> {
         CellTransaction<'block, 'world, GovernanceUnlockStatsSnapshot>,
     pub(crate) parliament_attempts: StorageTransaction<
         'block,
-        'world,
         iroha_data_model::governance::types::GovernanceAttemptId,
         ParliamentAttemptStateV1,
     >,
@@ -8233,69 +8117,55 @@ pub struct WorldTransaction<'block, 'world> {
         CellTransaction<'block, 'world, ParliamentAttemptCountsV1>,
     /// Derived distinct-attempt reference counts for each Parliament member account.
     pub(crate) parliament_member_reference_counts:
-        StorageTransaction<'block, 'world, AccountId, ParliamentMemberReferenceCountsV1>,
+        StorageTransaction<'block, AccountId, ParliamentMemberReferenceCountsV1>,
     /// Active timed-OVN resource reservations derived from Parliament attempts.
-    parliament_timed_ovn_resource_reservations: StorageTransaction<
-        'block,
-        'world,
-        BallotAttemptId,
-        ParliamentTimedOvnResourceReservationV1,
-    >,
+    parliament_timed_ovn_resource_reservations:
+        StorageTransaction<'block, BallotAttemptId, ParliamentTimedOvnResourceReservationV1>,
     /// Active hidden-ballot phase windows eligible for compact casting snapshots.
     pub(crate) parliament_timed_ovn_casting_candidates:
-        StorageTransaction<'block, 'world, BallotAttemptId, ParliamentTimedOvnCastingCandidateV1>,
+        StorageTransaction<'block, BallotAttemptId, ParliamentTimedOvnCastingCandidateV1>,
     /// Governance attempts that currently require a logical beacon slot.
     pub(crate) parliament_required_beacon_pulse_slots:
-        StorageTransaction<'block, 'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+        StorageTransaction<'block, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Certified governance attempts keyed by their exact enactment height.
     pub(crate) parliament_certified_enactments:
-        StorageTransaction<'block, 'world, u64, BTreeSet<GovernanceAttemptId>>,
+        StorageTransaction<'block, u64, BTreeSet<GovernanceAttemptId>>,
     /// Governance attempts that terminally classified a logical beacon slot as unavailable.
     pub(crate) parliament_unavailable_beacon_pulse_slots:
-        StorageTransaction<'block, 'world, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
+        StorageTransaction<'block, (BeaconSessionId, u64), BTreeSet<GovernanceAttemptId>>,
     /// Exact attempt contributors grouped by TLE key session and opening deadline.
-    pub(crate) parliament_tle_key_session_retention_deadlines: StorageTransaction<
-        'block,
-        'world,
-        TleKeySessionId,
-        ParliamentTleKeySessionRetentionIndexV1,
-    >,
+    pub(crate) parliament_tle_key_session_retention_deadlines:
+        StorageTransaction<'block, TleKeySessionId, ParliamentTleKeySessionRetentionIndexV1>,
     /// TLE key-session selection windows keyed by activation height.
     pub(crate) tle_key_session_selection_intervals:
-        StorageTransaction<'block, 'world, u64, (u64, TleKeySessionId)>,
+        StorageTransaction<'block, u64, (u64, TleKeySessionId)>,
     /// Finalized public-only adaptive TLE key sessions.
     pub(crate) tle_key_sessions:
-        StorageTransaction<'block, 'world, TleKeySessionId, TleKeySessionPublicStateV1>,
+        StorageTransaction<'block, TleKeySessionId, TleKeySessionPublicStateV1>,
     /// Frozen ordered validator roster bound to each finalized TLE key session.
-    pub(crate) tle_key_session_rosters:
-        StorageTransaction<'block, 'world, TleKeySessionId, Vec<PeerId>>,
+    pub(crate) tle_key_session_rosters: StorageTransaction<'block, TleKeySessionId, Vec<PeerId>>,
     /// Versioned TLE key-session lifecycle metadata.
     pub(crate) tle_key_session_lifecycles:
-        StorageTransaction<'block, 'world, TleKeySessionId, TleKeySessionLifecycleV1>,
+        StorageTransaction<'block, TleKeySessionId, TleKeySessionLifecycleV1>,
     /// Singleton TLE key session eligible for new ballots.
-    pub(crate) tle_active_key_session: StorageTransaction<'block, 'world, u64, TleKeySessionId>,
+    pub(crate) tle_active_key_session: StorageTransaction<'block, u64, TleKeySessionId>,
     /// Single authoritative public timed-OVN lifecycle keyed by ballot attempt.
     pub(crate) timed_ovn_evidence:
-        StorageTransaction<'block, 'world, BallotAttemptId, TimedOvnLifecycleStateV1>,
+        StorageTransaction<'block, BallotAttemptId, TimedOvnLifecycleStateV1>,
     pub(crate) global_beacon_dkg:
-        StorageTransaction<'block, 'world, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
-    pub(crate) global_beacon_key_sessions: StorageTransaction<
-        'block,
-        'world,
-        [u8; 32],
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    >,
-    pub(crate) global_beacon_active_session: StorageTransaction<'block, 'world, u64, [u8; 32]>,
+        StorageTransaction<'block, [u8; 32], GlobalThresholdBeaconDkgSnapshotV1>,
+    pub(crate) global_beacon_key_sessions:
+        StorageTransaction<'block, [u8; 32], FinalizedGlobalThresholdBeaconKeySessionRecordV1>,
+    pub(crate) global_beacon_active_session: StorageTransaction<'block, u64, [u8; 32]>,
     pub(crate) global_beacon_latest_pulse:
-        StorageTransaction<'block, 'world, u64, GlobalThresholdBeaconPulseLinkV1>,
+        StorageTransaction<'block, u64, GlobalThresholdBeaconPulseLinkV1>,
     pub(crate) global_beacon_pulses: StorageTransaction<
         'block,
-        'world,
         [u8; 32],
         iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1,
     >,
     pub(crate) global_beacon_pulse_slots:
-        StorageTransaction<'block, 'world, (BeaconSessionId, u64), [u8; 32]>,
+        StorageTransaction<'block, (BeaconSessionId, u64), [u8; 32]>,
     /// Buffer of events pending publication to external subscribers.
     pub(crate) merge_hint_roots: CellTransaction<'block, 'world, Vec<Hash>>,
     /// Latest reduced global state root observed in this transaction scope.
@@ -8468,20 +8338,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Mutable authoritative domain-owner generations used by Musubi delegations.
     pub fn musubi_domain_ownership_generations_mut(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, DomainId, u64> {
+    ) -> &mut StorageTransaction<'block, DomainId, u64> {
         &mut self.musubi_domain_ownership_generations
     }
     /// Mutable Musubi archive-commitment storage.
     pub fn musubi_archives_mut(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, ArchiveId, MusubiArchiveRecordV1> {
+    ) -> &mut StorageTransaction<'block, ArchiveId, MusubiArchiveRecordV1> {
         &mut self.musubi_archives
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
     pub fn smart_contract_state_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, StatePath, Vec<u8>> {
+    ) -> &mut StorageTransaction<'block, StatePath, Vec<u8>> {
         &mut self.smart_contract_state
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -8491,7 +8361,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        'world,
         iroha_crypto::Hash,
         iroha_data_model::smart_contract::manifest::ContractManifest,
     > {
@@ -8559,7 +8428,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        'world,
         iroha_data_model::account::rekey::AccountAlias,
         iroha_data_model::account::AccountId,
     > {
@@ -8571,7 +8439,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        'world,
         iroha_data_model::account::AccountId,
         BTreeSet<iroha_data_model::account::rekey::AccountAlias>,
     > {
@@ -9181,7 +9048,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.track_rwa_frozen(rwa_id, next_is_frozen);
     }
     fn track_escrow_index<K: MvKey>(
-        storage: &mut StorageTransaction<'block, 'world, K, BTreeSet<EscrowId>>,
+        storage: &mut StorageTransaction<'block, K, BTreeSet<EscrowId>>,
         key: &K,
         escrow_id: EscrowId,
     ) {
@@ -9192,7 +9059,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
     fn untrack_escrow_index<K: MvKey>(
-        storage: &mut StorageTransaction<'block, 'world, K, BTreeSet<EscrowId>>,
+        storage: &mut StorageTransaction<'block, K, BTreeSet<EscrowId>>,
         key: &K,
         escrow_id: &EscrowId,
     ) {
@@ -9365,7 +9232,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         Ok(previous)
     }
     fn track_repo_agreement_index(
-        storage: &mut StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+        storage: &mut StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
         account_id: &AccountId,
         agreement_id: &RepoAgreementId,
     ) {
@@ -9376,7 +9243,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
     fn untrack_repo_agreement_index(
-        storage: &mut StorageTransaction<'block, 'world, AccountId, BTreeSet<RepoAgreementId>>,
+        storage: &mut StorageTransaction<'block, AccountId, BTreeSet<RepoAgreementId>>,
         account_id: &AccountId,
         agreement_id: &RepoAgreementId,
     ) {
@@ -24439,7 +24306,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        'world,
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     > {
@@ -25186,36 +25052,35 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, ManifestDigest, PinManifestRecord> {
+    ) -> &mut StorageTransaction<'block, ManifestDigest, PinManifestRecord> {
         &mut self.pin_manifests
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the alias-manifest registry during tests.
     pub fn manifest_aliases_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, ManifestAliasId, ManifestAliasRecord> {
+    ) -> &mut StorageTransaction<'block, ManifestAliasId, ManifestAliasRecord> {
         &mut self.manifest_aliases
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to replication orders for deterministic test setup.
     pub fn replication_orders_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, ReplicationOrderId, ReplicationOrderRecord> {
+    ) -> &mut StorageTransaction<'block, ReplicationOrderId, ReplicationOrderRecord> {
         &mut self.replication_orders
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to provider-ingest completion authorities for tests.
     pub fn provider_ingest_completion_authorities_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, ProviderId, ProviderIngestCompletionAuthorityV1>
-    {
+    ) -> &mut StorageTransaction<'block, ProviderId, ProviderIngestCompletionAuthorityV1> {
         &mut self.provider_ingest_completion_authorities
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to resolver directory records for deterministic tests.
     pub fn soradns_directory_records_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, DirectoryId, ResolverDirectoryRecordV1> {
+    ) -> &mut StorageTransaction<'block, DirectoryId, ResolverDirectoryRecordV1> {
         &mut self.soradns_directory_records
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -25228,13 +25093,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Test helper: get mutable access to governance referenda storage for direct seeding.
     pub fn governance_referenda_mut(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, String, GovernanceReferendumRecord> {
+    ) -> &mut StorageTransaction<'block, String, GovernanceReferendumRecord> {
         &mut self.governance_referenda
     }
     /// Test helper: get mutable access to elections storage for direct seeding.
-    pub fn elections_mut(
-        &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, String, ElectionState> {
+    pub fn elections_mut(&mut self) -> &mut StorageTransaction<'block, String, ElectionState> {
         &mut self.elections
     }
     /// Test helper: seed governance locks while retaining the exact expiry index.
@@ -25335,7 +25198,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Test helper: get mutable access to governance slashing ledger for direct seeding.
     pub fn governance_slashes_mut(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, String, GovernanceSlashLedger> {
+    ) -> &mut StorageTransaction<'block, String, GovernanceSlashLedger> {
         &mut self.governance_slashes
     }
     fn remove_parliament_tle_retention_contribution(
@@ -26260,7 +26123,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Test helper: get mutable access to citizenship storage for direct seeding.
     pub fn citizens_mut(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, AccountId, CitizenshipRecord> {
+    ) -> &mut StorageTransaction<'block, AccountId, CitizenshipRecord> {
         &mut self.citizens
     }
     /// Test helper: get mutable access to stored proof records for direct seeding.
@@ -26268,7 +26131,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        'world,
         iroha_data_model::proof::ProofId,
         iroha_data_model::proof::ProofRecord,
     > {
@@ -26278,37 +26140,33 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Test helper: get mutable access to public lane validators for direct seeding.
     pub fn public_lane_validators_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, (LaneId, AccountId), PublicLaneValidatorRecord>
-    {
+    ) -> &mut StorageTransaction<'block, (LaneId, AccountId), PublicLaneValidatorRecord> {
         &mut self.public_lane_validators
     }
     #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
     /// Test helper: get mutable access to public lane stake shares for direct seeding.
     pub fn public_lane_stake_shares_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>
-    {
+    ) -> &mut StorageTransaction<'block, (LaneId, AccountId, AccountId), PublicLaneStakeShare> {
         &mut self.public_lane_stake_shares
     }
     #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
     /// Test helper: get mutable access to public lane rewards for direct seeding.
     pub fn public_lane_rewards_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, (LaneId, u64), PublicLaneRewardRecord> {
+    ) -> &mut StorageTransaction<'block, (LaneId, u64), PublicLaneRewardRecord> {
         &mut self.public_lane_rewards
     }
     /// Test helper: get mutable access to stored proof tags for direct seeding.
     pub fn proof_tags_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, iroha_data_model::proof::ProofId, Vec<[u8; 4]>>
-    {
+    ) -> &mut StorageTransaction<'block, iroha_data_model::proof::ProofId, Vec<[u8; 4]>> {
         &mut self.proof_tags
     }
     /// Test helper: get mutable access to the tag → proof index for direct seeding.
     pub fn proofs_by_tag_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>
-    {
+    ) -> &mut StorageTransaction<'block, [u8; 4], Vec<iroha_data_model::proof::ProofId>> {
         &mut self.proofs_by_tag
     }
     /// Test helper: get mutable access to verifying-key registry for seeding.
@@ -26316,7 +26174,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<
         'block,
-        'world,
         iroha_data_model::proof::VerifyingKeyId,
         iroha_data_model::proof::VerifyingKeyRecord,
     > {
@@ -26325,19 +26182,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Test helper: get mutable access to the verifying-key circuit index for seeding.
     pub fn verifying_keys_by_circuit_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<
-        'block,
-        'world,
-        (String, u32),
-        iroha_data_model::proof::VerifyingKeyId,
-    > {
+    ) -> &mut StorageTransaction<'block, (String, u32), iroha_data_model::proof::VerifyingKeyId>
+    {
         &mut self.verifying_keys_by_circuit
     }
     /// Test helper: get mutable access to shielded asset state for direct seeding.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn zk_assets_mut_for_testing(
         &mut self,
-    ) -> &mut StorageTransaction<'block, 'world, AssetDefinitionId, ZkAssetState> {
+    ) -> &mut StorageTransaction<'block, AssetDefinitionId, ZkAssetState> {
         &mut self.zk_assets
     }
     /// Test helper: index a manually seeded confidential-policy transition.
@@ -30927,6 +30780,29 @@ impl State {
         sb.activate_due_public_lane_validators(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
+        // Finish start-phase transaction owners before the after-start
+        // continuation enters Network execution on this same block. Keeping
+        // these independent owners in this constructor also keeps all of their
+        // large stack slots live throughout that execution in debug builds.
+        Self::apply_block_start_private_settlement_expiry(&mut sb, now_h);
+        Self::apply_block_start_parliament_enactments(&mut sb, now_h);
+        let current_slot =
+            current_axt_slot_from_block(&sb._curr_block, sb.nexus.axt.slot_length_ms);
+        // Keep independent transaction phases in separate frames. Unoptimized
+        // builds otherwise reserve all of their large overlay temporaries for
+        // this entire constructor, even when a phase has no work to apply.
+        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot);
+        Self::sweep_expired_governance_locks_at_block_start(&mut sb, now_h);
+        Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot);
+        Self::apply_block_start_confidential_policies(&mut sb, now_h);
+        sb.start_of_block_effects_applied = true;
+        sb.capture_execution_output_capacity();
+        let result = after_start(&mut sb, continuation)?;
+        Ok((sb, result))
+    }
+    /// Release expired private locks inside their original block transaction.
+    #[inline(never)]
+    fn apply_block_start_private_settlement_expiry(sb: &mut StateBlock<'_>, now_h: u64) {
         if sb
             .world
             .private_settlement_staged_locks
@@ -30952,6 +30828,13 @@ impl State {
                 });
             expiry.apply();
         }
+    }
+    /// Resolve due Parliament effects before entering after-start execution.
+    ///
+    /// A failed effect drops its original transaction before a separate
+    /// transaction records the deterministic failure in the same block.
+    #[inline(never)]
+    fn apply_block_start_parliament_enactments(sb: &mut StateBlock<'_>, now_h: u64) {
         if let Some((enact_at_height, attempts)) =
             sb.world.parliament_certified_enactments.iter().next()
             && *enact_at_height < now_h
@@ -31016,19 +30899,6 @@ impl State {
                 "Parliament certified-enactment index retained a due bucket after block-start execution at height {now_h}"
             );
         }
-        let current_slot =
-            current_axt_slot_from_block(&sb._curr_block, sb.nexus.axt.slot_length_ms);
-        // Keep independent transaction phases in separate frames. Unoptimized
-        // builds otherwise reserve all of their large overlay temporaries for
-        // this entire constructor, even when a phase has no work to apply.
-        Self::apply_block_start_world_transitions(&mut sb, now_h, current_slot);
-        Self::sweep_expired_governance_locks_at_block_start(&mut sb, now_h);
-        Self::apply_block_start_oracle_changes(&mut sb, now_h, current_slot);
-        Self::apply_block_start_confidential_policies(&mut sb, now_h);
-        sb.start_of_block_effects_applied = true;
-        sb.capture_execution_output_capacity();
-        let result = after_start(&mut sb, continuation)?;
-        Ok((sb, result))
     }
     /// Apply scheduled world transitions within their shared transaction.
     #[inline(never)]

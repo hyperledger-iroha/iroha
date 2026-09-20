@@ -133,7 +133,7 @@ fn invocation() -> ContractInvocation {
     }
 }
 
-fn register_call(tx: &mut SetTransaction<'_, '_>, id: &str, executable: Executable) {
+fn register_call(tx: &mut SetTransaction<'_>, id: &str, executable: Executable) {
     let action = SpecializedAction::new(
         executable,
         Repeats::Exactly(3),

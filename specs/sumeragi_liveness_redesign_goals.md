@@ -1545,9 +1545,14 @@ through nested child edits. Abort needs no rollback allocation or admission;
 caught mutation/cleanup panic makes the original cursor unpublishable. The
 [native Storage undo owner](../docs/history/2026-09-20/native-storage-undo.md)
 replaces the block-undo standard map with that same tree engine, preserving both
-original generations through snapshots and publication retry. The next Storage
-step must jointly admit current edits and first preimages and replace the
-transaction-local standard map and inverse-edit rollback with admitted ownership.
+original generations through snapshots and publication retry. The live
+[Storage transaction checkpoints](../docs/history/2026-09-20/storage-transaction-checkpoints.md)
+now retain both original parent roots and borrow transaction preimages directly.
+Abort restores both trees without allocation, cloning or inverse edits; caught
+preimage-clone and owned query-key destruction panic cannot apply partial work.
+The next Storage step must jointly admit current edits, first block preimages and
+ordered touch metadata, propagate generation refusal through State admission,
+and carry concrete payload policies into configured production funding.
 L1–L6 and four/seven-validator qualification stay open.
 
 

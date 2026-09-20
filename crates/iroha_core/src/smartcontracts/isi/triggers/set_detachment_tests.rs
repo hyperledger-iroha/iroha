@@ -26,7 +26,7 @@ fn blob() -> IvmBytecode {
     IvmBytecode::from_compiled(code)
 }
 
-fn register_call(tx: &mut SetTransaction<'_, '_>, value: &str) {
+fn register_call(tx: &mut SetTransaction<'_>, value: &str) {
     let action = SpecializedAction::new(
         Executable::Ivm(blob()),
         Repeats::Exactly(3),
@@ -40,7 +40,7 @@ fn register_call(tx: &mut SetTransaction<'_, '_>, value: &str) {
     );
 }
 
-fn register_data(tx: &mut SetTransaction<'_, '_>, value: &str) {
+fn register_data(tx: &mut SetTransaction<'_>, value: &str) {
     let mut action = SpecializedAction::new(
         Executable::Instructions(ConstVec::from(Vec::<InstructionBox>::new())),
         Repeats::Exactly(3),

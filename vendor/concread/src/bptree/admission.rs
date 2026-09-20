@@ -552,7 +552,7 @@ fn edit_admitted<K, V, P, E>(
     key: K,
     value: V,
     admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, P>>,
+    saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
 ) -> Result<Option<V>, ((K, V), InsertAdmissionError<E>)>
 where
     K: Clone + Ord + Debug,
@@ -589,24 +589,44 @@ where
     Ok(previous)
 }
 
-/// An exclusive transaction-start checkpoint of an original prepaid map writer.
+/// An exclusive transaction-start checkpoint of an original map writer.
 ///
 /// Dropping this guard aborts its private edits without allocating or obtaining
 /// new credit. Applying it keeps those edits private in the same writer. Nested
-/// guards resolve in LIFO order through exclusive reborrows. No publication,
-/// detachment or unrestricted mutable payload access exists through this guard.
+/// guards resolve in LIFO order through exclusive reborrows. Publication and
+/// detachment are unavailable through the borrowed guard. Untracked checkpoints
+/// permit ordinary edits; prepaid checkpoints permit only admitted insertion.
 ///
-/// The entire original writer and checkpoint lifetime must remain inside its
-/// budget's synchronous refund-notification deferral scope. An edit or cleanup
-/// panic makes the original cursor unusable even if caught before the physical
-/// writer guard unwinds; abort that writer instead of publishing it.
-pub struct BptreeMapCheckpoint<'a, K, V, P>
+/// Keep a prepaid writer and all its checkpoints inside its budget's synchronous
+/// refund-notification deferral scope. An internal edit or cleanup panic makes
+/// the original cursor unusable even if caught before its physical writer guard
+/// unwinds; abort that writer instead of publishing it.
+pub struct BptreeMapCheckpoint<'a, K, V, M = Untracked>
 where
     K: Clone + Ord + Debug + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    P: ClonePlanning<K, V>,
+    M: MapMode + NodeCloning<K, V>,
 {
-    inner: crate::internals::bptree::cursor::CursorCheckpoint<'a, K, V, P>,
+    inner: crate::internals::bptree::cursor::CursorCheckpoint<'a, K, V, M>,
+}
+
+impl<K, V, M> BptreeMapWriteTxn<'_, K, V, M>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: MapMode + NodeCloning<K, V>,
+{
+    /// Begin an allocation-free private checkpoint under this original writer.
+    ///
+    /// Checked generation exhaustion refuses before changing any owner. Prepaid
+    /// writers must remain inside their original budget's refund-deferral scope.
+    pub fn checkpoint(&mut self) -> Result<BptreeMapCheckpoint<'_, K, V, M>, PlanningError> {
+        self.inner
+            .as_mut()
+            .checkpoint()
+            .map(|inner| BptreeMapCheckpoint { inner })
+            .ok_or(PlanningError::Overflow)
+    }
 }
 
 impl<K, V, P> BptreeMapWriteTxn<'_, K, V, Prepaid<P>>
@@ -615,18 +635,6 @@ where
     V: Clone + Send + Sync + 'static,
     P: ClonePlanning<K, V>,
 {
-    /// Begin an allocation-free private checkpoint under this original writer.
-    ///
-    /// Checked generation exhaustion refuses before changing any owner. Keep
-    /// the entire writer lifetime in its original budget's refund-deferral scope.
-    pub fn checkpoint(&mut self) -> Result<BptreeMapCheckpoint<'_, K, V, P>, PlanningError> {
-        self.inner
-            .as_mut()
-            .checkpoint()
-            .map(|inner| BptreeMapCheckpoint { inner })
-            .ok_or(PlanningError::Overflow)
-    }
-
     /// Admit one closed insertion while retaining this original physical writer.
     ///
     /// Refusal returns the original input before mutation; successful edits
@@ -642,11 +650,11 @@ where
     }
 }
 
-impl<K, V, P> BptreeMapCheckpoint<'_, K, V, P>
+impl<K, V, M> BptreeMapCheckpoint<'_, K, V, M>
 where
     K: Clone + Ord + Debug + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    P: ClonePlanning<K, V>,
+    M: MapMode + NodeCloning<K, V>,
 {
     /// Borrow an immutable value from this private checkpoint's current state.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
@@ -657,21 +665,120 @@ where
         self.inner.as_ref().search(key)
     }
 
+    /// Borrow the original value at this checkpoint's start, without copying it.
+    ///
+    /// The parent root remains retained even after child edits remove or replace
+    /// the entry. This reference cannot outlive the exclusive checkpoint guard.
+    pub fn get_before<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.inner.get_before(key)
+    }
+
+    /// Whether the checkpoint's current state contains this key.
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get(key).is_some()
+    }
+
+    /// Number of entries in the checkpoint's current state.
+    pub fn len(&self) -> usize {
+        self.inner.as_ref().len()
+    }
+
+    /// Whether the checkpoint's current state contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Borrow ordered entries directly from this checkpoint's original cursor.
+    pub fn iter(&self) -> Iter<'_, K, V, M::Charge> {
+        self.inner.as_ref().kv_iter()
+    }
+
+    /// Borrow ordered keys directly from this checkpoint's original cursor.
+    pub fn keys(&self) -> KeyIter<'_, K, V, M::Charge> {
+        self.inner.as_ref().k_iter()
+    }
+
+    /// Borrow ordered values directly from this checkpoint's original cursor.
+    pub fn values(&self) -> ValueIter<'_, K, V, M::Charge> {
+        self.inner.as_ref().v_iter()
+    }
+
+    /// Borrow entries within the requested key bounds.
+    pub fn range<R, T>(&self, range: R) -> RangeIter<'_, K, V, M::Charge>
+    where
+        K: Borrow<T>,
+        T: Ord + ?Sized,
+        R: RangeBounds<T>,
+    {
+        self.inner.as_ref().range(range)
+    }
+
+    /// Borrow the current minimum key and value.
+    pub fn first_key_value(&self) -> Option<(&K, &V)> {
+        self.inner.as_ref().first_key_value()
+    }
+
+    /// Borrow the current maximum key and value.
+    pub fn last_key_value(&self) -> Option<(&K, &V)> {
+        self.inner.as_ref().last_key_value()
+    }
+
     /// Borrow a snapshot whose lifetime cannot escape this exclusive guard.
-    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, Prepaid<P>> {
+    pub fn to_snapshot(&self) -> BptreeMapReadSnapshot<'_, K, V, M> {
         BptreeMapReadSnapshot {
             inner: SnapshotType::W(self.inner.as_ref()),
         }
     }
 
     /// Begin a nested private checkpoint; overflow leaves the parent unchanged.
-    pub fn checkpoint(&mut self) -> Result<BptreeMapCheckpoint<'_, K, V, P>, PlanningError> {
+    pub fn checkpoint(&mut self) -> Result<BptreeMapCheckpoint<'_, K, V, M>, PlanningError> {
         self.inner
             .checkpoint()
             .map(|inner| BptreeMapCheckpoint { inner })
             .ok_or(PlanningError::Overflow)
     }
 
+    /// Keep all child edits private in the original writer; does not publish.
+    pub fn apply(self) {
+        self.inner.apply();
+    }
+}
+
+impl<K, V> BptreeMapCheckpoint<'_, K, V>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    /// Insert or replace an entry, returning the previous private value.
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.inner.edit_parts().0.insert(key, value)
+    }
+
+    /// Remove an entry from this private checkpoint.
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self.inner.edit_parts().0.remove(key)
+    }
+
+    /// Clone the original path before borrowing a private mutable value.
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.inner.edit_parts().0.get_mut_ref(key)
+    }
+}
+
+impl<K, V, P> BptreeMapCheckpoint<'_, K, V, Prepaid<P>>
+where
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    P: ClonePlanning<K, V>,
+{
     /// Admit one closed edit while retaining exact parent rollback ownership.
     pub fn try_insert_admitted<E>(
         &mut self,
@@ -681,11 +788,6 @@ where
     ) -> Result<Option<V>, ((K, V), InsertAdmissionError<E>)> {
         let (cursor, buffers) = self.inner.edit_parts();
         edit_admitted(cursor, key, value, admit, Some(buffers))
-    }
-
-    /// Keep all child edits private in the original writer; does not publish.
-    pub fn apply(self) {
-        self.inner.apply();
     }
 }
 

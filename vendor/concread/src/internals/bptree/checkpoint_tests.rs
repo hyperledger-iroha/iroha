@@ -1,7 +1,7 @@
 //! Original checkpoint metadata, allocation custody and private generation tags.
 
 use super::*;
-use crate::bptree::NodeFunding;
+use crate::bptree::{NodeCloning, NodeFunding, Prepaid};
 use crate::internals::bptree::cursor::{CursorReadOps, SuperBlock};
 use crate::internals::bptree::node::allocation_tests::{
     Charge, Prepaid as ObservedPrepaid, all_refunded, prepaid, record, without_allocations,
@@ -32,8 +32,8 @@ impl NodeCloning<usize, usize> for ScalarPolicy {
 }
 
 type Cursor = CursorWrite<usize, usize, Prepaid<ScalarPolicy>>;
-type Checkpoint<'a> = CursorCheckpoint<'a, usize, usize, ScalarPolicy>;
-type Tracking = Buffer<usize, usize, ScalarPolicy>;
+type Checkpoint<'a> = CursorCheckpoint<'a, usize, usize, Prepaid<ScalarPolicy>>;
+type Tracking = Buffer<usize, usize, Prepaid<ScalarPolicy>>;
 
 struct Fixture {
     // Private allocations must disappear before the original published root.
@@ -118,7 +118,7 @@ fn insert_with_growth(
 }
 
 fn allocation_count(policy: &ScalarPolicy) -> usize {
-    policy.0.borrow().next
+    policy.0.as_ref().borrow().next
 }
 
 fn assert_reclaimed(start: usize, end: usize) {
@@ -276,4 +276,289 @@ fn exhausted_private_tag_refuses_without_allocating_or_changing_any_owner() {
     }
     fixture.cursor.txid = original_tag;
     finish(fixture);
+}
+
+#[test]
+fn untracked_final_generation_refuses_nested_checkpoint_and_restores_parent() {
+    let source = unsafe { SuperBlock::<usize, usize>::new() };
+    let mut cursor = source.create_writer(());
+    cursor.insert(0, 100);
+    let original_tag = cursor.txid;
+    cursor.txid = (TXID_MASK >> TXID_SHF) - 2;
+    let root = cursor.root;
+    let parent_tag = cursor.txid;
+    let length = cursor.length;
+    let first = cursor.first_seen.clone();
+    let last = cursor.last_seen.as_ref().unwrap().clone();
+    let buffers = (
+        cursor.first_seen.as_ptr(),
+        cursor.first_seen.capacity(),
+        cursor.last_seen.as_ref().unwrap().as_ptr(),
+        cursor.last_seen.as_ref().unwrap().capacity(),
+    );
+
+    let mut checkpoint = without_allocations(|| cursor.checkpoint().unwrap());
+    assert_eq!(checkpoint.as_ref().txid, parent_tag + 1);
+    without_allocations(|| assert!(checkpoint.checkpoint().is_none()));
+    assert_eq!(checkpoint.as_ref().txid, parent_tag + 1);
+    assert_eq!(checkpoint.get_before(&0), Some(&100));
+    assert_eq!(checkpoint.as_ref().search(&0), Some(&100));
+    without_allocations(|| drop(checkpoint));
+
+    assert_eq!(
+        (cursor.root, cursor.txid, cursor.length),
+        (root, parent_tag, length)
+    );
+    assert_eq!(cursor.first_seen, first);
+    assert_eq!(*cursor.last_seen.as_ref().unwrap(), last);
+    assert_eq!(
+        (
+            cursor.first_seen.as_ptr(),
+            cursor.first_seen.capacity(),
+            cursor.last_seen.as_ref().unwrap().as_ptr(),
+            cursor.last_seen.as_ref().unwrap().capacity(),
+        ),
+        buffers
+    );
+    cursor.txid = original_tag;
+    assert!(cursor.verify());
+    without_allocations(|| {
+        drop(cursor);
+        drop(source);
+    });
+}
+
+#[test]
+fn untracked_abort_restores_parent_nodes_and_cuts_without_allocating_after_growth() {
+    let source = unsafe { SuperBlock::<usize, Box<usize>>::new() };
+    let mut cursor = source.create_writer(());
+    for key in 0..128 {
+        cursor.insert(key, Box::new(key + 1000));
+    }
+    let root = cursor.root;
+    let tag = cursor.txid;
+    let length = cursor.length;
+    let first_cut = cursor.first_seen.len();
+    let last_cut = cursor.last_seen.as_ref().unwrap().len();
+    let original = cursor.search(&10).unwrap().as_ref() as *const usize;
+    let mut outer = without_allocations(|| cursor.checkpoint().unwrap());
+    assert_eq!(
+        outer.get_before(&10).unwrap().as_ref() as *const usize,
+        original
+    );
+    for key in 128..512 {
+        outer.edit_parts().0.insert(key, Box::new(key + 1000));
+    }
+    for key in 0..100 {
+        outer.edit_parts().0.remove(&key);
+    }
+    **outer.edit_parts().0.get_mut_ref(&110).unwrap() = 999;
+    let mut child = without_allocations(|| outer.checkpoint().unwrap());
+    assert!(child.get_before(&10).is_none());
+    child.edit_parts().0.insert(10, Box::new(10));
+    let latest = child.as_ref().txid;
+    without_allocations(|| child.apply());
+    assert_eq!(outer.as_ref().txid, latest);
+    assert_eq!(
+        outer.get_before(&10).unwrap().as_ref() as *const usize,
+        original
+    );
+    assert!(outer.get_before(&200).is_none());
+    let capacities = (
+        outer.cursor.first_seen.capacity(),
+        outer.cursor.last_seen.as_ref().unwrap().capacity(),
+    );
+    without_allocations(|| drop(outer));
+    assert_eq!(
+        (cursor.root, cursor.txid, cursor.length),
+        (root, tag, length)
+    );
+    assert_eq!(cursor.first_seen.len(), first_cut);
+    assert_eq!(cursor.last_seen.as_ref().unwrap().len(), last_cut);
+    assert_eq!(cursor.first_seen.capacity(), capacities.0);
+    assert_eq!(cursor.last_seen.as_ref().unwrap().capacity(), capacities.1);
+    assert_eq!(
+        cursor.search(&10).unwrap().as_ref() as *const usize,
+        original
+    );
+    for key in 0..128 {
+        assert_eq!(cursor.search(&key).map(Box::as_ref), Some(&(key + 1000)));
+    }
+    assert!(cursor.verify());
+    without_allocations(|| {
+        drop(cursor);
+        drop(source);
+    });
+}
+
+#[test]
+fn public_untracked_checkpoint_reads_saved_values_and_applies_without_allocation() {
+    use crate::bptree::{BptreeMap, BptreeMapCheckpoint};
+    let map: BptreeMap<usize, Box<usize>> = (0..64).map(|key| (key, Box::new(key))).collect();
+    let old = map.read();
+    let original = old.get(&20).unwrap().as_ref() as *const usize;
+    let mut writer = map.write();
+    let mut parent: BptreeMapCheckpoint<'_, usize, Box<usize>> =
+        without_allocations(|| writer.checkpoint().unwrap());
+    assert_eq!(parent.len(), 64);
+    assert!(!parent.is_empty());
+    assert!(parent.contains_key(&20));
+    assert_eq!(
+        parent.get_before(&20).unwrap().as_ref() as *const usize,
+        original
+    );
+    assert_eq!(parent.first_key_value().map(|(key, _)| *key), Some(0));
+    assert_eq!(parent.last_key_value().map(|(key, _)| *key), Some(63));
+    assert_eq!(parent.range(10..20).count(), 10);
+    assert_eq!(parent.iter().len(), 64);
+    assert_eq!(parent.keys().count(), 64);
+    assert_eq!(parent.values().count(), 64);
+    assert_eq!(parent.to_snapshot().get(&20).map(Box::as_ref), Some(&20));
+    assert_eq!(parent.remove(&20), Some(Box::new(20)));
+    **parent.get_mut(&21).unwrap() = 121;
+    parent.insert(64, Box::new(64));
+    let mut child = without_allocations(|| parent.checkpoint().unwrap());
+    assert!(child.get_before(&20).is_none());
+    assert_eq!(child.get_before(&21).map(Box::as_ref), Some(&121));
+    child.insert(20, Box::new(220));
+    without_allocations(|| child.apply());
+    assert_eq!(parent.get(&20).map(Box::as_ref), Some(&220));
+    assert_eq!(
+        parent.get_before(&20).unwrap().as_ref() as *const usize,
+        original
+    );
+    without_allocations(|| parent.apply());
+    assert_eq!(writer.get(&20).map(Box::as_ref), Some(&220));
+    writer.commit();
+    assert_eq!(map.read().get(&21).map(Box::as_ref), Some(&121));
+    assert_eq!(old.get(&20).unwrap().as_ref() as *const usize, original);
+    assert_eq!(old.len(), 64);
+}
+
+#[test]
+fn caught_untracked_insert_remove_and_mutable_clone_panics_fail_the_original_cursor() {
+    use crate::bptree::BptreeMap;
+    use std::{
+        panic::{catch_unwind, AssertUnwindSafe},
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+    };
+    struct Value {
+        data: Box<usize>,
+        panic_clone: Arc<AtomicBool>,
+    }
+    impl Clone for Value {
+        fn clone(&self) -> Self {
+            assert!(
+                !self.panic_clone.load(Ordering::Relaxed),
+                "injected value clone panic"
+            );
+            Self {
+                data: self.data.clone(),
+                panic_clone: self.panic_clone.clone(),
+            }
+        }
+    }
+    for operation in 0..3 {
+        let panic_clone = Arc::new(AtomicBool::new(false));
+        let map: BptreeMap<usize, Value> = (0..32)
+            .map(|key| {
+                (
+                    key,
+                    Value {
+                        data: Box::new(key),
+                        panic_clone: panic_clone.clone(),
+                    },
+                )
+            })
+            .collect();
+        let old = map.read();
+        let original = old.get(&10).unwrap().data.as_ref() as *const usize;
+        let mut writer = map.write();
+        let mut checkpoint = writer.checkpoint().unwrap();
+        panic_clone.store(true, Ordering::Relaxed);
+        assert!(catch_unwind(AssertUnwindSafe(|| match operation {
+            0 => {
+                checkpoint.insert(
+                    10,
+                    Value {
+                        data: Box::new(110),
+                        panic_clone: panic_clone.clone(),
+                    },
+                );
+            }
+            1 => {
+                checkpoint.remove(&10);
+            }
+            _ => {
+                checkpoint.get_mut(&10);
+            }
+        }))
+        .is_err());
+        panic_clone.store(false, Ordering::Relaxed);
+        assert!(catch_unwind(AssertUnwindSafe(|| checkpoint.len())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| checkpoint.get_before(&10))).is_err());
+        drop(checkpoint);
+        assert!(catch_unwind(AssertUnwindSafe(|| writer.len())).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| writer.insert(
+            99,
+            Value {
+                data: Box::new(99),
+                panic_clone: panic_clone.clone(),
+            }
+        )))
+        .is_err());
+        drop(writer);
+        assert_eq!(
+            old.get(&10).unwrap().data.as_ref() as *const usize,
+            original
+        );
+        assert_eq!(*map.read().get(&10).unwrap().data, 10);
+        // Catching the edit panic did not unwind the physical guard. Only the
+        // abandoned cursor is failed; a new original writer remains usable.
+        let mut replacement = map.try_write().unwrap();
+        replacement.insert(
+            100,
+            Value {
+                data: Box::new(100),
+                panic_clone: panic_clone.clone(),
+            },
+        );
+        replacement.commit();
+        assert_eq!(*map.read().get(&100).unwrap().data, 100);
+    }
+}
+
+#[test]
+fn untracked_checkpoint_retains_only_live_rollback_metadata() {
+    use crate::bptree::{BptreeMapCheckpoint, Untracked};
+    use std::mem::size_of;
+
+    type Original = Saved<usize, usize, Untracked>;
+    type Checkpoint<'a> = CursorCheckpoint<'a, usize, usize, Untracked>;
+    // Ordinary Vec growth never displaces a tracking owner into these slots.
+    // Every World storage transaction owns two checkpoints, so retaining two
+    // impossible Option<Vec> values per guard needlessly expands its stack.
+    assert_eq!(size_of::<CheckpointBuffers<usize, usize, Untracked>>(), 0);
+    // A live saved root is non-null; the resolved state uses that same niche.
+    assert_eq!(size_of::<Option<Original>>(), size_of::<Original>());
+    assert_eq!(
+        size_of::<Original>(),
+        size_of::<(NonNull<Node<usize, usize>>, u64, usize, usize, usize)>()
+    );
+    assert_eq!(
+        size_of::<Checkpoint<'_>>(),
+        size_of::<Original>() + 2 * size_of::<usize>()
+    );
+    assert_eq!(
+        size_of::<BptreeMapCheckpoint<'_, usize, usize>>(),
+        size_of::<Checkpoint<'_>>()
+    );
+    // Prepaid checkpoints still carry both original charged buffer owners.
+    assert_eq!(
+        size_of::<CheckpointBuffers<usize, usize, Prepaid<ScalarPolicy>>>(),
+        2 * size_of::<Option<Tracking>>()
+    );
 }
