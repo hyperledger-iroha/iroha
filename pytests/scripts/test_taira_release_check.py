@@ -35,6 +35,7 @@ from unittest.mock import MagicMock, patch
 # The configured initial-catalog/network control also runs before CLI checks.
 # Two private-key fixture controls cover immutable-source signing and custody.
 # Three explicit Torii listener controls preserve P2P and generated API ports.
+# Five real execution publication controls retain witness, wire and State ownership.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -43,8 +44,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -89,6 +90,26 @@ def isolate_stage_fixture(stack, *, keep=()):
 
 
 class BeaconGateTests(unittest.TestCase):
+    def test_actual_publication_controls_are_unique_and_focused_in_both_scopes(self):
+        prefix = 'state::execution_publication_test_support::tests::'
+        required = tuple(prefix + leaf for leaf in (
+            'executed_genesis_and_successor_publish_real_finality_and_witnesses',
+            'publication_rejects_an_overlay_from_another_state_before_durable_writes',
+            'publication_rejects_changed_sealed_wire_with_the_same_header',
+            'publication_requires_the_original_captured_witness',
+            'publication_refuses_other_signed_genesis_validator_keys',
+        ))
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = [leaf for _, leaves in gate.qualification_stages(scope)['core'] for leaf in leaves]
+            startup = [leaf for _, leaves in gate.CORE_STARTUP_STAGES for leaf in leaves]
+            for leaf in required:
+                with self.subTest(scope=scope, regression=leaf):
+                    self.assertEqual(selected.count(leaf), 1)
+                    self.assertEqual(startup.count(leaf), 1)
+                    focused = gate.focused_regression_stages(scope, ('core=' + leaf,))
+                    self.assertEqual(tuple(focused), ('core',))
+                    self.assertEqual([name for _, names in focused['core'] for name in names], [leaf])
+
     def test_prebuilt_portability_controls_are_required_and_focused_on_both_platforms(self):
         required = (
             "tests::program_absolute_prebuilt_override_does_not_require_checkout",
@@ -920,7 +941,14 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (1039, 1217)), ("linux", (1044, 1222))):
+        portable_counts = (
+            EXPECTED_BASIC_REGRESSION_COUNT - PLATFORM_REGRESSION_COUNT,
+            EXPECTED_REGRESSION_COUNT - PLATFORM_REGRESSION_COUNT,
+        )
+        for platform, counts in (
+            ("darwin", portable_counts),
+            ("linux", tuple(count + 5 for count in portable_counts)),
+        ):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)

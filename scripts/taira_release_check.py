@@ -1826,6 +1826,17 @@ CORE_STAGES += CORE_FINALITY_INSPECTION_STAGES
 CORE_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
 
+CORE_EXECUTION_PUBLICATION_STAGES = (("actual execution fixture finality and publication ownership", (
+    'state::execution_publication_test_support::tests::executed_genesis_and_successor_publish_real_finality_and_witnesses',
+    'state::execution_publication_test_support::tests::publication_rejects_an_overlay_from_another_state_before_durable_writes',
+    'state::execution_publication_test_support::tests::publication_rejects_changed_sealed_wire_with_the_same_header',
+    'state::execution_publication_test_support::tests::publication_requires_the_original_captured_witness',
+    'state::execution_publication_test_support::tests::publication_refuses_other_signed_genesis_validator_keys',
+)),)
+CORE_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
+CORE_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
+
 
 # Portable ownership prerequisites; every selected leaf runs in both scopes.
 MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map")

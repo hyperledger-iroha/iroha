@@ -396,6 +396,8 @@ mod committed_transaction_context;
 mod da_hydration;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod execution_publication_test_support;
 mod fastpq_source_inventory;
 mod output_capacity;
 mod output_publication;
