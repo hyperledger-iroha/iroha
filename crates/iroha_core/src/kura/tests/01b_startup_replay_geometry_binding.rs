@@ -285,9 +285,11 @@ impl StartupGeometryBindingFixture {
         &self,
         transition: &super::lane_geometry::StartupReplayGeometryTransition,
     ) -> Result<V2StartupReplayStorageBinding> {
-        let _lease = self.kura.canonical_publication_lease();
-        self.kura
-            .finish_startup_replay_geometry_transition(transition)
+        let lease = self
+            .kura
+            .try_publication_lease()
+            .expect("joint startup publication lease");
+        lease.finish_startup_replay_geometry_transition(transition)
     }
 }
 

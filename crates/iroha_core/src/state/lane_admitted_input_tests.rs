@@ -228,3 +228,286 @@ state_test! { sync first_lane_input_reader_drops_state_guards_and_rejects_change
     }, || state.first_lane_admitted_input(&observed, &observed.contexts()[0]));
     assert!(matches!(result.unwrap(), FirstLaneAdmittedInputReadV1::ObservationChanged));
 }
+
+state_test! { sync canonical_queue_plan_input_reads_exact_first_carrier_pending_and_applied
+    let (fixture, control) = first_lane_input_fixture(0x91);
+    let state = &fixture.state;
+    let hash = fixture.binding.entrypoint_hash;
+    let before = exact_test_tree_fingerprint(&state.kura.store_root());
+    let generation = state.state_view_generation();
+    let first = state.canonical_queue_plan_admitted_input(hash).unwrap().unwrap();
+    assert_eq!(norito::encode_canonical(first.input()).unwrap(), control);
+    assert_eq!(first.certificate().certificate.binding, fixture.binding);
+    assert_eq!(first.entrypoint().hash(), hash);
+    assert_eq!(state.canonical_queue_plan_admitted_input(hash).unwrap(), Some(first.clone()));
+    assert!(State::queue_plan_pending_binding_in_view(&state.view(), hash).unwrap().is_some());
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), before);
+
+    let absent = HashOf::from_untyped_unchecked(Hash::new(b"absent canonical admission"));
+    assert_eq!(state.canonical_queue_plan_admitted_input(absent).unwrap(), None);
+    // The actual first carrier remains the source after the existing explicit
+    // fixture boundary resolves every pending marker and commits membership.
+    // This does not claim transaction execution or a second finality decision.
+    state.record_committed_queue_plan_entrypoints_for_tests(
+        [hash], NonZeroUsize::new(state.committed_height()).unwrap(),
+    ).unwrap();
+    assert_eq!(State::queue_plan_pending_binding_in_view(&state.view(), hash).unwrap(), None);
+    assert_eq!(state.canonical_queue_plan_admitted_input(hash).unwrap(), Some(first));
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), before);
+}
+
+state_test! { large_stack canonical_queue_plan_input_rejects_wrong_rank_claim_and_orphan
+    let (fixture, _) = first_lane_input_fixture(0x92);
+    let state = &fixture.state;
+    let binding = &fixture.binding;
+    let key = State::queue_plan_admission_registry_marker_key(&binding.registry_key()).unwrap();
+    let original = state.world.smart_contract_state.view().get(&key).unwrap().clone();
+    let record = State::decode_exact_queue_plan_admission_registry_record(&key, &original).unwrap();
+    let before = exact_test_tree_fingerprint(&state.kura.store_root());
+    for (height, index) in [
+        (record.priority.carrier_height, 1),
+        (record.priority.carrier_height + 1, 0),
+        (record.priority.carrier_height - 1, 0),
+    ] {
+        let mut world = state.world.block();
+        world.smart_contract_state.insert(key.clone(),
+            State::queue_plan_admission_registry_marker_payload(
+                &record.claim, QueuePlanAdmissionPriorityV1::new(height, index).unwrap(),
+            ).unwrap());
+        world.commit();
+        assert!(state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).is_err(),
+            "wrong first-carrier position ({height}, {index}) cannot yield an input");
+    }
+    let mut other_claim = record.claim;
+    other_claim.binding_hash = Hash::new(b"another canonical binding");
+    let mut world = state.world.block();
+    world.smart_contract_state.insert(key.clone(),
+        State::queue_plan_admission_registry_marker_payload(&other_claim, record.priority).unwrap());
+    world.commit();
+    assert!(state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).is_err());
+    let mut world = state.world.block();
+    world.smart_contract_state.remove(key.clone());
+    world.commit();
+    assert!(state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).is_err(),
+        "an orphaned pending obligation is never genuine registry absence");
+    let mut world = state.world.block();
+    world.smart_contract_state.insert(key, original);
+    world.commit();
+    assert!(state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).unwrap().is_some());
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), before);
+}
+
+state_test! { sync canonical_queue_plan_input_requires_original_finality_and_available_body
+    let (fixture, _) = first_lane_input_fixture(0x93);
+    let state = &fixture.state;
+    let hash = fixture.binding.entrypoint_hash;
+    let path = state.kura.v2_finality_artifact_path_for_testing(fixture.block.header().height().get());
+    let exact = std::fs::read(&path).unwrap();
+    let generation = state.state_view_generation();
+    let block_hash = state.latest_block_hash_fast();
+    std::fs::remove_file(&path).unwrap();
+    assert!(state.canonical_queue_plan_admitted_input(hash).is_err());
+    let mut corrupt = exact.clone();
+    corrupt[0] ^= 1;
+    std::fs::write(&path, &corrupt).unwrap();
+    assert!(state.canonical_queue_plan_admitted_input(hash).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), corrupt, "read cannot repair occupied corruption");
+    let (foreign, _) = first_lane_input_fixture(0x94);
+    let foreign_path = foreign.state.kura.v2_finality_artifact_path_for_testing(
+        foreign.block.header().height().get(),
+    );
+    let foreign_bytes = std::fs::read(foreign_path).unwrap();
+    assert_ne!(foreign.block.hash(), fixture.block.hash());
+    std::fs::write(&path, &foreign_bytes).unwrap();
+    assert!(state.canonical_queue_plan_admitted_input(hash).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), foreign_bytes);
+    std::fs::write(&path, exact).unwrap();
+    assert!(state.canonical_queue_plan_admitted_input(hash).unwrap().is_some());
+    state.kura.evict_first_admission_body_for_testing(
+        NonZeroUsize::new(usize::try_from(fixture.block.header().height().get()).unwrap()).unwrap(),
+        fixture.block.hash(),
+    ).unwrap();
+    assert_eq!(state.canonical_queue_plan_admitted_input(hash).unwrap_err(),
+        "canonical QueuePlan first-carrier body requires authenticated recovery");
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.latest_block_hash_fast(), block_hash);
+    assert_eq!(state.queue_plan_admission_binding_registry_match(&fixture.binding).unwrap(),
+        QueuePlanAdmissionRegistryMatch::Exact);
+}
+
+state_test! { sync canonical_queue_plan_input_releases_state_guards_and_rejoins_original_registry
+    let (fixture, _) = first_lane_input_fixture(0x95);
+    let state = Arc::new(fixture.state);
+    let hash = fixture.binding.entrypoint_hash;
+    let key = State::queue_plan_admission_registry_marker_key(&fixture.binding.registry_key()).unwrap();
+    let original = state.world.smart_contract_state.view().get(&key).unwrap().clone();
+    let record = State::decode_exact_queue_plan_admission_registry_record(&key, &original).unwrap();
+    let successor = empty_global_block_after(Some(&fixture.block));
+    let writer = Arc::clone(&state);
+    let result = super::lane_consensus_verified::io_observer::observe(move || {
+        let writer = Arc::clone(&writer);
+        let header = successor.header();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let task = std::thread::spawn(move || {
+            let _lease = writer.consensus_publication_lease();
+            writer.append_committed_block_header_for_tests(header);
+            let world = writer.world.block();
+            world.commit();
+            let _ = done_tx.send(());
+        });
+        done_rx.recv_timeout(Duration::from_secs(5)).expect("no State guards survive into Kura I/O");
+        task.join().unwrap();
+    }, || state.canonical_queue_plan_admitted_input(hash));
+    assert!(result.unwrap().is_some(), "unrelated publication preserves the original source");
+    let changed = Arc::clone(&state);
+    let changed_key = key.clone();
+    let result = crate::torii_proxy::observe_queue_plan_authentication_for_test(move || {
+        // This hook runs after the actual Kura read, while the original body is
+        // authenticated. Its mutation must be seen by the final registry join.
+        let mut world = changed.world.block();
+        world.smart_contract_state.insert(changed_key.clone(),
+            State::queue_plan_admission_registry_marker_payload(&record.claim,
+                QueuePlanAdmissionPriorityV1::new(record.priority.carrier_height, 1).unwrap(),
+            ).unwrap());
+        world.commit();
+    }, || state.canonical_queue_plan_admitted_input(hash));
+    assert_eq!(result.unwrap_err(), "canonical QueuePlan registry source changed during carrier read");
+    let mut world = state.world.block();
+    world.smart_contract_state.insert(key, original);
+    world.commit();
+    assert!(state.canonical_queue_plan_admitted_input(hash).unwrap().is_some());
+}
+
+state_test! { sync canonical_queue_plan_input_component_carrier_requires_separate_finality
+    let (state, validators, _, parent) = configured_lane_context_queue_plan_state();
+    let (binding, control) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE, DataSpaceId::UNIVERSAL,
+        )),
+        &validators, parent.header().height().get(), 0x96,
+    );
+    // This component helper accepts admission-only metadata. The generic
+    // lane-opening fixture also owns DA policies, so build this narrower real
+    // proposal from the same parent and complete input instead.
+    let header = BlockHeader::new(
+        parent.header().height().checked_add(1).unwrap(),
+        Some(parent.hash()), None, parent.header().creation_time_ms + 1, 0,
+    );
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+    builder.set_execution_context(Some(
+        iroha_data_model::block::BlockExecutionContextBundle::default()
+            .with_queue_plan_admissions(vec![control.clone()]),
+    ));
+    let key = merge_carrier_finality_fixture_keypair();
+    let mut carrier = builder.build_with_signature(0, key.private_key());
+    carrier.set_execution_outputs(
+        Vec::new(), 0, BTreeMap::new(), Vec::new(), AxtPolicySnapshot::default(),
+        Default::default(), Vec::new(),
+        &crate::execution_output_test_support::structural_output_limits(),
+    ).unwrap();
+    carrier.validate_proposal_commitments().unwrap();
+    carrier.validate_execution_result_structure().unwrap();
+    assert_eq!(carrier.header().prev_block_hash(), Some(parent.hash()));
+    assert!(carrier.da_proof_policies().is_none());
+    let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
+    assert!(state.commit_queue_plan_admission_carrier_for_testing(
+        &carrier.canonical_resultless_proposal(),
+    ).is_err(), "the component helper cannot manufacture a result-bearing image");
+    assert_eq!(crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(), before);
+    state.commit_queue_plan_admission_carrier_for_testing(&carrier).unwrap();
+    assert_eq!(state.latest_block_hash_fast(), Some(carrier.hash()));
+    assert_eq!(state.queue_plan_admission_binding_registry_match(&binding).unwrap(),
+        QueuePlanAdmissionRegistryMatch::Exact);
+    assert!(state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).is_err(),
+        "component State staging alone is not authenticated body/finality custody");
+    state.kura.store_block(Arc::new(carrier.clone())).unwrap();
+    assert!(state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).is_err(),
+        "an exact stored body alone is not finality");
+    let mut previous = None;
+    for height in 1..=state.committed_height() {
+        let block = state.kura.get_block(NonZeroUsize::new(height).unwrap()).unwrap();
+        let artifact = merge_carrier_finality_artifact_with_network(
+            &block, previous.as_ref(), state.network_id,
+        );
+        let _receipt = state.kura.store_v2_finality_artifact(&artifact).unwrap();
+        previous = Some(artifact);
+    }
+    let admitted = state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).unwrap().unwrap();
+    assert_eq!(norito::encode_canonical(admitted.input()).unwrap(), control);
+    assert_eq!(admitted.certificate().certificate.binding, binding);
+}
+
+state_test! { large_stack canonical_queue_plan_input_retains_first_carrier_after_real_lane_close
+    let (state, validators, _, parent) = configured_lane_context_queue_plan_state();
+    let lane_id = LaneId::new(1);
+    install_autoscale_elastic_catalog_for_test(&state,
+        autoscale_elastic_catalog_lane_with_committee_for_test(lane_id, 1, &validators));
+    install_lane_manifest_registry_for_keypairs(&state, &[LaneId::SINGLE, lane_id], &validators);
+    let plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        lane_id, DataSpaceId::UNIVERSAL,
+    ));
+    let (binding, control) = queue_plan_admission_certificate_for_state_test(
+        &state, plan.clone(), &validators, parent.header().height().get(), 0x97,
+    );
+    let (first, _, _) = publish_first_lane_input_fixture(&state, &parent, &control);
+    let original = state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).unwrap().unwrap();
+    let close = empty_global_block_after(Some(&first));
+    let mut overlay = state.block(close.header());
+    let capacity = autoscale_default_route_capacity_lanes(
+        &overlay.nexus.routing_policy, overlay.nexus.lane_catalog.lanes(),
+        overlay.nexus.autoscale.min_lane_id.get(), overlay.nexus.autoscale.max_lane_id_exclusive.get(),
+    );
+    overlay.stage_autoscale_lane_drain_intent(lane_id, capacity, capacity, 0, 0).unwrap();
+    overlay.record_autoscale_transition_height(close.header().height().get());
+    state.validate_committed_autoscale_lane_lifecycle(
+        overlay.pending_autoscale_lifecycle.as_ref().unwrap(),
+        close.header().height().get(), close.hash(), None,
+    ).unwrap();
+    overlay.block_hashes.push(close.hash());
+    insert_empty_transaction_block_for_state_commit(&mut overlay, &close);
+    overlay.commit().unwrap();
+    state.kura.store_block(Arc::new(close.clone())).unwrap();
+    assert!(crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+        &state.view(), plan.coordinator_route(), close.header().height().get() + 1,
+    ).is_err(), "fresh admission is closed");
+    assert_eq!(State::queue_plan_pending_route_authority_in_view(&state.view(), &binding).unwrap(),
+        Some(QueuePlanPendingRouteAuthority::Draining));
+    let before = exact_test_tree_fingerprint(&state.kura.store_root());
+    assert_eq!(state.canonical_queue_plan_admitted_input(binding.entrypoint_hash).unwrap(), Some(original));
+    assert_eq!(state.latest_block_hash_fast(), Some(close.hash()));
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), before);
+}
+
+state_test! { sync canonical_queue_plan_input_enforces_cumulative_read_budget
+    let (fixture, control) = first_lane_input_fixture(0x98);
+    let state = &fixture.state;
+    let hash = fixture.binding.entrypoint_hash;
+    let budget = State::canonical_queue_plan_input_decode_limits().unwrap();
+    let body = norito::canonical_decode_limits(
+        usize::try_from(iroha_data_model::block::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES).unwrap(),
+    );
+    let kura = crate::kura::canonical_admission_read_decode_limits().unwrap();
+    assert!(kura.max_total_allocated_bytes() > body.max_total_allocated_bytes(),
+        "valid maximum-body allocations retain their complete allowance after metadata reads");
+    assert!(budget.max_total_allocated_bytes() > kura.max_total_allocated_bytes(),
+        "pre-read and post-read State observations have separate cumulative allowances");
+    assert!(State::canonical_queue_plan_input_read_working_set_bytes().unwrap()
+        > budget.max_total_allocated_bytes());
+    let generation = state.state_view_generation();
+    let before = exact_test_tree_fingerprint(&state.kura.store_root());
+    let refused = norito::with_decode_limits_scope(
+        norito::DecodeLimits::new(
+            budget.max_sequence_elements(), budget.max_field_bytes(),
+            budget.max_total_elements(), 0, budget.max_nesting_depth(),
+        ),
+        || state.canonical_queue_plan_admitted_input(hash),
+    );
+    assert!(refused.is_err(), "a nested reader cannot raise the original allocator budget");
+    let admitted = state.canonical_queue_plan_admitted_input(hash).unwrap().unwrap();
+    assert_eq!(norito::encode_canonical(admitted.input()).unwrap(), control,
+        "a refused scoped decode must release its budget before the exact retry");
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), before);
+}

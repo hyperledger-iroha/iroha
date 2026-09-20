@@ -88,6 +88,15 @@ pub(in crate::sumeragi) struct LifecycleReplayAuthorityV1 {
     source: LifecycleReplaySourceV1,
 }
 impl LifecycleReplayAuthorityV1 {
+    /// Move only the original diagnostic proof. This is data, not a recovered
+    /// output capability; its caller must independently authenticate the
+    /// frozen context, PoPs and both conflicting signatures before retention.
+    pub(super) fn into_equivocation_proof(self) -> Option<wire::SumeragiV2Equivocation> {
+        match self.source {
+            LifecycleReplaySourceV1::Equivocation(proof) => Some(proof),
+            _ => None,
+        }
+    }
     /// Return whether this canonical authority originated in a live WAL frame.
     pub(super) fn is_live_wal_origin(&self) -> bool {
         matches!(&self.source, LifecycleReplaySourceV1::Wal(_))
@@ -1008,24 +1017,131 @@ impl RecoveredWalDecisionFetchReplayEvidenceV1 {
 #[must_use = "pending Kura comparison must join its exact lifecycle census"]
 pub(in crate::sumeragi) struct PendingKuraApplyComparisonV1 {
     expected: crate::sumeragi::v2_recovery::PendingKuraApply,
+    context: LifecycleContext,
     candidate: CandidateAdmission,
+    lineage: RecoveredDecisionApplyReplayLineageV1,
+    effect: AdapterEffect,
+    validated: ValidatedBodyReceipt,
+    retained_rows: Option<Vec<LifecycleLedgerRecordV1>>,
 }
 impl PendingKuraApplyComparisonV1 {
-    /// Authenticate the complete original standalone Apply row without rewriting it.
-    pub(super) fn matches_record(
-        &self,
-        context: LifecycleContext,
-        record: &LifecycleLedgerRecordV1,
-    ) -> bool {
-        self.candidate.replay_authority_is_exact(context)
+    /// Authenticate the complete original Apply row without rewriting it.
+    pub(super) fn matches_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.candidate.replay_authority_is_exact(self.context)
+            && self
+                .retained_rows
+                .as_ref()
+                .is_none_or(|rows| rows.last() == Some(record))
             && RecoveredDecisionApplyCandidateLineageV1::candidate_matches_record(
                 &self.candidate,
                 record,
-                OwnerId::new(self.candidate.causal_root, record.ordinal()),
+                self.owner(record.ordinal()),
                 None,
                 super::schema::DurableContinuation::None,
             )
             && record.ordinal() != 0
+    }
+    /// Authenticate an existing linked owner before admitting its passive Apply.
+    pub(super) fn bind_retained_owner(
+        &mut self,
+        verified: &VerifiedHeightContext,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        if self.retained_rows.is_some()
+            || self.context != super::projection::lifecycle_context(verified.context())
+        {
+            return false;
+        }
+        match ledger.authenticate_pending_kura_linked_apply(verified, self) {
+            Ok(Some((candidate, rows))) => {
+                self.candidate = candidate;
+                self.retained_rows = Some(rows);
+                true
+            }
+            Ok(None) => true,
+            Err(_) => false,
+        }
+    }
+    /// Retain the original first-admission ordinal only after its prefix is sealed.
+    pub(super) fn owner(&self, ordinal: u128) -> OwnerId {
+        self.retained_rows
+            .as_ref()
+            .and_then(|rows| rows.first())
+            .map_or_else(
+                || OwnerId::new(self.candidate.causal_root, ordinal),
+                |row| row.owner(),
+            )
+    }
+    /// Rejoin every immutable predecessor, not just the live Apply coordinates.
+    pub(super) fn matches_ledger(&self, ledger: &super::ledger::LifecycleLedgerV1) -> bool {
+        ledger.context() == self.context
+            && self.retained_rows.as_ref().is_none_or(|rows| {
+                rows.first().is_some_and(|first| {
+                    ledger
+                        .records()
+                        .iter()
+                        .filter(|row| row.owner() == first.owner())
+                        .eq(rows.iter())
+                })
+            })
+    }
+    /// Check the same original prefix before census or completed-Apply settlement.
+    pub(super) fn matches_coordinator(&self, coordinator: &super::LifecycleCoordinator) -> bool {
+        super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|ledger| self.matches_ledger(&ledger))
+    }
+    /// Compare an exact canonical Decision predecessor with the sealed WAL family.
+    pub(super) fn matches_canonical_predecessor(
+        &self,
+        record: &LifecycleLedgerRecordV1,
+        authority: &LifecycleReplayAuthorityV1,
+        stage: LifecycleStageKind,
+    ) -> bool {
+        let expected = match stage {
+            LifecycleStageKind::FetchBody => Some(self.lineage.fetch.clone()),
+            LifecycleStageKind::StoreBody | LifecycleStageKind::ValidateBody => {
+                self.lineage.body.authority_for(self.context, stage)
+            }
+            _ => None,
+        };
+        let Some(expected) = expected else {
+            return false;
+        };
+        let Ok(shape) = expected
+            .source
+            .project(self.context, stage, &expected.payload)
+        else {
+            return false;
+        };
+        self.lineage.is_stage_closed(self.context)
+            && *authority == expected
+            && record.key() == Some(shape.key)
+            && record.work_class() == Some(shape.work_class)
+            && record.stage() == Some(LifecycleStage::new(stage, PredecessorScope::Independent))
+            && record.reconstruction_source() == self.candidate.reconstruction_source
+            && record.durable_payload() == expected.payload.durable_payload()
+    }
+    /// Reconstruct only inert original-owner admission data using the shared oracle.
+    pub(super) fn project_retained_body_apply(
+        &self,
+        verified: &VerifiedHeightContext,
+        owner: OwnerId,
+        validate_key: LifecycleKey,
+        validate_authority: &LifecycleReplayAuthorityV1,
+        original_fetch: Option<&LifecycleReplayAuthorityV1>,
+    ) -> Option<CandidateAdmission> {
+        let (candidate, pending) = authenticate_retained_body_apply_projection(
+            verified,
+            &self.candidate,
+            owner,
+            validate_key,
+            validate_authority,
+            &self.validated,
+            &self.effect,
+            original_fetch,
+        )?;
+        drop(pending);
+        Some(candidate)
     }
     /// Borrow inert comparison data only inside lifecycle census and settlement.
     pub(super) const fn candidate(&self) -> &CandidateAdmission {
@@ -1245,6 +1361,7 @@ impl RecoveredDecisionApplyReplayLineageV1 {
         expected: crate::sumeragi::v2_recovery::PendingKuraApply,
         effect: &AdapterEffect,
         pending: &PendingRuntimeEffectBinding,
+        validated: &ValidatedBodyReceipt,
     ) -> Option<PendingKuraApplyComparisonV1> {
         let context = super::projection::lifecycle_context(verified.context());
         if !self.is_stage_closed(context)
@@ -1263,9 +1380,21 @@ impl RecoveredDecisionApplyReplayLineageV1 {
             DurablePayloadReference::BodyFrame(self.body.body_frame.durable_reference()),
             self.apply.clone(),
         )?;
+        if durable_body_frame_reference(context, validated.durable())
+            != Some(self.body.body_frame.durable_reference())
+            || !matches!(effect, AdapterEffect::Apply { certificate, .. }
+                if certificate.execution_commitment == validated.execution_commitment())
+        {
+            return None;
+        }
         Some(PendingKuraApplyComparisonV1 {
             expected,
+            context,
             candidate,
+            lineage: self.clone(),
+            effect: effect.clone(),
+            validated: validated.clone(),
+            retained_rows: None,
         })
     }
     /// Consume the inert replay family into the sole fixed reducer-derived
@@ -5656,14 +5785,6 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         {
             return None;
         }
-        let AdapterEffect::Apply { certificate, .. } = effect else {
-            return None;
-        };
-        if certificate.execution_commitment != receipt.execution_commitment()
-            || verified.verify_quorum_certificate(certificate).is_err()
-        {
-            return None;
-        }
         let canonical_projection = super::projection::authority_free_admission_projection(
             context,
             verified,
@@ -5680,107 +5801,142 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         if canonical_candidate != self.apply {
             return None;
         }
-        let source = validate_authority.recover_durable_standalone_validate(
-            context,
+        authenticate_retained_body_apply_projection(
+            verified,
+            &self.apply,
+            owner,
             validate_key,
-            LifecycleStage::new(
-                LifecycleStageKind::ValidateBody,
-                PredecessorScope::Independent,
-            ),
-            self.apply.payload,
-        )?;
-        let validate_effect = standalone_validate_effect(&source.source)?;
-        if !standalone_validate_stage_matches(
-            &source.source,
-            source.body_frame,
-            &validate_effect,
-            receipt.durable(),
-        ) {
+            validate_authority,
+            receipt,
+            effect,
+            original_fetch,
+        )
+    }
+}
+
+/// Rejoin the authenticated Decision Apply to its original signed body owner.
+/// Callers keep executable ownership separately; PendingKura discards the local binding.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_retained_body_apply_projection(
+    verified: &VerifiedHeightContext,
+    current: &CandidateAdmission,
+    owner: OwnerId,
+    validate_key: LifecycleKey,
+    validate_authority: &LifecycleReplayAuthorityV1,
+    receipt: &ValidatedBodyReceipt,
+    effect: &AdapterEffect,
+    original_fetch: Option<&LifecycleReplayAuthorityV1>,
+) -> Option<(CandidateAdmission, PendingRuntimeEffectBinding)> {
+    let context = super::projection::lifecycle_context(verified.context());
+    let AdapterEffect::Apply { certificate, .. } = effect else {
+        return None;
+    };
+    if !current.replay_authority_is_exact(context)
+        || current.work_class != LifecycleWorkClass::Apply
+        || durable_body_frame_reference(context, receipt.durable())
+            .map(DurablePayloadReference::BodyFrame)
+            != Some(current.payload)
+        || owner.causal_root() == current.causal_root
+        || certificate.execution_commitment != receipt.execution_commitment()
+        || verified.verify_quorum_certificate(certificate).is_err()
+    {
+        return None;
+    }
+    let source = validate_authority.recover_durable_standalone_validate(
+        context,
+        validate_key,
+        LifecycleStage::new(
+            LifecycleStageKind::ValidateBody,
+            PredecessorScope::Independent,
+        ),
+        current.payload,
+    )?;
+    let validate_effect = standalone_validate_effect(&source.source)?;
+    if !standalone_validate_stage_matches(
+        &source.source,
+        source.body_frame,
+        &validate_effect,
+        receipt.durable(),
+    ) {
+        return None;
+    }
+    let certified_predecessor = match &source.source.origin {
+        BodyPipelineOriginV1::Certified { certificate, .. } => {
+            let authenticated = if original_fetch
+                .is_some_and(|fetch| fetch.same_persisted_family(validate_authority))
+            {
+                CertifiedFetchReplayEvidenceV1 {
+                    family: CertifiedBodyPipelineReplayFamilyV1 {
+                        source: source.source.clone(),
+                        body_frame: source.body_frame,
+                    },
+                }
+                .authenticated_by_verified_height(verified)
+            } else {
+                authenticated_genesis_standalone_source(verified, &source.source)
+                    || authenticated_refined_proposal_standalone_source(verified, &source.source)
+            };
+            if !authenticated {
+                return None;
+            }
+            Some(certificate)
+        }
+        BodyPipelineOriginV1::Proposal(proposal) => {
+            verified
+                .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+                ))
+                .ok()?;
+            None
+        }
+        BodyPipelineOriginV1::LocalBody(_) if original_fetch.is_none() => None,
+        BodyPipelineOriginV1::LocalBody(_) | BodyPipelineOriginV1::RecoveredDecision { .. } => {
             return None;
         }
-        let certified_predecessor = match &source.source.origin {
-            BodyPipelineOriginV1::Certified { certificate, .. } => {
-                let authenticated = if original_fetch
-                    .is_some_and(|fetch| fetch.same_persisted_family(validate_authority))
-                {
-                    CertifiedFetchReplayEvidenceV1 {
-                        family: CertifiedBodyPipelineReplayFamilyV1 {
-                            source: source.source.clone(),
-                            body_frame: source.body_frame,
-                        },
-                    }
-                    .authenticated_by_verified_height(verified)
-                } else {
-                    authenticated_genesis_standalone_source(verified, &source.source)
-                        || authenticated_refined_proposal_standalone_source(
-                            verified,
-                            &source.source,
-                        )
-                };
-                if !authenticated {
-                    return None;
-                }
-                Some(certificate)
-            }
-            BodyPipelineOriginV1::Proposal(proposal) => {
-                verified
-                    .verify_consensus_message(&wire::ConsensusMessageV2::new(
-                        wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-                    ))
-                    .ok()?;
-                None
-            }
-            BodyPipelineOriginV1::LocalBody(_) if original_fetch.is_none() => None,
-            BodyPipelineOriginV1::LocalBody(_) | BodyPipelineOriginV1::RecoveredDecision { .. } => {
-                return None;
-            }
+    };
+    let validate_pending = PendingRuntimeEffectBinding::from_durable_standalone_validate(
+        DurableStandaloneValidatePendingMintPermit::new(),
+        Hash::prehashed(*owner.causal_root().digest().as_bytes()),
+        &validate_effect,
+        certified_predecessor,
+    )?;
+    if let Some(fetch) = original_fetch {
+        let LifecycleReplaySourceV1::BodyPipeline(fetch_source) = &fetch.source else {
+            return None;
         };
-        let validate_pending = PendingRuntimeEffectBinding::from_durable_standalone_validate(
-            DurableStandaloneValidatePendingMintPermit::new(),
-            Hash::prehashed(*owner.causal_root().digest().as_bytes()),
-            &validate_effect,
-            certified_predecessor,
-        )?;
-        if let Some(fetch) = original_fetch {
-            let LifecycleReplaySourceV1::BodyPipeline(fetch_source) = &fetch.source else {
+        if !fetch.same_persisted_family(validate_authority) {
+            let BodyPipelineOriginV1::Proposal(proposal) = &fetch_source.origin else {
                 return None;
             };
-            if !fetch.same_persisted_family(validate_authority) {
-                let BodyPipelineOriginV1::Proposal(proposal) = &fetch_source.origin else {
-                    return None;
-                };
-                verified
-                    .verify_consensus_message(&wire::ConsensusMessageV2::new(
-                        wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-                    ))
-                    .ok()?;
-                if !exact_remote_proposal_validate_source_from_retained(
-                    fetch_source,
-                    &source.source,
-                    &validate_pending,
-                ) {
-                    return None;
-                }
+            verified
+                .verify_consensus_message(&wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+                ))
+                .ok()?;
+            if !exact_remote_proposal_validate_source_from_retained(
+                fetch_source,
+                &source.source,
+                &validate_pending,
+            ) {
+                return None;
             }
         }
-        let pending =
-            validate_pending.project_validate_apply_successor(&validate_effect, effect)?;
-        let projected = super::projection::authority_free_admission_projection(
-            context, verified, effect, &pending,
-        )
-        .ok()?;
-        let candidate = candidate_from_authorized_projection(
-            context,
-            projected,
-            self.apply.payload,
-            self.apply.replay_authority.clone(),
-        )?;
-        (candidate.causal_root == owner.causal_root()
-            && candidate.key == self.apply.key
-            && candidate.stage == self.apply.stage
-            && candidate.payload == self.apply.payload)
-            .then_some((candidate, pending))
     }
+    let pending = validate_pending.project_validate_apply_successor(&validate_effect, effect)?;
+    let projected =
+        super::projection::authority_free_admission_projection(context, verified, effect, &pending)
+            .ok()?;
+    let candidate = candidate_from_authorized_projection(
+        context,
+        projected,
+        current.payload,
+        current.replay_authority.clone(),
+    )?;
+    (candidate.causal_root == owner.causal_root()
+        && candidate.key == current.key
+        && candidate.stage == current.stage
+        && candidate.payload == current.payload)
+        .then_some((candidate, pending))
 }
 
 impl LifecycleReplayAuthorityV1 {

@@ -97,6 +97,12 @@ impl Fixture {
             .with_kagemusha_mint_finality_genesis_parameters(mint)
             .set_topology(topology)
             .append_parameter(Parameter::Custom(npos.into_custom_parameter()));
+        if !instructions.is_empty() {
+            // Genesis serializes topology registrations after a transaction's
+            // explicit instructions. Staking must execute in the next batch,
+            // after those peers and their consensus keys exist.
+            builder = builder.next_transaction();
+        }
         for instruction in instructions {
             builder = builder.append_instruction(instruction);
         }
@@ -195,7 +201,7 @@ fn execute_fixture_genesis(
     key: &KeyPair,
 ) -> (SignedBlock, Hash, Hash) {
     use iroha_config::{
-        kura::{FsyncMode, InitMode},
+        kura::InitMode,
         parameters::{actual, defaults},
     };
     use iroha_core::{
@@ -237,7 +243,7 @@ fn execute_fixture_genesis(
     let kura_config = actual::Kura {
         init_mode: InitMode::Strict,
         // The temporary constructor supplies and retains its isolated directory.
-        store_dir: iroha_config_base::WithOrigin::inline(PathBuf::new()),
+        store_dir: iroha_config::base::WithOrigin::inline(PathBuf::new()),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
@@ -245,7 +251,7 @@ fn execute_fixture_genesis(
         fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: FsyncMode::Batched,
+        fsync_mode: defaults::kura::FSYNC_MODE,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
     };
     let kura = Kura::new_temporary_with_configured_lane_catalog(
@@ -253,7 +259,7 @@ fn execute_fixture_genesis(
         &nexus.lane_config,
         &nexus.configured_lane_catalog,
     )
-    .unwrap();
+    .expect("initialize authenticated temporary Kura for native genesis");
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         world,
         kura,
@@ -273,17 +279,19 @@ fn execute_fixture_genesis(
         .validate_active_coverage_for_catalog(&nexus.lane_catalog)
         .unwrap();
     state.install_lane_manifests(&std::sync::Arc::new(manifests));
-    state
-        .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
-        .unwrap();
-    state
-        .restore_kura_lane_segments_before_startup_replay()
-        .unwrap();
-    state.set_nexus_from_config(nexus).unwrap();
     let mut pipeline = actual::Pipeline::default();
     pipeline.workers = 1;
     pipeline.gas.tech_account_id = reprofile(&pipeline.gas.tech_account_id);
     state.set_pipeline(pipeline);
+    state
+        .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+        .expect("bind signed genesis network and configured primary geometry");
+    state
+        .restore_kura_lane_segments_before_startup_replay()
+        .expect("restore authenticated primary before genesis execution");
+    state
+        .set_nexus_from_config(nexus)
+        .expect("install the exact configured genesis Nexus baseline");
     state.set_crypto(actual::Crypto::default());
     let topology =
         Topology::new(iroha_core::sumeragi::signed_genesis_voting_peers(&provisional).unwrap());
@@ -299,19 +307,13 @@ fn execute_fixture_genesis(
     )
     .unpack(|_| {})
     .unwrap_or_else(|(block, error)| {
-        let transaction_errors = (0..block.external_transactions().count())
-            .filter_map(|index| {
-                let (_, output) = block.network_output_at(u32::try_from(index).ok()?)?;
-                output
-                    .result
-                    .as_ref()
-                    .err()
-                    .map(|reason| format!("transaction[{index}]: {reason:?}"))
-            })
+        let output_errors = block
+            .failed_outputs()
+            .map(|(index, reason)| format!("output[{index}]: {reason:?}"))
             .collect::<Vec<_>>();
         panic!(
             "native fixture genesis execution failed: {error}; {}",
-            transaction_errors.join("; ")
+            output_errors.join("; ")
         )
     });
     let nexus_hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
@@ -324,6 +326,85 @@ fn execute_fixture_genesis(
 pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
     let fixture = Fixture::new();
     (fixture.block, fixture.genesis)
+}
+
+/// Execute and sign explicit active lane bindings with authority keys distinct from peer keys.
+pub(crate) fn deployment_lane_genesis_fixture() -> (SignedBlock, KeyPair) {
+    static FIXTURE: std::sync::OnceLock<Fixture> = std::sync::OnceLock::new();
+    let fixture = FIXTURE.get_or_init(|| {
+        std::thread::Builder::new()
+            .name("deployment-lane-genesis-fixture".into())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                use iroha_data_model::{
+                    account::{Account, address::AccountAddress},
+                    asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+                    domain::Domain,
+                    isi::{
+                        ActivatePublicLaneValidator, Mint, Register, RegisterPublicLaneValidator,
+                    },
+                };
+                use iroha_model_base::{domain::DomainId, metadata::Metadata, topology::LaneId};
+                use iroha_primitives::numeric::{NumericSpec, Quantity};
+
+                let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+                let escrow = AccountAddress::from_i105_for_discriminant(
+                    &iroha_config::parameters::defaults::nexus::staking::stake_escrow_account_id(),
+                    Some(iroha_config::parameters::defaults::common::chain_discriminant()),
+                )
+                .unwrap()
+                .to_i105_for_discriminant(CHAIN_DISCRIMINANT)
+                .unwrap();
+                let escrow = AccountId::parse_encoded(&escrow).unwrap();
+                let stake_asset = AssetDefinitionId::parse_address_literal(
+                    &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
+                )
+                .unwrap();
+                let mut instructions: Vec<iroha_data_model::isi::InstructionBox> = vec![
+                    Register::domain(Domain::new(
+                        DomainId::parse_fully_qualified("nexus.universal").unwrap(),
+                    ))
+                    .into(),
+                    Register::account(Account::new(escrow)).into(),
+                    Register::asset_definition(AssetDefinition::new(
+                        stake_asset.clone(),
+                        "Fixture stake",
+                        NumericSpec::default(),
+                        AssetBalancePolicy::Global,
+                        None,
+                    ))
+                    .into(),
+                ];
+                for seed in 110..114 {
+                    let validator =
+                        AccountId::new(key(seed + 20, Algorithm::Ed25519).public_key().clone());
+                    let peer = PeerId::new(key(seed, Algorithm::BlsNormal).public_key().clone());
+                    instructions.extend([
+                        Register::account(Account::new(validator.clone())).into(),
+                        Mint::asset_quantity(
+                            1_u64,
+                            AssetId::new(stake_asset.clone(), validator.clone()),
+                        )
+                        .into(),
+                        RegisterPublicLaneValidator::new(
+                            LaneId::SINGLE,
+                            validator.clone(),
+                            peer,
+                            validator.clone(),
+                            Quantity::from(1_u64),
+                            Metadata::default(),
+                        )
+                        .into(),
+                        ActivatePublicLaneValidator::new(LaneId::SINGLE, validator).into(),
+                    ]);
+                }
+                Fixture::build_with_epoch_and_instructions(20, instructions)
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    });
+    (fixture.block.clone(), fixture.genesis.clone())
 }
 
 /// Reuse native genesis execution with an explicit grant, leaving the default fixture unchanged.

@@ -631,6 +631,11 @@ fn validate_geometry_journal_relative_path(
             ));
         }
     }
+    // An in-memory Kura retains the same authenticated instance and relative
+    // namespace rules, but owns no filesystem root or ancestor objects.
+    if store_root.as_os_str().is_empty() {
+        return Ok(());
+    }
     let root_metadata = fs::symlink_metadata(store_root)
         .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
     if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {

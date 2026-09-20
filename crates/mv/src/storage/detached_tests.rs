@@ -208,7 +208,7 @@ fn aborted_children_and_noop_touches_survive_detachment_without_invented_entries
 }
 
 #[test]
-fn admission_precedes_delta_copies_and_retains_reservation_until_values_drop() {
+fn detachment_retains_original_values_without_clones_and_releases_reservation_last() {
     #[derive(Debug)]
     struct Counted(u64, Arc<AtomicUsize>);
     impl Clone for Counted {
@@ -252,8 +252,8 @@ fn admission_precedes_delta_copies_and_retains_reservation_until_values_drop() {
         .unwrap();
     assert_eq!(
         copies.load(Ordering::SeqCst),
-        1,
-        "only one retained after-value is copied, not all 100 entries or either preimage"
+        0,
+        "both original successors are retained without copying any key or value"
     );
     assert_eq!(journal.touched_entries().len(), 2);
     assert!(!journal.admission().0.load(Ordering::SeqCst));

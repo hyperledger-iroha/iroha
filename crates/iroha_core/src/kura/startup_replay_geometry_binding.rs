@@ -15,6 +15,9 @@ pub(crate) struct ReplayGeometryBindingRequest<'a> {
 
 /// Private pre-publication expectation. It cannot adopt identities observed after a move.
 pub(crate) struct StartupReplayGeometryTransition {
+    original_owner: Arc<()>,
+    original_kura: super::KuraInstanceIdentity,
+    expected_transitions: Vec<StartupReplayGeometryRequestIdentity>,
     binding: super::V2StartupReplayStorageBinding,
     expected_paths: BTreeMap<PathBuf, super::StableSidecarDirectoryInventory>,
     final_auxiliary: BTreeMap<PathBuf, super::StableSidecarDirectoryInventory>,
@@ -23,11 +26,27 @@ pub(crate) struct StartupReplayGeometryTransition {
     created_namespaces: Vec<StartupReplayNamespaceCreation>,
 }
 
+impl StartupReplayGeometryTransition {
+    /// Compare custody of this original transition while preparation is incomplete.
+    /// The identity carries no storage or publication authority by itself.
+    pub(crate) fn original_owner_identity(&self) -> Arc<()> {
+        Arc::clone(&self.original_owner)
+    }
+}
+
+struct StartupReplayGeometryRequestIdentity {
+    height: u64,
+    previous: Vec<LaneGeometryBinding>,
+    updated: Vec<LaneGeometryBinding>,
+    previous_lineage: Hash,
+    updated_lineage: Hash,
+}
+
 /// Effect receipt emitted only by the existing native namespace creator.
 pub(crate) struct StartupReplayNamespaceCreation {
     blocks_identity: GeometryFileIdentity,
-    held: BoundProgressDirectory,
-    inventory: super::StableSidecarDirectoryInventory,
+    held: Option<BoundProgressDirectory>,
+    inventory: Option<super::StableSidecarDirectoryInventory>,
 }
 struct StartupReplayMissingNamespace {
     blocks: PathBuf,
@@ -141,6 +160,7 @@ impl Kura {
         let mut prior_updated = None;
         let mut prior_index = None;
         let mut final_lanes = initial_lanes;
+        let mut expected_transitions = Vec::with_capacity(requests.len());
         for request in requests {
             let previous = self.geometry_bindings(
                 request.previous,
@@ -195,6 +215,13 @@ impl Kura {
                     "replay geometry journal operations are ambiguous or noncontiguous",
                 ));
             }
+            expected_transitions.push(StartupReplayGeometryRequestIdentity {
+                height: request.transition_height,
+                previous: previous.clone(),
+                updated: updated.clone(),
+                previous_lineage: request.previous_lineage_root,
+                updated_lineage: request.updated_lineage_root,
+            });
             for operation in &record.operations {
                 for instance in operation.previous.iter().chain(operation.updated.iter()) {
                     let path = self.binding_blocks_path(instance);
@@ -323,6 +350,9 @@ impl Kura {
         drop(_geometry);
         self.validate_v2_startup_replay_storage_binding_unlocked(binding)?;
         Ok(StartupReplayGeometryTransition {
+            original_owner: Arc::new(()),
+            original_kura: self.instance_identity(),
+            expected_transitions,
             binding: binding.clone(),
             expected_paths,
             final_auxiliary,
@@ -333,6 +363,7 @@ impl Kura {
     }
 
     /// Consume native geometry effects into the private replay preparation.
+    #[cfg(test)]
     pub(crate) fn apply_startup_replay_geometry_transition(
         &self,
         request: &ReplayGeometryBindingRequest<'_>,
@@ -360,17 +391,29 @@ impl Kura {
         receipt: &StartupReplayNamespaceCreation,
         path: &Path,
     ) -> Result<super::StableSidecarDirectoryInventory> {
-        let opened = secure_file_metadata::from_file(&receipt.held.file)
+        let held = receipt.held.as_ref().ok_or_else(|| {
+            self.startup_auxiliary_identity_error(
+                path,
+                "native namespace creation has no captured original descriptor",
+            )
+        })?;
+        let inventory = receipt.inventory.as_ref().ok_or_else(|| {
+            self.startup_auxiliary_identity_error(
+                path,
+                "native namespace creation inventory is unfinished",
+            )
+        })?;
+        let opened = secure_file_metadata::from_file(&held.file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        if !Self::sidecar_directory_metadata_unchanged(&receipt.held.metadata, &opened)
-            || !receipt.inventory.files.is_empty()
+        if !Self::sidecar_directory_metadata_unchanged(&held.metadata, &opened)
+            || !inventory.files.is_empty()
         {
             return Err(self.startup_auxiliary_identity_error(
                 path,
                 "native created namespace changed after its receipt",
             ));
         }
-        let mut expected = receipt.inventory.clone();
+        let mut expected = inventory.clone();
         expected.directory.expected_path = path.to_path_buf();
         let canonical_root = self
             .store_root
@@ -449,11 +492,35 @@ impl Kura {
         Ok(())
     }
 
-    /// Caller holds the final canonical publication lease; every failure precedes WSV install.
+    /// Acquire the joint boundary for standalone startup geometry publication.
+    #[cfg(test)]
     pub(crate) fn finish_startup_replay_geometry_transition(
         &self,
         transition: &StartupReplayGeometryTransition,
     ) -> Result<super::V2StartupReplayStorageBinding> {
+        let lease = self.try_publication_lease().map_err(|error| match error {
+            super::KuraPublicationPreparationError::Storage(error) => error,
+            super::KuraPublicationPreparationError::Busy { .. } => self.geometry_error(
+                ErrorKind::WouldBlock,
+                "startup geometry publication fence is busy",
+            ),
+        })?;
+        lease.finish_startup_replay_geometry_transition(transition)
+    }
+    fn finish_startup_replay_geometry_transition_under_lease(
+        &self,
+        transition: &StartupReplayGeometryTransition,
+        lease: &super::KuraPublicationLease<'_>,
+    ) -> Result<super::V2StartupReplayStorageBinding> {
+        if !lease.belongs_to(self)
+            || !transition
+                .original_kura
+                .same_instance(&self.instance_identity())
+        {
+            return Err(
+                self.geometry_error(ErrorKind::InvalidInput, "foreign startup geometry owner")
+            );
+        }
         let (original, _) = transition.binding.strict_parts().ok_or_else(|| {
             self.geometry_error(
                 ErrorKind::InvalidInput,
@@ -494,7 +561,7 @@ impl Kura {
                 expected_blocks: transition.expected_blocks.clone(),
             }),
         };
-        self.validate_v2_startup_replay_storage_binding_unlocked(&next)?;
+        self.validate_v2_startup_replay_storage_binding_with_lease(&next, Some(lease))?;
         // Snapshot/install/clear all take this same inventory-first lock order.
         // No session can pair a publication with an independently replaced audit.
         let installed = self.v2_startup_finality_verification_inventory.lock();
@@ -518,11 +585,17 @@ impl Kura {
         *publication = Some(Arc::clone(next_publication));
         Ok(next)
     }
-    pub(super) fn validate_startup_geometry_publication(
+    pub(super) fn validate_startup_geometry_publication_with_lease(
         &self,
         publication: &StartupReplayGeometryPublication,
+        lease: Option<&super::KuraPublicationLease<'_>>,
     ) -> Result<()> {
-        let _geometry = self.lane_geometry_lock.lock();
+        if lease.is_some_and(|lease| !lease.belongs_to(self)) {
+            return Err(
+                self.geometry_error(ErrorKind::InvalidInput, "foreign startup publication lease")
+            );
+        }
+        let _geometry = lease.is_none().then(|| self.lane_geometry_lock.lock());
         for (path, expected) in &publication.expected_blocks {
             match expected {
                 Some(identity) => self.require_geometry_path_identity(path, true, *identity)?,
@@ -556,5 +629,16 @@ impl Kura {
             Self::require_startup_auxiliary_identity(expected, &current)?;
         }
         Ok(())
+    }
+}
+
+impl super::KuraPublicationLease<'_> {
+    /// Finish the original replay geometry receipt under all held physical fences.
+    pub(crate) fn finish_startup_replay_geometry_transition(
+        &self,
+        transition: &StartupReplayGeometryTransition,
+    ) -> Result<super::V2StartupReplayStorageBinding> {
+        self.original_kura()
+            .finish_startup_replay_geometry_transition_under_lease(transition, self)
     }
 }

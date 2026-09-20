@@ -91,6 +91,10 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
         /// Exact lifecycle ordinal whose executed Validate carrier became Ready.
         ordinal: u128,
     },
+    /// The original Validate dispatch remains parked on actual local release/capacity.
+    LifecycleValidateLocalWaiting,
+    /// The original local-waiting dispatch re-entered the same keyed worker queue.
+    LifecycleValidateLocalRequeued,
     /// A missing-sidecar Validate remains parked under its immutable registration owner.
     LifecycleValidateDeferred,
     /// A registered sidecar wait is externally parked and ordinary ingress may resume.
@@ -186,6 +190,8 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::ApplyTerminalDirectBroadcastDeferred
             | Self::LifecycleValidatePublished { .. }
             | Self::LifecycleValidateDeferred
+            | Self::LifecycleValidateLocalWaiting
+            | Self::LifecycleValidateLocalRequeued
             | Self::LifecycleValidateSidecarWaiting
             | Self::LifecycleValidateSidecarWoken { .. }
             | Self::LifecycleValidateSidecarSuperseded
@@ -1085,6 +1091,7 @@ impl LaunchedProductionLifecycleV1 {
                 | PendingLifecycleCompletionV1::RecoveredDecisionFetch(_)
                 | PendingLifecycleCompletionV1::RecoveredSign(_)
                 | PendingLifecycleCompletionV1::Validate(_)
+                | PendingLifecycleCompletionV1::LocalValidate(_)
                 | PendingLifecycleCompletionV1::DeferredValidate(_) => Claim::AwaitingCompletion,
             });
         }
@@ -1220,6 +1227,27 @@ impl LaunchedProductionLifecycleV1 {
         self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)
     }
 
+    fn retry_local_lifecycle_validate(
+        &mut self,
+        retained: RetainedLocalLifecycleValidateV1,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        match retained.retry() {
+            LocalLifecycleValidateRetryV1::Waiting(retained) => {
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
+            }
+            LocalLifecycleValidateRetryV1::Requeued => {
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued
+            }
+            LocalLifecycleValidateRetryV1::RecoveryRequired(retained) => {
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                ProductionLifecycleCompletionSelectionV1::RestartRequired
+            }
+        }
+    }
+
     fn settle_parked_lifecycle_validate_completion(
         &mut self,
     ) -> ProductionLifecycleCompletionSelectionV1 {
@@ -1236,6 +1264,10 @@ impl LaunchedProductionLifecycleV1 {
                 .lifecycle_output_guard()
                 .close_admission_for_restart();
             return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+        };
+        let completion = match completion.into_local_or_publication() {
+            Ok(completion) => completion,
+            Err(retained) => return self.retry_local_lifecycle_validate(retained),
         };
         let (dispatch, ack) = completion.into_publication_parts();
         let physical_completion = ack.physical_completion();
@@ -1563,6 +1595,23 @@ impl LaunchedProductionLifecycleV1 {
                         Some(PendingLifecycleCompletionV1::Validate(completion));
                     self.settle_parked_lifecycle_validate_completion()
                 }
+                PendingLifecycleCompletionV1::LocalValidate(retained) => {
+                    let selected = self.retry_local_lifecycle_validate(retained);
+                    if matches!(selected, ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting) {
+                        match self.services.prepare_ordinary_completion_behind_validate_fence() {
+                            Ok(true) => return ProductionLifecycleCompletionPreGateV1::Ordinary(runner),
+                            Ok(false) => {},
+                            Err(reason) => {
+                                self.services.lifecycle_output_guard().retain_effect_failure(reason);
+                                self.close_output_for_restart();
+                                return ProductionLifecycleCompletionPreGateV1::Selected(
+                                    ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                                );
+                            }
+                        }
+                    }
+                    selected
+                },
                 PendingLifecycleCompletionV1::ReadyValidateSuccessor(published) => self
                     .settle_ready_validate_successor(published, runner.debt()),
                 PendingLifecycleCompletionV1::DeferredValidate(deferred) => {
@@ -3043,6 +3092,7 @@ impl ActivatedProductionLifecycleV1 {
                     }
                     PendingLifecycleCompletionV1::RecoveredSign(_) => "RecoveredSign",
                     PendingLifecycleCompletionV1::Validate(_) => "Validate",
+                    PendingLifecycleCompletionV1::LocalValidate(_) => "LocalValidate",
                     PendingLifecycleCompletionV1::ReadyValidateSuccessor(_) => {
                         "ReadyValidateSuccessor"
                     }

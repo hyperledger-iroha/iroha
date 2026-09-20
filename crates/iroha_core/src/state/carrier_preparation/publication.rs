@@ -122,7 +122,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             reputation_capture: _reputation_capture,
             mut publication_events,
             tiered_snapshot,
-            effects,
+            mut effects,
             admission: retained_admission,
         } = journals;
         admission = retained_admission;
@@ -139,21 +139,23 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         runtime.publish();
         let (_, mut extra_events, (), ()) = world.publish();
         world_effects.publish(target);
-        if let Some(pending) = &effects.pending_da_commitments {
-            // Derived persistence runs only after the Kura lease is released.
-            target.apply_committed_da_commitment_bundle(pending, false);
-        }
+        let da_post_publication = effects
+            .da_commitments
+            .take()
+            .map(|effects| effects.publish(target, &generation, true));
         target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry));
         block_hashes.publish();
         target.update_latest_block_header_cache(effects.header);
         drop(generation);
+        // Capture the final cursor projection under these same physical fences,
+        // with the applying carrier's retained lane configuration.
+        if let Some(post) = da_post_publication {
+            post.publish(target);
+        }
         let commit = fences.release_for_completion();
 
         // Every authoritative component is now visible. Remaining operations
         // materialize derived indexes/persistence and cannot return a pre-write retry.
-        if effects.pending_da_commitments.is_some() {
-            target.schedule_da_shard_cursor_journal_persist();
-        }
         effects.publish_observability(target);
         if !effects.verified_lane_relay_records.is_empty() {
             target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records);
@@ -250,11 +252,7 @@ impl RetainedCarrierEffects {
                 target.telemetry.record_citizens_total(total);
             }
             target.telemetry.set_musubi_replication_shortfall_releases(
-                *target
-                    .world
-                    .musubi_replication_shortfall_releases
-                    .view()
-                    .get(),
+                self.committed_musubi_replication_shortfall_releases,
             );
         }
         #[cfg(not(feature = "telemetry"))]

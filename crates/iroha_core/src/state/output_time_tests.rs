@@ -220,10 +220,10 @@ fn scheduled_time_owns_actual_root_nested_trace_and_completion_call() {
     assert!(block.world.triggers.by_call_triggers().is_empty());
     assert_eq!(block.committed_fragment_count(), fragments + 2);
     assert!(block.gas_used_in_block > 0);
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -454,10 +454,10 @@ fn real_time_failure_retains_rejection_without_retry_or_business_effects() {
             .repeats,
         Repeats::Exactly(1)
     );
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -482,10 +482,10 @@ fn time_phase_cannot_bypass_network_or_run_twice() {
                 })
                 .is_err()
         );
-        assert_eq!(
+        assert!(matches!(
             block.commit().unwrap_err(),
             TransactionsBlockError::ExecutionOutputCapacity
-        );
+        ));
     }
 }
 

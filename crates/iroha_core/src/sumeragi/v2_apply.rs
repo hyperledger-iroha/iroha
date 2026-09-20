@@ -12,7 +12,7 @@ use super::{
     message::CanonicalExecutedBlockNeedV1,
     network_topology::Topology,
     v2::VerifiedHeightContext,
-    v2_body_store::{BodyValidationError, V2BodyStore, ValidatedBodyReceipt},
+    v2_body_store::{BodyValidationBusy, BodyValidationError, V2BodyStore, ValidatedBodyReceipt},
     v2_core::{
         CanonicalIdentityProjection, CheckedProductionTransition, EventTag,
         IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD,
@@ -3515,6 +3515,10 @@ fn submit_fastpq_witness_job(
     }
 }
 
+/// Typed candidate custody awaiting the complete reserved publisher integration.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) mod validation_custody;
+
 /// Immutable dependencies of the single v2 application service.
 pub(crate) struct V2ApplyService {
     state: Arc<State>,
@@ -4005,7 +4009,8 @@ impl V2ApplyService {
         }
         Ok(())
     }
-    fn classify_native_amx_evidence_byte_budget_error(
+    /// Preserve local configured capacity separately from immutable protocol bounds.
+    pub(super) fn classify_native_amx_evidence_byte_budget_error(
         error: NativeAmxParticipantApplicationEvidenceByteBudgetError,
     ) -> V2ApplyError {
         match &error {
@@ -4013,16 +4018,32 @@ impl V2ApplyService {
             | NativeAmxParticipantApplicationEvidenceByteBudgetError::ArtifactFraming(_) => {
                 V2ApplyError::ExecutionCommitment(error.to_string())
             }
-            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(_) => {
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::HardGeometry(_) => {
                 V2ApplyError::Validation(error.to_string())
             }
+            NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalStablePairCapacity {
+                required_bytes,
+                configured_bytes,
+            } => V2ApplyError::LocalEvidenceCapacity {
+                required_bytes: *required_bytes,
+                configured_bytes: *configured_bytes,
+            },
         }
     }
-    fn classify_candidate_validation_error(
+    /// Preserve local candidate readiness separately from deterministic invalidity.
+    pub(super) fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
+        if let BlockValidationError::DaIndexHydration(reason) = error {
+            return V2ApplyError::LocalCanonicalState(reason.clone());
+        }
+        if let BlockValidationError::LocalStorageRecoveryRequired { reason } = error {
+            return V2ApplyError::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.clone()),
+            );
+        }
         if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = error {
             return match merge_reference {
                 Some(reference) if reference.entry_hash == *entry_hash => {
@@ -4112,7 +4133,7 @@ impl V2ApplyService {
             &routes,
             &hashes,
         )
-        .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+        .map_err(V2ApplyError::from)?;
         if expected.unavailable_indices.is_empty()
             && expected.ownerships == bundle.lane_payload_ownerships
         {
@@ -4133,7 +4154,7 @@ impl V2ApplyService {
             &routes,
             &hashes,
         )
-        .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
+        .map_err(V2ApplyError::from)?;
         if recovered.unavailable_indices.is_empty()
             && recovered.ownerships == bundle.lane_payload_ownerships
         {
@@ -4950,48 +4971,173 @@ impl V2ApplyService {
             )?;
         Ok(())
     }
+    fn classify_lane_lifecycle_validation_error(
+        error: crate::state::LaneLifecycleError,
+    ) -> V2ApplyError {
+        match error {
+            crate::state::LaneLifecycleError::Storage(_)
+            | crate::state::LaneLifecycleError::GeometryStorage(_)
+            | crate::state::LaneLifecycleError::DrainObservation(_)
+            | crate::state::LaneLifecycleError::PublicationBusy { .. } => {
+                V2ApplyError::LocalValidation(
+                    super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
+                        error.to_string(),
+                    ),
+                )
+            }
+            _ => V2ApplyError::Validation(error.to_string()),
+        }
+    }
+    fn prospective_autoscale_retirement_queue_binding(
+        block: &SignedBlock,
+        state_block: &crate::state::StateBlock<'_>,
+    ) -> Result<Option<(LaneId, DataSpaceId, Hash)>, V2ApplyError> {
+        // The overlay owns its original canonical predecessor. Derive the
+        // retirement identity before touching node-local Queue owners; an
+        // ordinary candidate must not wait on unrelated retirement contention.
+        let pending_binding = state_block
+            .pending_autoscale_retirement_binding()
+            .map_err(Self::classify_lane_lifecycle_validation_error)?;
+        let binding = match pending_binding {
+            Some(binding) => Some(binding),
+            None => state_block
+                .prospective_autoscale_retirement_binding(block)
+                .map_err(Self::classify_lane_lifecycle_validation_error)?,
+        };
+        Ok(binding)
+    }
+    fn try_validate_prospective_autoscale_retirement_queue(
+        &self,
+        block: &SignedBlock,
+        state_block: &crate::state::StateBlock<'_>,
+    ) -> Result<(), V2ApplyError> {
+        let Some((lane_id, dataspace_id, lane_incarnation)) =
+            Self::prospective_autoscale_retirement_queue_binding(block, state_block)?
+        else {
+            return Ok(());
+        };
+        self.try_validate_autoscale_retirement_queue_binding(
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+    }
     fn validate_prospective_autoscale_retirement_queue(
         &self,
         block: &SignedBlock,
         state_block: &crate::state::StateBlock<'_>,
     ) -> Result<(), V2ApplyError> {
-        let queue_retirement_observer = self.queue.lock_lane_retirement_observer();
-        let _lifecycle_guard = self.state.lock_lane_lifecycle_work_admission();
-        let pending_binding = state_block
-            .pending_autoscale_retirement_binding()
-            .map_err(|error| V2ApplyError::Validation(error.to_string()))?;
-        let binding = match pending_binding {
-            Some(binding) => Some(binding),
-            None => state_block
-                .prospective_autoscale_retirement_binding(block)
-                .map_err(|error| V2ApplyError::Validation(error.to_string()))?,
-        };
-        let Some((lane_id, dataspace_id, lane_incarnation)) = binding else {
+        let Some((lane_id, dataspace_id, lane_incarnation)) =
+            Self::prospective_autoscale_retirement_queue_binding(block, state_block)?
+        else {
             return Ok(());
         };
+        Self::validate_autoscale_retirement_incarnation(lane_incarnation)?;
+        // Apply has no retained local-dependency continuation yet. Keep its original
+        // blocking order and final veto until the prepared publication owner
+        // can retain the decided execution across physical contention.
+        // TODO: connect Apply to that consuming owner before using try probes here.
+        let observer = self.queue.lock_lane_retirement_observer();
+        let _lifecycle_guard = self.state.lock_lane_lifecycle_work_admission();
         Self::validate_autoscale_retirement_queue_binding(
-            &queue_retirement_observer,
+            &observer,
             lane_id,
             dataspace_id,
             lane_incarnation,
+            self.queue.sumeragi_waker(),
         )
+    }
+    fn validate_autoscale_retirement_incarnation(
+        lane_incarnation: Hash,
+    ) -> Result<(), V2ApplyError> {
+        if lane_incarnation == Hash::prehashed([0; Hash::LENGTH]) {
+            return Err(V2ApplyError::Validation(
+                "autoscale retirement requires a nonzero lane incarnation".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+    fn try_validate_autoscale_retirement_queue_binding(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<(), V2ApplyError> {
+        Self::validate_autoscale_retirement_incarnation(lane_incarnation)?;
+        let busy = |resource, wait| {
+            V2ApplyError::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::PhysicalBusy(
+                    BodyValidationBusy::new(resource, wait, self.queue.sumeragi_waker()),
+                ),
+            )
+        };
+        // Declaration order releases lifecycle before the retained Queue cut
+        // on a scan failure or unwind. No guard crosses an async wait.
+        let queue_retirement_cut;
+        let lifecycle_guard;
+        let observer = self
+            .queue
+            .try_lock_lane_retirement_observer()
+            .map_err(|wait| busy("lane_reservation_transition_lock", wait))?;
+        if observer.durability_faulted() {
+            return Err(V2ApplyError::LocalCanonicalState(
+                "Queue retirement observation requires durability recovery".to_owned(),
+            ));
+        }
+        lifecycle_guard = self
+            .state
+            .try_lock_lane_lifecycle_work_admission()
+            .map_err(|wait| busy("lane_lifecycle_lock", wait))?;
+        queue_retirement_cut = observer
+            .try_into_cut()
+            .map_err(|error| busy(error.field, error.wait))?;
+        let result = Self::classify_autoscale_retirement_queue_release(
+            queue_retirement_cut.lane_pending_work_release(lane_id, dataspace_id, lane_incarnation),
+            self.queue.sumeragi_waker(),
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        );
+        drop(lifecycle_guard);
+        drop(queue_retirement_cut);
+        result
     }
     fn validate_autoscale_retirement_queue_binding(
         queue_retirement_observer: &QueueLaneRetirementObserver<'_>,
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
+        wake: std::task::Waker,
     ) -> Result<(), V2ApplyError> {
-        if queue_retirement_observer.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation)
-        {
-            return Err(V2ApplyError::Validation(format!(
-                "autoscale retirement for lane {} dataspace {} incarnation {} is blocked by local Queue ownership",
-                lane_id.as_u32(),
-                dataspace_id.as_u64(),
-                hex::encode(lane_incarnation.as_ref()),
-            )));
+        Self::validate_autoscale_retirement_incarnation(lane_incarnation)?;
+        Self::classify_autoscale_retirement_queue_release(
+            queue_retirement_observer.lane_pending_work_release(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+            ),
+            wake,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+        )
+    }
+    fn classify_autoscale_retirement_queue_release(
+        release: Result<Option<mv::ReleaseWait>, crate::queue::QueueLaneRetirementUnavailable>,
+        wake: std::task::Waker,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<(), V2ApplyError> {
+        use super::v2_body_store::LocalValidationRefusal;
+        match release {
+            Ok(None) => Ok(()),
+            Ok(Some(wait)) => Err(LocalValidationRefusal::QueueRelease { wait, wake }.into()),
+            Err(error) => Err(LocalValidationRefusal::RecoveryRequired(format!(
+                "autoscale retirement Queue observation failed for lane {} dataspace {} incarnation {}: {error:?}",
+                lane_id.as_u32(), dataspace_id.as_u64(), hex::encode(lane_incarnation.as_ref()),
+            )).into()),
         }
-        Ok(())
     }
     /// Run the exact production proposal validator without applying its state
     /// overlay.
@@ -5032,7 +5178,10 @@ impl V2ApplyService {
             )
         })?;
         debug_assert_eq!(prepared.context(), context);
-        self.validate_prospective_autoscale_retirement_queue(prepared.block(), prepared.state())?;
+        self.try_validate_prospective_autoscale_retirement_queue(
+            prepared.block(),
+            prepared.state(),
+        )?;
         self.kura
             .validate_native_amx_participant_application_evidence_byte_budget(
                 prepared.native_amx_manifest(),
@@ -5448,6 +5597,7 @@ impl V2ApplyService {
                     lane_id,
                     dataspace_id,
                     lane_incarnation,
+                    self.queue.sumeragi_waker(),
                 )
                 .map_err(|error| error.to_string())
             };
@@ -5458,9 +5608,7 @@ impl V2ApplyService {
         } else {
             state_block.commit_with_state_commit_authorization(state_commit_authorization)
         };
-        commit_result.map_err(|error| {
-            V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
-        })?;
+        commit_result.map_err(V2ApplyError::CommittedStatePublication)?;
         timings.record();
         #[cfg(feature = "test-network-native-amx-fault-injection")]
         for source_id in private_settlement_carrier_bundle_sources_v1(committed_block.as_ref()) {

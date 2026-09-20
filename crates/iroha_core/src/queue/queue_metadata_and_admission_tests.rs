@@ -387,6 +387,92 @@ fn contains_pending_hash_ignores_committed_entries() {
     assert!(!queue.contains_pending_hash(hash, &state));
 }
 #[test]
+fn contains_pending_hash_waiting_for_state_does_not_pin_queue_removal() {
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new(world_with_test_domains(), kura, query_handle);
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let queue = Queue::test(config_factory(), &time_source);
+    let tx = accepted_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+    let hash = tx.as_ref().hash_as_entrypoint();
+    queue.push(tx, state.view()).expect("push tx");
+    assert!(queue.contains_pending_hash(hash, &state));
+    let generation = state.state_view_generation();
+    let original_hashes = state.view().block_hashes.clone();
+
+    // The real publication writer blocks State::view at its first hash read. Its
+    // original journal is aborted after the concurrency cut; nothing is published.
+    let hashes = state.block_hashes.block().detach();
+    let writer = hashes
+        .try_prepare_publication(&state.block_hashes, |_, _| {
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .unwrap_or_else(|(_, error)| panic!("prepare original hash writer: {error:?}"));
+    let (reached_tx, reached_rx) = std::sync::mpsc::sync_channel(1);
+    *queue.pending_hash_state_view_handoff.lock() = Some(reached_tx);
+    let (lookup_tx, lookup_rx) = std::sync::mpsc::sync_channel(1);
+    let (removed_tx, removed_rx) = std::sync::mpsc::sync_channel(1);
+    let timeout = Duration::from_secs(5);
+    let (reached, removed_while_held, lookup_while_held, lookup, removal) =
+        std::thread::scope(|scope| {
+            let lookup = scope.spawn(|| {
+                let pending = queue.contains_pending_hash(hash, &state);
+                let _ = lookup_tx.send(pending);
+                pending
+            });
+            let reached = reached_rx.recv_timeout(timeout);
+            let removal = scope.spawn(|| {
+                let removed = queue.remove_committed_hashes([hash], None);
+                let _ = removed_tx.send(removed);
+                removed
+            });
+            let removed_while_held = removed_rx.recv_timeout(timeout);
+            let lookup_while_held = lookup_rx.try_recv();
+
+            // Release the physical blocker before assertions or joins even if a
+            // regressed lookup pins the shard and removal cannot finish. Buffered
+            // notifications and closed receivers cannot strand either worker.
+            drop(writer.abort());
+            drop(reached_rx);
+            drop(removed_rx);
+            drop(lookup_rx);
+            let lookup = lookup.join();
+            let removal = removal.join();
+            (
+                reached,
+                removed_while_held,
+                lookup_while_held,
+                lookup,
+                removal,
+            )
+        });
+
+    assert_eq!(
+        reached,
+        Ok(()),
+        "lookup reached its actual State view boundary"
+    );
+    assert_eq!(
+        removed_while_held,
+        Ok(1),
+        "Queue removal must complete while the original State hash writer is held"
+    );
+    assert!(matches!(
+        lookup_while_held,
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert!(!lookup.expect("pending lookup thread"));
+    assert_eq!(removal.expect("queue removal thread"), 1);
+    assert!(!queue.contains_entrypoint_hash(hash));
+    assert!(!queue.contains_pending_hash(hash, &state));
+    assert_eq!(queue.active_len(), 0);
+    assert!(!queue.transaction_selection_durability_faulted());
+    assert_eq!(state.state_view_generation(), generation);
+    assert_eq!(state.view().block_hashes, original_hashes);
+    assert!(state.view().transactions.get(&hash).is_none());
+}
+#[test]
 fn gossip_batch_with_state_removes_committed_entries() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

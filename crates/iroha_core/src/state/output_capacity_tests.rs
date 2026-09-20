@@ -216,10 +216,10 @@ fn ordinary_source_mints_one_plan_and_unfinished_plan_cannot_publish() {
     assert_eq!(plan.proposal, source.hash());
     assert!(plan.input_root.is_some());
     assert!(block.reserve_ordinary_execution_outputs(&source).is_err());
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         super::super::TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]

@@ -526,9 +526,9 @@ MUTATIONS = ((0,
   False),
  (9,
   'A02',
-  '.map_or(true, |markers|',
-  '.map_or(false, |markers|',
-  'Storage failure must block drain.',
+  '.native_amx_participant_frontiers_pending_durable_evidence_snapshot()?',
+  '.native_amx_participant_frontiers_pending_durable_evidence_snapshot().unwrap_or_default()',
+  'Storage failure must propagate locally rather than authorizing an empty drain.',
   False),
  (10,
   'A03',
@@ -775,6 +775,155 @@ def test_semantic_mutations_rejected_after_full_provider_rehash(tmp_path, case):
     if order_only:
         assert any("violates order" in error for error in errors), reason
     (tmp_path / "semantic-rejection.json").write_text(json.dumps({"id":name,"reason":reason,"errors":errors}))
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("read_native_amx_participant_application_history",
+     "with_lease(lane_id, None)", "with_lease(LaneId::SINGLE, None)"),
+    ("read_native_amx_participant_application_history",
+     "with_lease(lane_id, None)", "with_lease(lane_id, Some(foreign_lease))"),
+    ("read_native_amx_participant_application_history",
+     "with_lease(lane_id, None)", "with_lease(lane_id, None).unwrap_or_default()"),
+    ("read_native_amx_participant_application_history_with_lease",
+     "lease.is_some_and(|lease| !lease.belongs_to(self))", "false"),
+    ("read_native_amx_participant_application_history_with_lease",
+     "return Err(Self::invalid_lane_artifact_error(", "let _ = Err(Self::invalid_lane_artifact_error("),
+    ("read_native_amx_participant_application_history_with_lease",
+     "lease.is_none().then(|| self.prune_lock.lock())", "Some(self.prune_lock.lock())"),
+    ("read_native_amx_participant_application_history_with_lease",
+     "lease.is_none().then(|| self.canonical_chain_lock.lock())", "Some(self.canonical_chain_lock.lock())"),
+])
+def test_history_delegation_preserves_exact_owner_and_error(tmp_path, symbol, old, new):
+    binding = next(b for b in BINDINGS if b[3] == symbol)
+    item = source_item(binding)
+    assert old in item
+    post = item.replace(old, new, 1)
+    changed_provider(tmp_path, binding, item, post)
+    errors = []
+    mutated = actual_item(tmp_path, *binding[1:4], "history delegation mutant", errors)
+    assert not errors and mutated == post
+    contract.validate_authority_recovery_item(mutated, binding, errors)
+    assert errors
+    assert all("authority/recovery item" in error for error in errors)
+
+
+@pytest.mark.parametrize("mutex", ["lane_geometry_lock", "sidecar_lock"])
+def test_history_delegation_preserves_lease_guard_on_reacquisition(tmp_path, mutex):
+    binding = next(b for b in BINDINGS if b[3] == "read_native_amx_participant_application_history_with_lease")
+    item = source_item(binding)
+    old = f"lease.is_none().then(|| self.{mutex}.lock())"
+    assert item.count(old) == 2
+    first, _, second = item.rpartition(old)
+    post = first + f"Some(self.{mutex}.lock())" + second
+    changed_provider(tmp_path, binding, item, post)
+    # The first required conditional remains; the second probe must still be
+    # rejected rather than passing a simple token-presence check.
+    assert old in post
+    errors = []
+    contract.validate_authority_recovery_item(post, binding, errors)
+    assert any(f"every {mutex} probe" in error for error in errors)
+
+
+def test_history_body_read_requires_both_inner_guard_drops(tmp_path):
+    binding = next(b for b in BINDINGS if b[3] == "read_native_amx_participant_application_history_with_lease")
+    item = source_item(binding)
+    old = """        drop(sidecar);
+        drop(geometry);
+        for height in &application_heights {
+            self.read_block_body_under_prune_and_canonical_guards(*height)?;
+        }"""
+    assert item.count(old) == 2
+    post = item.replace(old, """        for height in &application_heights {
+            self.read_block_body_under_prune_and_canonical_guards(*height)?;
+        }
+        drop(sidecar);
+        drop(geometry);""", 1)
+    changed_provider(tmp_path, binding, item, post)
+    assert all(token in post for token in binding[4])
+    errors = []
+    contract.validate_authority_recovery_item(post, binding, errors)
+    assert any("violates order" in error for error in errors)
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("lane_has_drain_blocking_evidence", ".unapplied_lane_block_artifact_heights_snapshot_cached()?",
+     ".unapplied_lane_block_artifact_heights_snapshot_cached().unwrap_or_default()"),
+    ("lane_has_drain_blocking_evidence", ".unapplied_certified_lane_block_heights_snapshot_cached()?",
+     ".unapplied_certified_lane_block_heights_snapshot_cached().unwrap_or_default()"),
+    ("lane_has_drain_blocking_evidence", "marker.lane_incarnation == lane_incarnation", "true"),
+    ("lane_drain_has_local_blockers", ".unwrap_or(true)", ".unwrap_or(false)"),
+    ("validate_merge_lane_drain_certificate_payload",
+     "MergeLedgerCommitError::LocalDrainObservation(Box::new(error))",
+     "MergeLedgerCommitError::ExecutionBatchInvalid(error.to_string())"),
+    ("validate_committed_autoscale_lane_lifecycle",
+     ".map_err(LaneLifecycleError::DrainObservation)?", ".unwrap_or_default()"),
+    ("BlockValidationError::from_autoscale_lifecycle_error",
+     "Self::LocalStorageRecoveryRequired { reason }", "Self::ExecutionContextInvalid(reason)"),
+    ("BlockValidationError::from_certified_merge_stage_error",
+     "| MergeLedgerCommitError::LocalDrainObservation(_)", "| MergeLedgerCommitError::Unrelated(_)"),
+    ("V2ApplyService::classify_candidate_validation_error",
+     "return V2ApplyError::LocalValidation(", "return V2ApplyError::Validation("),
+    ("V2ApplyService::classify_lane_lifecycle_validation_error",
+     "V2ApplyError::LocalValidation(", "V2ApplyError::Validation("),
+    ("rejection_identity", "| Self::CommittedStatePublication(_) => None,",
+     "| Self::CommittedStatePublication(_) => Some(BodyValidationRejectionIdentity::Rejected),"),
+    ("PreparedLaneLifecycleEffects::prepare", "Arc::clone(&pending.updated_lane_manifests)",
+     "Arc::clone(&other.updated_lane_manifests)"),
+    ("PreparedLaneLifecycleEffects::prepare", "pending.catalog_update.updated_lane_config.clone()",
+     "nexus.lane_config.clone()"),
+    ("PreparedLaneLifecycleEffects::publish", "state.reset_lane_scoped_runtime_indexes(&self.lanes_to_reset);",
+     "state.reset_lane_scoped_runtime_indexes(&BTreeSet::new());"),
+    ("PreparedLaneLifecycleEffects::publish", "if publish_process_runtime {", "if true {"),
+    ("PreparedLaneLifecycleEffects::publish", "!self.active_reset_lanes.is_empty() && self.transition_height != 0",
+     "!self.active_reset_lanes.is_empty() || self.transition_height != 0"),
+    ("PreparedLaneLifecycleEffects::publish",
+     ".mark_lanes_canonically_reset(&self.active_reset_lanes, self.transition_height);",
+     ".mark_lanes_canonically_reset(&self.lanes_to_reset, self.transition_height);"),
+    ("PreparedLaneLifecycleEffects::publish", "let persist_cursor_journal = publish_process_runtime",
+     "let persist_cursor_journal = true"),
+    ("LaneLifecyclePostPublication::publish", "if self.persist_cursor_journal {", "if false {"),
+    ("LaneLifecyclePostPublication::publish",
+     "state.persist_da_shard_cursor_journal_with_config(&self.lane_config);",
+     "state.persist_da_shard_cursor_journal();"),
+    ("active_reset_lanes", "lane_config.entry(*lane_id).is_some()", "true"),
+    ("StateBlock::commit_inner", "prepared.publish(state_ref, &_view_generation, !replay_prevalidation)",
+     "prepared.publish(state_ref, &_view_generation, true)"),
+])
+def test_typed_drain_and_retained_lifecycle_preserve_semantics(tmp_path, symbol, old, new):
+    binding = next(b for b in BINDINGS if b[3] == symbol)
+    item = source_item(binding)
+    assert old in item
+    post = item.replace(old, new, 1)
+    changed_provider(tmp_path, binding, item, post)
+    errors = []
+    mutated = actual_item(tmp_path, *binding[1:4], "typed lifecycle mutant", errors)
+    assert not errors and mutated == post
+    contract.validate_authority_recovery_item(mutated, binding, errors)
+    assert errors and all("authority/recovery item" in error for error in errors)
+
+
+@pytest.mark.parametrize("mutation", ["post_inside_generation", "lifecycle_fence_released", "generation_released"])
+def test_lifecycle_post_work_requires_original_generation_and_fences(tmp_path, mutation):
+    binding = next(b for b in BINDINGS if b[3] == "StateBlock::commit_inner")
+    item = source_item(binding)
+    post = """        if let Some(post) = lifecycle_post_publication {
+            post.publish(state_ref);
+        }"""
+    assert item.count(post) == 1
+    if mutation == "post_inside_generation":
+        changed = item.replace(post, "", 1).replace("            block_hashes.commit();",
+            "            block_hashes.commit();\n" + post, 1)
+    elif mutation == "lifecycle_fence_released":
+        changed = item.replace("        drop(autoscale_lifecycle_guard);", "", 1).replace(
+            post, "        drop(autoscale_lifecycle_guard);\n" + post, 1)
+    else:
+        call = "Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))"
+        changed = item.replace(call, "{ drop(_view_generation); " + call + " }", 1)
+    changed_provider(tmp_path, binding, item, changed)
+    assert all(token in changed for token in binding[4])
+    errors = []
+    contract.validate_authority_recovery_item(changed, binding, errors)
+    assert any("order" in error for error in errors)
 
 
 @pytest.mark.parametrize("remove_owner", [False, True])

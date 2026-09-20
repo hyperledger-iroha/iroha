@@ -45,6 +45,8 @@ use std::{
 pub(crate) mod epoch_maintenance;
 #[path = "taira_dataspace_deploy_finality.rs"]
 mod finality;
+#[path = "taira_dataspace_deploy_manifest.rs"]
+mod lane_manifest;
 #[path = "taira_dataspace_deploy_profile.rs"]
 mod profile;
 
@@ -69,7 +71,7 @@ const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 180_000;
 pub(crate) enum Command {
     /// Export retained-network expectations from independently selected public inputs.
     ExportProfile(profile::ExportProfile),
-    /// Generate native deployment intent from public files and current namespace policies.
+    /// Generate native deployment intent from signed genesis and current namespace policies.
     Init(InitArgs),
     /// Validate live capabilities and the exact intent, then retain an immutable plan.
     Plan(PlanArgs),
@@ -95,8 +97,6 @@ pub(crate) struct InitArgs {
     lane_profile: LaneProfile,
     #[arg(long)]
     account_alias: String,
-    #[arg(long)]
-    lane_manifest: PathBuf,
     #[arg(long)]
     trust: PathBuf,
     #[arg(long)]
@@ -346,6 +346,18 @@ impl ManifestV1 {
         }
         self.dataspace.validate_structure()?;
         self.lane_manifest.validate_structure()?;
+        iroha_core::governance::manifest::LaneManifestRegistry::validate_runtime_manifest(
+            &self.lane_manifest,
+            &self.lane,
+            &self.dataspace.descriptor,
+            &iroha_config::parameters::actual::GovernanceCatalog::default(),
+        )
+        .map_err(|error| eyre!("invalid native lane manifest: {error}"))?;
+        require(
+            self.lane_manifest.manifest
+                == lane_manifest::generate(&self.lane.alias, &self.finality)?,
+            "native lane manifest differs from the selected genesis committee and peer endpoints",
+        )?;
         let grant = AliasDataspaceBootstrapGrantV1::try_new(
             &self.dataspace.descriptor.alias,
             self.owner.clone(),
@@ -354,7 +366,8 @@ impl ManifestV1 {
             self.dataspace.descriptor.id == grant.dataspace.dataspace_id
                 && self.dataspace.manifest_hash == grant.name_hash
                 && self.lane.dataspace_id == grant.dataspace.dataspace_id
-                && self.lane.id == self.lane_manifest.lane_id,
+                && self.lane.id == self.lane_manifest.lane_id
+                && self.lane.alias == grant.dataspace.canonical_name.to_string(),
             "dataspace, selector hash, lane and manifest must bind the same native identity",
         )?;
         require(
@@ -1100,14 +1113,11 @@ fn initialize<C: RunContext>(context: &mut C, args: InitArgs) -> Result<()> {
                 .ok_or_else(|| eyre!("quote lifetime overflow"))?,
         )
         .ok_or_else(|| eyre!("quote deadline overflow"))?;
-    let raw_manifest = String::from_utf8(read_public_input(&args.lane_manifest)?)?;
-    let inline_manifest = raw_manifest.parse::<iroha_primitives::json::Json>()?;
     let manifest = init_manifest(
         &args,
         context.config().network_id,
         context.config().account.clone(),
         trust,
-        inline_manifest,
         &policies,
         deadline,
     )?;
@@ -1126,7 +1136,6 @@ fn init_manifest(
     network_id: NetworkId,
     owner: AccountId,
     trust: finality::TrustV1,
-    inline_manifest: iroha_primitives::json::Json,
     policies: &[iroha_data_model::sns::SuffixPolicyV1; 2],
     deadline: u64,
 ) -> Result<ManifestV1> {
@@ -1166,6 +1175,7 @@ fn init_manifest(
         })
     };
     let name = grant.dataspace.canonical_name.to_string();
+    let inline_manifest = lane_manifest::generate(&name, &trust)?;
     let alias = AccountAliasName::try_new(&args.account_alias, None::<&str>, &name)?;
     let intents = vec![
         EnsureAlias::new(
@@ -1645,7 +1655,8 @@ impl Journal {
             .ok_or_else(|| eyre!("operation directory has no name"))?;
         let parent_path = path
             .parent()
-            .ok_or_else(|| eyre!("operation directory has no parent"))?
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
             .canonicalize()?;
         let parent = File::from(rustix::fs::open(
             &parent_path,
@@ -2441,6 +2452,15 @@ mod tests {
         KeyPair::try_from_seed(vec![37; 32], Algorithm::Ed25519).unwrap()
     }
     fn manifest() -> ManifestV1 {
+        let trust = lane_manifest::test_trust();
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_genesis::decode_signed_genesis(
+                &hex::decode(&trust.genesis_signed_wire_hex).unwrap(),
+            )
+            .unwrap()
+            .hash(),
+        );
+        let native_manifest = lane_manifest::generate("devex", &trust).unwrap();
         let owner = AccountId::new(key().public_key().clone());
         let grant = AliasDataspaceBootstrapGrantV1::try_new("devex", owner.clone()).unwrap();
         let asset: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw".parse().unwrap();
@@ -2472,10 +2492,10 @@ mod tests {
             guard,
         );
         ManifestV1 {
-            finality: finality::test_trust(),
+            finality: trust,
             schema_version: 1,
             operation_id: None,
-            network_id: finality::test_network_id(),
+            network_id,
             owner,
             dataspace: RuntimeDataSpaceAdditionV1 {
                 descriptor: DataSpaceMetadata {
@@ -2494,7 +2514,7 @@ mod tests {
             },
             lane_manifest: RuntimeLaneManifestV1 {
                 lane_id: LaneId::new(6),
-                manifest: Json::new(norito::json!({"version":1})),
+                manifest: native_manifest,
             },
             alias_request: AliasSetupPlanRequestV1::new(vec![ds, account]),
             spending: SpendingV1 {
@@ -2651,6 +2671,45 @@ mod tests {
         let mut wrong = value.clone();
         wrong.lane_manifest.lane_id = LaneId::new(5);
         assert!(wrong.validate().is_err());
+        for (field, changed) in [
+            ("lane", norito::json!("another-lane")),
+            ("quorum", norito::json!(2)),
+            ("validators", norito::json!([])),
+            ("unknown", norito::json!(true)),
+        ] {
+            let mut wrong = value.clone();
+            let mut native: json::Value =
+                json::from_str(wrong.lane_manifest.manifest.get()).unwrap();
+            native
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), changed);
+            wrong.lane_manifest.manifest = Json::new(native);
+            assert!(wrong.validate().is_err(), "accepted invalid native {field}");
+        }
+        let mut wrong = value.clone();
+        let mut native: json::Value = json::from_str(wrong.lane_manifest.manifest.get()).unwrap();
+        native
+            .as_object_mut()
+            .unwrap()
+            .get_mut("validators")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "torii_url".into(),
+                norito::json!("https://unselected.example/"),
+            );
+        wrong.lane_manifest.manifest = Json::new(native);
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.lane.alias = "another-lane".into();
+        assert!(wrong.validate().is_err());
+        let mut wrong = value.clone();
+        wrong.dataspace.descriptor.fault_tolerance = 2;
+        assert!(wrong.validate().is_err());
         let mut wrong = value.clone();
         wrong.alias_request.intents[0].quote_guard.max_amount = amount(6, 1);
         assert!(wrong.validate().is_err());
@@ -2752,6 +2811,52 @@ mod tests {
         changed = AliasTransactionPlanV1::new(changed.body);
         assert!(validate_paid_plan(&manifest, &changed).is_err());
     }
+    #[test]
+    fn journal_creates_and_reopens_relative_output_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const CHILD_ENV: &str = "IROHA_CLI_TEST_RELATIVE_JOURNAL_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let path = Path::new("fresh-output");
+            let journal = Journal::open(path, true).expect("create relative output journal");
+            assert_eq!(journal.path, std::env::current_dir().unwrap().join(path));
+            journal
+                .install_json("intent.json", &"retained intent")
+                .unwrap();
+            drop(journal);
+
+            let reopened = Journal::open(path, false).expect("reopen relative output journal");
+            assert_eq!(
+                reopened.read_json::<String>("intent.json").unwrap(),
+                "retained intent"
+            );
+            reopened.revalidate().unwrap();
+            return;
+        }
+
+        // Run in an isolated private working directory without changing the
+        // process-global cwd used by concurrently executing tests.
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "taira_dataspace_deploy::tests::journal_creates_and_reopens_relative_output_directory",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "relative journal child failed:\n{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(root.path().join("fresh-output/intent.json").is_file());
+    }
+
     #[test]
     fn journal_dispatch_claim_is_durable_and_exclusive() {
         let root = tempfile::tempdir().unwrap();
@@ -2945,7 +3050,6 @@ mod tests {
             lane_id: 6,
             lane_profile: LaneProfile::RestrictedFullReplica,
             account_alias: "admin".into(),
-            lane_manifest: PathBuf::from("public.json"),
             trust: PathBuf::from("trust.json"),
             payment_asset: manifest().spending.asset_definition_id,
             alias_create_maximum: amount(5, 1),
@@ -2979,8 +3083,7 @@ mod tests {
             &args,
             reference.network_id,
             reference.owner.clone(),
-            finality::test_trust(),
-            reference.lane_manifest.manifest.clone(),
+            reference.finality.clone(),
             &policies,
             9_000_000_000_000,
         )
@@ -3012,8 +3115,7 @@ mod tests {
             &public,
             reference.network_id,
             reference.owner,
-            finality::test_trust(),
-            reference.lane_manifest.manifest,
+            reference.finality.clone(),
             &policies,
             9_000_000_000_000,
         )
@@ -3037,8 +3139,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner.clone(),
-                finality::test_trust(),
-                reference.lane_manifest.manifest.clone(),
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -3051,8 +3152,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner.clone(),
-                finality::test_trust(),
-                reference.lane_manifest.manifest.clone(),
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -3065,8 +3165,7 @@ mod tests {
                 &args,
                 reference.network_id,
                 reference.owner,
-                finality::test_trust(),
-                reference.lane_manifest.manifest,
+                reference.finality.clone(),
                 &policies,
                 9_000_000_000_000
             )
@@ -3083,8 +3182,6 @@ mod tests {
             "restricted-full-replica",
             "--account-alias",
             "admin",
-            "--lane-manifest",
-            "public.json",
             "--trust",
             "trust.json",
             "--payment-asset",
@@ -3103,5 +3200,8 @@ mod tests {
         assert_eq!(init.alias_create_maximum, amount(5, 1));
         assert_eq!(init.transaction_fee_maximum, amount(1, 0));
         assert!(Wrapper::try_parse_from(&argv[..argv.len() - 2]).is_err());
+        let mut retired = argv.to_vec();
+        retired.extend(["--lane-manifest", "handwritten.json"]);
+        assert!(Wrapper::try_parse_from(retired).is_err());
     }
 }

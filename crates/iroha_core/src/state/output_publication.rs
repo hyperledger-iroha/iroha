@@ -46,6 +46,7 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     sample_history: VecDeque<AutoscaleSampleRecord>,
     sample_history_dirty: bool,
     evaluated_fragment_count: Option<u64>,
+    lifecycle_evaluated: bool,
     relay_records: Hash,
     merge_entry: Option<HashOf<MergeLedgerEntry>>,
     merge_entrypoints: BTreeSet<HashOf<TransactionEntrypoint>>,
@@ -380,6 +381,7 @@ impl FinalizedPublicationSurface {
             sample_history: block.autoscale_sample_history.clone(),
             sample_history_dirty: block.autoscale_sample_history_dirty,
             evaluated_fragment_count: block.autoscale_evaluated_committed_fragment_count,
+            lifecycle_evaluated: block.autoscale_lifecycle_evaluated,
             relay_records: hash_value(&block.verified_lane_relay_records)?,
             merge_entry: block
                 .staged_merge_entry
@@ -526,6 +528,10 @@ mod tests {
         block.autoscale_sample_history_dirty = true;
         assert!(surface.verify(&block).is_err());
         block.autoscale_sample_history_dirty = false;
+        surface.verify(&block).unwrap();
+        block.autoscale_lifecycle_evaluated = true;
+        assert!(surface.verify(&block).is_err());
+        block.autoscale_lifecycle_evaluated = false;
         surface.verify(&block).unwrap();
         block
             .lane_incarnation_activation_heights

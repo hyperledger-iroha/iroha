@@ -63,6 +63,32 @@ impl ReleaseNotification {
         }
     }
 
+    /// Cover acquisition that may panic after locking but before returning its
+    /// physical guard, for example while cloning an EBR generation. Normal
+    /// completion emits no signal: the caller must immediately wrap the returned
+    /// physical guard. Unwinding signals only after the inner acquisition stack
+    /// has released its raw lock, so an already-waiting retry learns of poison.
+    pub(crate) fn with_acquisition_unwind_notification<T>(&self, acquire: impl FnOnce() -> T) -> T {
+        struct Acquisition<'a> {
+            notification: &'a ReleaseNotification,
+            armed: bool,
+        }
+        impl Drop for Acquisition<'_> {
+            fn drop(&mut self) {
+                if self.armed {
+                    self.notification.released(true);
+                }
+            }
+        }
+        let mut acquisition = Acquisition {
+            notification: self,
+            armed: true,
+        };
+        let guard = acquire();
+        acquisition.armed = false;
+        guard
+    }
+
     fn released(&self, poisoned: bool) {
         let waiters = {
             let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
@@ -136,26 +162,35 @@ impl Future for ReleaseFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
+        // Raw waker callbacks may reenter this notification. Clone before any
+        // internal lock, and retain replaced wakers until both locks are gone.
+        let replacement = cx.waker().clone();
         let mut state = this
             .observation
             .state
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         if state.sequence != this.observation.sequence || state.sequence == u64::MAX {
+            drop(state);
             this.registration = None;
             return Poll::Ready(());
         }
-        if let Some(registration) = &this.registration {
+        let retired = if let Some(registration) = &this.registration {
             let mut waker = registration.lock().unwrap_or_else(|p| p.into_inner());
             if waker.as_ref().is_none_or(|old| !old.will_wake(cx.waker())) {
-                *waker = Some(cx.waker().clone());
+                waker.replace(replacement)
+            } else {
+                Some(replacement)
             }
         } else {
-            let registration = Arc::new(Mutex::new(Some(cx.waker().clone())));
+            let registration = Arc::new(Mutex::new(Some(replacement)));
             state.waiters.retain(|waiter| waiter.strong_count() != 0);
             state.waiters.push(Arc::downgrade(&registration));
             this.registration = Some(registration);
-        }
+            None
+        };
+        drop(state);
+        drop(retired);
         Poll::Pending
     }
 }

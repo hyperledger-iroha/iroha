@@ -1,3 +1,12 @@
+/// Whether an exact terminal receipt read crosses its durability boundary.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AutonomousTerminalReceiptReadMode {
+    /// Validate unchanged existing objects without repair or synchronization.
+    ReadOnly,
+    /// Preserve runtime terminal reconciliation's durability attestation.
+    Attest,
+}
+
 /// Custody-fenced completion permit for one exact, re-observed bootstrap authority.
 enum AutonomousLifecycleBootstrapCompletionFence<'queue> {
     ProducerQueue(AutonomousLaneKuraActivationAuthorization<'queue>),
@@ -1359,6 +1368,23 @@ impl Kura {
         receipt_data_path: &Path,
         receipt_index_path: &Path,
     ) -> Result<LaneBlockApplicationReceiptArtifact> {
+        self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_with_receipt_read_mode_locked(
+            payload,
+            source,
+            receipt_data_path,
+            receipt_index_path,
+            AutonomousTerminalReceiptReadMode::Attest,
+        )
+    }
+
+    fn autonomous_lifecycle_terminal_source_matches_canonical_carrier_with_receipt_read_mode_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+        receipt_data_path: &Path,
+        receipt_index_path: &Path,
+        receipt_read_mode: AutonomousTerminalReceiptReadMode,
+    ) -> Result<LaneBlockApplicationReceiptArtifact> {
         let AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
             merge_epoch_id,
             merge_entry_hash,
@@ -1372,10 +1398,11 @@ impl Kura {
                 "autonomous lifecycle terminal source is not a canonical carrier",
             ));
         };
+        let repair_append_tail = receipt_read_mode == AutonomousTerminalReceiptReadMode::Attest;
         let entry = self
             .merge_log
             .lock()
-            .entry_by_hash(merge_entry_hash)?
+            .entry_by_hash_with_append_repair_policy(merge_entry_hash, repair_append_tail)?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
@@ -1395,11 +1422,17 @@ impl Kura {
             block_height: carrier_block_height,
             block_hash: carrier_block_hash,
         };
-        if self
-            .merge_carrier_for_entry_under_prune_and_canonical_guards(merge_entry_hash)?
-            .as_ref()
-            != Some(&expected_carrier)
-        {
+        let carrier = match receipt_read_mode {
+            AutonomousTerminalReceiptReadMode::ReadOnly => self
+                .merge_carrier_for_entry_without_append_repair_under_prune_and_canonical_guards(
+                    merge_entry_hash,
+                    &entry,
+                )?,
+            AutonomousTerminalReceiptReadMode::Attest => {
+                self.merge_carrier_for_entry_under_prune_and_canonical_guards(merge_entry_hash)?
+            }
+        };
+        if carrier.as_ref() != Some(&expected_carrier) {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "autonomous lifecycle canonical terminal source lost its canonical carrier",
@@ -1456,10 +1489,11 @@ impl Kura {
                 "autonomous lifecycle canonical terminal receipt hash changed",
             ));
         }
-        self.require_exact_autonomous_lifecycle_terminal_application_receipt_locked(
+        self.require_exact_autonomous_lifecycle_terminal_application_receipt_with_read_mode_locked(
             &expected,
             receipt_data_path,
             receipt_index_path,
+            receipt_read_mode,
         )?;
         Ok(expected)
     }
@@ -1469,14 +1503,30 @@ impl Kura {
         receipt_data_path: &Path,
         receipt_index_path: &Path,
     ) -> Result<()> {
+        self.require_exact_autonomous_lifecycle_terminal_application_receipt_with_read_mode_locked(
+            expected,
+            receipt_data_path,
+            receipt_index_path,
+            AutonomousTerminalReceiptReadMode::Attest,
+        )
+    }
+
+    fn require_exact_autonomous_lifecycle_terminal_application_receipt_with_read_mode_locked(
+        &self,
+        expected: &LaneBlockApplicationReceiptArtifact,
+        receipt_data_path: &Path,
+        receipt_index_path: &Path,
+        receipt_read_mode: AutonomousTerminalReceiptReadMode,
+    ) -> Result<()> {
         let descriptor = &expected.proposal.descriptor;
         let durable = self
-            .read_lane_block_application_receipt_from_paths_durability_attested_locked(
+            .read_lane_block_application_receipt_from_paths_with_read_mode_locked(
                 descriptor.lane_id,
                 descriptor.lane_block_height,
                 receipt_data_path,
                 receipt_index_path,
                 false,
+                receipt_read_mode,
             )
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
@@ -2324,26 +2374,6 @@ impl Kura {
     /// Path-scoped canonical-replica validation used for retired lane archives.
     /// The caller separately proves that no attempt/cursor/bootstrap shares the
     /// identity in the selected namespace.
-    fn validate_canonical_replica_terminal_outcome_from_paths_locked(
-        &self,
-        lane_id: LaneId,
-        outcome: &AutonomousLifecycleTerminalOutcomeV1,
-        replica_data_path: &Path,
-        replica_index_path: &Path,
-        receipt_data_path: &Path,
-        receipt_index_path: &Path,
-    ) -> Result<LaneExecutablePayloadV1> {
-        self.validate_canonical_replica_terminal_outcome_from_paths_for_local_peer_locked(
-            lane_id,
-            outcome,
-            replica_data_path,
-            replica_index_path,
-            receipt_data_path,
-            receipt_index_path,
-            self.local_peer_id.get(),
-        )
-    }
-
     fn validate_canonical_replica_terminal_outcome_from_paths_for_local_peer_locked(
         &self,
         lane_id: LaneId,
@@ -2353,6 +2383,30 @@ impl Kura {
         receipt_data_path: &Path,
         receipt_index_path: &Path,
         local_peer: Option<&PeerId>,
+    ) -> Result<LaneExecutablePayloadV1> {
+        self.validate_canonical_replica_terminal_outcome_from_paths_with_receipt_read_mode_locked(
+            lane_id,
+            outcome,
+            replica_data_path,
+            replica_index_path,
+            receipt_data_path,
+            receipt_index_path,
+            local_peer,
+            AutonomousTerminalReceiptReadMode::Attest,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_canonical_replica_terminal_outcome_from_paths_with_receipt_read_mode_locked(
+        &self,
+        lane_id: LaneId,
+        outcome: &AutonomousLifecycleTerminalOutcomeV1,
+        replica_data_path: &Path,
+        replica_index_path: &Path,
+        receipt_data_path: &Path,
+        receipt_index_path: &Path,
+        local_peer: Option<&PeerId>,
+        receipt_read_mode: AutonomousTerminalReceiptReadMode,
     ) -> Result<LaneExecutablePayloadV1> {
         let AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { replica_hash } =
             outcome.basis()
@@ -2438,11 +2492,12 @@ impl Kura {
         outcome.validate_for_payload(&payload).map_err(|message| {
             Self::invalid_lane_artifact_error(replica_data_path.to_path_buf(), message)
         })?;
-        self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_from_receipt_paths_locked(
+        self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_with_receipt_read_mode_locked(
             &payload,
             outcome.source(),
             receipt_data_path,
             receipt_index_path,
+            receipt_read_mode,
         )?;
         Ok(payload)
     }

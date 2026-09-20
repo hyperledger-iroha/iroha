@@ -145,6 +145,12 @@ pub(crate) struct NativeExecutionCustody {
     context: crate::sumeragi::v2::VerifiedHeightContext,
 }
 impl NativeExecutionCustody {
+    /// Borrow the same privately authenticated sources retained by execution.
+    /// These immutable observations do not grant source release or live signing.
+    pub(in crate::state) fn sources(&self) -> &[VerifiedLaneDecisionGroupV1] {
+        &self.sources
+    }
+
     #[cfg(test)]
     pub(in crate::state) fn sources_for_test(&self) -> &[VerifiedLaneDecisionGroupV1] {
         &self.sources

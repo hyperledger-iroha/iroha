@@ -5,6 +5,8 @@
 //! The abstractions here are intentionally small to avoid pulling heavy dependencies. They are
 //! suitable for in-memory testing or thin adapters in higher-level crates.
 use core::fmt::Debug;
+/// Finite prepaid custody for explicitly enumerated allocation layouts.
+pub mod allocation;
 mod publication;
 pub use publication::{
     BlockPublicationIdentity, PublicationPreparationError, PublicationPreparationResult,

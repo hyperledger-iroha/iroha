@@ -31,6 +31,7 @@ mod compliance;
 mod endorsement;
 mod fee_sponsor_program;
 mod manifest;
+mod native_lane_manifest;
 mod privacy;
 mod private_settlement;
 mod relay;
@@ -40,6 +41,7 @@ pub use compliance::*;
 pub use endorsement::*;
 pub use fee_sponsor_program::*;
 pub use manifest::*;
+pub use native_lane_manifest::*;
 pub use privacy::*;
 #[cfg(test)]
 pub(crate) use private_settlement::tests::measured_receipt as measured_private_settlement_receipt;

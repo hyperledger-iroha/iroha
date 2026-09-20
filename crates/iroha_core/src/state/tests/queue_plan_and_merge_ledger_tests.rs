@@ -152,19 +152,23 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     let_row! { pending_hash = state .kura .persist_pending_queue_plan_admission_certificate(&certificate) .expect("persist participant-bound QueuePlan certificate") };
     let_row! { participant_incarnation = state .lane_incarnation(participant_lane) .expect("participant lane incarnation") };
     assert!(
-        state.lane_has_drain_blocking_evidence(
-            participant_lane,
-            DataSpaceId::UNIVERSAL,
-            participant_incarnation,
-        ),
+        state
+            .lane_has_drain_blocking_evidence(
+                participant_lane,
+                DataSpaceId::UNIVERSAL,
+                participant_incarnation,
+            )
+            .expect("observe exact lane drain evidence"),
         "a durable pending participant claim must block its exact lane incarnation"
     );
     assert!(
-        !state.lane_has_drain_blocking_evidence(
-            participant_lane,
-            DataSpaceId::UNIVERSAL,
-            Hash::new(b"unrelated-recreated-incarnation"),
-        ),
+        !state
+            .lane_has_drain_blocking_evidence(
+                participant_lane,
+                DataSpaceId::UNIVERSAL,
+                Hash::new(b"unrelated-recreated-incarnation"),
+            )
+            .expect("observe exact lane drain evidence"),
         "pending evidence from another incarnation must not block a recreated lane"
     );
     state
@@ -197,11 +201,13 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
         QueuePlanAdmissionRegistryMatch::Absent
     );
     assert!(
-        !state.lane_has_drain_blocking_evidence(
-            participant_lane,
-            DataSpaceId::UNIVERSAL,
-            replacement_incarnation,
-        ),
+        !state
+            .lane_has_drain_blocking_evidence(
+                participant_lane,
+                DataSpaceId::UNIVERSAL,
+                replacement_incarnation,
+            )
+            .expect("observe exact lane drain evidence"),
         "an authenticated stale claim is a definitive loser, not a drain blocker"
     );
     state
@@ -233,11 +239,13 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     );
     let_row! { conflict_hash = state .kura .persist_pending_queue_plan_admission_certificate(&certificate) .expect("persist definitive conflict fixture") };
     assert!(
-        state.lane_has_drain_blocking_evidence(
-            participant_lane,
-            DataSpaceId::UNIVERSAL,
-            participant_incarnation,
-        ),
+        state
+            .lane_has_drain_blocking_evidence(
+                participant_lane,
+                DataSpaceId::UNIVERSAL,
+                participant_incarnation,
+            )
+            .is_err(),
         "corrupt conflicting ownership must fail closed for drain"
     );
     state
@@ -315,11 +323,13 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
         );
     }
     assert!(
-        !state.lane_has_drain_blocking_evidence(
-            participant_lane,
-            DataSpaceId::UNIVERSAL,
-            replacement_incarnation,
-        ),
+        !state
+            .lane_has_drain_blocking_evidence(
+                participant_lane,
+                DataSpaceId::UNIVERSAL,
+                replacement_incarnation,
+            )
+            .expect("observe exact lane drain evidence"),
         "incarnation-A WSV witnesses must not drain-block same-ID incarnation B"
     );
     assert_eq!(
@@ -380,11 +390,13 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
     );
     let_row! { malformed_hash = state .kura .persist_pending_queue_plan_admission_certificate(&[0xFF]) .expect("persist malformed pending evidence") };
     assert!(
-        state.lane_has_drain_blocking_evidence(
-            participant_lane,
-            DataSpaceId::UNIVERSAL,
-            participant_incarnation,
-        ),
+        state
+            .lane_has_drain_blocking_evidence(
+                participant_lane,
+                DataSpaceId::UNIVERSAL,
+                participant_incarnation,
+            )
+            .is_err(),
         "malformed durable pending evidence must fail closed for drain"
     );
     state
@@ -596,7 +608,10 @@ state_test! { sync staged_merge_missing_transaction_block_mutates_nothing
     let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), &entry, ConsensusMode::Permissioned) .expect("stage exact certified merge entry") };
     state_block.block_hashes.push(carrier.hash());
     let_row! { error = state_block .commit() .expect_err("missing transaction membership must abort the staged merge") };
-    assert!(matches!(error, TransactionsBlockError::MissingInsertBlock), "unexpected missing membership rejection: {error:?}");
+    assert!(
+        matches!(error, TransactionsBlockError::MissingInsertBlock),
+        "unexpected missing membership rejection: {error:?}"
+    );
     assert_eq!(state.committed_height(), committed_height_before);
     assert_eq!(state.lane_execution_state_hash().expect("stable valid fixture snapshot"), state_hash_before);
     assert_eq!(*state.world.merge_hint_roots.view(), roots_before);

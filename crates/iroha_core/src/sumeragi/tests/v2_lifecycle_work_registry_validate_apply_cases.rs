@@ -1,4 +1,191 @@
 #[cfg(feature = "bls")]
+impl LifecycleWorkRegistryHolder {
+    /// Persist a live Validate-to-Apply survivor with its inherited owner.
+    /// The caller supplies the actual body-store receipt and signed messages.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn persist_pending_kura_linked_apply_for_test(
+        verified: &VerifiedHeightContext,
+        adapter: &mut SumeragiV2Adapter,
+        proposal: wire::Proposal,
+        prepare: wire::QuorumCertificate,
+        decision: wire::QuorumCertificate,
+        validated: ValidatedBodyReceipt,
+        ledger_root: &std::path::Path,
+    ) -> super::super::ledger::LifecycleLedgerV1 {
+        let tag = adapter.current_tag();
+        let manifest = proposal.manifest.clone();
+        let round = proposal.round;
+        let subject = proposal.subject;
+        assert_eq!(validated.durable().round(), round);
+        assert_eq!(validated.durable().subject(), subject);
+        assert_eq!(
+            decision.execution_commitment,
+            validated.execution_commitment()
+        );
+        let proposal_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+        );
+        verified
+            .verify_consensus_message(&proposal_message)
+            .expect("authenticate the linked Apply's actual Proposal");
+        let fetch = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(proposal_message))
+            .expect("admit linked Apply Proposal")
+            .into_effects();
+        assert!(matches!(
+            fetch.as_slice(),
+            [AdapterEffect::FetchBody { .. }]
+        ));
+        let stored = adapter
+            .body_available(tag, manifest.clone())
+            .expect("advance actual linked Apply body to Store")
+            .into_effects();
+        assert!(matches!(
+            stored.as_slice(),
+            [AdapterEffect::StoreBody { .. }]
+        ));
+        let validate = adapter
+            .body_stored(tag, round, subject, validated.durable())
+            .expect("advance actual linked Apply body to Validate")
+            .into_effects();
+        assert!(matches!(
+            validate.as_slice(),
+            [AdapterEffect::ValidateBody { .. }]
+        ));
+        for certificate in [prepare, decision.clone()] {
+            let message = wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+            );
+            verified
+                .verify_consensus_message(&message)
+                .expect("authenticate linked Apply quorum certificate");
+            let observed = adapter
+                .receive_authenticated(AuthenticatedConsensusMessage::for_test(message))
+                .expect("retain authenticated QC before Validate publication");
+            assert!(observed.effects().is_empty());
+        }
+        let mut holder = Self::empty();
+        let (lease, slot, candidate, _retry_census) = holder
+            .install_remote_proposal_validate_completion_for_test(
+                verified,
+                tag,
+                proposal,
+                manifest,
+                validated,
+                Some((
+                    decision.round,
+                    decision.proposal_round,
+                    decision.subject,
+                    decision.execution_commitment,
+                )),
+            );
+        let mut coordinator = LifecycleCoordinator::new(
+            LifecycleContext::new(candidate.key.context(), candidate.key.round().height()),
+            0,
+            CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 64))),
+        );
+        assert!(matches!(
+            coordinator.reduce_admit(AdmissionRequest::Candidate(candidate)),
+            AdmissionDecision::Admitted { owner, ordinal, producer_turn_ordinal: None }
+                if owner == lease.owner() && ordinal == lease.ordinal()
+        ));
+        coordinator
+            .records
+            .get_mut(&lease.ordinal())
+            .expect("admitted genuine Validate completion")
+            .physical_slots = lease.physical_slots().clone();
+        coordinator.ready_index.remove(&lease.ordinal());
+        coordinator
+            .records
+            .get_mut(&lease.ordinal())
+            .expect("claim genuine Validate completion")
+            .state = LifecycleState::Claimed(lease.id());
+        coordinator.active_lease = Some(lease.clone());
+        let (runtime_ordinals, coordinator_ordinals) =
+            authority::lifecycle_ordinal_authorities_after_high_watermark(coordinator.high_water);
+        coordinator.lifecycle_ordinal_authority = Some(coordinator_ordinals);
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+            runtime_ordinals,
+        )
+        .advance_past(7)
+        .expect("retain nonadjacent actor-global Apply ordinal");
+        coordinator
+            .attach_empty_test_ledger(ledger_root)
+            .expect("attach actual linked Apply LedgerV1");
+        let prepared = holder
+            .registry_for_test_mut()
+            .prepare_ready_durable_validate_execution(&lease, slot, verified)
+            .expect("prepare exact Validate completion");
+        let preview = prepared
+            .prepare_adapter_preview(adapter)
+            .unwrap_or_else(|_| panic!("join exact Validate completion to actual decided adapter"));
+        let publication = preview
+            .seal_live_wal_validate_apply()
+            .unwrap_or_else(|_| panic!("seal actual live Validate-to-Apply admission"));
+        let transition = coordinator
+            .prepare_sealed_validate_apply_transition(&lease, verified, publication)
+            .unwrap_or_else(|_| panic!("stage actual linked Apply admission"));
+        if let Err(error) = transition.persist_and_publish() {
+            panic!(
+                "publish actual linked Apply: {:?}",
+                error.registry_failure_reason()
+            );
+        }
+        let (_, ledger) = super::super::ledger::LifecycleLedgerStoreV1::open(
+            ledger_root,
+            coordinator.active_context,
+        )
+        .expect("read the actual fsynced linked Apply survivor");
+        let apply = ledger
+            .records()
+            .iter()
+            .find(|row| row.work_class() == Some(LifecycleWorkClass::Apply))
+            .expect("native admission published Apply");
+        let parent = ledger
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == lease.ordinal())
+            .expect("native admission retained its Validate predecessor");
+        assert_eq!(ledger.records().len(), 2);
+        assert_eq!(apply.ordinal(), 8);
+        assert_eq!(apply.owner(), parent.owner());
+        assert_eq!(apply.owner().first_admission_ordinal(), lease.ordinal());
+        assert_ne!(apply.owner().first_admission_ordinal(), apply.ordinal());
+        assert_eq!(parent.terminal(), Some(Some(TerminalOutcome::Advanced)));
+        assert_eq!(
+            parent.continuation(),
+            Some(super::super::schema::DurableContinuation::successor(
+                super::super::schema::DurableContinuationEdge::ValidateToApply,
+                apply.ordinal(),
+            ))
+        );
+        assert_eq!(apply.terminal(), Some(None));
+        assert_eq!(
+            apply.continuation(),
+            Some(super::super::schema::DurableContinuation::None)
+        );
+        let address = ConcreteWorkAddress::new(
+            apply.owner(),
+            apply.ordinal(),
+            PhysicalSlotId::for_capacity(CapacityClass::Effect, 0),
+        )
+        .expect("actual linked Apply address");
+        let work = holder
+            .registry_for_test()
+            .entries
+            .get(&address)
+            .expect("actual live Apply executable carrier");
+        assert!(work.validate_exact());
+        assert!(matches!(
+            &work.kind,
+            ConcreteLifecycleWorkKind::DurableLiveWalApply(_)
+        ));
+        assert_eq!(holder.registry_for_test().entries.len(), 1);
+        ledger
+    }
+}
+
+#[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
 fn assert_ready_validate_vote_sign_live_transaction(
     attach_ledger: bool,

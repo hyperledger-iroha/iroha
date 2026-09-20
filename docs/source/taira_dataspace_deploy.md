@@ -96,7 +96,7 @@ iroha --config CLIENT.toml \
   --operator-private-key-file /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/operator.key \
   taira dataspace-deploy init \
   --dataspace dpn --lane-id 6 --lane-profile restricted-full-replica \
-  --account-alias admin --lane-manifest LANE_MANIFEST.json \
+  --account-alias admin \
   --trust /ABSOLUTE/OWNER_PRIVATE_DIRECTORY/deployment-profile.json \
   --payment-asset 6TEAJqbb8oEPmLncoNiMRbLEK6tw \
   --alias-create-maximum 0.5 --transaction-fee-maximum TX_FEE_CAP \
@@ -112,10 +112,19 @@ alias is additional, preserving any existing primary alias. `init` checks the
 native paid plan and atomically writes `deployment.json` inside the selected
 output directory; it submits nothing. In the example, that file is
 `/ABSOLUTE/OWNER_PRIVATE_DIRECTORY/manifest/deployment.json`; the `manifest`
-directory must be new. Supply the native inline lane manifest object in
-`LANE_MANIFEST.json`. The trust file
-contains the independently selected public genesis key, exact signed genesis
-wire and four public peer/fingerprint records.
+directory must be new. The inline lane manifest is generated from the signed
+genesis's registered and activated universal-lane validator accounts and peer
+bindings. The selected profile supplies each peer's Torii endpoint. Generation
+requires the exact four selected peers, four distinct accounts and quorum three;
+bindings absent, inactive or ambiguous in signed genesis fail before a deployment file is written.
+The trust file contains the independently selected public genesis key, exact
+signed genesis wire and four public peer/fingerprint records. Both generated and
+loaded deployment manifests pass the same native schema, alias and committee
+validation used by Core before any deployment phase can be planned. A loaded
+manifest must retain the exact generated committee and selected peer endpoints;
+edited committee inputs are rejected. The signed genesis bindings describe the
+proposed deployment intent. Core separately verifies current account, peer, role
+and key eligibility when activating the catalog; generation is not live authority.
 
 Public-reset inventories select each validator's canonical HTTPS root URL,
 including an explicit nondefault port when needed. Four distinct URLs may use

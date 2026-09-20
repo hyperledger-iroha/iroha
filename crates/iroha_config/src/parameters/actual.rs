@@ -6211,7 +6211,9 @@ impl LaneValidatorMode {
 pub struct SumeragiBlock {
     /// Maximum transactions selected for one candidate block.
     pub max_transactions: NonZeroUsize,
-    /// Maximum canonical block-body size in bytes.
+    /// Local canonical block-body resource capacity in bytes.
+    /// Authenticated startup requires this to cover the signed RS16 payload
+    /// envelope; a smaller value cannot redefine the network proposal limit.
     pub max_payload_bytes: NonZeroUsize,
     /// Proposal queue scan budget relative to `max_transactions`.
     pub proposal_queue_scan_multiplier: NonZeroUsize,
@@ -7059,7 +7061,8 @@ impl SumeragiV2Config {
 pub struct SumeragiV2Limits {
     /// Maximum transactions selected for one candidate block.
     pub max_transactions: u64,
-    /// Maximum canonical block body size in bytes.
+    /// Validated local body resource capacity, which must cover the authenticated
+    /// signed RS16 envelope before startup or candidate selection.
     pub max_payload_bytes: u64,
     /// Maximum queued transactions inspected for one proposal attempt.
     pub max_queue_scan: u64,

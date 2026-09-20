@@ -133,10 +133,10 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
                 }
                 stage_membership(&mut block, Some(original));
                 // No second capture or accessor call can be required to reject publication.
-                assert_eq!(
+                assert!(matches!(
                     block.commit(),
-                    Err(TransactionsBlockError::FastpqSourceInventory),
-                );
+                    Err(TransactionsBlockError::FastpqSourceInventory)
+                ));
                 assert_unpublished(&state);
             }
         }
@@ -175,10 +175,10 @@ fn failed_inventory_construction_prevents_commit_without_publishing_overlay() {
         );
         block.authenticated_replay_commit = replay;
         stage_membership(&mut block, Some(source));
-        assert_eq!(
+        assert!(matches!(
             block.commit(),
-            Err(TransactionsBlockError::FastpqSourceInventory),
-        );
+            Err(TransactionsBlockError::FastpqSourceInventory)
+        ));
         assert_unpublished(&state);
     }
 }

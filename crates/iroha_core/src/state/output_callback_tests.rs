@@ -441,10 +441,10 @@ fn early_nested_depth_failure_cannot_be_swallowed_or_drained_as_success() {
     assert!(block.batch_transfer_outcomes.is_empty());
     assert!(block.fastpq_transcripts.is_empty());
     assert_eq!(witness::snapshot_exec_witness(), before_witness);
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }
 
 #[test]
@@ -526,10 +526,10 @@ fn successful_nested_callbacks_without_journal_transfer_cannot_apply() {
         }
         assert!(block.batch_transfer_outcomes.is_empty());
         assert!(block.fastpq_transcripts.is_empty());
-        assert_eq!(
+        assert!(matches!(
             block.commit().unwrap_err(),
             TransactionsBlockError::ExecutionOutputCapacity
-        );
+        ));
         assert!(
             fixture
                 .state
@@ -714,8 +714,8 @@ fn real_dfs_predispatch_failure_poison_preserves_no_earlier_callback_effects() {
     assert!(block.batch_transfer_outcomes.is_empty());
     assert!(block.fastpq_transcripts.is_empty());
     assert_eq!(witness::snapshot_exec_witness(), before_witness);
-    assert_eq!(
+    assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
-    );
+    ));
 }

@@ -6197,7 +6197,9 @@ pub struct SumeragiBlock {
     /// Maximum transactions selected for one candidate block.
     #[config(default = "defaults::sumeragi::BLOCK_MAX_TRANSACTIONS")]
     pub max_transactions: NonZeroUsize,
-    /// Maximum canonical block-body size in bytes.
+    /// Local canonical block-body resource capacity in bytes.
+    /// Authenticated startup requires this to cover the signed RS16 payload
+    /// envelope; a smaller value cannot redefine the network proposal limit.
     #[config(default = "defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES")]
     pub max_payload_bytes: NonZeroUsize,
     /// Proposal queue scan budget relative to `max_transactions`.

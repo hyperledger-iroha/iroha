@@ -73,6 +73,8 @@ def test_geometry_evidence_contract_is_connected_to_release_gate():
     "ObservedNativeAmxEvidence", "observe_geometry_native_amx_per_height_evidence",
     "read_and_attest_geometry_native_amx_per_height_evidence", "attest",
     "maintain_lane_retirement_route_locked", "certified_history_has_committed_rewrite_locked",
+    "scan_lane_retirement_locked", "ensure_archived_lane_work_released_with_custody",
+    "observe_lane_retirement_locked", "prepare_route", "native", "into_observed",
 ])
 def test_geometry_evidence_contract_rejects_missing_ledger_owner(fixture, symbol):
     _, _, checker, models = fixture
@@ -109,7 +111,9 @@ def test_geometry_evidence_contract_rejects_weakened_ledger_tokens(fixture):
     ("MAINTENANCE", ".is_none()", ".is_some()", "executable relation"),
     ("MAINTENANCE", "if retiring.contains(&frontier_identity)", "if !retiring.contains(&frontier_identity)", "executable relation"),
     ("MAINTENANCE", "        let lane_artifacts =", "        let _guard = self.sidecar_lock.lock();\n        let lane_artifacts =", "reacquires an inherited lock"),
-    ("GEOMETRY", "read_and_attest_geometry_native_amx_per_height_evidence(", "observe_geometry_native_amx_per_height_evidence(", "missing or reorders"),
+    ("GEOMETRY", "effects.native(native_observation)?", "native_observation.into_observed()?", "missing or reorders"),
+    ("EFFECTS", "Self::Observe => kura.observe_lane_retirement_route_locked(entry)", "Self::Observe => kura.maintain_lane_retirement_route_locked(entry)", "executable relation"),
+    ("GEOMETRY", "custody.is_none().then(|| self.sidecar_lock.lock())", "custody.is_some().then(|| self.sidecar_lock.lock())", "missing or reorders"),
 ])
 def test_geometry_evidence_contract_rejects_semantic_mutations(fixture, owner, old, new, diagnostic):
     root, support, checker, _ = fixture
@@ -123,7 +127,7 @@ def test_geometry_evidence_contract_rejects_semantic_mutations(fixture, owner, o
     ("EVIDENCE", "fn attest(self)", "file.sync_all()", "read_regular_sidecar_snapshot(&path, lane_artifacts, payload_limit)?"),
     ("MAINTENANCE", "fn maintain_lane_retirement_route_locked(", "recover_certified_lane_block_pair_from_frontier_locked(", "confirm_latest_certified_lane_block_frontier_read_locked("),
     ("MAINTENANCE", "fn maintain_lane_retirement_route_locked(", "compact_lane_histories_through_merge_frontier_locked(", "recover_geometry_progress_pairs_before_snapshot("),
-    ("GEOMETRY", "fn ensure_first_release_lane_retirement_admissible_with_certified_locked(", "self.maintain_lane_retirement_route_locked(", "self.geometry_bound_progress_directory_snapshot("),
+    ("GEOMETRY", "fn scan_lane_retirement_locked(", "effects.prepare_route(", "self.geometry_bound_progress_directory_snapshot("),
 ])
 def test_geometry_evidence_contract_rejects_reordered_effects(fixture, owner, anchor, earlier, later):
     root, support, checker, _ = fixture
@@ -169,3 +173,45 @@ def test_geometry_evidence_contract_requires_terminal_rewrite_before_frontier_re
         "recover_certified_lane_block_pair_from_frontier_locked(",
     )
     assert any("missing or reorders" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("symbol,old,new", [
+    ("ensure_first_release_lane_retirement_admissible_with_certified_locked", "RetirementScanEffects::MaintainAndAttest", "RetirementScanEffects::Observe"),
+    ("observe_lane_retirement_locked", "RetirementScanEffects::Observe", "RetirementScanEffects::MaintainAndAttest"),
+    ("ensure_archived_lane_work_released_with_custody", "custody.authenticate(self)?;", "// custody.authenticate(self)?;"),
+])
+def test_geometry_evidence_contract_rejects_changed_caller_effects(fixture, symbol, old, new):
+    root, support, checker, _ = fixture
+    support.replace_once_after(
+        root / checker.geometry_evidence_contract.GEOMETRY,
+        f"fn {symbol}(", old, new,
+    )
+    assert any("executable relation" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("old,new", [
+    ("Self::Observe => observation.into_observed()", "Self::Observe => observation.attest()"),
+    ("Self::MaintainAndAttest { .. } => observation.attest()", "Self::MaintainAndAttest { .. } => observation.into_observed()"),
+])
+def test_geometry_evidence_contract_rejects_changed_native_dispatch(fixture, old, new):
+    root, support, checker, _ = fixture
+    support.replace_once_after(
+        root / checker.geometry_evidence_contract.EFFECTS,
+        "fn native(", old, new,
+    )
+    assert any("executable relation" in error for error in validate(fixture))
+
+
+@pytest.mark.parametrize("symbol,old,new,diagnostic", [
+    ("attest", "after.bytes_hash != observed.bytes_hash", "after.bytes_hash == observed.bytes_hash", "executable relation"),
+    ("into_observed", "!= self.inventory", "== self.inventory", "executable relation"),
+    ("into_observed", "(self)", "(&self)", "executable relation"),
+    ("into_observed", "        for observed in &self.files {", "        sync_dir(&self.directory.expected_path)?;\n        for observed in &self.files {", "observer contains storage effect"),
+])
+def test_geometry_evidence_contract_rejects_changed_consumer(fixture, symbol, old, new, diagnostic):
+    root, support, checker, _ = fixture
+    support.replace_once_after(
+        root / checker.geometry_evidence_contract.EVIDENCE,
+        f"fn {symbol}", old, new,
+    )
+    assert any(diagnostic in error for error in validate(fixture))

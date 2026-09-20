@@ -39,8 +39,9 @@ fn fail_next_bound_progress_append_index_sync_for_tests() {
 fn fail_next_native_amx_latest_index_recovery_temp_sync_for_tests() {
     FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC.with(|flag| flag.set(true));
 }
+/// Fail a selected retained intent directory sync in focused publication tests.
 #[cfg(test)]
-fn fail_bound_progress_intent_directory_sync_for_tests(
+pub(crate) fn fail_bound_progress_intent_directory_sync_for_tests(
     calls_before_failure: usize,
     target_index: usize,
 ) {

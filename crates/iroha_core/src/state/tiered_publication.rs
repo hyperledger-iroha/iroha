@@ -7,6 +7,9 @@ use super::*;
 
 pub(super) struct PreparedTieredSnapshot {
     payload: Option<TieredSnapshotPayload>,
+    // On abandonment, observe release after the stored payload is destroyed.
+    #[cfg(test)]
+    _capture: Option<capture_observer::Capture>,
 }
 
 impl PreparedTieredSnapshot {
@@ -14,12 +17,16 @@ impl PreparedTieredSnapshot {
         let complete = {
             let backend = worker.inner.backend.lock();
             if !backend.enabled() {
-                return Self { payload: None };
+                return Self {
+                    payload: None,
+                    #[cfg(test)]
+                    _capture: None,
+                };
             }
             !backend.snapshot_baseline_ready()
         };
-        // TODO: account for the complete cold-baseline allocation in the
-        // candidate resource budget. This is a local tiered projection only.
+        // Carrier journal admission precedes this allocation. TODO: connect its
+        // complete cold-baseline charge to the production candidate budget.
         let payload = if complete {
             world.tiered_snapshot_payload_with_scope(true)
         } else {
@@ -27,7 +34,14 @@ impl PreparedTieredSnapshot {
         };
         Self {
             payload: Some(payload),
+            #[cfg(test)]
+            _capture: capture_observer::captured(),
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::state) fn payload_for_test(&self) -> Option<&TieredSnapshotPayload> {
+        self.payload.as_ref()
     }
 
     pub(super) fn publish(self, state_ref: &State, replay_prevalidation: bool) {
@@ -47,6 +61,68 @@ impl PreparedTieredSnapshot {
             #[cfg(feature = "telemetry")]
             record_tiered_snapshot_metrics(&backend, &state_ref.telemetry);
         }
+    }
+}
+
+/// Thread-scoped observation of capture custody, including abandonment order.
+/// This does not track a payload transferred into the persistence worker.
+#[cfg(test)]
+pub(in crate::state) mod capture_observer {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    std::thread_local! {
+        static OBSERVER: std::cell::RefCell<Option<Arc<Counts>>> = const {
+            std::cell::RefCell::new(None)
+        };
+    }
+
+    #[derive(Default)]
+    pub(in crate::state) struct Counts {
+        captured: AtomicUsize,
+        released: AtomicUsize,
+    }
+
+    impl Counts {
+        pub(in crate::state) fn captured(&self) -> usize {
+            self.captured.load(Ordering::SeqCst)
+        }
+
+        pub(in crate::state) fn released(&self) -> usize {
+            self.released.load(Ordering::SeqCst)
+        }
+    }
+
+    pub(super) struct Capture(Arc<Counts>);
+
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.released.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    pub(super) fn captured() -> Option<Capture> {
+        OBSERVER.with(|observer| {
+            observer.borrow().as_ref().map(|counts| {
+                counts.captured.fetch_add(1, Ordering::SeqCst);
+                Capture(Arc::clone(counts))
+            })
+        })
+    }
+
+    pub(in crate::state) fn observe<T>(action: impl FnOnce(Arc<Counts>) -> T) -> T {
+        struct Restore(Option<Arc<Counts>>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                OBSERVER.with(|observer| observer.replace(self.0.take()));
+            }
+        }
+        let counts = Arc::new(Counts::default());
+        let _restore =
+            Restore(OBSERVER.with(|observer| observer.replace(Some(Arc::clone(&counts)))));
+        action(counts)
     }
 }
 

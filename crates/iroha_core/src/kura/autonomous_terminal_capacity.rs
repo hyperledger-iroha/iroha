@@ -631,7 +631,9 @@ impl Kura {
     ///
     /// Callers hold `prune_lock` and `canonical_chain_lock`. This helper must
     /// run before either the lane-geometry or sidecar lock is acquired because
-    /// the durable-index snapshot takes block-store metadata locks.
+    /// the durable-index snapshot takes block-store metadata locks and a cold
+    /// pending-block scan resolves merge references through the sidecar lock.
+    /// Nonblocking publication preparation retains its snapshot in the lease.
     fn pending_canonical_capacity_bytes_under_prune_and_canonical_guards(&self) -> Result<u64> {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(0);

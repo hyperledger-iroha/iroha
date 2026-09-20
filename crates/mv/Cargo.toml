@@ -29,7 +29,7 @@ path = "src/lib.rs"
 
 
 [dependencies.concread]
-version = "0.5.7"
+workspace = true
 default-features = false
 features = [
     "ebr",
@@ -44,3 +44,14 @@ features = ["base-codec"]
 
 [features]
 default = []
+
+[[test]]
+name = "ebr_allocation_custody"
+path = "tests/ebr_allocation_custody.rs"
+
+[dev-dependencies.crossbeam-epoch]
+version = "=0.9.20"
+
+[[test]]
+name = "map_owned_generations"
+path = "tests/map_owned_generations.rs"

@@ -158,7 +158,11 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-pub(crate) use lane_geometry::{ReplayGeometryBindingRequest, StartupReplayGeometryTransition};
+pub use lane_geometry::RawGeometryWait;
+pub(crate) use lane_geometry::{
+    RawGeometryAttempt, RawGeometryPhase, ReplayGeometryBindingRequest,
+    StartupReplayGeometryTransition,
+};
 use lane_storage::LaneStorageEntry;
 pub use lane_storage::LaneStorageIdentity;
 #[cfg(test)]
@@ -617,7 +621,9 @@ use crate::publication_lock::{PublicationGuard, PublicationMutex};
 mod carrier_checkpoint;
 mod publication_lease;
 pub(crate) use carrier_checkpoint::KuraWsvCheckpointReceipt;
-pub(crate) use publication_lease::{KuraPublicationLease, KuraPublicationPreparationError};
+pub(crate) use publication_lease::{
+    KuraArchiveCaptureAuthenticationError, KuraPublicationLease, KuraPublicationPreparationError,
+};
 
 /// The interface of Kura subsystem.
 ///
@@ -739,6 +745,8 @@ pub struct Kura {
     /// Serializes lifecycle geometry moves, snapshot checkpoints, and archive garbage collection.
     /// Acquire it after `prune_lock` and before `sidecar_lock` when locks are combined.
     lane_geometry_lock: PublicationMutex,
+    /// Exact in-process operation custody while physical geometry locks are released.
+    raw_geometry_claim: lane_geometry::RawGeometryClaimGate,
     /// Maximum on-disk footprint for Kura block storage (0 = unlimited).
     max_disk_usage_bytes: u64,
     /// Distinct remote peers required before Kura may evict a local canonical block body.
@@ -3069,6 +3077,7 @@ impl Kura {
                 &resource_inventory,
             ),
             lane_geometry_lock: PublicationMutex::default(),
+            raw_geometry_claim: lane_geometry::RawGeometryClaimGate::default(),
             max_disk_usage_bytes: if config.init_mode == InitMode::Fast {
                 0
             } else {
@@ -3458,6 +3467,7 @@ impl Kura {
                 &resource_inventory,
             ),
             lane_geometry_lock: PublicationMutex::default(),
+            raw_geometry_claim: lane_geometry::RawGeometryClaimGate::default(),
             max_disk_usage_bytes: MAX_DISK_USAGE_BYTES.get(),
             eviction_required_replicas: EVICTION_REQUIRED_REPLICAS,
             local_peer_id: OnceLock::new(),
@@ -4263,6 +4273,10 @@ impl Kura {
         Ok(())
     }
     fn resolve_canonical_storage_before_mutation(&self) -> Result<()> {
+        // The canonical fence also orders raw geometry claim acquisition.
+        // Its original request must not observe a different carrier frontier
+        // while State retains the operation between physical leases.
+        self.raw_geometry_claim.ensure_unclaimed()?;
         self.durable_mutation_authorized()?;
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
@@ -5187,56 +5201,48 @@ impl Kura {
         receipt_bytes: usize,
         standalone_limit: u64,
     ) -> std::result::Result<(), NativeAmxParticipantApplicationEvidenceByteBudgetError> {
+        use NativeAmxParticipantApplicationEvidenceGeometryError as Geometry;
+
         if manifest_bytes == 0 {
-            return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-                    "Native AMX participant manifest framing is empty".to_owned(),
-                ),
-            );
+            return Err(Geometry::EmptyManifest.into());
         }
         if receipt_bytes == 0 {
-            return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-                    "Native AMX participant receipt framing is empty".to_owned(),
-                ),
-            );
+            return Err(Geometry::EmptyReceipt.into());
         }
-        let manifest_bytes_u64 = u64::try_from(manifest_bytes).map_err(|_| {
-            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-                "Native AMX participant manifest length does not fit u64".to_owned(),
-            )
-        })?;
-        let receipt_bytes_u64 = u64::try_from(receipt_bytes).map_err(|_| {
-            NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(
-                "Native AMX participant receipt length does not fit u64".to_owned(),
-            )
-        })?;
+        let manifest_bytes_u64 =
+            u64::try_from(manifest_bytes).map_err(|_| Geometry::ManifestLengthUnrepresentable)?;
+        let receipt_bytes_u64 =
+            u64::try_from(receipt_bytes).map_err(|_| Geometry::ReceiptLengthUnrepresentable)?;
         if manifest_bytes_u64 > standalone_limit {
-            return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
-                    "Native AMX participant manifest is {manifest_bytes_u64} bytes, exceeding the standalone payload budget of {standalone_limit} bytes"
-                )),
-            );
+            return Err(Geometry::ManifestStandaloneLimit {
+                bytes: manifest_bytes_u64,
+                limit: standalone_limit,
+            }
+            .into());
         }
         if receipt_bytes_u64 > standalone_limit {
-            return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
-                    "Native AMX participant receipt is {receipt_bytes_u64} bytes, exceeding the standalone payload budget of {standalone_limit} bytes"
-                )),
-            );
+            return Err(Geometry::ReceiptStandaloneLimit {
+                bytes: receipt_bytes_u64,
+                limit: standalone_limit,
+            }
+            .into());
         }
         let pair_bytes = checked_native_amx_participant_application_pair_bytes(
             manifest_bytes_u64,
             receipt_bytes_u64,
         )?;
-        if !self
-            .native_amx_participant_evidence_pair_fits_stable_bytes(manifest_bytes, receipt_bytes)
-        {
+        // Preserve the original local addressability check independently of
+        // the configured stable bound; arithmetic failure is never capacity debt.
+        manifest_bytes
+            .checked_add(receipt_bytes)
+            .ok_or(Geometry::PairLengthUnrepresentable { bytes: pair_bytes })?;
+        let configured_bytes = self.native_amx_participant_evidence_file_bytes();
+        if pair_bytes > configured_bytes {
             return Err(
-                NativeAmxParticipantApplicationEvidenceByteBudgetError::Budget(format!(
-                    "Native AMX participant manifest/receipt pair is {pair_bytes} bytes, exceeding the configured shared stable aggregate byte bound of {} bytes",
-                    self.native_amx_participant_evidence_file_bytes()
-                )),
+                NativeAmxParticipantApplicationEvidenceByteBudgetError::LocalStablePairCapacity {
+                    required_bytes: pair_bytes,
+                    configured_bytes,
+                },
             );
         }
         Ok(())
@@ -11406,12 +11412,20 @@ impl Kura {
     ) -> Result<Option<MergeLedgerEntry>> {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
+        self.merge_entry_by_hash_with_sidecar_guard(hash, self.sidecar_lock.lock())
+    }
+    /// Consume the caller's exact sidecar guard, releasing it before merge-log access.
+    /// This lets nonblocking publication preparation use the same canonical lookup.
+    fn merge_entry_by_hash_with_sidecar_guard(
+        &self,
+        hash: HashOf<MergeLedgerEntry>,
+        sidecar: PublicationGuard<'_>,
+    ) -> Result<Option<MergeLedgerEntry>> {
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
         let path = self.pending_merge_entry_path(hash);
-        let pending = {
-            let _guard = self.sidecar_lock.lock();
-            self.ensure_prune_recovery_not_required()?;
-            self.read_pending_merge_entry_path(&path, Some(hash))?
-        };
+        let pending = self.read_pending_merge_entry_path(&path, Some(hash))?;
+        drop(sidecar);
         self.ensure_prune_recovery_not_required()?;
         if pending.is_some() {
             return Ok(pending);
@@ -13272,7 +13286,7 @@ impl Kura {
     pub fn get_block(&self, block_height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
         self.get_block_inner(block_height, true)
     }
-    /// Load a body without updating derived Network query membership or body caches.
+    /// Load a body without updating hash, height, Network query, or body caches.
     ///
     /// This historical storage helper grants no executed-wire query authority.
     /// Canonical queries use the exact finalized body reader with a precharged
@@ -13354,13 +13368,15 @@ impl Kura {
             if data.len() != chain_len || self.prune_recovery_is_required() {
                 return None;
             }
-            data.cache_hash(block_index, expected_hash);
-            if let (Some(previous_index), Some(previous_hash)) =
-                (block_index.checked_sub(1), expected_previous_hash)
-            {
-                data.cache_hash(previous_index, previous_hash);
+            if update_transaction_index {
+                data.cache_hash(block_index, expected_hash);
+                if let (Some(previous_index), Some(previous_hash)) =
+                    (block_index.checked_sub(1), expected_previous_hash)
+                {
+                    data.cache_hash(previous_index, previous_hash);
+                }
+                self.set_block_height_index_entry(block_height.get(), expected_hash);
             }
-            self.set_block_height_index_entry(block_height.get(), expected_hash);
         }
         let (block, is_evicted, authenticated_for_index) = {
             let mut block_store = self.block_store.lock();
@@ -14065,9 +14081,21 @@ impl Kura {
     fn capture_v2_startup_replay_lane_auxiliary_sidecars(
         &self,
     ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
+        self.capture_v2_startup_replay_lane_auxiliary_sidecars_with_lease(None)
+    }
+    fn capture_v2_startup_replay_lane_auxiliary_sidecars_with_lease(
+        &self,
+        lease: Option<&KuraPublicationLease<'_>>,
+    ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
+        if lease.is_some_and(|lease| !lease.belongs_to(self)) {
+            return Err(Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, "foreign startup geometry lease"),
+                self.store_root.clone(),
+            ));
+        }
         // Bind the retained reference catalog and all inventory paths in one cut.
-        // Callers own canonical/prune ordering where required, but not geometry.
-        let _geometry_guard = self.lane_geometry_lock.lock();
+        // A joint publication lease already owns this exact geometry fence.
+        let _geometry_guard = lease.is_none().then(|| self.lane_geometry_lock.lock());
         let directories = self.v2_startup_replay_lane_auxiliary_sidecar_directories()?;
         let mut inventories = BTreeMap::new();
         let mut historical_records = 0_usize;
@@ -14156,6 +14184,12 @@ impl Kura {
     fn capture_v2_startup_replay_auxiliary_sidecars(
         &self,
     ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
+        self.capture_v2_startup_replay_auxiliary_sidecars_with_lease(None)
+    }
+    fn capture_v2_startup_replay_auxiliary_sidecars_with_lease(
+        &self,
+        lease: Option<&KuraPublicationLease<'_>>,
+    ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
         let mut inventories = [self.wsv_checkpoint_dir(), self.commit_manifest_dir()]
             .into_iter()
             .map(|directory| {
@@ -14163,7 +14197,9 @@ impl Kura {
                     .map(|inventory| (directory, inventory))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        for (directory, inventory) in self.capture_v2_startup_replay_lane_auxiliary_sidecars()? {
+        for (directory, inventory) in
+            self.capture_v2_startup_replay_lane_auxiliary_sidecars_with_lease(lease)?
+        {
             if inventories.insert(directory.clone(), inventory).is_some() {
                 return Err(Error::IO(
                     std::io::Error::new(
@@ -14939,6 +14975,19 @@ impl Kura {
         &self,
         binding: &V2StartupReplayStorageBinding,
     ) -> Result<()> {
+        self.validate_v2_startup_replay_storage_binding_with_lease(binding, None)
+    }
+    fn validate_v2_startup_replay_storage_binding_with_lease(
+        &self,
+        binding: &V2StartupReplayStorageBinding,
+        lease: Option<&KuraPublicationLease<'_>>,
+    ) -> Result<()> {
+        if lease.is_some_and(|lease| !lease.belongs_to(self)) {
+            return Err(Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, "foreign startup binding lease"),
+                self.store_root.clone(),
+            ));
+        }
         let Some((inventory, auxiliary_sidecars)) = binding.strict_parts() else {
             let V2StartupReplayStorageBinding::EmergencyFast(binding) = binding else {
                 unreachable!("startup replay binding variants are exhaustive");
@@ -15008,9 +15057,10 @@ impl Kura {
             publication, ..
         } = binding
         {
-            self.validate_startup_geometry_publication(publication)?;
+            self.validate_startup_geometry_publication_with_lease(publication, lease)?;
         }
-        let current_auxiliary = self.capture_v2_startup_replay_auxiliary_sidecars()?;
+        let current_auxiliary =
+            self.capture_v2_startup_replay_auxiliary_sidecars_with_lease(lease)?;
         for (directory, expected) in auxiliary_sidecars {
             let current = current_auxiliary.get(directory).ok_or_else(|| {
                 self.startup_auxiliary_identity_error(
@@ -15631,7 +15681,12 @@ impl Kura {
         };
         let mut cursor = snapshot.bytes.as_slice();
         let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
-        if record.encode() != snapshot.bytes {
+        let canonical_len = {
+            let _flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::core::encoded_payload_len(&record)?
+        };
+        if canonical_len != snapshot.bytes.len() || record.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -18557,11 +18612,16 @@ impl Kura {
         }
         Ok(true)
     }
-    fn pending_block_bytes_raw(&self, persisted_count: usize) -> Result<u64> {
+    fn pending_block_bytes_raw<E: From<Error>>(
+        &self,
+        persisted_count: usize,
+        mut resolve_merge: impl FnMut(HashOf<MergeLedgerEntry>) -> Result<Option<MergeLedgerEntry>, E>,
+    ) -> Result<u64, E> {
         if self.emergency_fast_startup_enabled() {
             return Err(Error::EmergencyFastAuxiliaryUnavailable {
                 subsystem: "pending canonical block cache",
-            });
+            }
+            .into());
         }
         #[cfg(test)]
         self.pending_budget_raw_scans
@@ -18586,7 +18646,7 @@ impl Kura {
         let mut pending_bytes = 0u64;
         for block in pending_blocks {
             let merge_entry = if let Some(reference) = Self::block_merge_reference(&block) {
-                Some(self.merge_entry_by_hash(reference.entry_hash)?.ok_or(
+                Some(resolve_merge(reference.entry_hash)?.ok_or(
                     Error::MissingCertifiedMergeSidecar {
                         entry_hash: reference.entry_hash,
                     },
@@ -18603,11 +18663,23 @@ impl Kura {
         Ok(pending_bytes)
     }
     fn pending_block_bytes(&self, persisted_count: usize, unindexed_bytes: u64) -> Result<u64> {
+        self.pending_block_bytes_with_merge_resolver(persisted_count, unindexed_bytes, |hash| {
+            self.merge_entry_by_hash(hash)
+        })
+    }
+    /// Share exact pending accounting while the caller owns merge lookup acquisition.
+    /// A resolver refusal leaves the pending-byte cache invalid for the next attempt.
+    fn pending_block_bytes_with_merge_resolver<E: From<Error>>(
+        &self,
+        persisted_count: usize,
+        unindexed_bytes: u64,
+        resolve_merge: impl FnMut(HashOf<MergeLedgerEntry>) -> Result<Option<MergeLedgerEntry>, E>,
+    ) -> Result<u64, E> {
         if self.pending_budget_bytes_valid.load(Ordering::Relaxed) {
             let pending = self.pending_budget_bytes.load(Ordering::Relaxed);
             return Ok(pending.saturating_sub(unindexed_bytes));
         }
-        let pending_bytes = self.pending_block_bytes_raw(persisted_count)?;
+        let pending_bytes = self.pending_block_bytes_raw(persisted_count, resolve_merge)?;
         self.pending_budget_bytes
             .store(pending_bytes, Ordering::Relaxed);
         self.pending_budget_bytes_valid
@@ -18771,7 +18843,8 @@ impl Kura {
         let association_stage_bytes =
             self.canonical_association_stage_additional_bytes(block, None)?;
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
-        let pending_raw = self.pending_block_bytes_raw(persisted_count)?;
+        let pending_raw =
+            self.pending_block_bytes_raw(persisted_count, |hash| self.merge_entry_by_hash(hash))?;
         let top_is_pending = block_count > persisted_count;
         let mut pending_raw_after = pending_raw;
         if top_is_pending {
@@ -22533,6 +22606,7 @@ impl Kura {
         }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         if provisional_transition {
+            self.raw_geometry_claim.ensure_unclaimed()?;
             if !self.provisional_snapshot_bootstrap_pending() {
                 return Err(Error::SnapshotBootstrapAuthenticationPending);
             }
@@ -39204,15 +39278,29 @@ impl Kura {
         &self,
         lane_id: LaneId,
     ) -> Result<NativeAmxParticipantApplicationHistory> {
+        self.read_native_amx_participant_application_history_with_lease(lane_id, None)
+    }
+
+    fn read_native_amx_participant_application_history_with_lease(
+        &self,
+        lane_id: LaneId,
+        lease: Option<&KuraPublicationLease<'_>>,
+    ) -> Result<NativeAmxParticipantApplicationHistory> {
+        if lease.is_some_and(|lease| !lease.belongs_to(self)) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native history lease belongs to another Kura",
+            ));
+        }
         if self.auxiliary_history_deferred {
             return Err(Error::EmergencyFastAuxiliaryUnavailable {
                 subsystem: "Native AMX participant application history",
             });
         }
-        let _prune = self.prune_lock.lock();
+        let _prune = lease.is_none().then(|| self.prune_lock.lock());
         self.ensure_prune_recovery_not_required()?;
-        let _canonical = self.canonical_chain_lock.lock();
-        let geometry = self.lane_geometry_lock.lock();
+        let _canonical = lease.is_none().then(|| self.canonical_chain_lock.lock());
+        let geometry = lease.is_none().then(|| self.lane_geometry_lock.lock());
         let entry = self.lane_storage_entry(lane_id)?;
         let marker = self.active_lane_incarnation_marker(&entry)?;
         let manifest_anchor =
@@ -39223,7 +39311,7 @@ impl Kura {
             &entry,
             &self.store_root,
         );
-        let sidecar = self.sidecar_lock.lock();
+        let sidecar = lease.is_none().then(|| self.sidecar_lock.lock());
         if self.bound_progress_sidecar_directory_is_absent(&manifest_anchor, &receipt_anchor)? {
             return Ok(NativeAmxParticipantApplicationHistory::default());
         }
@@ -39377,9 +39465,9 @@ impl Kura {
         for height in &application_heights {
             self.read_block_body_under_prune_and_canonical_guards(*height)?;
         }
-        let geometry = self.lane_geometry_lock.lock();
+        let geometry = lease.is_none().then(|| self.lane_geometry_lock.lock());
         let current = self.lane_storage_entry(lane_id)?;
-        let sidecar = self.sidecar_lock.lock();
+        let sidecar = lease.is_none().then(|| self.sidecar_lock.lock());
         self.ensure_prune_recovery_not_required()?;
         if Self::native_amx_participant_receipt_latest_index_path_for_entry(
             &current,
@@ -41276,6 +41364,13 @@ impl Kura {
         &self,
         frontier: &LaneMergeApplicationFrontierV1,
     ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        self.lane_merge_application_frontier_expected_receipt_with_append_repair_policy_under_prune_and_canonical_guards(frontier, true)
+    }
+    fn lane_merge_application_frontier_expected_receipt_with_append_repair_policy_under_prune_and_canonical_guards(
+        &self,
+        frontier: &LaneMergeApplicationFrontierV1,
+        repair_append_tail: bool,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
         if frontier.version != LaneMergeApplicationFrontierV1::VERSION
             || frontier.lane_block_height == 0
             || frontier.application_block_height == 0
@@ -41285,7 +41380,7 @@ impl Kura {
         let entry = self
             .merge_log
             .lock()
-            .entry_by_hash(frontier.merge_entry_hash)
+            .entry_by_hash_with_append_repair_policy(frontier.merge_entry_hash, repair_append_tail)
             .ok()
             .flatten()?;
         if entry.epoch_id != frontier.merge_epoch_id {
@@ -41692,7 +41787,27 @@ impl Kura {
         index_path: &Path,
         recover: bool,
     ) -> Option<LaneBlockApplicationReceiptArtifact> {
-        let passive = self.emergency_fast_startup_enabled();
+        self.read_lane_block_application_receipt_from_paths_with_read_mode_locked(
+            lane_id,
+            lane_block_height,
+            data_path,
+            index_path,
+            recover,
+            AutonomousTerminalReceiptReadMode::Attest,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn read_lane_block_application_receipt_from_paths_with_read_mode_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+        read_mode: AutonomousTerminalReceiptReadMode,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let passive = self.emergency_fast_startup_enabled()
+            || read_mode == AutonomousTerminalReceiptReadMode::ReadOnly;
         let recover = recover && !passive;
         if recover
             && !self.recover_bound_progress_sidecar_artifacts(
@@ -42546,6 +42661,9 @@ include!("kura/indexed_sidecar_io.rs");
 include!("kura/consensus_storage_reads.rs");
 #[path = "kura/lane_admission_source.rs"]
 mod lane_admission_source;
+pub(crate) use lane_admission_source::{
+    canonical_admission_read_decode_limits, canonical_admission_read_working_set_bytes,
+};
 #[path = "kura/native_lane_batch_source.rs"]
 #[cfg_attr(
     not(test),
@@ -44205,7 +44323,7 @@ impl BlockStore {
             self.data_file = Some(if self.read_only {
                 FileWrap::open_read_only(path)?
             } else {
-                FileWrap::open_read_write(path)?
+                FileWrap::open_existing_read_write(path)?
             });
         }
         Ok(self.data_file.as_mut().expect("handle just initialised"))
@@ -44216,7 +44334,7 @@ impl BlockStore {
             self.index_file = Some(if self.read_only {
                 FileWrap::open_read_only(path)?
             } else {
-                FileWrap::open_read_write(path)?
+                FileWrap::open_existing_read_write(path)?
             });
         }
         Ok(self.index_file.as_mut().expect("handle just initialised"))
@@ -44227,7 +44345,7 @@ impl BlockStore {
             self.hashes_file = Some(if self.read_only {
                 FileWrap::open_read_only(path)?
             } else {
-                FileWrap::open_read_write(path)?
+                FileWrap::open_existing_read_write(path)?
             });
         }
         Ok(self.hashes_file.as_mut().expect("handle just initialised"))

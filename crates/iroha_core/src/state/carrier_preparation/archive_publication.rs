@@ -49,7 +49,9 @@ impl<Admission, BindingAdmission>
     /// The caller admits installation work and joins the original target Kura
     /// before calling this method. It must hold no State or Kura publication
     /// lease. The temporary nonblocking lease below protects checkpoint readback
-    /// only and is released before either archive's own authenticated readers.
+    /// and both archive writes. Each capture authenticates through the held Kura
+    /// boundary and probes its archive writer without waiting on its readers.
+    /// Every refusal releases this lease before returning the exact retry owner.
     /// The final State publisher must rejoin the same receipt under its final
     /// Kura lease; this intermediate success grants no State publication right.
     ///
@@ -69,19 +71,18 @@ impl<Admission, BindingAdmission>
                 self.journals.checkpoint,
             )
             .map_err(CarrierArchivePublicationError::Checkpoint)?;
-        drop(lease);
-
         let receipt = self.checkpoint.finality_receipt();
         if let Some(provider) = self.journals.provider_capture.as_mut() {
             provider
-                .publish(receipt)
+                .publish_under_publication_lease(&lease, receipt)
                 .map_err(CarrierArchivePublicationError::Provider)?;
         }
         if let Some(reputation) = self.journals.reputation_capture.as_mut() {
             reputation
-                .publish(receipt)
+                .publish_under_publication_lease(&lease, receipt)
                 .map_err(CarrierArchivePublicationError::Reputation)?;
         }
+        drop(lease);
         Ok(())
     }
 }

@@ -176,8 +176,8 @@ fn admission_refusal_releases_writers_before_any_final_value_copy() {
     let journal = detach(block);
     assert_eq!(
         copies.load(Ordering::SeqCst),
-        1,
-        "only the touched after-value is copied"
+        0,
+        "touched capture retains the original successor allocations"
     );
     drop(journal);
     let block = cell.block();
@@ -186,7 +186,7 @@ fn admission_refusal_releases_writers_before_any_final_value_copy() {
     assert_eq!(
         copies.load(Ordering::SeqCst),
         0,
-        "untouched capture retains identity only"
+        "untouched capture retains original successors without copying"
     );
     drop(journal);
 }

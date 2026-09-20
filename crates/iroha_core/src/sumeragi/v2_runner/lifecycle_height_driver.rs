@@ -1124,6 +1124,10 @@ mod tests {
             }
 
             match (self, selected) {
+            (
+                Self::AwaitingCompletion,
+                Completion::LifecycleValidateLocalWaiting | Completion::LifecycleValidateLocalRequeued,
+            ) => Ok(Self::AwaitingCompletion),
             (Self::AwaitingCompletion, Completion::LifecycleValidatePublished { ordinal }) => {
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
@@ -1281,6 +1285,11 @@ mod tests {
                 Self::AwaitingApplyCompletion,
                 Completion::LifecycleDecisionApplyCompletionDeferred,
             ) => Ok(Self::AwaitingApplyCompletion),
+            (
+                Self::Eligible | Self::AwaitingCompletion,
+                Completion::LifecycleValidateLocalWaiting
+                    | Completion::LifecycleValidateLocalRequeued,
+            ) => Ok(Self::AwaitingCompletion),
             (Self::Eligible | Self::AwaitingCompletion, Completion::LifecycleValidateDeferred) => {
                 Ok(Self::AwaitingCompletion)
             }
@@ -1409,6 +1418,57 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn local_validate_retry_keeps_only_the_original_completion_claim() {
+        use crate::sumeragi::v2_lifecycle_coordinator::{
+            LifecycleDigest, ProductionLifecycleCompletionSelectionV1 as Completion, WaitSource,
+            wait_token_for_test,
+        };
+
+        for selected in [
+            Completion::LifecycleValidateLocalWaiting,
+            Completion::LifecycleValidateLocalRequeued,
+        ] {
+            let claim = LifecycleProducerClaimDispositionV1::AwaitingCompletion
+                .observe_completion(&selected)
+                .expect("physical retry retains the original completion owner");
+            assert_eq!(
+                claim,
+                LifecycleProducerClaimDispositionV1::AwaitingCompletion
+            );
+            assert!(claim.requires_yield());
+            assert!(!claim.blocks_runtime());
+            assert!(!claim.permits_ready_completion());
+            assert!(!completion_selection_retries_before_runtime(&selected));
+
+            for foreign in [
+                LifecycleProducerClaimDispositionV1::Eligible,
+                LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 7 },
+                LifecycleProducerClaimDispositionV1::AwaitingValidateFence {
+                    ordinal: 7,
+                    wait: wait_token_for_test(
+                        WaitSource::External(LifecycleDigest::new([7; 32])),
+                        1,
+                    ),
+                },
+                LifecycleProducerClaimDispositionV1::AwaitingLiveApplyQueue {
+                    parent_ordinal: 7,
+                    child_ordinal: 8,
+                },
+                LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar,
+                LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion,
+                LifecycleProducerClaimDispositionV1::ApplyTerminalSettled,
+                LifecycleProducerClaimDispositionV1::AwaitingReplayCompletion,
+            ] {
+                assert_eq!(
+                    foreign.observe_completion(&selected),
+                    Err(LifecycleProducerClaimTransitionErrorV1::Completion),
+                    "{foreign:?} cannot acquire a Validate owner from a physical retry",
+                );
+            }
+        }
+    }
 
     #[test]
     fn completed_certified_serve_yields_before_the_next_outer_turn() {

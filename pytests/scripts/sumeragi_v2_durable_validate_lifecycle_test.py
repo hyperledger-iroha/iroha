@@ -43,9 +43,11 @@ def copy_durable_validate_lifecycle_fixture(
         module.DURABLE_VALIDATE_LIFECYCLE_MUTATION_RUNNER,
         "ci/check_sumeragi_formal.sh",
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        "crates/iroha_core/src/sumeragi/v2_effects_recovered_fetch_and_pipeline_types.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        "crates/iroha_core/src/sumeragi/v2_worker.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         "crates/iroha_core/src/sumeragi/v2_lifecycle_validate_sidecar.rs",
         "crates/iroha_core/src/sumeragi/"
@@ -193,13 +195,13 @@ def test_durable_validate_lifecycle_retires_only_after_successor_retention(
         / "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"
     )
     source = driver.read_text(encoding="utf-8")
-    assert source.count("ReadyValidateSuccessorV1::from_validated(published)") == 1
+    before = """ReadyValidateSuccessorV1::from_validated(
+                            published,
+                            physical_completion,
+                        )"""
+    assert source.count(before) == 1
     driver.write_text(
-        source.replace(
-            "ReadyValidateSuccessorV1::from_validated(published)",
-            "ReadyValidateSuccessorV1::from_rejected(published)",
-            1,
-        ),
+        source.replace(before, before.replace("from_validated", "from_rejected"), 1),
         encoding="utf-8",
     )
 
@@ -317,3 +319,198 @@ def test_applied_phase_formal_contract_has_no_deleted_validation_callback() -> N
         assert "ValidationSucceeded" not in source
         assert "validation_succeeded" not in source
         assert "ConflictPolarity" not in source
+
+
+@pytest.mark.parametrize(
+    ("filename", "before", "after", "expected_error"),
+    (
+        pytest.param(
+            "v2_worker_completion.rs",
+            """GuardedLifecycleValidateWorkerResultV1::local_busy(
+                key,
+                dispatch,
+                dependency,
+                output_guard,
+            )""",
+            'return Err("discarded physical dispatch".to_owned())',
+            "physical refusal must retain the original dispatch",
+            id="local-refusal-drops-dispatch",
+        ),
+        pytest.param(
+            "v2_worker_completion.rs",
+            "let release = Some(dependency.wait.clone().wait_for_release());",
+            "let release = None;",
+            "retain its original physical release observation",
+            id="lost-physical-release",
+        ),
+        pytest.param(
+            "v2_worker_completion.rs",
+            "std::future::Future::poll(std::pin::Pin::new(future), &mut context).is_pending()",
+            "std::future::Future::poll(std::pin::Pin::new(future), &mut context).is_ready()",
+            "physical release must precede same-key retry",
+            id="retry-before-release",
+        ),
+        pytest.param(
+            "v2_worker_completion.rs",
+            "return LifecycleValidateLocalRetryV1::Waiting(self);",
+            "return LifecycleValidateLocalRetryV1::Executed(self);",
+            "physical release must precede same-key retry",
+            id="unexecuted-dispatch-published",
+        ),
+        pytest.param(
+            "v2_worker_completion.rs",
+            "match queue.retry_lifecycle_validate(LifecycleValidateTaskV1 { key, dispatch }) {",
+            "drop_guard.disarm();\n        match queue.retry_lifecycle_validate(LifecycleValidateTaskV1 { key, dispatch }) {",
+            "disarm only after queue publication",
+            id="guard-retired-before-retry",
+        ),
+        pytest.param(
+            "v2_worker_completion.rs",
+            "dispatch: task.dispatch,\n                            dependency,\n                            release: Some(release),",
+            "dispatch: task.dispatch,\n                            dependency,\n                            release: None,",
+            "backpressure must retain the same dispatch",
+            id="backpressure-loses-release-wake",
+        ),
+        pytest.param(
+            "v2_worker_completion.rs",
+            "dependency.waker().wake_by_ref();",
+            "let _ = dependency.waker();",
+            "register the original release wake",
+            id="release-before-registration-loses-wake",
+        ),
+        pytest.param(
+            "v2_worker.rs",
+            ".lifecycle_validates\n                .get(&key)\n                .is_none_or(|tracked| tracked.state != V2IoWorkState::CompletionPending)",
+            ".lifecycle_validates\n                .get(&key)\n                .is_none_or(|tracked| tracked.state != V2IoWorkState::Queued)",
+            "keep its exact completion-pending index",
+            id="retry-wrong-physical-phase",
+        ),
+        pytest.param(
+            "v2_worker.rs",
+            """let release = self.admission.lifecycle_capacity_release.observe();
+        if state.commands.len() >= self.capacity
+            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)""",
+            """let release = self.admission.lifecycle_capacity_release.observe();
+        if state.commands.len() >= self.capacity""",
+            "reserve original command capacity",
+            id="retry-skips-resource-reservation",
+        ),
+        pytest.param(
+            "v2_lifecycle_turn_driver.rs",
+            "let completion = match completion.retry_local() {",
+            "let completion = match crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Executed(completion) {",
+            "rejoin the guarded completion to its coordinator row",
+            id="driver-skips-local-retry",
+        ),
+        pytest.param(
+            "v2_lifecycle_turn_driver.rs",
+            """*pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::Validate(completion));""",
+            "*pending_lifecycle_completion = None;",
+            "rejoin the guarded completion to its coordinator row",
+            id="driver-discards-waiting-owner",
+        ),
+        pytest.param(
+            "v2_lifecycle_turn_driver.rs",
+            """let selected = self.settle_parked_lifecycle_validate_completion();
+                    if matches!(
+                        selected,
+                        ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
+                    )""",
+            """let selected = self.settle_parked_lifecycle_validate_completion();
+                    if false""",
+            "use only the authenticated ordinary completion drain",
+            id="physical-wait-starves-ordinary-head",
+        ),
+        pytest.param(
+            "v2_lifecycle_turn_driver.rs",
+            """ReadyValidateSuccessorV1::from_validated(
+                            published,
+                            physical_completion,
+                        )""",
+            "ReadyValidateSuccessorV1::from_validated(published, None)",
+            "a validated owner must install its exact durable successor",
+            id="validated-successor-loses-physical-owner",
+        ),
+        pytest.param(
+            "v2_lifecycle_turn_driver.rs",
+            """ReadyValidateSuccessorV1::from_rejected(
+                            published,
+                            physical_completion,
+                        )""",
+            "ReadyValidateSuccessorV1::from_rejected(published, None)",
+            "a rejected owner must install its exact durable successor",
+            id="rejected-successor-loses-physical-owner",
+        ),
+        pytest.param(
+            "v2_lifecycle_scheduler_inputs.rs",
+            ".is_some_and(|completion| incumbent_dispatch_key != Some(completion.dispatch_key()))",
+            ".is_some_and(|completion| incumbent_dispatch_key == Some(completion.dispatch_key()))",
+            "carry the authenticated incumbent key",
+            id="foreign-physical-incumbent",
+        ),
+        pytest.param(
+            "v2_effects.rs",
+            "&& existing.can_refine_to(&candidate)",
+            "&& true",
+            "replace only the exact apply-authorized incumbent",
+            id="skip-extracted-refinement-owner",
+        ),
+        pytest.param(
+            "v2_effects_recovered_fetch_and_pipeline_types.rs",
+            """self.dispatch_key != candidate.dispatch_key
+            && self.apply_is_authorized""",
+            "self.dispatch_key != candidate.dispatch_key",
+            "extracted refinement owner must preserve authorization",
+            id="refinement-loses-apply-authority",
+        ),
+        pytest.param(
+            "v2_effects_recovered_fetch_and_pipeline_types.rs",
+            "self.dispatch_key.owner() == candidate.dispatch_key.owner()",
+            "self.dispatch_key.owner() != candidate.dispatch_key.owner()",
+            "extracted refinement owner must preserve authorization",
+            id="refinement-foreign-owner",
+        ),
+        pytest.param(
+            "v2_lifecycle_validate_sidecar.rs",
+            "if coordinator.cancelled_validate_sidecar_registration_matches(&identity, registry) {",
+            "if true {",
+            "restart must restore an fsynced sidecar wait",
+            id="unauthenticated-cancelled-cleanup",
+        ),
+        pytest.param(
+            "v2_lifecycle_validate_sidecar.rs",
+            "record.state == LifecycleState::Terminal(TerminalOutcome::Cancelled)",
+            "record.state != LifecycleState::Terminal(TerminalOutcome::Cancelled)",
+            "cancelled sidecar cleanup must authenticate the exact terminal row",
+            id="cleanup-nonterminal-row",
+        ),
+        pytest.param(
+            "v2_lifecycle_validate_sidecar.rs",
+            "&& registry\n                .registry()\n                .lacks_validate_sidecar_registration(identity)",
+            "&& true",
+            "absent registry custody",
+            id="cleanup-discards-live-registry-custody",
+        ),
+    ),
+)
+def test_durable_validate_lifecycle_rejects_local_wait_custody_mutants(
+    tmp_path: Path,
+    filename: str,
+    before: str,
+    after: str,
+    expected_error: str,
+) -> None:
+    """Physical retries preserve dispatch custody and cannot publish a verdict."""
+
+    module = load_checker()
+    repo_root, _ = copy_durable_validate_lifecycle_fixture(tmp_path, module)
+    path = repo_root / "crates/iroha_core/src/sumeragi" / filename
+    source = path.read_text(encoding="utf-8")
+    assert source.count(before) == 1
+    path.write_text(source.replace(before, after, 1), encoding="utf-8")
+
+    errors = module._durable_validate_lifecycle_production_source_fidelity_errors(
+        repo_root
+    )
+    assert any(expected_error in error for error in errors), errors

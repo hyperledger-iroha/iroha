@@ -473,21 +473,118 @@ fn pipeline_status_local_read_evicts_stale_queued_cache() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
 }
-#[tokio::test]
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
-    let mut app = mk_app_state_for_tests();
+    // Public Log admission requires an exact QueuePlan certificate. Keep four real
+    // authorities and obtain f+1 receipts from the local queue and a signed HTTP
+    // peer request; neither a lifecycle intent nor an injected queue entry tests
+    // the public handler's live-pending path.
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xd8_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive live pending QueuePlan authority",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (mut app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xd8,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair =
-        checked_torii_test_ed25519_keypair(0xd8, "derive live pending pipeline-status fixture key");
-    let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = signed_log_transaction_for_test(
-        *app.state.network_id_ref(),
-        authority,
-        "pipeline-status-live-pending",
-        &keypair,
+    let (mut peer_app, _) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xd8,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
     );
+    {
+        let peer = Arc::get_mut(&mut peer_app).expect("unique peer app state");
+        peer.local_peer_id = Some(PeerId::from(signers[1].public_key().clone()));
+        peer.torii_proxy_bridge_signer = signers[1].clone();
+        peer.high_load_tx_threshold = usize::MAX;
+    }
+    let journal_dir = tempfile::tempdir().expect("live pending QueuePlan journals");
+    for (name, receiver) in [("local", &app), ("peer", &peer_app)] {
+        receiver
+            .queue
+            .install_plan_journal(
+                &journal_dir.path().join(format!("{name}.norito")),
+                1024 * 1024,
+                true,
+            )
+            .expect("install actual receiver QueuePlan journal");
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind live pending authority");
+    let peer_url = format!(
+        "http://{}/",
+        listener
+            .local_addr()
+            .expect("live pending authority address")
+    );
+    let validators = signers
+        .iter()
+        .enumerate()
+        .map(|(index, signer)| {
+            (
+                AccountId::new(signer.public_key().clone()),
+                PeerId::from(signer.public_key().clone()),
+                (index == 1).then_some(peer_url.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let lanes = [(LaneId::SINGLE, validators)];
+    for receiver in [&app, &peer_app] {
+        install_lane_manifest_registry_with_torii_urls_for_test(&receiver.state, &lanes);
+    }
+    let plan = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let context = app
+        .queue
+        .plan_admission_context_with_state(&app.state, &plan)
+        .expect("local live pending authority context");
+    assert_eq!(single_route_queue_plan_authorities(&context).len(), 4);
+    assert_eq!(
+        context,
+        peer_app
+            .queue
+            .plan_admission_context_with_state(&peer_app.state, &plan)
+            .expect("peer live pending authority context"),
+        "both durable receivers must authenticate the same canonical route and roster"
+    );
+    let peer_layer = axum::middleware::from_fn_with_state::<
+        _,
+        _,
+        (axum::extract::State<SharedAppState>, axum::extract::Request),
+    >(
+        peer_app.clone(),
+        operator_signatures::enforce_torii_proxy_peer_signature,
+    );
+    let router = axum::Router::new()
+        .route(
+            TORII_INTERNAL_PROXY_HTTP_PATH,
+            axum::routing::post(handler_internal_torii_proxy_request).layer(peer_layer),
+        )
+        .with_state(peer_app.clone());
+    let (shutdown, shutdown_requested) = tokio::sync::oneshot::channel();
+    let peer_task = tokio::spawn(async move {
+        axum::serve(listener, router.into_make_service())
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_requested.await;
+            })
+            .await
+            .expect("serve actual signed QueuePlan receiver");
+    });
+    let TransactionEntrypoint::External(transaction) =
+        queue_plan_synced_test_entrypoint(&request).clone()
+    else {
+        panic!("live pending fixture must retain its signed external transaction")
+    };
     let tx_hash = transaction.hash();
     let response = super::handler_post_transaction(
         State(app.clone()),
@@ -498,7 +595,25 @@ async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
     .await
     .expect("accepted")
     .into_response();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let status = response.status();
+    let body = torii_body_bytes(response, "live pending admission response").await;
+    let _ = shutdown.send(());
+    tokio::time::timeout(Duration::from_secs(5), peer_task)
+        .await
+        .expect("signed QueuePlan receiver should shut down")
+        .expect("signed QueuePlan receiver should finish");
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "actual certified handler admission: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(
+        peer_app
+            .queue
+            .contains_pending_hash(transaction.hash_as_entrypoint(), &peer_app.state),
+        "the second authenticated authority must have durably admitted the same input"
+    );
     assert!(
         app.queue
             .contains_pending_hash(transaction.hash_as_entrypoint(), &app.state),

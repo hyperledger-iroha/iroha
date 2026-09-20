@@ -74,3 +74,44 @@ fn same_cut_replacement_preserves_absent_undo_and_retained_predecessor() {
         "an abandoned replacement does not publish"
     );
 }
+
+#[test]
+fn same_cut_owner_drop_preserves_values_identity_and_releases_both_writers() {
+    let cell = Cell::new(10_u64);
+    let mut tip = cell.block();
+    *tip.get_mut() = 20;
+    tip.commit();
+    let journal = cell.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
+    let owner = cell.current_replacement();
+    assert_eq!(*owner.get(), 20);
+    assert_eq!(*cell.view(), 20);
+    assert_eq!(*cell.predecessor_view(), Some(10));
+    assert!(cell.revert.try_write().is_none());
+    assert!(cell.blocks.try_write().is_none());
+    assert!(journal.matches_current(&cell));
+    drop(owner);
+    assert!(cell.revert.try_write().is_some());
+    assert!(cell.blocks.try_write().is_some());
+    assert!(journal.matches_current(&cell));
+    assert_eq!(*cell.view(), 20);
+    assert_eq!(*cell.predecessor_view(), Some(10));
+}
+
+#[test]
+fn same_cut_owner_publish_preserves_undo_and_retained_readers() {
+    let cell = Cell::new(10_u64);
+    let mut tip = cell.block();
+    *tip.get_mut() = 20;
+    tip.commit();
+    let journal = cell.block().try_detach(|_| Ok::<_, ()>(())).unwrap();
+    let current = cell.view();
+    let undo = cell.predecessor_view();
+    let owner = cell.current_replacement();
+    owner.publish(21);
+    assert_eq!(*current, 20);
+    assert_eq!(*undo, Some(10));
+    assert_eq!(*cell.view(), 21);
+    assert_eq!(*cell.predecessor_view(), Some(10));
+    assert!(!journal.matches_current(&cell));
+    assert_eq!(*cell.block_and_revert(), 10);
+}

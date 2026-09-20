@@ -130,7 +130,7 @@ fn either_busy_writer_returns_original_values_and_releases_partial_locks() {
     let mut candidate = target.block();
     *candidate.get_mut() = String::from("after");
     let mut journal = detach(candidate);
-    let ptr = journal.change.as_ref().unwrap().1.as_ptr();
+    let ptr = journal.touched_value().unwrap().after.as_ptr();
     for which in 0..2 {
         let undo = (which == 0).then(|| target.revert.write());
         let current = (which == 1).then(|| target.blocks.write());
@@ -139,7 +139,7 @@ fn either_busy_writer_returns_original_values_and_releases_partial_locks() {
             .err()
             .unwrap();
         assert!(matches!(error, PublicationPreparationError::Busy(_)));
-        assert_eq!(returned.change.as_ref().unwrap().1.as_ptr(), ptr);
+        assert_eq!(returned.touched_value().unwrap().after.as_ptr(), ptr);
         drop(current);
         drop(undo);
         assert!(target.revert.try_write().is_some());
@@ -193,7 +193,7 @@ fn abort_preserves_the_exact_journal_for_retry_after_late_component_refusal() {
     let mut candidate = first.block();
     *candidate.get_mut() = String::from("after");
     let journal = detach(candidate);
-    let ptr = journal.change.as_ref().unwrap().1.as_ptr();
+    let ptr = journal.touched_value().unwrap().after.as_ptr();
     let prepared = prepare(journal, &first);
     let (_, error) = detach(second.block())
         .try_prepare_publication(&second, |_, _| Err::<(), _>("capacity"))
@@ -201,7 +201,7 @@ fn abort_preserves_the_exact_journal_for_retry_after_late_component_refusal() {
         .unwrap();
     assert_eq!(error, PublicationPreparationError::Admission("capacity"));
     let journal = prepared.abort();
-    assert_eq!(journal.change.as_ref().unwrap().1.as_ptr(), ptr);
+    assert_eq!(journal.touched_value().unwrap().after.as_ptr(), ptr);
     assert!(journal.matches_current(&first));
     assert_eq!(&*first.view(), "before");
     prepare(journal, &first).publish();
@@ -209,7 +209,7 @@ fn abort_preserves_the_exact_journal_for_retry_after_late_component_refusal() {
 }
 
 #[test]
-fn admission_precedes_value_copies_and_publication_transfers_resource_owners() {
+fn original_successors_are_reused_without_value_copies_and_keep_resource_owners() {
     struct Counted(Arc<AtomicUsize>);
     impl Clone for Counted {
         fn clone(&self) -> Self {
@@ -246,7 +246,11 @@ fn admission_precedes_value_copies_and_publication_transfers_resource_owners() {
         Ok(p) => p,
         Err(_) => panic!("admission"),
     };
-    assert!(copies.load(Ordering::SeqCst) > 0);
+    assert_eq!(
+        copies.load(Ordering::SeqCst),
+        0,
+        "installation reuses the original successors"
+    );
     let reservations = prepared.publish();
     assert!(!captured.load(Ordering::SeqCst));
     assert!(!installed.load(Ordering::SeqCst));

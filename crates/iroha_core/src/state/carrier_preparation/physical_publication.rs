@@ -28,6 +28,12 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Kura(KuraPublicationPreparationError),
     /// The retained durable checkpoint/finality no longer matches its original owner.
     Checkpoint(crate::kura::Error),
+    /// The retained execution or Native source differs from exact durable evidence.
+    Source(super::super::super::execution_prefix::CarrierSourceAuthenticationError),
+    /// The original provider capture does not join this exact durable carrier.
+    Provider(crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveErrorV1),
+    /// The original reputation capture does not join this exact durable carrier.
+    Reputation(crate::query::reputation_finalized::ReputationFinalizedArchiveError),
     /// The original execution witness could not be persisted or reauthenticated.
     ExecutionWitness(crate::kura::Error),
     /// Retained archive persistence failed before the final joint lease.
@@ -59,6 +65,9 @@ impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> 
             Self::ForeignKura => f.write_str("ForeignKura"),
             Self::Kura(error) => f.debug_tuple("Kura").field(error).finish(),
             Self::Checkpoint(error) => f.debug_tuple("Checkpoint").field(error).finish(),
+            Self::Source(error) => f.debug_tuple("Source").field(error).finish(),
+            Self::Provider(error) => f.debug_tuple("Provider").field(error).finish(),
+            Self::Reputation(error) => f.debug_tuple("Reputation").field(error).finish(),
             Self::ExecutionWitness(error) => {
                 f.debug_tuple("ExecutionWitness").field(error).finish()
             }
@@ -76,6 +85,103 @@ impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> 
             Self::Runtime(error) => f.debug_tuple("Runtime").field(error).finish(),
             Self::World(error) => f.debug_tuple("World").field(error).finish(),
         }
+    }
+}
+
+/// The whole original decided execution joined to durable sources under its lease.
+/// No standalone proof escapes: releasing the lease returns only the original
+/// unauthenticated decision, so every later attempt must reauthenticate it.
+struct SourceAuthenticatedCarrier<'target, Admission, BindingAdmission> {
+    decision: DecisionBoundCarrierJournals<
+        Admission,
+        BindingAdmission,
+        DetachedCarrierComponents,
+        KuraWsvCheckpointReceipt,
+    >,
+    kura: KuraPublicationLease<'target>,
+}
+
+impl<'target, Admission, BindingAdmission>
+    SourceAuthenticatedCarrier<'target, Admission, BindingAdmission>
+{
+    fn try_new<E>(
+        decision: DecisionBoundCarrierJournals<
+            Admission,
+            BindingAdmission,
+            DetachedCarrierComponents,
+            KuraWsvCheckpointReceipt,
+        >,
+        kura: KuraPublicationLease<'target>,
+    ) -> Result<
+        Self,
+        (
+            DecisionBoundCarrierJournals<
+                Admission,
+                BindingAdmission,
+                DetachedCarrierComponents,
+                KuraWsvCheckpointReceipt,
+            >,
+            CarrierPhysicalPreparationError<E>,
+        ),
+    > {
+        let owner = Self { decision, kura };
+        let result = (|| {
+            let original = &owner.decision;
+            owner
+                .kura
+                .reauthenticate_checkpoint(
+                    &original.checkpoint,
+                    original.finality.artifact(),
+                    original.journals.checkpoint,
+                )
+                .map_err(CarrierPhysicalPreparationError::Checkpoint)?;
+            original
+                .journals
+                .source_prefix
+                .authenticate_durable_carrier(
+                    original.block(),
+                    &original.journals.context,
+                    &original.journals.execution_prefix,
+                    &owner.kura,
+                )
+                .map_err(CarrierPhysicalPreparationError::Source)?;
+            // Standalone archive readers would reacquire Kura and deadlock.
+            // Join both retained anchors under this exact source boundary.
+            if let Some(capture) = original.journals.provider_capture.as_ref() {
+                capture
+                    .reauthenticate_under_publication_lease(
+                        &owner.kura,
+                        original.checkpoint.finality_receipt(),
+                    )
+                    .map_err(CarrierPhysicalPreparationError::Provider)?;
+            }
+            if let Some(capture) = original.journals.reputation_capture.as_ref() {
+                capture
+                    .reauthenticate_under_publication_lease(
+                        &owner.kura,
+                        original.checkpoint.finality_receipt(),
+                    )
+                    .map_err(CarrierPhysicalPreparationError::Reputation)?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => Ok(owner),
+            Err(error) => Err((owner.release(), error)),
+        }
+    }
+
+    fn release(
+        self,
+    ) -> DecisionBoundCarrierJournals<
+        Admission,
+        BindingAdmission,
+        DetachedCarrierComponents,
+        KuraWsvCheckpointReceipt,
+    > {
+        let Self { decision, kura } = self;
+        drop(kura);
+        decision
     }
 }
 
@@ -180,6 +286,7 @@ pub(in crate::state::carrier_preparation::journals) struct PhysicallyPreparedCar
     BindingAdmission,
     Installation,
 > {
+    // The writers below belong to this exact State, never a caller-supplied replacement.
     target: &'target State,
     decision: DecisionBoundCarrierJournals<
         Admission,
@@ -204,8 +311,9 @@ impl<Admission, BindingAdmission>
     ///
     /// The required callback covers all component staging/COW copies, retained
     /// readers, publication identities, durable body/finality/checkpoint decoding
-    /// and verification, original execution-witness staging/promotion and final
-    /// proof authentication, and acquisition/abort bookkeeping. There
+    /// and verification, both retained archive anchors and their result-bearing
+    /// body authentication, original witness and archive persistence, final
+    /// witness reauthentication, and acquisition/abort bookkeeping. There
     /// is no implicit production capacity policy. A failed attempt returns the
     /// exact block, verified artifact, journals, effects and prior reservations.
     pub(in crate::state::carrier_preparation::journals) fn try_prepare_physical<
@@ -234,6 +342,24 @@ impl<Admission, BindingAdmission>
             drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignKura));
         }
+        // Reject substituted execution or archive custody before any derived
+        // persistence can modify its durable namespace. Release the temporary
+        // lease before the continuations enter their own storage APIs; the final
+        // lease below must authenticate all these same owners again.
+        let kura = match target.kura.try_publication_lease() {
+            Ok(lease) => lease,
+            Err(error) => {
+                drop(installation);
+                return Err((original, CarrierPhysicalPreparationError::Kura(error)));
+            }
+        };
+        original = match SourceAuthenticatedCarrier::try_new(original, kura) {
+            Ok(owner) => owner.release(),
+            Err((original, error)) => {
+                drop(installation);
+                return Err((original, error));
+            }
+        };
         if let Err(error) = original.publish_execution_witness() {
             use super::execution_witness_publication::CarrierExecutionWitnessPublicationError;
             let error = match error {
@@ -273,20 +399,21 @@ impl<Admission, BindingAdmission>
                 return Err((original, CarrierPhysicalPreparationError::Kura(error)));
             }
         };
-        // Authenticate under the original four Kura fences, before any State
-        // probe. Equal bytes from another Kura or a replaced checkpoint cannot
-        // grant publication. A storage refusal is not a lock-release dependency.
-        if let Err(error) = kura.reauthenticate_checkpoint(
-            &original.checkpoint,
-            original.finality.artifact(),
-            original.journals.checkpoint,
-        ) {
-            drop(kura);
-            drop(installation);
-            return Err((original, CarrierPhysicalPreparationError::Checkpoint(error)));
-        }
-        if let Err(error) = kura.reauthenticate_execution_witness(original.finality.artifact()) {
-            drop(kura);
+        // Join the original source and checkpoint under all four Kura fences
+        // before any State probe. The complete owner carries this authentication
+        // only while that same lease remains held.
+        let authenticated = match SourceAuthenticatedCarrier::try_new(original, kura) {
+            Ok(owner) => owner,
+            Err((original, error)) => {
+                drop(installation);
+                return Err((original, error));
+            }
+        };
+        if let Err(error) = authenticated
+            .kura
+            .reauthenticate_execution_witness(authenticated.decision.finality.artifact())
+        {
+            let original = authenticated.release();
             drop(installation);
             return Err((
                 original,
@@ -296,11 +423,15 @@ impl<Admission, BindingAdmission>
         let state = match StateFences::try_acquire(target) {
             Ok(fences) => fences,
             Err(error) => {
-                drop(kura);
+                let original = authenticated.release();
                 drop(installation);
                 return Err((original, error));
             }
         };
+        let SourceAuthenticatedCarrier {
+            decision: original,
+            kura,
+        } = authenticated;
         let fences = CarrierFences {
             _state: state,
             _kura: kura,
@@ -435,6 +566,49 @@ impl<Admission, BindingAdmission>
 impl<Admission, BindingAdmission, Installation>
     PhysicallyPreparedCarrier<'_, Admission, BindingAdmission, Installation>
 {
+    /// Private preparation seam for the future source-authorized consumer.
+    /// Merely acquiring the carrier never calls this or grants permission to do so.
+    /// Every local error releases all writers and returns the exact journals,
+    /// archive captures and partially completed raw/tiered operations together.
+    fn try_resume_geometry(
+        mut self,
+    ) -> Result<
+        Self,
+        (
+            DecisionBoundCarrierJournals<
+                Admission,
+                BindingAdmission,
+                DetachedCarrierComponents,
+                KuraWsvCheckpointReceipt,
+            >,
+            crate::state::LaneLifecycleError,
+        ),
+    > {
+        let result = match self.target.tiered_backend.try_lock_or_wait() {
+            Ok(mut backend) => {
+                let journals = &mut self.decision.journals;
+                // Explicit preparation still needs the future pre-vote resource
+                // owner. Resume itself must never create replacement descriptors.
+                journals
+                    .geometry
+                    .prepare_under(&backend, &journals.components._fences._kura)
+                    .and_then(|()| {
+                        journals
+                            .geometry
+                            .resume_under(&mut backend, &journals.components._fences._kura)
+                    })
+            }
+            Err(wait) => Err(crate::state::LaneLifecycleError::PublicationBusy {
+                field: "tiered_backend",
+                wait,
+            }),
+        };
+        match result {
+            Ok(()) => Ok(self),
+            Err(error) => Err((self.abort(), error)),
+        }
+    }
+
     /// Release all physical ownership and return the complete original decision.
     pub(in crate::state::carrier_preparation::journals) fn abort(
         self,

@@ -126,11 +126,17 @@ fn native_preparation_new_admission(
 #[inline(never)]
 fn assert_native_preparation_success(atomic: bool) {
     let fixture = native_control_execution_fixture(atomic);
-    assert_native_preparation_with_fixture(atomic, fixture);
+    assert_native_preparation_success_in_fixture(fixture, atomic);
 }
 
+// Fixture construction acquires real genesis State journals. Finish that phase
+// before reserving the assertion frame's later candidate/journal result slots;
+// neither phase needs a larger thread stack or a different ownership contract.
 #[inline(never)]
-fn assert_native_preparation_with_fixture(atomic: bool, fixture: NativeControlExecutionFixture) {
+fn assert_native_preparation_success_in_fixture(
+    fixture: NativeControlExecutionFixture,
+    atomic: bool,
+) {
     use super::NativeLaneBatchSourcePreparationV1;
     let pulse = native_control_requested_beacon(&fixture);
     let state = &fixture.economic.native.state;
@@ -350,6 +356,204 @@ state_test! { sync native_preparation_atomic_retains_real_suffix_controls_and_un
     assert_native_preparation_success(true);
 }
 
+// Keep the real fixture constructor off the later journal/authentication frame.
+fn assert_native_durable_source_authentication(atomic: bool) {
+    let fixture = native_control_execution_fixture(atomic);
+    assert_native_durable_source_authentication_in_fixture(fixture);
+}
+
+#[inline(never)]
+fn assert_native_durable_source_authentication_in_fixture(fixture: NativeControlExecutionFixture) {
+    let state = &fixture.economic.native.state;
+    let carrier = native_preparation_carrier(
+        &fixture,
+        Vec::new(),
+        Some(native_control_requested_beacon(&fixture)),
+        Duration::ZERO,
+        false,
+    );
+    let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
+    let super::NativeLaneBatchSourcePreparationV1::Ready(source) = state
+        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .unwrap()
+    else {
+        panic!("real original Native sources must be ready");
+    };
+    let (_, clock) = iroha_primitives::time::TimeSource::new_mock(carrier.header().creation_time());
+    let prepared = source
+        .prepare_candidate(
+            fixture.applying.clone(),
+            &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+            &clock,
+            state.sumeragi_block_cadence(),
+        )
+        .unwrap()
+        .unwrap();
+    let block = prepared.block().clone();
+    let commitment = prepared.execution_prefix_commitment();
+    let journals = prepared
+        .prepare_journals(None, None, |_| Ok::<_, std::convert::Infallible>(()))
+        .unwrap();
+    let prefix = journals.source_prefix();
+    let native = journals.native_source_for_test().unwrap();
+    let groups = native.sources_for_test().as_ptr();
+    let source_body = native.sources_for_test()[0].body();
+    let bytes = source_body.canonical_bytes().as_ptr();
+    let decisions = native.sources_for_test()[0].decisions().as_ptr();
+    let contexts = native.sources_for_test()[0].contexts().as_ptr();
+    let original = source_body.source();
+    let source_height = original.priority().carrier_height;
+    let source_hash = original.carrier_hash();
+    let inventory = Arc::clone(prefix.inventory());
+    let writes = prefix.witness().writes.as_ptr();
+
+    // Sign the actual retained execution; a fixture-only execution commitment or
+    // old Native participant receipt cannot substitute for the real witness.
+    let context = fixture.applying.context();
+    let subject = BlockSubject {
+        parent_block_hash: block.header().prev_block_hash(),
+        block_hash: block.hash(),
+        payload_hash: block.canonical_proposal_wire_hash().unwrap(),
+    };
+    let round = ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: block.header().view_change_index(),
+    };
+    let mut qc = QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: GlobalPhase::Commit,
+        subject,
+        execution_commitment: commitment,
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![1],
+    };
+    let keys = native_preparation_global_keys(context);
+    let preimage = qc.signer_preimage(context, 0).unwrap();
+    let shares = keys
+        .iter()
+        .take(3)
+        .map(|key| {
+            Signature::try_new(key.private_key(), &preimage)
+                .unwrap()
+                .payload()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let finality = V2FinalityArtifact::new(
+        context.clone(),
+        subject,
+        qc,
+        keys.iter()
+            .map(|key| bls_normal_pop_prove(key.private_key()).unwrap())
+            .collect(),
+    );
+    finality.verify().unwrap();
+    state.kura.store_block(Arc::new(block.clone())).unwrap();
+    state.kura.store_v2_finality_artifact(&finality).unwrap();
+    let authenticate = || {
+        let lease = state.kura.try_publication_lease().unwrap();
+        prefix.authenticate_durable_carrier(&block, context, &commitment, &lease)
+    };
+    authenticate().unwrap();
+    let files = exact_test_tree_fingerprint(&state.kura.store_root());
+    let path = state
+        .kura
+        .v2_finality_artifact_path_for_testing(source_height);
+    let original_finality = std::fs::read(&path).unwrap();
+    for corrupt in [false, true] {
+        if corrupt {
+            std::fs::write(&path, b"corrupt original first-carrier finality").unwrap();
+        } else {
+            std::fs::remove_file(&path).unwrap();
+        }
+        let occupied = exact_test_tree_fingerprint(&state.kura.store_root());
+        let error = authenticate().unwrap_err();
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "storage provenance: {error}"
+        );
+        assert_eq!(
+            exact_test_tree_fingerprint(&state.kura.store_root()),
+            occupied
+        );
+        std::fs::write(&path, &original_finality).unwrap();
+        authenticate().unwrap();
+        assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
+    }
+    state
+        .kura
+        .evict_first_admission_body_for_testing(
+            NonZeroUsize::new(usize::try_from(source_height).unwrap()).unwrap(),
+            source_hash,
+        )
+        .unwrap();
+    let absent = exact_test_tree_fingerprint(&state.kura.store_root());
+    authenticate()
+        .expect("original privately verified source survives authenticated local absence");
+    assert_eq!(
+        exact_test_tree_fingerprint(&state.kura.store_root()),
+        absent
+    );
+    assert_eq!(native.sources_for_test().as_ptr(), groups);
+    assert_eq!(
+        native.sources_for_test()[0]
+            .body()
+            .canonical_bytes()
+            .as_ptr(),
+        bytes
+    );
+    assert_eq!(native.sources_for_test()[0].decisions().as_ptr(), decisions);
+    assert_eq!(native.sources_for_test()[0].contexts().as_ptr(), contexts);
+    assert!(Arc::ptr_eq(prefix.inventory(), &inventory));
+    assert_eq!(prefix.witness().writes.as_ptr(), writes);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+        before
+    );
+    drop(state.world.block());
+    drop(state.transactions.block());
+
+    // Historical source absence is not permission to publish without the actual
+    // result-bearing applying carrier authenticated by this execution seal.
+    state
+        .kura
+        .evict_first_admission_body_for_testing(
+            NonZeroUsize::new(usize::try_from(context.height).unwrap()).unwrap(),
+            block.hash(),
+        )
+        .unwrap();
+    let absent_current = exact_test_tree_fingerprint(&state.kura.store_root());
+    let error = authenticate().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("exact body recovery is required"),
+        "{error}"
+    );
+    assert_eq!(
+        exact_test_tree_fingerprint(&state.kura.store_root()),
+        absent_current
+    );
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
+        before
+    );
+}
+
+state_test! { sync native_preparation_single_authenticates_original_durable_sources_under_lease
+    assert_native_durable_source_authentication(false);
+}
+
+state_test! { sync native_preparation_atomic_authenticates_original_durable_sources_under_lease
+    assert_native_durable_source_authentication(true);
+}
+
 fn assert_native_preparation_refusal(
     fixture: &NativeControlExecutionFixture,
     carrier: SignedBlock,
@@ -491,10 +695,10 @@ fn assert_native_preparation_raw_commit_refusal(fixture: NativeControlExecutionF
         .unwrap();
     assert!(prepared.native_source_for_test().is_some());
     let overlay = prepared.into_state_for_test();
-    assert_eq!(
+    assert!(matches!(
         overlay.commit().unwrap_err(),
         TransactionsBlockError::MergeAdmission
-    );
+    ));
     assert_eq!(
         crate::snapshot::canonical_state_snapshot_hash(state).unwrap(),
         before

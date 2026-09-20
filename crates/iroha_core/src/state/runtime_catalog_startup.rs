@@ -4,6 +4,8 @@ impl State {
         &self,
         manifests: &LaneManifestRegistryHandle,
     ) -> bool {
+        let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
+        let manifests = Arc::clone(manifests);
         let _state_write_lock = self.state_write_lock.lock();
         let publication = self.begin_state_view_write();
         if !manifests.is_bound_to_catalog(&self.nexus_snapshot().lane_catalog) {
@@ -18,7 +20,7 @@ impl State {
                 return false;
             }
         }
-        self.install_lane_manifests_in_publication(manifests, &publication);
+        self.install_prepared_lane_manifests_in_publication(manifests, privacy, &publication);
         true
     }
 

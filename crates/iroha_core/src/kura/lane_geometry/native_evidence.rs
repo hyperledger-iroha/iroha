@@ -263,6 +263,46 @@ impl Kura {
 }
 
 impl ObservedNativeAmxEvidence<'_> {
+    /// Consume authenticated read evidence without asserting filesystem durability.
+    /// This projection cannot authorize retirement or survive a mutation boundary.
+    pub(super) fn into_observed(self) -> Result<NativeGeometryEvidence> {
+        for observed in &self.files {
+            let after = self
+                .kura
+                .read_regular_sidecar_snapshot(
+                    &observed.path,
+                    &self.directory.expected_path,
+                    self.payload_limit,
+                )?
+                .ok_or_else(|| {
+                    self.kura.geometry_error(
+                        ErrorKind::InvalidData,
+                        "Native AMX evidence disappeared after observation",
+                    )
+                })?;
+            if after.bytes_hash != observed.bytes_hash
+                || !Kura::stable_sidecar_metadata_unchanged(&observed.metadata, &after.metadata)
+            {
+                return Err(self.kura.geometry_error(
+                    ErrorKind::InvalidData,
+                    "Native AMX evidence changed after observation",
+                ));
+            }
+        }
+        if &self.kura.geometry_bound_progress_directory_snapshot(
+            &self.directory,
+            self.inventory.len(),
+            self.context,
+        )? != self.inventory
+        {
+            return Err(self.kura.geometry_error(
+                ErrorKind::InvalidData,
+                "Native AMX evidence namespace changed after observation",
+            ));
+        }
+        Ok((self.manifests, self.receipts))
+    }
+
     #[cfg(test)]
     pub(super) fn manifests(
         &self,

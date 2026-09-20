@@ -334,6 +334,24 @@ pub(crate) enum V2StartupReplayStorageBinding {
     EmergencyFast(Arc<EmergencyFastStartupReplayBinding>),
 }
 impl V2StartupReplayStorageBinding {
+    /// Match the original audit owner, never a newly recaptured equal inventory.
+    pub(crate) fn original_owner_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Strict(a), Self::Strict(b)) => Arc::ptr_eq(a, b),
+            (
+                Self::StrictAfterGeometryPublication {
+                    inventory: a,
+                    publication: ap,
+                },
+                Self::StrictAfterGeometryPublication {
+                    inventory: b,
+                    publication: bp,
+                },
+            ) => Arc::ptr_eq(a, b) && Arc::ptr_eq(ap, bp),
+            (Self::EmergencyFast(a), Self::EmergencyFast(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
     fn strict_parts(
         &self,
     ) -> Option<(

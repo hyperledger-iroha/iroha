@@ -3264,11 +3264,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     ) -> Result<(Self, V2BodyStore), EffectExecutorError> {
         let executor_output_guard = Arc::clone(&output_guard);
         let lifecycle_body_store_identity = body_store.instance_identity();
-        let construction = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            EffectExecutorError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
-            )
-        })?;
+        let construction = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
         if !body_store.matches_context(&context) {
             return Err(EffectExecutorError::BodyStore(
                 "pre-opened Sumeragi v2 body store changed its height context".to_owned(),
@@ -5090,11 +5088,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             let decision_before_step = runtime
                 .decided_body()
                 .map_err(EffectExecutorError::Runtime)?;
-            let wal_step = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
             let step = match runtime.try_step_owed_fifo_predecessor(
                 now,
                 attestation.dispatch_key().lifecycle_ordinal(),
@@ -5548,7 +5544,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<(), EffectTransportError> {
         if self.output_guard.restart_required() {
             return Err(EffectTransportError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
+                self.output_guard.restart_error(),
             ));
         }
         if let Some(reason) = &self.fatal_reason {
@@ -8834,11 +8830,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let decision_before_step = runtime
                 .decided_body()
                 .map_err(EffectExecutorError::Runtime)?;
-            let wal_step = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
             let step = match runtime.step_pre_timeout_locked_prepare_qc_effects(now, cut, &external)
             {
                 Ok(step) => step,
@@ -8939,11 +8933,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let decision_before_step = runtime
                 .decided_body()
                 .map_err(EffectExecutorError::Runtime)?;
-            let wal_step = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
             let step = match runtime.step_pacemaker_effects(now, &external) {
                 Ok(step) => step,
                 Err(reason) => {
@@ -9089,11 +9081,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let decision_before_step = runtime
                 .decided_body()
                 .map_err(EffectExecutorError::Runtime)?;
-            let wal_step = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
             let step = match runtime.step_completion_capacity_relief_effects(
                 now,
                 blocked_ordinal,
@@ -9236,11 +9226,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let decision_before_step = runtime
                 .decided_body()
                 .map_err(EffectExecutorError::Runtime)?;
-            let wal_step = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
             let step = match runtime.step_effects(now, &external) {
                 Ok(step) => step,
                 Err(reason) => {
@@ -9361,11 +9349,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         let runtime_result = (|| {
             let (runtime, output_guard, external) = self.runtime_and_external_lifecycle_census()?;
-            let wal_step = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-                EffectExecutorError::FailClosed(
-                    "process restart is required after a fatal consensus failure".to_owned(),
-                )
-            })?;
+            let wal_step = output_guard
+                .begin_fail_stop_operation()
+                .ok_or_else(|| EffectExecutorError::FailClosed(output_guard.restart_error()))?;
             let step = match runtime.step_recovery_effects(now, &external) {
                 Ok(step) => step,
                 Err(reason) => {
@@ -10841,7 +10827,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<CompletionDisposition, EffectTransportError> {
         if self.output_guard.restart_required() {
             return Err(EffectTransportError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
+                self.output_guard.restart_error(),
             ));
         }
         let work_id = task.id();
@@ -11521,11 +11507,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             height: self.context.height,
             captured_at,
             fail_closed: self.fatal_reason.is_some() || restart_required,
-            fatal_reason: self.fatal_reason.clone().or_else(|| {
-                restart_required.then(|| {
-                    "process restart is required after a fatal consensus failure".to_owned()
-                })
-            }),
+            fatal_reason: self
+                .fatal_reason
+                .clone()
+                .or_else(|| restart_required.then(|| self.output_guard.restart_error())),
             pending_tip_recovery_stage: self
                 .pending_tip_recovery
                 .as_ref()
@@ -15657,7 +15642,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn ensure_open(&self) -> Result<(), EffectExecutorError> {
         if self.output_guard.restart_required() {
             return Err(EffectExecutorError::FailClosed(
-                "process restart is required after a fatal consensus failure".to_owned(),
+                self.output_guard.restart_error(),
             ));
         }
         match &self.fatal_reason {
@@ -15673,13 +15658,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // The retained relay may terminate the process as soon as the guard
         // closes, so preserve the precise reason before publishing that edge.
         iroha_logger::error!(%reason, "Sumeragi v2 effect transport failed closed");
-        // A caller may still own the launch or runtime operation's permit.
-        // Close admission now; that outer permit's release completes the drain.
-        self.output_guard.close_admission_for_restart();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| reason.to_string())
             .clone();
+        // Publish the cause before closure becomes visible to another observer.
+        // A caller may still own the launch or runtime operation's permit;
+        // its release completes the drain without blocking this notification.
+        self.output_guard.retain_effect_failure(reason.clone());
+        self.output_guard.close_admission_for_restart();
         services.fail_closed(&reason);
         EffectTransportError::FailClosed(reason)
     }
@@ -15700,13 +15687,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // concurrently and may exit before `services.fail_closed` can report
         // the originating executor error.
         iroha_logger::error!(%error, "Sumeragi v2 effect executor failed closed");
-        // Service failure may unwind through an outer admitted operation.
-        // Waiting for its permit here would prevent that unwind from returning.
-        self.output_guard.close_admission_for_restart();
         let reason = self
             .fatal_reason
             .get_or_insert_with(|| error.to_string())
             .clone();
+        // The first observer of closed output must already see this cause.
+        // Service failure may unwind through an outer admitted operation;
+        // waiting for its permit here would prevent that unwind from returning.
+        self.output_guard.retain_effect_failure(reason.clone());
+        self.output_guard.close_admission_for_restart();
         services.fail_closed(&reason);
         error
     }

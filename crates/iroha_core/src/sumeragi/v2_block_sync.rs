@@ -1415,7 +1415,47 @@ pub(super) mod tests {
             fixture.proofs_of_possession.clone(),
         );
         artifact.validate().expect("valid history-fixture finality");
-        let kura = Kura::blank_kura_for_testing();
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let config = iroha_config::parameters::actual::Kura {
+            init_mode: iroha_config::kura::InitMode::Strict,
+            store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            lane_history_retention:
+                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        };
+        let kura = Kura::new_temporary_with_configured_lane_catalog(
+            &config,
+            &nexus.lane_config,
+            &nexus.configured_lane_catalog,
+        )
+        .expect("open authenticated history-fixture geometry");
+        let mut world = crate::state::World::default();
+        crate::sns::try_seed_default_namespace_policies(&mut world, &nexus.fees.fee_asset_id)
+            .expect("seed current namespace policy before pre-genesis configuration");
+        // The fallible production constructor keeps geometry unbound until
+        // the configured anchor is authenticated. Test convenience constructors
+        // install active markers eagerly and cannot precede this startup cut.
+        let mut state =
+            crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+                world,
+                Arc::clone(&kura),
+                crate::query::store::LiveQueryStore::start_test(),
+                "v2-block-sync-history"
+                    .parse()
+                    .expect("fixture chain label"),
+                context.network_id,
+            )
+            .expect("construct exact-network State before geometry publication");
+        state.install_pre_genesis_nexus_for_testing(nexus);
+        drop(state);
         kura.store_block(block)
             .expect("store history-fixture block");
         let _receipt = kura

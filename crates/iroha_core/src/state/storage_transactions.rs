@@ -241,7 +241,7 @@ mod block {
     /// Committing a block without first calling [`insert_block`] is considered an error and will
     /// cause [`commit`](Self::commit) to fail. See the release-mode tests for examples. Errors that
     /// can occur when committing [`TransactionsBlock`]
-    #[derive(thiserror::Error, Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq)]
+    #[derive(thiserror::Error, Debug, displaydoc::Display)]
     #[ignore_extra_doc_attributes]
     pub enum TransactionsBlockError {
         /// `TransactionsBlock::insert_block()` was not called
@@ -258,11 +258,13 @@ mod block {
         HeightOverflow,
         /// Deterministic autoscale lane lifecycle failed while preparing block commit
         AutoscaleLaneLifecycle,
+        /// Local lane geometry publication retains its original refusal: {0}
+        LocalLaneGeometry(#[source] crate::state::LaneLifecycleError),
         /// Certified merge admission changed before the block could commit
         MergeAdmission,
         /// Finalized FASTPQ source ownership is invalid at block commit
         FastpqSourceInventory,
-        /// Execution output reservations have not been resolved by the canonical producer
+        /// Execution outputs require their canonical consuming publication owner
         ExecutionOutputCapacity,
         /// Frozen lane consensus metadata changed after its authenticated capture
         LaneConsensusContexts,
@@ -276,6 +278,18 @@ mod block {
         SnapshotObservationChanged,
         /// A stable State snapshot projection or encoding is malformed
         SnapshotProjection,
+    }
+    impl From<crate::state::LaneLifecycleError> for TransactionsBlockError {
+        fn from(error: crate::state::LaneLifecycleError) -> Self {
+            use crate::state::LaneLifecycleError;
+            match error {
+                error @ (LaneLifecycleError::Storage(_)
+                | LaneLifecycleError::GeometryStorage(_)
+                | LaneLifecycleError::DrainObservation(_)
+                | LaneLifecycleError::PublicationBusy { .. }) => Self::LocalLaneGeometry(error),
+                _ => Self::AutoscaleLaneLifecycle,
+            }
+        }
     }
     /// Batched update to the storage that can be reverted later
     pub struct TransactionsBlock<'storage> {
@@ -1363,13 +1377,103 @@ mod tests {
         check_views(&views, &keys);
     }
     #[test]
+    fn lane_geometry_commit_refusal_preserves_storage_source_and_deterministic_errors() {
+        use crate::state::LaneLifecycleError;
+        use std::error::Error as _;
+
+        let path = std::path::PathBuf::from("retained/lane_geometry_journal.norito");
+        let error = TransactionsBlockError::from(LaneLifecycleError::GeometryStorage(
+            crate::kura::Error::IO(
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "original journal owner",
+                ),
+                path.clone(),
+            ),
+        ));
+        let lifecycle = error
+            .source()
+            .and_then(|source| source.downcast_ref::<LaneLifecycleError>())
+            .expect("commit refusal retains the typed lifecycle source");
+        let Some(crate::kura::Error::IO(io, actual_path)) = lifecycle
+            .source()
+            .and_then(|source| source.downcast_ref::<crate::kura::Error>())
+        else {
+            panic!("commit refusal must retain the original Kura IO source");
+        };
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(io.to_string(), "original journal owner");
+        assert_eq!(actual_path, &path);
+        let drain = TransactionsBlockError::from(LaneLifecycleError::DrainObservation(
+            crate::state::MergeLedgerCommitError::Persistence(crate::kura::Error::IO(
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, "original drain owner"),
+                path.clone(),
+            )),
+        ));
+        let lifecycle = drain
+            .source()
+            .and_then(|source| source.downcast_ref::<LaneLifecycleError>())
+            .expect("drain refusal remains a local lifecycle source");
+        let observation = lifecycle
+            .source()
+            .and_then(|source| source.downcast_ref::<crate::state::MergeLedgerCommitError>())
+            .expect("drain refusal retains its exact observation error");
+        assert!(
+            matches!(observation, crate::state::MergeLedgerCommitError::Persistence(
+            crate::kura::Error::IO(io, actual_path)
+        ) if io.kind() == std::io::ErrorKind::PermissionDenied
+            && io.to_string() == "original drain owner" && actual_path == &path)
+        );
+        assert!(matches!(
+            TransactionsBlockError::from(LaneLifecycleError::Storage("tiered capture".to_owned())),
+            TransactionsBlockError::LocalLaneGeometry(source)
+                if matches!(&source, LaneLifecycleError::Storage(detail) if detail == "tiered capture")
+        ));
+        assert!(matches!(
+            TransactionsBlockError::from(LaneLifecycleError::PhysicalPrimaryReplacement),
+            TransactionsBlockError::AutoscaleLaneLifecycle
+        ));
+    }
+
+    #[test]
+    fn lane_geometry_commit_refusal_retains_original_release_observation() {
+        use crate::state::LaneLifecycleError;
+        use std::{
+            future::Future as _,
+            pin::Pin,
+            task::{Context, Waker},
+        };
+
+        let release = mv::ReleaseNotification::default();
+        let original_owner = release.guard(());
+        let observation = release.observe();
+        let error = TransactionsBlockError::from(LaneLifecycleError::PublicationBusy {
+            field: "original geometry writer",
+            wait: observation.clone(),
+        });
+        let TransactionsBlockError::LocalLaneGeometry(source) = error else {
+            panic!("local publication refusal must retain its source");
+        };
+        let LaneLifecycleError::PublicationBusy { field, wait } = source else {
+            panic!("original release observation must survive conversion");
+        };
+        assert_eq!(field, "original geometry writer");
+        assert_eq!(wait, observation);
+        let mut future = wait.wait_for_release();
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(Pin::new(&mut future).poll(&mut context).is_pending());
+        drop(original_owner);
+        assert!(Pin::new(&mut future).poll(&mut context).is_ready());
+    }
+
+    #[test]
     fn commit_without_insert_block_fails() {
         let storage = TransactionsStorage::new();
         let block = storage.block();
-        assert_eq!(
+        assert!(matches!(
             block.commit(),
             Err(TransactionsBlockError::MissingInsertBlock)
-        );
+        ));
     }
     #[test]
     fn validate_commit_height_mismatch_does_not_mutate_storage() {
@@ -1378,13 +1482,13 @@ mod tests {
         let mut block = storage.block();
         let wrong_height = NonZeroUsize::new(2).unwrap();
         block.insert_block(HashSet::from([key]), wrong_height);
-        assert_eq!(
+        assert!(matches!(
             block.validate_commit(),
             Err(TransactionsBlockError::HeightMismatch {
                 expected_current_height: 1,
-                actual_current_height: wrong_height.get(),
-            })
-        );
+                actual_current_height,
+            }) if actual_current_height == wrong_height.get()
+        ));
         assert_eq!(storage.latest_height(), 0);
         drop(block);
         assert_eq!(storage.latest_height(), 0);
@@ -1405,13 +1509,14 @@ mod tests {
         let wrong_height = NonZeroUsize::new(first_height.get() + 2).unwrap();
         let expected_height = first_height.get() + 1;
         block.insert_block(transactions, wrong_height);
-        assert_eq!(
+        assert!(matches!(
             block.commit(),
             Err(TransactionsBlockError::HeightMismatch {
-                expected_current_height: expected_height,
-                actual_current_height: wrong_height.get(),
-            })
-        );
+                expected_current_height,
+                actual_current_height,
+            }) if expected_current_height == expected_height
+                && actual_current_height == wrong_height.get()
+        ));
     }
     #[test]
     fn commit_with_insert_block_succeeds() {

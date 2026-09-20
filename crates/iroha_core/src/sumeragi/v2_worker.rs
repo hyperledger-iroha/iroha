@@ -806,6 +806,13 @@ impl LifecycleValidateTaskV1 {
         self.dispatch.matches_dispatch_key(self.key)
     }
 }
+enum LifecycleValidateRetryQueueErrorV1 {
+    Unavailable {
+        task: LifecycleValidateTaskV1,
+        release: mv::ReleaseWait,
+    },
+    InvalidOwner(LifecycleValidateTaskV1),
+}
 /// Exact worker result retained until LedgerV1 terminal publication and reply delivery.
 struct LifecycleCertifiedServeWorkerResultV1 {
     task: LifecycleCertifiedServeTaskV1,
@@ -1114,6 +1121,7 @@ impl V2IoWorkDescriptor {
 /// consensus its suffix, and trusted control the final slot without reordering.
 struct V2IoAdmission {
     queued: AtomicUsize,
+    lifecycle_capacity_release: mv::ReleaseNotification,
     lifecycle_capacity_generation: AtomicU64,
     lifecycle_capacity_generation_exhausted: AtomicBool,
     auxiliary_limit: usize,
@@ -1165,6 +1173,7 @@ impl V2IoAdmission {
             .ok_or_else(|| "Sumeragi v2 I/O queue capacity overflow".to_owned())?;
         Ok(Self {
             queued: AtomicUsize::new(0),
+            lifecycle_capacity_release: mv::ReleaseNotification::default(),
             lifecycle_capacity_generation: AtomicU64::new(0),
             lifecycle_capacity_generation_exhausted: AtomicBool::new(false),
             auxiliary_limit: auxiliary_capacity,
@@ -1183,6 +1192,7 @@ impl V2IoAdmission {
     fn unbounded_for_tests() -> Arc<Self> {
         Arc::new(Self {
             queued: AtomicUsize::new(0),
+            lifecycle_capacity_release: mv::ReleaseNotification::default(),
             lifecycle_capacity_generation: AtomicU64::new(0),
             lifecycle_capacity_generation_exhausted: AtomicBool::new(false),
             auxiliary_limit: usize::MAX,
@@ -1221,6 +1231,9 @@ impl V2IoAdmission {
             previous != 0,
             "Sumeragi v2 I/O admission released an unreserved command"
         );
+        // The checked decrement released an actual admitted command. Notify
+        // its registered runner after publishing the capacity generation.
+        let _released_command = self.lifecycle_capacity_release.guard(());
         if self
             .lifecycle_capacity_generation
             .fetch_update(
@@ -3213,22 +3226,77 @@ impl V2IoCommandQueue {
         tracked.state = V2IoWorkState::CompletionPending;
         Ok(())
     }
+    #[cfg(test)]
     fn complete_lifecycle_validate(
         &self,
         key: LifecycleValidateDispatchKeyV1,
         result: &ExecutedDurableValidateDispatch,
+    ) -> Result<(), String> {
+        self.complete_lifecycle_validate_exact(key, result.matches_dispatch_key(key))
+    }
+    fn complete_lifecycle_validate_result(
+        &self,
+        key: LifecycleValidateDispatchKeyV1,
+        result: &LifecycleValidateWorkerResultV1,
+    ) -> Result<(), String> {
+        self.complete_lifecycle_validate_exact(key, result.matches_dispatch_key(key))
+    }
+    fn complete_lifecycle_validate_exact(
+        &self,
+        key: LifecycleValidateDispatchKeyV1,
+        matches_dispatch: bool,
     ) -> Result<(), String> {
         let mut state = self.lock();
         let tracked = state
             .lifecycle_validates
             .get_mut(&key)
             .ok_or_else(|| "completed lifecycle Validate lost its exact queue owner".to_owned())?;
-        if tracked.state != V2IoWorkState::Active || !result.matches_dispatch_key(key) {
+        if tracked.state != V2IoWorkState::Active || !matches_dispatch {
             return Err(
                 "completed lifecycle Validate changed its exact dispatch material".to_owned(),
             );
         }
         tracked.state = V2IoWorkState::CompletionPending;
+        Ok(())
+    }
+    fn retry_lifecycle_validate(
+        &self,
+        task: LifecycleValidateTaskV1,
+    ) -> Result<(), LifecycleValidateRetryQueueErrorV1> {
+        let key = task.key;
+        let mut state = self.lock();
+        if !task.matches_exact()
+            || !state.sender_open
+            || !state.receiver_open
+            || state
+                .lifecycle_validates
+                .get(&key)
+                .is_none_or(|tracked| tracked.state != V2IoWorkState::CompletionPending)
+            || state
+                .commands
+                .iter()
+                .any(|command| command.lifecycle_validate_key() == Some(key))
+        {
+            return Err(LifecycleValidateRetryQueueErrorV1::InvalidOwner(task));
+        }
+        // Observe capacity before its probe under the original queue lock.
+        // The guarded completion already owns this same keyed physical slot.
+        let release = self.admission.lifecycle_capacity_release.observe();
+        if state.commands.len() >= self.capacity
+            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
+        {
+            return Err(LifecycleValidateRetryQueueErrorV1::Unavailable { task, release });
+        }
+        state
+            .lifecycle_validates
+            .get_mut(&key)
+            .expect("validated exact retry retains its original index")
+            .state = V2IoWorkState::Queued;
+        state
+            .commands
+            .push_back(V2IoCommand::LifecycleValidate(task));
+        drop(state);
+        self.ready.notify_one();
         Ok(())
     }
     fn complete_lifecycle_validate_failure(&self, key: LifecycleValidateDispatchKeyV1) {
@@ -3615,12 +3683,20 @@ impl V2IoCommandReceiver {
         self.queue
             .complete_recovered_decision_fetch_body(key, completion)
     }
+    #[cfg(test)]
     fn complete_lifecycle_validate(
         &self,
         key: LifecycleValidateDispatchKeyV1,
         result: &ExecutedDurableValidateDispatch,
     ) -> Result<(), String> {
         self.queue.complete_lifecycle_validate(key, result)
+    }
+    fn complete_lifecycle_validate_result(
+        &self,
+        key: LifecycleValidateDispatchKeyV1,
+        result: &LifecycleValidateWorkerResultV1,
+    ) -> Result<(), String> {
+        self.queue.complete_lifecycle_validate_result(key, result)
     }
     fn complete_lifecycle_validate_failure(&self, key: LifecycleValidateDispatchKeyV1) {
         self.queue.complete_lifecycle_validate_failure(key);

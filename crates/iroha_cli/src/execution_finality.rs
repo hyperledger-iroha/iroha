@@ -525,13 +525,13 @@ impl VerifySettlementArgs {
             proofs.verify(&anchor),
             "authenticated input/output proof mismatch"
         );
+        // The verified proof joins the exact Network output to the anchored input
+        // index. Internal outputs never select a wallet transaction or its result.
         let entry = block
-            .network_entrypoints()
-            .find(|entry| entry.hash() == entry_hash)
+            .network_entrypoint_at(usize::try_from(anchor.entry_index())?)
             .ok_or_else(|| eyre!("target entry absent from authenticated block"))?;
-        // The verified output proof authenticates the exact Network output joined to this input.
         ensure!(
-            proofs.output_proof.output().result().0.is_ok(),
+            proofs.output_proof.output().result().is_ok(),
             "authenticated transaction was rejected, not settled"
         );
         let TransactionEntrypoint::External(transaction) = entry else {
@@ -673,7 +673,7 @@ mod tests {
         builder.push_transaction(alternate_transaction);
         let mut block = builder
             .try_build_with_signature(0, transaction_key.private_key())
-            .expect("fixture block signature");
+            .expect("fixture signed proposal");
         let results = [
             if rejected {
                 Err(
@@ -702,6 +702,7 @@ mod tests {
         block
             .set_execution_outputs(
                 outputs,
+                // Attaching synthetic outputs commits no execution fragments.
                 0,
                 Default::default(),
                 Vec::new(),
@@ -712,7 +713,8 @@ mod tests {
                     max_outputs: 2,
                     max_output_bytes: 1024 * 1024,
                     max_total_output_bytes: 2 * 1024 * 1024,
-                    max_executed_wire_bytes: MAX_BLOCK_BYTES as u64,
+                    max_executed_wire_bytes: u64::try_from(MAX_BLOCK_BYTES)
+                        .expect("fixture block byte bound"),
                 },
             )
             .expect("fixture block outputs align with network inputs");
@@ -1233,6 +1235,22 @@ mod tests {
         assert!(
             args.verify_carriers(swapped)
                 .expect_err("swapped entry proof")
+                .to_string()
+                .contains("input/output proof mismatch")
+        );
+        let mut wrong_output = fixture.block_proofs.clone();
+        wrong_output.output_proof = fixture.alternate_block_proofs.output_proof.clone();
+        assert!(
+            wrong_output
+                .output_proof
+                .verify(&wrong_output.output_commitment),
+            "the alternate output is included in the same authenticated output tree"
+        );
+        let mut swapped_output = bundle(&fixture);
+        swapped_output.proofs = norito::encode_canonical(&wrong_output).expect("swapped output");
+        assert!(
+            args.verify_carriers(swapped_output)
+                .expect_err("output for another network input")
                 .to_string()
                 .contains("input/output proof mismatch")
         );

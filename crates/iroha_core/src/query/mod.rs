@@ -1,6 +1,7 @@
 //! This module contains [`store::LiveQueryStore`] and helpers.
 #![allow(clippy::disallowed_types)]
 mod archive_capture;
+mod archive_index;
 pub use archive_capture::ArchiveCaptureWait;
 pub mod cursor;
 pub mod index_status;

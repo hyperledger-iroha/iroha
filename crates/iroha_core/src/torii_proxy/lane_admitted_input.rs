@@ -195,7 +195,8 @@ pub struct LaneAdmittedInputEnvelopeSizeBoundsV1 {
 /// Callers must separately enforce signed global/native RS16 geometry, the
 /// **entire** global candidate, transport topic caps and outbound reservations.
 /// These lengths are not a complete admission-feasibility decision. This function
-/// intentionally does not change the existing Torii preacceptance guard.
+/// is consumed by the actual Sumeragi handle at Torii preacceptance; the
+/// complete global scheduling guarantee remains a separate obligation.
 ///
 /// # Errors
 /// Rejects inconsistent input/binding claims, an input above the complete-control

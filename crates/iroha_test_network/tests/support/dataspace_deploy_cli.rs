@@ -11,7 +11,8 @@ use iroha_data_model::{
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     nexus::{
-        LaneCatalog, LaneLifecycleParameterV1, LaneLifecycleStatusV1, NexusCatalogTransitionV1,
+        LaneCatalog, LaneLifecycleParameterV1, LaneLifecycleStatusV1, NativeLaneManifestV1,
+        NexusCatalogTransitionV1, RuntimeLaneManifestV1,
     },
     parameter::Parameter,
     transaction::{Executable, SignedTransaction, TransactionEntrypoint},
@@ -268,6 +269,67 @@ fn genesis_validator_authorities<'a>(
         "signed core-lane authorities must be registered and activated accounts"
     );
     Ok(core_bindings)
+}
+
+// Independently compare native CLI output with the authenticated fixture inputs;
+// this oracle never supplies a manifest to the deployment command.
+fn assert_generated_lane_manifest(
+    intent: &Value,
+    trust: &Trust,
+    authorities: &BTreeMap<PeerId, AccountId>,
+) -> Result<RuntimeLaneManifestV1> {
+    let runtime: RuntimeLaneManifestV1 = json::from_value(field(intent, "lane_manifest")?.clone())?;
+    runtime.validate_structure()?;
+    let descriptor: NativeLaneManifestV1 = json::from_str(runtime.manifest.get())?;
+    ensure!(
+        runtime.lane_id == LaneId::new(6)
+            && descriptor.lane.as_deref() == Some("dpn")
+            && descriptor.version == Some(NativeLaneManifestV1::VERSION)
+            && descriptor.quorum == Some(3)
+            && descriptor.governance.is_none()
+            && descriptor.protected_namespaces.is_none()
+            && descriptor.hooks.is_none()
+            && descriptor.privacy_commitments.is_none(),
+        "native init changed the requested DPN lane manifest policy"
+    );
+    let bindings = descriptor
+        .validators
+        .ok_or_else(|| eyre!("native init omitted validator bindings"))?;
+    let expected = trust
+        .peers
+        .iter()
+        .map(|peer| (&peer.peer_id, &peer.torii_origin))
+        .collect::<BTreeMap<_, _>>();
+    ensure!(
+        trust.peers.len() == 4
+            && expected.len() == 4
+            && authorities.len() == 4
+            && bindings.len() == 4,
+        "native init must retain all four independently selected validator bindings"
+    );
+    let mut observed = BTreeSet::new();
+    for binding in bindings {
+        let literal = binding
+            .peer_id
+            .as_deref()
+            .ok_or_else(|| eyre!("native validator binding omitted its peer identity"))?;
+        let peer: PeerId = literal.parse()?;
+        let authority = authorities
+            .get(&peer)
+            .ok_or_else(|| eyre!("native init substituted a peer outside signed genesis"))?;
+        let endpoint = expected
+            .get(&peer)
+            .ok_or_else(|| eyre!("native init selected a peer outside its trust profile"))?;
+        ensure!(
+            peer.to_string() == literal
+                && observed.insert(peer)
+                && binding.validator.as_deref()
+                    == Some(authority.to_i105_for_discriminant(369)?.as_str())
+                && binding.torii_url.as_deref() == Some(endpoint.as_str()),
+            "native init changed or duplicated the signed authority/peer/endpoint binding"
+        );
+    }
+    Ok(runtime)
 }
 
 // Only public status fields may enter failure diagnostics. Never include phase
@@ -636,57 +698,48 @@ pub(super) async fn run_paid_deployment(
     let startup = Instant::now() + Duration::from_secs(180);
     let trust_path = root.join("trust.json");
     write_private(&trust_path, &json::to_vec(&trust)?)?;
-    let mut validators = Vec::new();
-    for peer in &trust.peers {
-        let validator = authorities
-            .get(&peer.peer_id)
-            .ok_or_else(|| eyre!("trusted peer lacks its authenticated validator authority"))?
-            .to_i105_for_discriminant(369)?;
-        let peer_id = peer.peer_id.to_string();
-        validators.push(norito::json!({"validator": validator, "peer_id": peer_id}));
-    }
-    let manifest = norito::json!({"lane": "dpn", "governance": "parliament", "version": 1,
-        "validators": validators, "quorum": 3});
-    let manifest_path = root.join("lane.json");
-    write_private(&manifest_path, &json::to_vec(&manifest)?)?;
     let bundle = root.join("intent");
     let payment = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
     let idle_before = drained(fixture.clients, startup).await?;
     let deadline = Instant::now() + Duration::from_secs(180);
-    cli.run(
-        &[
-            "init",
-            "--dataspace",
-            "dpn",
-            "--lane-id",
-            "6",
-            "--lane-profile",
-            "restricted-full-replica",
-            "--account-alias",
-            "admin",
-            "--lane-manifest",
-            manifest_path.to_str().unwrap(),
-            "--trust",
-            trust_path.to_str().unwrap(),
-            "--payment-asset",
-            &payment,
-            "--alias-create-maximum",
-            "0.5",
-            "--transaction-fee-maximum",
-            "100",
-            "--lease-years",
-            "1",
-            "--quote-lifetime-secs",
-            "3600",
-            "--operation-id",
-            OPERATION,
-            "--output-dir",
-            bundle.to_str().unwrap(),
-        ],
-        deadline,
-    )
-    .await?;
+    let intent = cli
+        .run(
+            &[
+                "init",
+                "--dataspace",
+                "dpn",
+                "--lane-id",
+                "6",
+                "--lane-profile",
+                "restricted-full-replica",
+                "--account-alias",
+                "admin",
+                "--trust",
+                trust_path.to_str().unwrap(),
+                "--payment-asset",
+                &payment,
+                "--alias-create-maximum",
+                "0.5",
+                "--transaction-fee-maximum",
+                "100",
+                "--lease-years",
+                "1",
+                "--quote-lifetime-secs",
+                "3600",
+                "--operation-id",
+                OPERATION,
+                "--output-dir",
+                bundle.to_str().unwrap(),
+            ],
+            deadline,
+        )
+        .await?;
+    let generated_manifest = assert_generated_lane_manifest(&intent, &trust, &authorities)?;
     let deployment = bundle.join("deployment.json");
+    ensure!(
+        json::from_slice::<Value>(&fs::read(&deployment)?)? == intent,
+        "native init retained a different deployment intent from its reported output"
+    );
     let plan = cli
         .run(
             &[
@@ -704,6 +757,12 @@ pub(super) async fn run_paid_deployment(
         baseline.validate()? == expected_catalog
             && baseline.catalog_hash == LaneLifecycleParameterV1::catalog_hash(&expected_catalog),
         "native plan baseline differs from the independently generated four-peer catalog"
+    );
+    let transition: NexusCatalogTransitionV1 =
+        json::from_value(field(&plan, "catalog_transition")?.clone())?;
+    ensure!(
+        transition.manifest_additions.as_slice() == std::slice::from_ref(&generated_manifest),
+        "native plan changed the independently checked generated lane manifest"
     );
     ensure!(
         drained(fixture.clients, deadline).await? == idle_before,
@@ -813,6 +872,7 @@ fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
         genesis_validator_authorities(instructions.iter(), &peers).unwrap(),
         expected
     );
+    assert_generated_binding_controls(&expected);
     // Consistent bindings on another public lane are valid; every failure below
     // changes one prerequisite while keeping the remaining native bindings.
     for omitted in [0, 1, 3] {
@@ -832,6 +892,73 @@ fn signed_genesis_validator_mapping_preserves_runtime_accounts() {
     changed.validator = AccountId::new(changed.peer_id.public_key().clone());
     conflict[2] = changed.into();
     assert!(genesis_validator_authorities(conflict.iter(), &peers).is_err());
+}
+
+fn assert_generated_binding_controls(authorities: &BTreeMap<PeerId, AccountId>) {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::nexus::NativeLaneValidatorBindingV1;
+    let trust = Trust {
+        genesis_public_key: KeyPair::from_seed(vec![50; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+        genesis_signed_wire_hex: String::new(),
+        peers: authorities
+            .keys()
+            .enumerate()
+            .map(|(index, peer)| TrustPeer {
+                torii_origin: format!("http://127.0.0.1:{}/", 8080 + index),
+                peer_id: peer.clone(),
+                node_fingerprint: Hash::new(peer.encode()),
+                build_fingerprint: Hash::new(b"fixture build"),
+                config_fingerprint: Hash::new(b"fixture config"),
+            })
+            .collect(),
+    };
+    let descriptor = NativeLaneManifestV1 {
+        lane: Some("dpn".into()),
+        version: Some(NativeLaneManifestV1::VERSION),
+        quorum: Some(3),
+        validators: Some(
+            trust
+                .peers
+                .iter()
+                .map(|peer| NativeLaneValidatorBindingV1 {
+                    validator: Some(
+                        authorities[&peer.peer_id]
+                            .to_i105_for_discriminant(369)
+                            .unwrap(),
+                    ),
+                    peer_id: Some(peer.peer_id.to_string()),
+                    torii_url: Some(peer.torii_origin.clone()),
+                })
+                .collect(),
+        ),
+        ..NativeLaneManifestV1::default()
+    };
+    let intent = |descriptor: &NativeLaneManifestV1| {
+        let manifest = RuntimeLaneManifestV1 {
+            lane_id: LaneId::new(6),
+            manifest: iroha_primitives::json::Json::try_new(descriptor).unwrap(),
+        };
+        let value = json::to_value(&manifest).unwrap();
+        norito::json!({"lane_manifest": value})
+    };
+    assert_generated_lane_manifest(&intent(&descriptor), &trust, authorities).unwrap();
+    for mutation in 0..5 {
+        let mut changed = descriptor.clone();
+        let bindings = changed.validators.as_mut().unwrap();
+        match mutation {
+            0 => bindings[0].validator = bindings[1].validator.clone(),
+            1 => bindings[0].peer_id = bindings[1].peer_id.clone(),
+            2 => bindings[0].torii_url = bindings[1].torii_url.clone(),
+            3 => {
+                bindings.pop();
+            }
+            4 => changed.quorum = Some(2),
+            _ => unreachable!(),
+        }
+        assert!(assert_generated_lane_manifest(&intent(&changed), &trust, authorities).is_err());
+    }
 }
 
 #[test]

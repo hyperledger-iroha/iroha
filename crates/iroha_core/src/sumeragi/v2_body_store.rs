@@ -1253,24 +1253,93 @@ impl BodyStoreCompletion {
         &self.manifest
     }
 }
+/// One actual physical validation dependency observed before its failed probe.
+///
+/// This process-local observation grants only permission to retry acquisition.
+/// It contains no scheduler identity and is never encoded in a body marker.
+#[derive(Clone, Debug, Error)]
+#[error("local validation resource `{resource}` is busy")]
+pub(crate) struct BodyValidationBusy {
+    /// The physical resource whose acquisition failed.
+    pub(crate) resource: &'static str,
+    /// Original release observation, retaining no storage or State guard.
+    pub(crate) wait: mv::ReleaseWait,
+    /// Wake destination belonging to the original validation service.
+    wake: std::task::Waker,
+}
+impl BodyValidationBusy {
+    /// Join a failed physical probe to its original runner notification.
+    pub(crate) fn new(
+        resource: &'static str,
+        wait: mv::ReleaseWait,
+        wake: std::task::Waker,
+    ) -> Self {
+        Self {
+            resource,
+            wait,
+            wake,
+        }
+    }
+
+    /// Polling may register only this original service's wake destination.
+    pub(crate) fn waker(&self) -> &std::task::Waker {
+        &self.wake
+    }
+}
+
+/// Local validator dependency, never a statement about proposal validity.
+#[derive(Clone, Debug, thiserror::Error)]
+pub(crate) enum LocalValidationRefusal {
+    /// An actual mutex must release before the original dispatch retries.
+    #[error(transparent)]
+    PhysicalBusy(BodyValidationBusy),
+    /// Exact Queue ownership must release before the original dispatch retries.
+    #[error("proposal validation awaits local Queue ownership release")]
+    QueueRelease {
+        /// Release observed while holding the original Queue ownership cut.
+        wait: mv::ReleaseWait,
+        /// Original runner wake destination, also used for worker capacity.
+        wake: std::task::Waker,
+    },
+    /// Local evidence or configuration requires repair followed by Strict restart.
+    #[error("proposal validation requires local recovery: {0}")]
+    RecoveryRequired(String),
+}
+
 /// Typed classification supplied by deterministic body validators.
 ///
-/// Only a missing, compact-reference-bound merge sidecar is recoverable. Every
-/// other semantic error remains a terminal rejection of the exact body.
+/// A local service/storage failure is not a consensus verdict. Implementations
+/// must explicitly identify deterministic rejection; there is no default which
+/// can accidentally persist local inability as an invalid proposal.
 pub(crate) trait BodyValidationError: std::fmt::Display {
-    /// Return the canonical reducer-level identity of a terminal rejection.
-    ///
-    /// Every current non-sidecar failure has identical `valid: false`
-    /// semantics, so the safe default is the one closed rejection identity.
-    fn rejection_identity(&self) -> BodyValidationRejectionIdentity {
-        BodyValidationRejectionIdentity::Rejected
+    /// Return a canonical identity only for a deterministic body rejection.
+    /// `None` leaves validation undecided and cannot mint marker authority.
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity>;
+    /// Preserve producer-specific local refusal without writing a semantic marker.
+    fn local_refusal(&self) -> Option<LocalValidationRefusal> {
+        None
     }
     /// Return the exact missing sidecar reference when validation should defer.
     fn missing_certified_merge_sidecar(&self) -> Option<&CertifiedMergeLedgerReference> {
         None
     }
 }
-impl BodyValidationError for String {}
+// String validators exist only in structural fixtures. Production validators
+// must preserve their typed local/semantic distinction through this boundary.
+#[cfg(test)]
+impl BodyValidationError for String {
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity> {
+        Some(BodyValidationRejectionIdentity::Rejected)
+    }
+}
+impl BodyValidationError for LocalValidationRefusal {
+    fn rejection_identity(&self) -> Option<BodyValidationRejectionIdentity> {
+        None
+    }
+    fn local_refusal(&self) -> Option<LocalValidationRefusal> {
+        Some(self.clone())
+    }
+}
 /// Authority whose single block signature must cover an exact proposal body.
 ///
 /// Height-one genesis is signed by the configured genesis authority rather
@@ -2005,7 +2074,11 @@ impl BoundV2BodyContextDirectory {
             self.verify_leaf(&file, &temporary, None)?;
             file.write_all(bytes)
                 .and_then(|()| file.flush())
-                .and_then(|()| file.sync_all())
+                .and_then(|()| {
+                    #[cfg(test)]
+                    retained_validation::marker_file_sync_fault(kind)?;
+                    file.sync_all()
+                })
                 .map_err(|source| V2BodyStoreError::Io {
                     path: temporary_path.clone(),
                     source,
@@ -2027,6 +2100,13 @@ impl BoundV2BodyContextDirectory {
                 },
             )?;
             self.verify_leaf(&file, destination, Some(&leaf))?;
+            #[cfg(test)]
+            retained_validation::marker_directory_sync_fault(kind).map_err(|source| {
+                V2BodyStoreError::Io {
+                    path: self.context_path.clone(),
+                    source,
+                }
+            })?;
             self.sync_context()?;
             self.verify_leaf(&file, destination, Some(&leaf))
         })();
@@ -2247,6 +2327,10 @@ fn rename_body_store_leaf_noreplace(
         "atomic no-replace body-store publication is unavailable",
     ))
 }
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "v2_body_store/retained_validation.rs"]
+mod retained_validation;
 
 /// Persistent exact-body store for one immutable height context.
 ///
@@ -3354,13 +3438,28 @@ impl V2BodyStore {
                         commitment.validate()?;
                         SemanticReplayOutcome::Validated(commitment)
                     }
-                    Err(error) if error.missing_certified_merge_sidecar().is_some() => {
-                        SemanticReplayOutcome::DeferredMergeSidecar
+                    Err(error) => {
+                        if let Some(refusal) = error.local_refusal() {
+                            return Err(V2BodyStoreError::LocalValidation(refusal));
+                        }
+                        if error.missing_certified_merge_sidecar().is_some() {
+                            SemanticReplayOutcome::DeferredMergeSidecar
+                        } else {
+                            SemanticReplayOutcome::Rejected {
+                                identity_code: error
+                                    .rejection_identity()
+                                    .ok_or_else(|| {
+                                        V2BodyStoreError::LocalValidation(
+                                            LocalValidationRefusal::RecoveryRequired(
+                                                error.to_string(),
+                                            ),
+                                        )
+                                    })?
+                                    .canonical_code(),
+                                reason: error.to_string(),
+                            }
+                        }
                     }
-                    Err(error) => SemanticReplayOutcome::Rejected {
-                        identity_code: error.rejection_identity().canonical_code(),
-                        reason: error.to_string(),
-                    },
                 };
                 replayed.insert(key.1, outcome.clone());
                 outcome
@@ -3762,6 +3861,40 @@ impl V2BodyStore {
             receipt,
         })
     }
+    /// Authenticate the complete original frame for both validation ownership paths.
+    fn load_validation_envelope(
+        &self,
+        durable: &DurableBodyReceipt,
+        expected_manifest_hash: HashOf<wire::PayloadManifest>,
+    ) -> Result<StoredBodyEnvelope, V2BodyStoreError> {
+        self.verify_receipt(durable)?;
+        let key = (durable.round(), durable.subject());
+        let stored_manifest = self
+            .manifests
+            .get(&key)
+            .ok_or(V2BodyStoreError::ReceiptMismatch)?;
+        if durable.context_id() != self.context.id()
+            || durable.round().context_id != durable.context_id()
+            || durable.round().height != self.context.height
+            || stored_manifest.round != durable.round()
+            || stored_manifest.subject != durable.subject()
+            || durable.manifest_hash() != expected_manifest_hash
+            || HashOf::new(stored_manifest) != expected_manifest_hash
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        let envelope = self.load_envelope(durable)?;
+        if envelope.context_id != durable.context_id()
+            || envelope.round != durable.round()
+            || envelope.subject != durable.subject()
+            || &envelope.manifest != stored_manifest
+            || HashOf::new(&envelope.manifest) != expected_manifest_hash
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        Ok(envelope)
+    }
+
     // DURABLE_BODY_VALIDATION_API_BEGIN
     /// Execute deterministic validation against one exact durable body.
     ///
@@ -3782,31 +3915,8 @@ impl V2BodyStore {
         F: FnOnce(&SignedBlock) -> Result<wire::ExecutionCommitment, E>,
         E: BodyValidationError,
     {
-        self.verify_receipt(&durable)?;
+        let envelope = self.load_validation_envelope(&durable, expected_manifest_hash)?;
         let key = (durable.round(), durable.subject());
-        let stored_manifest = self
-            .manifests
-            .get(&key)
-            .ok_or(V2BodyStoreError::ReceiptMismatch)?;
-        if durable.context_id() != self.context.id()
-            || durable.round().context_id != durable.context_id()
-            || durable.round().height != self.context.height
-            || stored_manifest.round != durable.round()
-            || stored_manifest.subject != durable.subject()
-            || durable.manifest_hash() != expected_manifest_hash
-            || HashOf::new(stored_manifest) != expected_manifest_hash
-        {
-            return Err(V2BodyStoreError::ReceiptMismatch);
-        }
-        let envelope = self.load_envelope(&durable)?;
-        if envelope.context_id != durable.context_id()
-            || envelope.round != durable.round()
-            || envelope.subject != durable.subject()
-            || &envelope.manifest != stored_manifest
-            || HashOf::new(&envelope.manifest) != expected_manifest_hash
-        {
-            return Err(V2BodyStoreError::ReceiptMismatch);
-        }
         if let Some(validated) = self.validated.get(&key) {
             if validated.durable() != &durable {
                 return Err(V2BodyStoreError::ReceiptMismatch);
@@ -3839,6 +3949,9 @@ impl V2BodyStore {
                 ))
             }
             Err(error) => {
+                if let Some(refusal) = error.local_refusal() {
+                    return Err(V2BodyStoreError::LocalValidation(refusal));
+                }
                 if let Some(reference) = error.missing_certified_merge_sidecar() {
                     return Ok(DurableBodyValidationOutcome(
                         DurableBodyValidationOutcomeBody::DeferredMergeSidecar {
@@ -3847,7 +3960,14 @@ impl V2BodyStore {
                         },
                     ));
                 }
-                let identity_code = error.rejection_identity().canonical_code();
+                let identity_code = error
+                    .rejection_identity()
+                    .ok_or_else(|| {
+                        V2BodyStoreError::LocalValidation(LocalValidationRefusal::RecoveryRequired(
+                            error.to_string(),
+                        ))
+                    })?
+                    .canonical_code();
                 let rejected =
                     self.persist_rejected_outcome(&durable, identity_code, error.to_string())?;
                 Ok(rejected.sealed_outcome())
@@ -4801,6 +4921,12 @@ fn read_validation_outcome_marker(
 /// Exact-body persistence or validation failure.
 #[derive(Debug, Error)]
 pub(crate) enum V2BodyStoreError {
+    /// Execution could not observe locally ready resources; no validity marker exists.
+    #[error(transparent)]
+    LocalValidation(#[from] LocalValidationRefusal),
+    /// A local retained-owner mismatch/refusal cannot authorize a rejection marker.
+    #[error(transparent)]
+    CarrierCustody(#[from] super::v2_apply::validation_custody::CarrierCustodyError),
     /// Filesystem operation failed.
     #[error("Sumeragi v2 body-store I/O failed at {path}: {source}")]
     Io {
