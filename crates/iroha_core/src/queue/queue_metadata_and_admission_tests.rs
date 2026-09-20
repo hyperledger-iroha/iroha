@@ -399,7 +399,7 @@ fn contains_pending_hash_waiting_for_state_does_not_pin_queue_removal() {
     queue.push(tx, state.view()).expect("push tx");
     assert!(queue.contains_pending_hash(hash, &state));
     let generation = state.state_view_generation();
-    let original_hashes = state.view().block_hashes.clone();
+    let original_hashes = state.view().block_hashes.iter().copied().collect::<Vec<_>>();
 
     // The real publication writer blocks State::view at its first hash read. Its
     // original journal is aborted after the concurrency cut; nothing is published.
@@ -469,7 +469,7 @@ fn contains_pending_hash_waiting_for_state_does_not_pin_queue_removal() {
     assert_eq!(queue.active_len(), 0);
     assert!(!queue.transaction_selection_durability_faulted());
     assert_eq!(state.state_view_generation(), generation);
-    assert_eq!(state.view().block_hashes, original_hashes);
+    assert_eq!(state.view().block_hashes.iter().copied().collect::<Vec<_>>(), original_hashes);
     assert!(state.view().transactions.get(&hash).is_none());
 }
 #[test]

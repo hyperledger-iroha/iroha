@@ -79,7 +79,7 @@ pools keep notifying normally. Notification also preserves the remaining
 original waiters when one callback unwinds, without suppressing its panic.
 
 Writer admission carries original move-only input alongside exact shell charges.
-The existing B+tree wrappers also expose `Prepaid<P>` for closed insertions:
+The existing B+tree wrappers expose `Prepaid<P>` for closed admitted edits:
 under the original writer lock, it plans node/buffer/shell layouts and an explicit
 nested payload bound, reserves once, then returns its completed detached owner.
 Unused admission returns before handoff; actual allocation charges remain until
@@ -92,6 +92,11 @@ Abort restores the original parent root without allocating; prepaid mode also
 restores its exact tracking buffers, including at full capacity. Nested apply
 keeps edits private; only the original writer can publish. A caught edit or
 cleanup panic forbids further use of that cursor. Prepaid mutation remains closed.
+Closed map removal admits the original search path, possible rebalance siblings,
+separator copies and tracking growth before mutation. Missing keys require no
+allocation or admission. Both map modes share this removal engine, including
+merges and root demotion; refusal and checkpoint abort preserve original nodes.
+`MapAdmissionError` covers acquisition and closed edit refusal.
 Real MV budget regressions exercise this public boundary. Production Storage
 uses the same B+tree engine for current and block-undo data, retaining both
 original generations through snapshots and publication retries. Ordinary block
@@ -99,11 +104,41 @@ opening no longer deep-clones prior undo values before clearing them. Transactio
 retain both parent checkpoints and borrow their original preimages; abort restores
 both roots without inverse edits, allocation or cloning. Apply resolves both
 checkpoints only after checking failures and dropping transaction touch keys.
-These maps remain Untracked pending native lock/runtime, joint current/undo/touch
-admission, generation-refusal propagation, concrete model payload policies and
-configured aggregate integration.
+Storage now carries the same sealed mode through its original current, undo and
+touch owners. Prepaid insertion and removal reserve all tree/copy/touch demand
+once before changing any owner; refusal leaves the original owners unchanged.
+Removal borrows the query and returns the original private value. Missing-key
+removal still records an explicit first absence and touch without making a clean
+block dirty; repeated absence needs no additional storage once both witnesses
+exist. Parent apply retains
+both checkpoints' cleanup until their transfers finish, leaving the parent
+unpublishable on cleanup panic. Pair publication prepares both physical owners,
+installs both roots and their shared identity, then releases locks before arbitrary
+retirement or wake callbacks. Direct and detached publication share this path.
+Direct `Storage::insert` preserves undo and rotates identity before releasing its
+current writer, with retirement and notifications after the identity unlocks.
+See [joint admission](../../docs/history/2026-09-20/joint-storage-admission.md)
+and the [removal validation record](../../docs/history/2026-09-21/joint-storage-removal.md).
+Production State remains Untracked pending native lock/runtime and identity
+storage, real model payload policies, general closed mutation/replacement,
+generation-refusal propagation and configured aggregate memory/work admission. Sorted touched-key
+insertion has an explicit heap bound; its shifting cost is not a CPU work bound.
+
+Read traversal uses the original tree's concrete associated iterator types.
+Views, blocks and transactions no longer box read iterators, and both B+tree
+traversal paths are inline arrays bounded by `usize::BITS + 1`. Construction,
+forward/reverse traversal and destruction allocate nothing, including reads
+from a prepaid map whose pool is full. No payload is cloned. Full iteration
+retains exact length across mixed-direction traversal; ranges preserve borrowed
+query keys and their inclusive/exclusive bounds. See the
+[allocation-free scan record](../../docs/history/2026-09-21/allocation-free-state-scans.md).
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.
 The production State publisher and its resource policy remain unfinished; no
 State execution, native-output or publication guard is bypassed by these APIs.
+
+Cell publication also retains both original writers through pair identity rotation.
+Epoch reclamation and release callbacks run after physical unlock, including
+current-only replacement that retains undo. A cleanup panic cannot poison the
+release hint for a physical lock that was already released successfully.

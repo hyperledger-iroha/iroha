@@ -1030,6 +1030,8 @@ mod tests {
             blocks_in_memory: defaults::BLOCKS_IN_MEMORY,
             lane_history_retention: defaults::LANE_HISTORY_RETENTION,
             replica_advert: defaults::REPLICA_ADVERT_POLICY,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: policy,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::MERGE_LEDGER_CACHE_CAPACITY,

@@ -1452,7 +1452,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "run_lifecycle_active_height": "b484fc049ff55e29f5a12d78493a8bd431be96f528ee4404ca502a4f9cf03dcc",
     "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade": "e82974c532219438b4b7af86dbd17c2c3ffeea7631b591b28708c5c3c66da452",
     "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",
-    "schedule_local_proposal": "41bad30c7a31127a62ce670b9b8bc891e1785d5dd48375fdcbe3b41dab4284b6",
+    "schedule_local_proposal": "8036a1e28aa9453c847849daa0598c001523d6356f114afe18609172713fc1ab",
     "locked_body_recovery_plan": "9f3f04e35b943a2bc09756833f08a782c050cccdd6c59aa2997eb1e9f0c1cf7b",
     "local_consensus_duties": "32480f07ba6f9eed6bbdfad70fc53c07e9e6d53c79cf7f0a80ff68ced7621c8e",
     "locked_body_recovery_is_independent_of_reproposal_gates": "e25524bcbcb9fba0308bdec85d063850b46285a00445ce49cedcca399a0ec0ec",

@@ -126,9 +126,11 @@ mod public_contract_creation_fees {
                 let valid = block
                     .validate_and_record_transactions(&mut state_block)
                     .unpack(|_| {});
+                assert_eq!(valid.as_ref().network_entrypoint_count(), 2);
+                assert_eq!(valid.as_ref().execution_outputs().len(), 2);
                 let errors = valid
                     .as_ref()
-                    .errors()
+                    .failed_outputs()
                     .map(|(index, error)| format!("{index}: {error:?}"))
                     .collect::<Vec<_>>();
                 if funded && bounded {

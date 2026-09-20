@@ -169,6 +169,99 @@ fn splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges() {
 }
 
 #[test]
+fn component_partitions_use_original_full_pool_without_allocation_or_new_admission() {
+    let budget = AllocationBudget::new(32);
+    let mut original = budget.try_reserve_bytes(32).unwrap();
+    let (mut current, mut undo) = without_allocations(|| {
+        let current = original.try_partition_bytes(12).unwrap();
+        let undo = original.try_partition_bytes(20).unwrap();
+        assert!(Arc::ptr_eq(&current.pool, &original.pool));
+        assert!(Arc::ptr_eq(&undo.pool, &original.pool));
+        assert_eq!(original.remaining_bytes(), 0);
+        assert_eq!(budget.reserved_bytes(), 32);
+        (current, undo)
+    });
+    assert!(matches!(
+        budget.try_reserve_bytes(1),
+        Err(AllocationRefusal::Capacity { .. })
+    ));
+    let (current_node, undo_node, undo_payload) = without_allocations(|| {
+        let mut payload = undo.try_partition_bytes(8).unwrap();
+        let charges = (
+            current.try_split(layout(12)).unwrap(),
+            undo.try_split(layout(12)).unwrap(),
+            payload.try_split(layout(8)).unwrap(),
+        );
+        drop(payload);
+        drop(original);
+        drop(current);
+        drop(undo);
+        assert_eq!(budget.reserved_bytes(), 32);
+        charges
+    });
+    without_allocations(|| {
+        drop(undo_node);
+        assert_eq!(budget.reserved_bytes(), 20);
+        drop(current_node);
+        assert_eq!(budget.reserved_bytes(), 8);
+        drop(undo_payload);
+        assert_eq!(budget.reserved_bytes(), 0);
+    });
+}
+
+#[test]
+fn refused_or_empty_partition_preserves_original_credits_and_release_observation() {
+    let budget = AllocationBudget::new(8);
+    let other = AllocationBudget::new(8);
+    let mut original = budget.try_reserve_bytes(8).unwrap();
+    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let wakes = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wakes).is_pending());
+    without_allocations(|| {
+        assert_eq!(
+            original.try_partition_bytes(usize::MAX).unwrap_err(),
+            InsufficientReservation {
+                requested_bytes: usize::MAX,
+                remaining_bytes: 8,
+            }
+        );
+        drop(original.try_partition_bytes(0).unwrap());
+        assert_eq!(original.remaining_bytes(), 8);
+        assert_eq!(budget.reserved_bytes(), 8);
+        assert_eq!(wakes.0.load(SeqCst), 0);
+    });
+    let child = without_allocations(|| original.try_partition_bytes(8).unwrap());
+    drop(original);
+    drop(other.try_reserve_bytes(8).unwrap());
+    assert_eq!(wakes.0.load(SeqCst), 0);
+    assert!(poll(&mut wait, &wakes).is_pending());
+    without_allocations(|| drop(child));
+    assert_eq!(wakes.0.load(SeqCst), 1);
+    assert!(poll(&mut wait, &wakes).is_ready());
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn aggregate_partitions_exceed_single_layout_limits_without_overflow() {
+    let budget = AllocationBudget::new(usize::MAX);
+    let mut original = budget.try_reserve_bytes(usize::MAX).unwrap();
+    let mut component =
+        without_allocations(|| original.try_partition_bytes(usize::MAX - 1).unwrap());
+    assert_eq!(original.remaining_bytes(), 1);
+    assert_eq!(component.remaining_bytes(), usize::MAX - 1);
+    let first = component.try_split(layout(isize::MAX as usize)).unwrap();
+    let second = component.try_split(layout(isize::MAX as usize)).unwrap();
+    assert_eq!(component.remaining_bytes(), 0);
+    drop(component);
+    drop(original);
+    assert_eq!(budget.reserved_bytes(), usize::MAX - 1);
+    drop(second);
+    assert_eq!(budget.reserved_bytes(), isize::MAX as usize);
+    drop(first);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
 fn exact_pool_release_wakes_waiters_including_before_their_first_poll() {
     let budget = AllocationBudget::new(8);
     let other = AllocationBudget::new(8);

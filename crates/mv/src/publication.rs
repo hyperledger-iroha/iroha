@@ -128,14 +128,21 @@ impl Publication {
     // All mutation paths use this short lock across their actual publication.
     // A successor may acquire the data writers as commit releases them, but its
     // identity capture waits until BOTH publications and this rotation finish.
-    pub(crate) fn publish(&self, publish: impl FnOnce()) {
-        self.publish_prepared(NextPublication::new(), publish);
-    }
-
-    pub(crate) fn publish_prepared(&self, next: NextPublication, publish: impl FnOnce()) {
+    /// Install an aggregate while every physical writer remains retained, then
+    /// rotate identity before unlocking any participant. Retirement and its
+    /// arbitrary destruction remain with the caller after all locks release.
+    pub(crate) fn publish_retaining<Published, Retirement>(
+        &self,
+        next: NextPublication,
+        publish: impl FnOnce() -> Published,
+        release: impl FnOnce(Published) -> Retirement,
+    ) -> Retirement {
         let mut version = self.lock_version();
-        publish();
+        let published = publish();
         **version = next.0;
+        let retirement = release(published);
+        drop(version);
+        retirement
     }
 }
 
@@ -197,12 +204,16 @@ mod tests {
                 let mut current = owner.blocks.write();
                 *undo.get_mut() = Some(10);
                 *current.get_mut() = 20;
-                owner.publication.publish(|| {
-                    current.commit();
-                    first_written.send(()).unwrap();
-                    finish_read.recv().unwrap();
-                    undo.commit();
-                });
+                owner.publication.publish_retaining(
+                    super::NextPublication::new(),
+                    || {
+                        current.commit();
+                        first_written.send(()).unwrap();
+                        finish_read.recv().unwrap();
+                        undo.commit();
+                    },
+                    |()| (),
+                );
             });
             first_read.recv().unwrap();
             // Deliberately pause the same two-write owner between its writes.

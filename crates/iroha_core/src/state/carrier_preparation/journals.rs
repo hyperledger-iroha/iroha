@@ -2,7 +2,7 @@
 //!
 //! No mutable StateBlock survives this handoff. Membership admission consumes its
 //! original writer and releases it with its exact predecessor identity retained.
-//! Block hashes likewise move into an owned journal and release their read guard.
+//! Block hashes move their original private tree without a chain copy or physical lock.
 //! World/runtime journals and tiered snapshots follow one resource admission.
 //! Archive plans retain original logical reservations and filesystem owners.
 //! The private terminal consumer joins exact QC/Kura/Native custody and refuses

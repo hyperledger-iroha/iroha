@@ -2581,3 +2581,149 @@ fn native_amx_completed_repair_rejects_foreign_tampered_and_unowned_temporaries(
         );
     }
 }
+
+#[test]
+fn native_amx_retained_prepublication_reauthenticates_exact_original_kura_and_frontiers() {
+    let fixture = native_amx_publication_capacity_fixture();
+    fixture.kura.store_block(Arc::clone(&fixture.block)).unwrap();
+    fixture.kura.store_v2_finality_artifact(&fixture.finality).unwrap();
+    let token = fixture.kura
+        .prepublish_native_amx_participant_application_evidence(&fixture.block, None)
+        .unwrap();
+    let frontiers = crate::state::State::native_amx_participant_frontier_markers(&fixture.block)
+        .unwrap();
+    assert_eq!(frontiers.len(), 3);
+    let before = snapshot_regular_files_recursively(&fixture.kura.store_root);
+    {
+        let lease = fixture.kura.try_publication_lease().unwrap();
+        lease.reauthenticate_native_amx_prepublication(
+            &token, &fixture.block, &fixture.manifest, &fixture.finality, &frontiers,
+        ).expect("original nonempty participant evidence under all original fences");
+        let mut wrong_finality = fixture.finality.clone();
+        wrong_finality.commit_qc.execution_commitment.post_state_root =
+            Hash::new(b"another retained participant execution");
+        assert!(lease.reauthenticate_native_amx_prepublication(
+            &token, &fixture.block, &fixture.manifest, &wrong_finality, &frontiers,
+        ).is_err(), "retained token cannot authorize a different decided execution");
+        let mut reordered = frontiers.clone();
+        reordered.swap(0, 1);
+        assert!(lease.reauthenticate_native_amx_prepublication(
+            &token, &fixture.block, &fixture.manifest, &fixture.finality, &reordered,
+        ).is_err(), "equal cardinality cannot replace the exact ordered State projection");
+        assert!(lease.reauthenticate_native_amx_prepublication(
+            &token, &fixture.block, &fixture.manifest, &fixture.finality, &frontiers[..2],
+        ).is_err(), "one missing frontier must refuse the complete publication");
+        let mut drifted = frontiers.clone();
+        drifted[2].source_count += 1;
+        assert!(lease.reauthenticate_native_amx_prepublication(
+            &token, &fixture.block, &fixture.manifest, &fixture.finality, &drifted,
+        ).is_err(), "later frontier drift must not be hidden by earlier matches");
+    }
+    assert_eq!(snapshot_regular_files_recursively(&fixture.kura.store_root), before);
+
+    // A second real Kura has the exact same canonical block and participant
+    // artifacts. Equality of durable bytes cannot substitute the original owner.
+    let foreign = native_amx_publication_capacity_fixture();
+    foreign.kura.store_block(Arc::clone(&fixture.block)).unwrap();
+    foreign.kura.store_v2_finality_artifact(&fixture.finality).unwrap();
+    let foreign_token = foreign.kura
+        .prepublish_native_amx_participant_application_evidence(&fixture.block, None)
+        .unwrap();
+    let lease = foreign.kura.try_publication_lease().unwrap();
+    assert!(lease.reauthenticate_native_amx_prepublication(
+        &token, &fixture.block, &fixture.manifest, &fixture.finality, &frontiers,
+    ).is_err(), "a token from another live Kura must not authorize matching storage");
+    lease.reauthenticate_native_amx_prepublication(
+        &foreign_token, &fixture.block, &fixture.manifest, &fixture.finality, &frontiers,
+    ).expect("foreign Kura may authenticate only its own original token");
+}
+
+#[test]
+fn native_amx_retained_prepublication_rereads_every_durable_component_before_visibility() {
+    for component in ["manifest", "receipt", "latest"] {
+        for missing in [true, false] {
+            let fixture = native_amx_publication_capacity_fixture();
+            fixture.kura.store_block(Arc::clone(&fixture.block)).unwrap();
+            fixture.kura.store_v2_finality_artifact(&fixture.finality).unwrap();
+            let token = fixture.kura
+                .prepublish_native_amx_participant_application_evidence(&fixture.block, None)
+                .unwrap();
+            let frontiers = crate::state::State::native_amx_participant_frontier_markers(&fixture.block)
+                .unwrap();
+            // Damage the final route: successful earlier readbacks must not
+            // permit a partial participant publication to escape.
+            let leaf = &fixture.manifest.entries().last().unwrap().leaf;
+            let entry = fixture.kura.lane_storage_entry(leaf.lane_id).unwrap();
+            let path = match component {
+                "manifest" => Kura::native_amx_application_manifest_path_for_entry(
+                    &entry, &fixture.kura.store_root, leaf.participant_height,
+                ),
+                "receipt" => Kura::native_amx_participant_receipt_path_for_entry(
+                    &entry, &fixture.kura.store_root, leaf.participant_height,
+                ),
+                "latest" => Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+                    &entry, &fixture.kura.store_root,
+                ),
+                _ => unreachable!(),
+            };
+            if missing {
+                std::fs::remove_file(&path).unwrap();
+            } else {
+                std::fs::write(&path, b"corrupt retained participant evidence").unwrap();
+            }
+            let before = snapshot_regular_files_recursively(&fixture.kura.store_root);
+            let lease = fixture.kura.try_publication_lease().unwrap();
+            assert!(lease.reauthenticate_native_amx_prepublication(
+                &token, &fixture.block, &fixture.manifest, &fixture.finality, &frontiers,
+            ).is_err(), "stale token accepted {component}, missing={missing}");
+            drop(lease);
+            assert_eq!(snapshot_regular_files_recursively(&fixture.kura.store_root), before,
+                "reauthentication cannot silently repair or rewrite {component}");
+            assert!(fixture.kura.wsv_checkpoint(1).unwrap().is_none());
+            assert!(fixture.kura.commit_manifest(1).unwrap().is_none());
+            drop(fixture.kura.try_publication_lease().expect("refusal releases every Kura fence"));
+        }
+    }
+}
+
+#[test]
+fn native_amx_retained_prepublication_survives_original_fence_contention() {
+    use std::{future::Future, pin::Pin, task::{Context, Poll, Wake, Waker}};
+    struct ParticipantWake(std::sync::atomic::AtomicUsize);
+    impl Wake for ParticipantWake {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let fixture = native_amx_publication_capacity_fixture();
+    fixture.kura.store_block(Arc::clone(&fixture.block)).unwrap();
+    fixture.kura.store_v2_finality_artifact(&fixture.finality).unwrap();
+    let token = fixture.kura
+        .prepublish_native_amx_participant_application_evidence(&fixture.block, None)
+        .unwrap();
+    let frontiers = crate::state::State::native_amx_participant_frontier_markers(&fixture.block)
+        .unwrap();
+    let before = snapshot_regular_files_recursively(&fixture.kura.store_root);
+    let held = fixture.kura.sidecar_lock.lock();
+    let mut wait = match fixture.kura.try_publication_lease() {
+        Err(KuraPublicationPreparationError::Busy { field, wait }) => {
+            assert_eq!(field, "sidecar_lock");
+            wait.wait_for_release()
+        }
+        _ => panic!("the original sidecar owner must defer publication"),
+    };
+    let wakes = Arc::new(ParticipantWake(std::sync::atomic::AtomicUsize::new(0)));
+    let waker = Waker::from(Arc::clone(&wakes));
+    assert_eq!(Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)), Poll::Pending);
+    let other = Kura::blank_kura_for_testing();
+    drop(other.try_publication_lease().unwrap());
+    assert_eq!(wakes.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(held);
+    assert_eq!(wakes.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)), Poll::Ready(()));
+    fixture.kura.try_publication_lease().unwrap()
+        .reauthenticate_native_amx_prepublication(
+            &token, &fixture.block, &fixture.manifest, &fixture.finality, &frontiers,
+        ).expect("same retained token succeeds after its original owner releases");
+    assert_eq!(snapshot_regular_files_recursively(&fixture.kura.store_root), before);
+}

@@ -51,15 +51,17 @@ fn signed_retirement_and_replacement_publish_once_under_original_service_queue_c
         ));
         assert_eq!(state.state_view_generation(), generation);
         assert_eq!(decision.block().encode_wire().unwrap(), wire);
-        let foreign = Arc::new(State::new_for_testing(
+        let foreign = Arc::new(State::new_with_chain_and_network_id_for_testing(
             crate::state::World::default(),
-            Arc::clone(&state.kura),
+            crate::kura::Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
+            state.chain_id_ref().clone(),
+            *state.network_id_ref(),
         ));
         let foreign_service = V2ApplyService::new(
             Arc::clone(&foreign),
             phase_queue(),
-            Arc::clone(&state.kura),
+            Arc::clone(&foreign.kura),
             None,
             None,
             foreign.sumeragi_block_cadence(),

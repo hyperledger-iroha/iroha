@@ -385,3 +385,204 @@ fn insufficient_tracking_returns_original_entry_before_any_node_allocation() {
         });
     }
 }
+
+fn removal_branches<V: Clone>(mut root: *mut Node<usize, V, Charge>, key: &usize) -> usize {
+    let mut branches = 0;
+    while !self_meta_shared!(root).is_leaf() {
+        branches += 1;
+        let branch = branch_ref_shared!(root, usize, V, Charge);
+        root = branch.get_idx_unchecked(branch.locate_node(key));
+    }
+    branches
+}
+
+#[test]
+fn funded_removal_preflight_preserves_source_and_absence_needs_no_slots() {
+    for deficient in [0, 1, 2] {
+        let (cell, funding) = new_cell::<PanicValue>();
+        let mut seed = cell.write_with(|_| input(funding));
+        for key in 0..32 {
+            seed.try_insert(key, PanicValue(key * 3)).unwrap();
+        }
+        let next = seed.funding.0.next;
+        seed.commit();
+        let original = cell.read();
+        let branches = removal_branches(original.get_root(), &0);
+        let new_slots = 2 * branches + 1;
+        let retired_slots = 3 * branches + 2;
+        let (first, last) = match deficient {
+            0 => (new_slots - 1, retired_slots),
+            1 => (new_slots, retired_slots - 1),
+            _ => (0, 0),
+        };
+        let mut writer = cell.write_with(|_| {
+            input_with_capacity(
+                Funded(Prepaid {
+                    next,
+                    remaining: 128 - next,
+                }),
+                first,
+                last,
+            )
+        });
+        let root = writer.root;
+        let txid = writer.txid;
+        let count = writer.funding.0.next;
+        let first_pointer = writer.first_seen.as_ptr();
+        let last_pointer = writer.last_seen.as_ref().unwrap().as_ptr();
+        FAIL_CLONE.with(|fail| fail.set(true));
+        without_allocations(|| {
+            assert!(writer.try_remove(&0).is_err());
+            assert!(matches!(writer.try_remove(&usize::MAX), Ok(None)));
+        });
+        FAIL_CLONE.with(|fail| fail.set(false));
+        assert_eq!((writer.root, writer.txid, writer.length), (root, txid, 32));
+        assert_eq!(writer.funding.0.next, count);
+        assert_eq!(writer.first_seen.as_ptr(), first_pointer);
+        assert_eq!(writer.last_seen.as_ref().unwrap().as_ptr(), last_pointer);
+        assert!(writer.first_seen.as_slice().is_empty());
+        assert!(writer.last_seen.as_ref().unwrap().as_slice().is_empty());
+        assert_eq!(original.search(&0).map(|v| v.0), Some(0));
+        without_allocations(|| drop(writer));
+        assert_refunded_range(next, count);
+        drop(original);
+        drop(cell);
+        all_refunded(&Prepaid {
+            next: count,
+            remaining: 0,
+        });
+    }
+}
+
+#[test]
+fn funded_removal_exact_structural_slots_abort_without_changing_retained_source() {
+    for (size, key) in [(1, 0), (32, 0), (64, 31), (64, 63)] {
+        let (cell, funding) = new_cell();
+        let mut seed = cell.write_with(|_| input(funding));
+        for key in 0..size {
+            seed.try_insert(key, key * 3).unwrap();
+        }
+        let next = seed.funding.0.next;
+        seed.commit();
+        let original = cell.read();
+        let branches = removal_branches(original.get_root(), &key);
+        let new_slots = 2 * branches + 1;
+        let retired_slots = 3 * branches + 2;
+        let mut writer = cell.write_with(|_| {
+            input_with_capacity(
+                Funded(Prepaid {
+                    next,
+                    remaining: 128 - next,
+                }),
+                new_slots,
+                retired_slots,
+            )
+        });
+        assert_eq!(writer.try_remove(&key), Ok(Some(key * 3)));
+        assert_eq!(writer.length, size - 1);
+        assert!(writer.search(&key).is_none());
+        assert!(writer.verify());
+        assert!(writer.first_seen.as_slice().len() <= new_slots);
+        assert!(writer.last_seen.as_ref().unwrap().as_slice().len() <= retired_slots);
+        assert_eq!(original.search(&key), Some(&(key * 3)));
+        let count = writer.funding.0.next;
+        without_allocations(|| drop(writer));
+        assert_refunded_range(next, count);
+        assert_eq!(cell.read().search(&key), Some(&(key * 3)));
+        drop(original);
+        drop(cell);
+        all_refunded(&Prepaid {
+            next: count,
+            remaining: 0,
+        });
+    }
+}
+
+#[test]
+fn funded_removal_merges_and_root_demotion_retain_original_reader_custody() {
+    for reverse in [false, true] {
+        let (cell, funding) = new_cell();
+        let mut seed = cell.write_with(|_| input(funding));
+        for key in 0..32 {
+            seed.try_insert(key, key).unwrap();
+        }
+        let next = seed.funding.0.next;
+        seed.commit();
+        let original = cell.read();
+        let mut writer = cell.write_with(|_| {
+            input_with_capacity(
+                Funded(Prepaid {
+                    next,
+                    remaining: 128 - next,
+                }),
+                64,
+                128,
+            )
+        });
+        for offset in 0..32 {
+            let key = if reverse { 31 - offset } else { offset };
+            let branches = removal_branches(writer.root, &key);
+            let first = writer.first_seen.as_slice().len();
+            let last = writer.last_seen.as_ref().unwrap().as_slice().len();
+            assert_eq!(writer.try_remove(&key), Ok(Some(key)));
+            assert!(writer.first_seen.as_slice().len() - first <= 2 * branches + 1);
+            assert!(writer.last_seen.as_ref().unwrap().as_slice().len() - last <= 3 * branches + 2);
+            assert!(writer.verify());
+        }
+        assert_eq!(writer.length, 0);
+        assert!(self_meta_shared!(writer.root).is_leaf());
+        let retired = writer.last_seen.as_ref().unwrap().as_ptr();
+        let count = writer.funding.0.next;
+        without_allocations(|| writer.commit());
+        assert_eq!(original.last_seen.get().unwrap().as_ptr(), retired);
+        assert!(
+            !record(next + 1).freed,
+            "original reader retains retirement buffer"
+        );
+        assert_eq!(original.kv_iter().count(), 32);
+        assert_eq!(cell.read().len(), 0);
+        without_allocations(|| drop(original));
+        assert!(record(next + 1).refunded);
+        without_allocations(|| drop(cell));
+        all_refunded(&Prepaid {
+            next: count,
+            remaining: 0,
+        });
+    }
+}
+
+#[test]
+fn funded_removal_clone_unwind_keeps_original_source_and_reclaims_private_owners() {
+    let (cell, funding) = new_cell::<PanicValue>();
+    let mut seed = cell.write_with(|_| input(funding));
+    seed.try_insert(4, PanicValue(8)).unwrap();
+    let next = seed.funding.0.next;
+    seed.commit();
+    let original = cell.read();
+    FAIL_CLONE.with(|fail| fail.set(true));
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        let mut writer = cell.write_with(|_| {
+            input_with_capacity(
+                Funded(Prepaid {
+                    next,
+                    remaining: 128 - next,
+                }),
+                1,
+                2,
+            )
+        });
+        writer.begin_admitted_edit();
+        writer.try_remove(&4).unwrap();
+    }));
+    FAIL_CLONE.with(|fail| fail.set(false));
+    assert!(failed.is_err());
+    assert_refunded_range(next, next + 3);
+    assert_eq!(original.search(&4).map(|v| v.0), Some(8));
+    assert!(cell.is_poisoned());
+    drop(original);
+    drop(cell);
+    all_refunded(&Prepaid {
+        next: next + 3,
+        remaining: 0,
+    });
+}

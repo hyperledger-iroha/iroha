@@ -4041,12 +4041,49 @@ impl V2ApplyService {
             },
         }
     }
+    fn classify_validation_failure(
+        &self,
+        merge_reference: Option<&CertifiedMergeLedgerReference>,
+        failed_block: &SignedBlock,
+        error: &BlockValidationError,
+    ) -> V2ApplyError {
+        use crate::state::BlockHashAdmissionError;
+        if let BlockValidationError::BlockHashAdmission(refusal) = error {
+            let wait = match refusal {
+                BlockHashAdmissionError::Busy(wait) | BlockHashAdmissionError::Changed(wait) => {
+                    Some(wait)
+                }
+                BlockHashAdmissionError::Capacity(
+                    mv::allocation::AllocationRefusal::Capacity { release, .. },
+                ) => Some(release),
+                _ => None,
+            };
+            return V2ApplyError::LocalValidation(match wait {
+                Some(wait) => super::v2_body_store::LocalValidationRefusal::PhysicalBusy(
+                    BodyValidationBusy::new(
+                        "block_hash_history",
+                        wait.clone(),
+                        self.queue.sumeragi_waker(),
+                    ),
+                ),
+                None => super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
+                    refusal.to_string(),
+                ),
+            });
+        }
+        Self::classify_candidate_validation_error(merge_reference, failed_block, error)
+    }
     /// Preserve local candidate readiness separately from deterministic invalidity.
     pub(super) fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
+        if let BlockValidationError::BlockHashAdmission(reason) = error {
+            return V2ApplyError::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
+            );
+        }
         if let BlockValidationError::DaIndexHydration(reason) = error {
             return V2ApplyError::LocalCanonicalState(reason.clone());
         }
@@ -5182,11 +5219,7 @@ impl V2ApplyService {
             &mut voting_block,
         )
         .map_err(|(failed_block, error)| {
-            Self::classify_candidate_validation_error(
-                merge_reference,
-                failed_block.as_ref(),
-                error.as_ref(),
-            )
+            self.classify_validation_failure(merge_reference, failed_block.as_ref(), error.as_ref())
         })?;
         debug_assert_eq!(prepared.context(), context);
         self.try_validate_prospective_autoscale_retirement_queue(
@@ -5313,7 +5346,7 @@ impl V2ApplyService {
             )
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(failed_block, error)| {
-                Self::classify_candidate_validation_error(
+                self.classify_validation_failure(
                     merge_reference.as_ref(),
                     failed_block.as_ref(),
                     error.as_ref(),

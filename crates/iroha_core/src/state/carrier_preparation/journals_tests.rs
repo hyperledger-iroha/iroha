@@ -172,7 +172,7 @@ fn journal_admission_refusal_prevents_cold_tiered_capture() {
     );
     assert!(!state.tiered_backend.lock().snapshot_baseline_ready());
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     drop(state.world.block());
 }
 
@@ -375,7 +375,10 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         effects_allocation_attempts,
         "refused admission must not allocate retained effects"
     );
-    assert!(state.block_hashes.inner.try_write().is_none());
+    assert!(
+        state.block_hashes.writer_available(),
+        "private execution retains no hash writer"
+    );
     let reserved = archive
         .try_reserve_candidate(
             crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveKeyV1::try_new(
@@ -427,7 +430,7 @@ fn journal_admission_refusal_returns_original_carrier_and_archive_predecessor() 
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
     );
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
 }
 
 #[test]
@@ -563,7 +566,7 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
     drop(state.prev_commit_topology.block());
     drop(state.lane_consensus_contexts.block());
     assert_eq!(
-        journals.components.block_hashes.as_slice().last(),
+        journals.components.block_hashes.last(),
         Some(&proposal.hash())
     );
     assert!(
@@ -572,7 +575,7 @@ fn prepared_journals_retain_the_original_cut_and_drop_without_publication() {
             .block_hashes
             .matches_current(&state.block_hashes)
     );
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     assert_eq!(
         journals.components.block_hashes.mode(),
         mv::BlockMode::Ordinary
@@ -820,7 +823,7 @@ fn archive_capacity_failure_retains_static_original_journals_without_artifact_wr
         "{error}"
     );
     assert!(!released.load(Ordering::SeqCst));
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     drop(state.world.block());
     drop(state.transactions.block());
     assert_eq!(
@@ -1117,7 +1120,7 @@ fn archive_index_refusal_retains_same_static_execution_and_completed_provider_pl
         carrier.journals.source_prefix.inventory(),
         &original_inventory
     ));
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     drop(state.world.block());
     drop(state.transactions.block());
     drop(state.canonical_runtime.block());
@@ -1218,7 +1221,7 @@ fn archive_original_capture_identity_refusal_retains_static_recovery_owner() {
                 reason: "candidate reputation State differs from its reserved exact identity"
             }
         ));
-        assert!(state.block_hashes.inner.try_write().is_some());
+        assert!(state.block_hashes.writer_available());
         drop(state.world.block());
         let original_box = std::ptr::from_ref(carrier.as_ref());
         let (carrier, repeated) = carrier
@@ -1274,7 +1277,7 @@ fn journal_resource_refusal_precedes_geometry_projection() {
         crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
         before
     );
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     assert_eq!(state.kura.blocks_count(), 0);
 }
 
@@ -1288,10 +1291,8 @@ fn geometry_refusal_drops_originals_before_capture_reservation() {
     }
     impl Drop for Reservation<'_> {
         fn drop(&mut self) {
-            self.originals_released_first.store(
-                self.state.block_hashes.inner.try_write().is_some(),
-                Ordering::SeqCst,
-            );
+            self.originals_released_first
+                .store(self.state.block_hashes.writer_available(), Ordering::SeqCst);
             self.released.fetch_add(1, Ordering::SeqCst);
         }
     }

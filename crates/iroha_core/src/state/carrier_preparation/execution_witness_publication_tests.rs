@@ -209,8 +209,8 @@ impl Original {
                 .journals
                 .components
                 .block_hashes
-                .as_slice()
-                .as_ptr()
+                .get(0)
+                .map_or(std::ptr::null(), std::ptr::from_ref)
                 .cast(),
             wire: decision.block().encode_wire().unwrap(),
         }

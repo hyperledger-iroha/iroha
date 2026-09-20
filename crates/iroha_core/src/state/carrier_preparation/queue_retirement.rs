@@ -7,14 +7,13 @@
 use crate::{
     queue::{QueueLaneRetirementCut, QueueLaneRetirementUnavailable},
     state::{
-        BlockHashOwner, LaneLifecycleError, State,
+        LaneLifecycleError, NativeLaneStateOwner, State,
         carrier_geometry_preparation::PreparedCarrierGeometry,
     },
 };
 use iroha_crypto::Hash;
 use iroha_data_model::block::BlockHeader;
 use iroha_model_base::topology::{DataSpaceId, LaneId};
-use std::sync::Arc;
 
 /// Local retirement refusal; no variant is a consensus-invalidity verdict.
 #[derive(Debug)]
@@ -46,7 +45,7 @@ pub(in crate::state) enum CarrierQueueRetirementError {
 /// Move-only custody retained until all authoritative State components are visible.
 /// Drop later component/State guards before this cut; never carry it across await.
 pub(in crate::state) struct CarrierQueueRetirement<'queue> {
-    state_owner: Arc<BlockHashOwner>,
+    state_owner: NativeLaneStateOwner,
     header: BlockHeader,
     routes: Vec<(LaneId, DataSpaceId, Hash)>,
     _cut: QueueLaneRetirementCut<'queue>,
@@ -90,7 +89,9 @@ impl<'queue> CarrierQueueRetirement<'queue> {
             }
         }
         Ok(Self {
-            state_owner: Arc::clone(&target.block_hashes.owner),
+            state_owner: target
+                .native_lane_state_owner()
+                .ok_or(CarrierQueueRetirementError::ForeignState)?,
             header,
             routes,
             _cut: cut,
@@ -116,7 +117,7 @@ impl<'queue> CarrierQueueRetirement<'queue> {
         header: BlockHeader,
     ) -> bool {
         if self.ensure_available().is_err()
-            || !Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)
+            || !self.state_owner.matches_state(target)
             || self.header != header
             || !geometry.matches_publication_target(target, header)
         {

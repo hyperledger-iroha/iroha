@@ -304,6 +304,28 @@ impl AllocationReservation {
         self.remaining
     }
 
+    /// Move part of this prepaid layout sum into another original reservation.
+    ///
+    /// This partitions one successful admission across component executors. It
+    /// neither acquires pool credits nor allocates storage, and the sum may be
+    /// larger than any single `Layout`. Each component must still split exact
+    /// allocation layouts from its reservation before constructing their owners.
+    /// Refusal leaves the parent unchanged. Both unused remainders and allocated
+    /// charges retain the same pool and refund their own credits exactly once.
+    pub fn try_partition_bytes(&mut self, bytes: usize) -> Result<Self, InsufficientReservation> {
+        if bytes > self.remaining {
+            return Err(InsufficientReservation {
+                requested_bytes: bytes,
+                remaining_bytes: self.remaining,
+            });
+        }
+        self.remaining -= bytes;
+        Ok(Self {
+            pool: Arc::clone(&self.pool),
+            remaining: bytes,
+        })
+    }
+
     /// Move one exact layout's credits into an independent allocation owner.
     /// No pool acquisition or payload allocation occurs here. Refusal preserves
     /// the complete original reservation for a corrected split or abandonment.
@@ -340,10 +362,10 @@ impl Drop for AllocationReservation {
     }
 }
 
-/// An attempted allocation exceeds this owner's remaining prepaid demand.
+/// An allocation or component partition exceeds this owner's prepaid remainder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InsufficientReservation {
-    /// Exact requested layout size.
+    /// Requested allocation layout size or checked component layout sum.
     pub requested_bytes: usize,
     /// Original prepaid remainder, unchanged by refusal.
     pub remaining_bytes: usize,

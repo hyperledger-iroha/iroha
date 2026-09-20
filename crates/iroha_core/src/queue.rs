@@ -23259,6 +23259,8 @@ pub mod tests {
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: kura_defaults::FSYNC_INTERVAL,
             lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         };

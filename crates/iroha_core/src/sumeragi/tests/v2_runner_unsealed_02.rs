@@ -137,6 +137,7 @@ fn same_tag_higher_lock_retires_all_local_proposal_owners() {
         attempted: Some(owner_a),
         submitted: Some((owner_a, subject_a)),
         non_empty_retry: Some(owner_a),
+        history_wait: None,
         candidate_work_wait: Some(CandidateWorkWait {
             owner: owner_a,
             started_at: now,
@@ -344,6 +345,7 @@ fn decision_retires_local_work_before_prepared_delivery() {
         submitted: Some((active, subject)),
         non_empty_retry: None,
         candidate_work_wait: None,
+        history_wait: None,
         pending_events: Some(PendingLocalEvents {
             owner: active,
             subject,
@@ -369,15 +371,26 @@ fn height_one_proposal_projects_staged_genesis_to_resultless_wire() {
     .sign(key_pair.private_key());
     let entrypoint = transaction.hash_as_entrypoint();
     let mut staged = SignedBlock::genesis(vec![transaction], key_pair.private_key(), None, None);
-    { let outputs = crate::execution_output_test_support::structural_network_outputs(&staged, &[entrypoint], vec![TransactionResultInner::Ok(DataTriggerSequence::default())]);
-let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
-staged.set_execution_outputs(outputs, fragments, Default::default(),
-Vec::new(),
-Default::default(),
-Default::default(),
-Vec::new(),
-&crate::execution_output_test_support::structural_output_limits()) }
-        .expect("attach deterministic staged genesis results");
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &staged,
+            &[entrypoint],
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        staged.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("attach deterministic staged genesis results");
     assert!(staged.has_results());
     assert!(!staged.is_resultless_proposal());
     assert!(staged.output_merkle_commitment().is_some());
@@ -1640,4 +1653,47 @@ fn prelatched_historical_serve_invokes_no_signer_cache_or_network() {
     assert_eq!(signer_calls.get(), 0);
     assert_eq!(cache_writes.get(), 0);
     assert_eq!(network_posts.get(), 0);
+}
+
+#[test]
+fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner() {
+    let (context, _) = context();
+    let owner = proposal_owner(
+        &context,
+        EventTag::new(context.height, 3, Generation::new(17)),
+        None,
+        None,
+    );
+    let next = proposal_owner(
+        &context,
+        EventTag::new(context.height, 4, Generation::new(17)),
+        None,
+        None,
+    );
+    let notification = mv::ReleaseNotification::default();
+    let error = crate::state::StateBlockStartError::<()>::History(
+        crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+    );
+    let wake = std::task::Waker::noop();
+    let mut state = LocalProposalState::default();
+    assert!(state.defer_history_admission(owner, &error, wake));
+    assert!(!state.is_pristine());
+    assert!(state.history_admission_pending(owner, wake));
+    assert!(state.attempted.is_none());
+    assert!(state.non_empty_retry.is_none());
+    drop(notification.guard(()));
+    assert!(!state.history_admission_pending(owner, wake));
+    assert!(state.is_pristine());
+    let error = crate::state::StateBlockStartError::<()>::History(
+        crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+    );
+    assert!(state.defer_history_admission(owner, &error, wake));
+    state.reconcile(next);
+    assert!(state.is_pristine());
+    assert!(!state.defer_history_admission(
+        next,
+        &crate::state::StateBlockStartError::Stage(()),
+        wake
+    ));
+    assert!(state.is_pristine());
 }

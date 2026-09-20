@@ -147,15 +147,26 @@ impl<'a, K: Clone + Ord + Debug, V: Clone, M: MapMode + NodeCloning<K, V>>
         )
     }
 
-    pub(crate) fn apply(mut self) {
-        self.cursor.assert_operable();
+    // The sealed mode hooks move custody only. No charge or payload destructor
+    // runs while resolving this checkpoint or transferring ancestor originals.
+    fn take_applied_buffers(&mut self) -> CheckpointBuffers<K, V, M> {
         let saved = self.saved.take().expect("live checkpoint");
-        self.cursor.edit_failed = true;
-        let excess = if let Some(parent) = self.parent.take() {
+        if let Some(parent) = self.parent.take() {
             parent.absorb(saved.buffers)
         } else {
             saved.buffers
-        };
+        }
+    }
+
+    pub(crate) fn apply_retaining(mut self) -> CheckpointBuffers<K, V, M> {
+        self.cursor.assert_operable();
+        self.take_applied_buffers()
+    }
+
+    pub(crate) fn apply(mut self) {
+        self.cursor.assert_operable();
+        self.cursor.edit_failed = true;
+        let excess = self.take_applied_buffers();
         // No rollback may run after transferring the saved owners to the parent.
         // A refund panic leaves the complete private cursor in a failed state.
         drop(excess);

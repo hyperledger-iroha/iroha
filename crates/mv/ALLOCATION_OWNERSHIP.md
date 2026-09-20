@@ -45,6 +45,16 @@ returns the original successor and input unchanged. Unrestricted mutation stays
 unavailable. Unused prepaid remainder returns before each handoff while allocated
 charges remain in their owners.
 
+Closed map removal plans the original search path and the exact sibling that
+rebalancing can use at each level. For `b` branch levels, the engine needs at most
+`2b + 1` new-node slots and `3b + 2` retirement slots, including merge and root
+demotion. Planning includes actual padded layouts, nested node copies and at
+most two additional separator copies per level. Complete admission precedes
+buffer growth or mutation. Missing keys need no admission or allocation. The
+same removal engine serves both modes; no alternate tree or inverse-insert
+rollback is introduced. `MapAdmissionError` names refusal for acquisition and
+all closed map edits. Storage removal still needs joint undo/touch admission.
+
 Attached writers in either map mode lend exclusive transaction checkpoints. A
 new private generation tag forces edits to copy parent nodes; nested guards
 resolve in LIFO order. Prepaid checkpoints retain the parent's original tracking
@@ -57,7 +67,7 @@ identity, allowing resolved checkpoints to reuse the pointer niche. Apply keeps
 edits private until the original writer commits. Caught mutation or cleanup panic makes that cursor unusable, including
 for reading, detaching and publishing. Borrowed current and saved-root values
 cannot outlive or mutate their checkpoint. Prepaid mode exposes only closed
-admitted insertion; generic checkpoint support does not grant ordinary mutation.
+admitted insertion, removal and clear; generic checkpoint support does not grant ordinary mutation.
 
 Production Storage now retains both current and block-undo maps in this same
 B+tree engine. Block opening clears a private undo root without deep-cloning the
@@ -77,16 +87,42 @@ and owned-query destruction, including work outside either tree cursor. Every
 value read, new edit, capture and publication preflights that state and both
 cursor states. A caught child undo-cursor panic therefore cannot publish a
 healthy current tree before discovering the failed undo owner.
-The ordered touch set still allocates without admission. Complete current/undo/
-touch admission and checked generation refusal through State remain required;
-these checkpoints do not enable production prepaid mutation.
+The explicit prepaid Storage mode jointly reserves current/first-undo/touch demand
+before insertion or removal. Missing-key removal still admits a first absence
+and touch witness; it does not set dirty. A borrowed query avoids an owned-key
+cleanup gap, and the removed private value keeps its original charge through
+return to the caller. The [removal record](../../docs/history/2026-09-21/joint-storage-removal.md)
+tracks validation. Its ordered initialized-prefix key buffer owns its actual layout
+charge, moves keys on growth, and drains them before buffer refund. Component
+reservations partition one original admission without another pool acquisition.
+Both map construction demands and block shell/undo-clear demands are likewise
+combined before allocation. Busy acquisition returns the original release observer.
 
-Current production MV Storage still instantiates Untracked maps. Initial root
-and reader control blocks now carry exact original charges; native mutex/runtime
-storage remains explicitly outside constructor admission. Real model payload
-policies, MV undo/transaction storage, iterator stacks and removal admission
-remain unfinished. Final-tree teardown walks original child pointers with a
-bounded stack and allocates nothing.
+Private apply moves both checkpoints' retired bookkeeping without destruction,
+then releases it with the parent failure flag still armed. Final pair publication
+prepares both map owners before node transfer, retains physical guards and cleanup
+through both root publications and pair identity rotation, unlocks all participants,
+then destroys retirement and issues notifications. A cleanup panic cannot leave a
+current-only publication. Original old readers still own their nodes until actual
+reclamation. The [joint admission record](../../docs/history/2026-09-20/joint-storage-admission.md)
+records scoped evidence and remaining boundaries.
+
+Production State still instantiates Untracked maps. Initial root and reader blocks
+carry exact original charges, but native mutex/runtime and MV identity/notification
+storage remain outside constructor admission. Real model payload policies,
+general closed mutation/replacement, State generation refusal and configured
+aggregate execution memory/work remain unfinished. Sorted touched-key insertion
+shifts its suffix and needs a bounded work policy before activation. Final-tree
+teardown walks original child pointers with a bounded stack and allocates nothing.
+
+Read traversal also allocates nothing: `StorageReadOnly` exposes concrete
+associated iterator types, and Concread retains both original traversal paths
+inline using the same valid-tree height bound as teardown. The arrays borrow
+nodes and their charge lifetimes without owning or cloning payloads. This trades
+two growable heap buffers and the MV iterator box for about 2 KiB of bounded
+inline traversal state on 64-bit hosts; default-stack consumer tests remain
+required. Exact full-iterator lengths and mixed-direction range semantics are
+preserved. Actual allocator controls include a completely occupied prepaid pool.
 
 Extract node charges before destroying their cache-padded Box and refund only
 after deallocation returns. Dropping an ordinary charge field happens too early.
@@ -271,3 +307,9 @@ Real callback-bearing charges need their original notification-deferral scope
 around physical guards and destruction. The [closed insertion record](../../docs/history/2026-09-20/closed-admitted-insertion.md)
 records the initial operation. The [retained edit record](../../docs/history/2026-09-20/retained-admitted-edits.md)
 records its multi-edit and root-ownership extension with separate validation.
+
+EBR Cell publication uses the original exclusive writer to transfer each allocation
+without entering the epoch collector. Opaque unlinked allocations remain owned
+through both physical writers and pair identity rotation; their retirement runs
+after unlock and retains the original reader grace period. This removes collector
+callbacks from the transfer interval, but does not admit collector bookkeeping.

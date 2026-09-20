@@ -8,6 +8,7 @@ async fn gossip_accepts_restricted_route_match() {
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         debug_output_new_blocks: false,

@@ -1,4 +1,37 @@
 #[test]
+fn kura_hash_history_has_one_finite_file_configured_limit() {
+    assert_eq!(
+        load_root(base_table()).kura.block_hash_history_bytes.get(),
+        defaults::kura::BLOCK_HASH_HISTORY_BYTES.get()
+    );
+    for bytes in [0, 16 * 1024 * 1024] {
+        let mut table = base_table();
+        table
+            .entry("kura")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("kura table")
+            .insert("block_hash_history_bytes".into(), Value::Integer(bytes));
+        let result = actual::Root::from_toml_source(TomlSource::inline(table));
+        if bytes == 0 {
+            assert!(
+                format!("{:?}", result.expect_err("zero is not unlimited"))
+                    .contains("kura.block_hash_history_bytes must be nonzero")
+            );
+        } else {
+            assert_eq!(
+                result
+                    .expect("positive finite policy")
+                    .kura
+                    .block_hash_history_bytes
+                    .get(),
+                bytes as u64
+            );
+        }
+    }
+}
+
+#[test]
 fn snapshot_resource_defaults_respect_norito_structural_limit() {
     let resources = super::SnapshotResourcePolicy::default();
     resources

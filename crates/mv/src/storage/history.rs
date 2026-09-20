@@ -1,8 +1,8 @@
 //! Borrowed committed and prior images for validation and derived storage.
 
-use super::{Iter, Storage, StorageReadOnly, View};
+use super::{Storage, StorageReadOnly, View};
 use crate::{Key, Value};
-use concread::bptree::BptreeMapReadTxn;
+use concread::bptree::{BptreeMapReadTxn, Iter};
 use std::{borrow::Borrow, cmp::Ordering, iter::Peekable, marker::PhantomData};
 
 /// Read-only guard over a storage's current state and retained undo history.
@@ -97,7 +97,7 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
 
 struct BeforeBlockIter<'a, K: Key, V: Value> {
     current: Peekable<Iter<'a, K, V>>,
-    revert: Peekable<concread::internals::bptree::iter::Iter<'a, K, Option<V>>>,
+    revert: Peekable<Iter<'a, K, Option<V>>>,
 }
 
 impl<'a, K: Key, V: Value> Iterator for BeforeBlockIter<'a, K, V> {

@@ -170,7 +170,7 @@ impl CapturedStateSnapshot {
     }
 }
 fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, out: &mut String) {
-    let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
+    let block_hashes = &view.block_hashes;
     out.push('{');
     json::write_json_string("chain_id", out);
     out.push(':');
@@ -203,7 +203,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     out.push(',');
     json::write_json_string("block_hashes", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&block_hashes, out);
+    crate::state::serialize_block_hashes(block_hashes, out);
     out.push(',');
     json::write_json_string("transactions", out);
     out.push(':');
@@ -245,7 +245,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
 }
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     let world = state.world();
-    let block_hashes: Vec<HashOf<BlockHeader>> = state.block_hashes().iter().copied().collect();
+    let block_hashes = state.block_hashes();
     out.push('{');
     json::write_json_string("chain_id", out);
     out.push(':');
@@ -265,7 +265,7 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     out.push(',');
     json::write_json_string("block_hashes", out);
     out.push(':');
-    json::JsonSerialize::json_serialize(&block_hashes, out);
+    crate::state::serialize_block_hashes(block_hashes, out);
     out.push(',');
     json::write_json_string("transactions", out);
     out.push(':');

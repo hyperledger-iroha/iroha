@@ -374,11 +374,22 @@ fn original_map_and_undo_survive_both_busy_writers_abort_and_publication_without
 
 #[test]
 fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
+    use std::{
+        future::Future,
+        task::{Context, Waker},
+    };
     let target: Storage<_, _> = [(1, 10), (2, 20)].into_iter().collect();
     let mut candidate = target.block();
     candidate.insert(1, 11);
     let journal = detach(candidate);
     let original = journal.blocks.get(&1).unwrap() as *const _;
+    let mut released = std::pin::pin!(target.blocks_released.observe().wait_for_release());
+    assert!(
+        released
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
     let (journal, error) = journal
         .try_prepare_publication(&target, |_, target| {
             // Deliberately bypass only the outer MV identity in this structural test.
@@ -386,11 +397,23 @@ fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
             let mut writer = target.blocks.write();
             writer.insert(2, 22);
             writer.commit();
+            assert!(
+                released
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
             Ok::<_, ()>(())
         })
         .err()
         .expect("original tree generation changed");
     assert_eq!(error, PublicationPreparationError::Changed);
+    assert!(
+        released
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_ready()
+    );
     assert_eq!(journal.blocks.get(&1).unwrap() as *const _, original);
     assert_eq!(journal.blocks.get(&2), Some(&20));
     assert_eq!(values(&target), [(1, 10), (2, 22)]);
@@ -401,6 +424,10 @@ fn changed_raw_map_generation_refuses_original_owner_before_any_installation() {
 
 #[test]
 fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
+    use std::{
+        future::Future,
+        task::{Context, Waker},
+    };
     for restore_same_values in [false, true] {
         let target: Storage<u64, u64> = [(1, 10), (2, 20)].into_iter().collect();
         let mut candidate = target.block();
@@ -408,6 +435,13 @@ fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
         let journal = detach(candidate);
         let current = journal.blocks.get(&1).unwrap() as *const _;
         let undo = journal.revert.get(&1).unwrap().as_ref().unwrap() as *const _;
+        let mut released = std::pin::pin!(target.revert_released.observe().wait_for_release());
+        assert!(
+            released
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
         let (journal, error) = journal
             .try_prepare_publication(&target, |original, target| {
                 // Bypass only the outer pair identity: the original native undo
@@ -418,12 +452,24 @@ fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
                     writer.remove(&7);
                 }
                 writer.commit();
+                assert!(
+                    released
+                        .as_mut()
+                        .poll(&mut Context::from_waker(Waker::noop()))
+                        .is_pending()
+                );
                 assert!(original.matches_current(target));
                 Ok::<_, ()>(())
             })
             .err()
             .expect("original undo generation changed");
         assert_eq!(error, PublicationPreparationError::Changed);
+        assert!(
+            released
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
         assert_eq!(journal.blocks.get(&1).unwrap() as *const _, current);
         assert_eq!(
             journal.revert.get(&1).unwrap().as_ref().unwrap() as *const _,
@@ -438,5 +484,259 @@ fn changed_raw_undo_generation_refuses_original_pair_even_after_value_aba() {
         );
         assert!(target.revert.try_write().is_some());
         assert!(target.blocks.try_write().is_some());
+    }
+}
+
+#[test]
+fn pair_release_wake_observes_both_roots_and_rotated_identity_without_held_writers() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Wake, Waker},
+    };
+    struct Probe {
+        storage: Arc<Storage<u64, u64>>,
+        predecessor: CapturedPublication,
+        expected: u64,
+        expected_undo: Option<Option<u64>>,
+        wakes: AtomicUsize,
+    }
+    impl Wake for Probe {
+        fn wake(self: Arc<Self>) {
+            assert_eq!(
+                self.predecessor
+                    .try_check_current::<()>(&self.storage.publication),
+                Err(PublicationPreparationError::Changed)
+            );
+            let current = self
+                .storage
+                .blocks
+                .try_write()
+                .expect("current physical writer released before notification");
+            let undo = self
+                .storage
+                .revert
+                .try_write()
+                .expect("undo physical writer released before notification");
+            assert_eq!(current.get(&1), Some(&self.expected));
+            assert_eq!(undo.get(&1), self.expected_undo.as_ref());
+            self.wakes.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    for prepared in [false, true] {
+        for dirty in [false, true] {
+            let storage = Arc::new(Storage::from_iter([(1, 10)]));
+            let predecessor = storage.publication.capture();
+            let mut block = storage.block();
+            if dirty {
+                block.insert(1, 20);
+            }
+            let mut wait = storage.blocks_released.observe().wait_for_release();
+            let probe = Arc::new(Probe {
+                storage: Arc::clone(&storage),
+                predecessor,
+                expected: if dirty { 20 } else { 10 },
+                expected_undo: dirty.then_some(Some(10)),
+                wakes: AtomicUsize::new(0),
+            });
+            let waker = Waker::from(Arc::clone(&probe));
+            assert!(
+                Pin::new(&mut wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
+            if prepared {
+                // Subscribe to the acquired original publication writer, after
+                // the intentional earlier detach release has already occurred.
+                drop(wait);
+                let detached = block.try_detach(|_| Ok::<_, ()>(())).unwrap();
+                let publish = detached
+                    .try_prepare_publication(&storage, |_, _| Ok::<_, ()>(()))
+                    .unwrap_or_else(|_| panic!("same original generation"));
+                wait = storage.blocks_released.observe().wait_for_release();
+                assert!(
+                    Pin::new(&mut wait)
+                        .poll(&mut Context::from_waker(&waker))
+                        .is_pending()
+                );
+                publish.publish();
+            } else {
+                block.commit();
+            }
+            assert_eq!(probe.wakes.load(Ordering::SeqCst), 1);
+            assert!(
+                Pin::new(&mut wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_ready()
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_insert_retirement_panic_preserves_published_identity_and_healthy_contention() {
+    use std::{
+        future::Future,
+        panic::{AssertUnwindSafe, catch_unwind},
+        task::{Context, Wake, Waker},
+    };
+
+    struct Control {
+        next: AtomicUsize,
+        panic_on: AtomicUsize,
+        panics: AtomicUsize,
+    }
+    struct Payload {
+        number: u64,
+        instance: usize,
+        control: Arc<Control>,
+    }
+    impl Payload {
+        fn new(number: u64, control: &Arc<Control>) -> Self {
+            Self {
+                number,
+                instance: control.next.fetch_add(1, Ordering::SeqCst),
+                control: Arc::clone(control),
+            }
+        }
+    }
+    impl Clone for Payload {
+        fn clone(&self) -> Self {
+            Self::new(self.number, &self.control)
+        }
+    }
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            if self
+                .control
+                .panic_on
+                .compare_exchange(
+                    self.instance,
+                    usize::MAX,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                self.control.panics.fetch_add(1, Ordering::SeqCst);
+                panic!("original published payload retirement");
+            }
+        }
+    }
+    struct Count(AtomicUsize);
+    impl Wake for Count {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    for panic_on_retirement in [false, true] {
+        let control = Arc::new(Control {
+            next: AtomicUsize::new(0),
+            panic_on: AtomicUsize::new(usize::MAX),
+            panics: AtomicUsize::new(0),
+        });
+        let mut target = Storage::new();
+        assert!(target.insert(1_u64, Payload::new(10, &control)).is_none());
+        let mut tip = target.block();
+        tip.insert(1, Payload::new(20, &control));
+        tip.commit();
+        let predecessor = target.publication.capture();
+        let retired = target.view().get(&1).unwrap().instance;
+        let (undo_pointer, undo_instance) = {
+            let undo = target.revert.read();
+            let value = undo.get(&1).unwrap().as_ref().unwrap();
+            (value as *const Payload, value.instance)
+        };
+        let observation = target.blocks_released.observe();
+        let mut released = std::pin::pin!(observation.clone().wait_for_release());
+        let count = Arc::new(Count(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&count));
+        assert!(
+            released
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        if panic_on_retirement {
+            control.panic_on.store(retired, Ordering::SeqCst);
+        }
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            target.insert(1, Payload::new(30, &control))
+        }));
+        if panic_on_retirement {
+            let panic = match result {
+                Err(panic) => panic,
+                Ok(_) => panic!("original retired value must unwind"),
+            };
+            assert_eq!(
+                panic.downcast_ref::<&str>(),
+                Some(&"original published payload retirement")
+            );
+            assert_eq!(control.panics.load(Ordering::SeqCst), 1);
+        } else {
+            let previous = result.unwrap_or_else(|_| panic!("normal insertion unwound"));
+            assert_eq!(previous.unwrap().number, 20);
+            assert_eq!(control.panics.load(Ordering::SeqCst), 0);
+        }
+        assert_eq!(target.view().get(&1).unwrap().number, 30);
+        assert_eq!(
+            predecessor.try_check_current::<()>(&target.publication),
+            Err(PublicationPreparationError::Changed)
+        );
+        assert!(!target.blocks.is_poisoned());
+        assert!(!observation.is_poisoned());
+        assert_eq!(count.0.load(Ordering::SeqCst), 1);
+        assert!(
+            released
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_ready()
+        );
+        {
+            let undo = target.revert.read();
+            let value = undo.get(&1).unwrap().as_ref().unwrap();
+            assert_eq!(value.number, 10);
+            assert_eq!(value.instance, undo_instance);
+            assert_eq!(value as *const Payload, undo_pointer);
+        }
+
+        // A later real waiter must observe contention on the healthy original
+        // writer, not permanent poison from the earlier retirement destructor.
+        let journal = detach(target.block());
+        let held = target
+            .blocks_released
+            .poisoning_guard(target.blocks.write());
+        let expected = target.blocks_released.observe();
+        let (journal, error) = journal
+            .try_prepare_publication(&target, |_, _| Ok::<_, ()>(()))
+            .err()
+            .expect("original current writer is held");
+        assert_eq!(error, PublicationPreparationError::Busy(expected.clone()));
+        let mut retry_wait = std::pin::pin!(expected.wait_for_release());
+        assert!(
+            retry_wait
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        drop(held);
+        assert_eq!(count.0.load(Ordering::SeqCst), 2);
+        assert!(
+            retry_wait
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_ready()
+        );
+        drop(prepare(journal, &target).abort());
+        assert_eq!(target.view().get(&1).unwrap().number, 30);
+        let undo = target.revert.read();
+        let value = undo.get(&1).unwrap().as_ref().unwrap();
+        assert_eq!(value.instance, undo_instance);
+        assert_eq!(value as *const Payload, undo_pointer);
     }
 }

@@ -632,6 +632,8 @@ pub(crate) use publication_lease::{
 /// global state checkpoints into storage.
 #[derive(Debug)]
 pub struct Kura {
+    /// One finite pool shared by every State hash generation using this store.
+    block_hash_history_budget: mv::allocation::AllocationBudget,
     /// Exact owner-published resident and physical resources; never consensus authority.
     resource_inventory: Arc<resource_inventory::Inventory>,
     /// Process-local identity shared with sealed lifecycle storage authority.
@@ -1661,6 +1663,10 @@ impl FinalizedMergeCarrierRepairPreflight {
     }
 }
 impl Kura {
+    /// Retain the original configured pool for State history construction and edits.
+    pub(crate) fn block_hash_history_budget(&self) -> mv::allocation::AllocationBudget {
+        self.block_hash_history_budget.clone()
+    }
     fn notify_block_writer_sender(
         sender: &mpsc::SyncSender<BlockNotify>,
         notification: BlockNotify,
@@ -2582,6 +2588,18 @@ impl Kura {
     ) -> Result<(Arc<Self>, BlockCount)> {
         let init_started_at = Instant::now();
         let configured_store_dir = config.store_dir.resolve_relative_path();
+        let history_bytes = usize::try_from(config.block_hash_history_bytes.get())
+            .ok()
+            .filter(|bytes| *bytes != 0)
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "kura.block_hash_history_bytes must be nonzero and representable as usize",
+                    ),
+                    configured_store_dir.clone(),
+                )
+            })?;
         config.fastpq_artifacts.validate().map_err(|error| {
             Error::IO(
                 std::io::Error::new(ErrorKind::InvalidInput, error.to_string()),
@@ -3002,6 +3020,7 @@ impl Kura {
         }
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
         let kura = Arc::new(Self {
+            block_hash_history_budget: mv::allocation::AllocationBudget::new(history_bytes),
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(test)]
@@ -3397,6 +3416,12 @@ impl Kura {
             .expect("default Native AMX prune-intent bound is valid");
         let resource_inventory = Arc::new(resource_inventory::Inventory::default());
         Arc::new(Self {
+            block_hash_history_budget: mv::allocation::AllocationBudget::new(
+                usize::try_from(
+                    iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
+                )
+                .expect("default history budget fits supported platforms"),
+            ),
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
             #[cfg(test)]

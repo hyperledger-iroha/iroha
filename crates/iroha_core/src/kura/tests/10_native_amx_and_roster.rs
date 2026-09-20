@@ -2745,7 +2745,7 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
         manifest_leaf_count: manifest.count(),
         artifacts,
     };
-    let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(&plan, identities)
+    let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(Kura::blank_kura_for_testing().instance_identity(), &plan, identities)
         .expect("build Native frontier prepublication token");
     let expected_frontiers = manifest
         .entries()

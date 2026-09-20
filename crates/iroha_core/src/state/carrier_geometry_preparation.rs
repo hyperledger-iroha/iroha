@@ -23,7 +23,7 @@ pub(super) struct PreparedCarrierGeometry {
     raw: Option<crate::kura::RawGeometryAttempt>,
     tiered: Option<tiered::TieredGeometryAttempt>,
     // Retain the original State allocation, even if an identical State shares Kura.
-    state_owner: Arc<BlockHashOwner>,
+    state_owner: NativeLaneStateOwner,
     // Keep the original Kura alive behind all captured physical custody.
     kura: Arc<Kura>,
 }
@@ -233,7 +233,7 @@ impl PreparedCarrierGeometry {
     /// Authenticate this captured geometry against the original publication target.
     /// Header bytes and shared Kura custody alone cannot identify a State family.
     pub(super) fn matches_publication_target(&self, target: &State, header: BlockHeader) -> bool {
-        self._header == header && Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)
+        self._header == header && self.state_owner.matches_state(target)
     }
 
     /// Whether the enclosing publisher must consume its prepared lifecycle effects.
@@ -537,7 +537,9 @@ impl StateBlock<'_> {
             network_id: self.network_id,
             raw: None,
             tiered: None,
-            state_owner: Arc::clone(&self.state_ref.block_hashes.owner),
+            state_owner: self.state_ref.native_lane_state_owner().ok_or_else(|| {
+                LaneLifecycleError::RuntimeCatalog("read-only State cannot publish geometry".into())
+            })?,
             kura: Arc::clone(&self.state_ref.kura),
         })
     }

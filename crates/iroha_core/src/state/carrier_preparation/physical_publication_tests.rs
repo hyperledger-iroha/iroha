@@ -122,7 +122,12 @@ fn phase_allocations(phase: &RetainedPhase) -> [*const (); 6] {
         journals: &super::super::super::PreparedCarrierJournals<PhaseReservation, B>,
     ) -> [*const (); 6] {
         [
-            journals.components.block_hashes.as_slice().as_ptr().cast(),
+            journals
+                .components
+                .block_hashes
+                .get(0)
+                .map_or(std::ptr::null(), std::ptr::from_ref)
+                .cast(),
             std::ptr::from_ref(journals.components.transactions.staged_membership().1).cast(),
             journals.source_prefix.witness().writes.as_ptr().cast(),
             journals.source_prefix.sources().entries().as_ptr().cast(),
@@ -430,7 +435,7 @@ fn retained_execution_phases_survive_marker_reproposal_and_publication_refusals(
     assert_fences_free_except(&state, "world.accounts");
     drop(queue.try_lock_lane_retirement_observer().unwrap());
     drop(state.kura.try_publication_lease().unwrap());
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     assert_eq!(
         phase_allocations(service.owner_for_test(durable.subject()).unwrap()),
         allocations
@@ -693,7 +698,7 @@ fn retained_capture_refusal_resumes_original_archives_before_any_validation_mark
             assert!(store.rejected_recovery_catalog().is_empty());
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             assert_eq!(releases.load(Ordering::SeqCst), 0);
-            assert!(state.block_hashes.inner.try_write().is_some());
+            assert!(state.block_hashes.writer_available());
             drop(state.world.accounts.block());
             drop(state.transactions.block());
             assert_fences_free_except(&state, "");
@@ -982,8 +987,8 @@ fn original_state_and_header_are_required_before_witness_or_archive_writes() {
             .journals
             .components
             .block_hashes
-            .as_slice()
-            .as_ptr();
+            .get(0)
+            .map_or(std::ptr::null(), std::ptr::from_ref);
         let witness = decision.journals.source_prefix.witness().writes.as_ptr();
         let inventory = Arc::clone(decision.journals.source_prefix.inventory());
         let releases = Arc::new(AtomicUsize::new(0));
@@ -1007,7 +1012,12 @@ fn original_state_and_header_are_required_before_witness_or_archive_writes() {
             assert_fences_free_except(target, "");
             assert_eq!(retry.block().encode_wire().unwrap(), wire);
             assert_eq!(
-                retry.journals.components.block_hashes.as_slice().as_ptr(),
+                retry
+                    .journals
+                    .components
+                    .block_hashes
+                    .get(0)
+                    .map_or(std::ptr::null(), std::ptr::from_ref),
                 hashes
             );
             assert_eq!(
@@ -1082,8 +1092,8 @@ fn joint_publication_persists_both_original_archives_without_state_effects_or_re
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     for _ in 0..2 {
         let physical = acquire(decision, &state);
         assert!(!provider.is_empty().unwrap());
@@ -1095,8 +1105,8 @@ fn joint_publication_persists_both_original_archives_without_state_effects_or_re
                 .journals
                 .components
                 .block_hashes
-                .as_slice()
-                .as_ptr(),
+                .get(0)
+                .map_or(std::ptr::null(), std::ptr::from_ref),
             hashes
         );
         assert!(decision.journals.provider_capture.is_some());
@@ -1123,8 +1133,8 @@ fn foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     for provider_case in [true, false] {
         let provider_was_empty = provider.is_empty().unwrap();
         let reputation_was_empty = reputation.is_empty().unwrap();
@@ -1168,10 +1178,15 @@ fn foreign_archive_refusal_precedes_state_acquisition_and_returns_complete_retry
         }
         assert_fences_free_except(&state, "state_commit_lock");
         drop(state.kura.try_publication_lease().unwrap());
-        assert!(state.block_hashes.inner.try_write().is_some());
+        assert!(state.block_hashes.writer_available());
         assert_eq!(retry.block().encode_wire().unwrap(), wire);
         assert_eq!(
-            retry.journals.components.block_hashes.as_slice().as_ptr(),
+            retry
+                .journals
+                .components
+                .block_hashes
+                .get(0)
+                .map_or(std::ptr::null(), std::ptr::from_ref),
             hashes
         );
         assert_eq!(provider.is_empty().unwrap(), provider_was_empty);
@@ -1446,8 +1461,8 @@ fn source_substitution_refuses_before_state_acquisition_and_retains_original_ret
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     std::mem::swap(
         &mut decision.journals.source_prefix,
         &mut foreign.source_prefix,
@@ -1480,7 +1495,12 @@ fn source_substitution_refuses_before_state_acquisition_and_retains_original_ret
     );
     assert_eq!(retry.block().encode_wire().unwrap(), wire);
     assert_eq!(
-        retry.journals.components.block_hashes.as_slice().as_ptr(),
+        retry
+            .journals
+            .components
+            .block_hashes
+            .get(0)
+            .map_or(std::ptr::null(), std::ptr::from_ref),
         hashes
     );
     std::mem::swap(
@@ -1629,7 +1649,14 @@ fn hold<'state>(state: &'state State, name: &str) -> Box<dyn Held + 'state> {
         "state_commit_lock" => Box::new(state.state_commit_lock.lock()),
         "lane_lifecycle_lock" => Box::new(state.lane_lifecycle_lock.lock()),
         "state_write_lock" => Box::new(state.state_write_lock.lock()),
-        "block_hashes" => Box::new(state.block_hashes.view()),
+        "block_hashes" => Box::new(
+            state
+                .block_hashes
+                .block()
+                .detach()
+                .try_prepare_publication(&state.block_hashes, |_, _| Ok::<_, ()>(()))
+                .unwrap_or_else(|_| panic!("hold hash publisher")),
+        ),
         "transactions" => Box::new(state.transactions.block()),
         "canonical_runtime" => Box::new(state.canonical_runtime.block()),
         "commit_topology" => Box::new(state.commit_topology.block()),
@@ -1663,8 +1690,8 @@ fn every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry() 
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     let original_membership = std::ptr::from_ref(
         decision
             .journals
@@ -1700,7 +1727,7 @@ fn every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry() 
                 .expect("Kura released before State refusal"),
         );
         if name != "block_hashes" {
-            assert!(state.block_hashes.inner.try_write().is_some());
+            assert!(state.block_hashes.writer_available());
         }
         if name != "transactions" {
             assert!(matches!(
@@ -1721,7 +1748,12 @@ fn every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry() 
             drop(state.lane_consensus_contexts.block());
         }
         assert_eq!(
-            retry.journals.components.block_hashes.as_slice().as_ptr(),
+            retry
+                .journals
+                .components
+                .block_hashes
+                .get(0)
+                .map_or(std::ptr::null(), std::ptr::from_ref),
             original_hashes
         );
         assert_eq!(
@@ -1782,7 +1814,7 @@ fn aggregate_acquisition_holds_every_family_without_publishing_or_losing_origina
     assert!(state.state_commit_lock.try_lock().is_none());
     assert!(state.lane_lifecycle_lock.try_lock().is_none());
     assert!(state.state_write_lock.try_lock().is_none());
-    assert!(state.block_hashes.inner.try_read().is_none());
+    assert!(state.block_hashes.try_view().is_err());
     assert_eq!(state.committed_height(), 0);
     assert_eq!(state.state_view_generation(), generation);
     assert!(matches!(
@@ -1826,8 +1858,8 @@ fn geometry_refusal_returns_original_decision_and_releases_every_physical_writer
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     let membership = std::ptr::from_ref(
         decision
             .journals
@@ -1851,7 +1883,7 @@ fn geometry_refusal_returns_original_decision_and_releases_every_physical_writer
     ));
     assert_fences_free_except(&state, "");
     drop(state.kura.try_publication_lease().unwrap());
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     assert!(
         retry
             .journals
@@ -1862,7 +1894,12 @@ fn geometry_refusal_returns_original_decision_and_releases_every_physical_writer
     assert!(retry.journals.components.runtime.matches_current(&state));
     assert_eq!(retry.block().encode_wire().unwrap(), wire);
     assert_eq!(
-        retry.journals.components.block_hashes.as_slice().as_ptr(),
+        retry
+            .journals
+            .components
+            .block_hashes
+            .get(0)
+            .map_or(std::ptr::null(), std::ptr::from_ref),
         hashes
     );
     assert_eq!(
@@ -1901,8 +1938,8 @@ fn geometry_backend_contention_releases_writers_and_waits_for_actual_backend_rel
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     let held = state.tiered_backend.lock();
     let (retry, error) = match acquire(decision, &state).publish() {
         Ok(_) => panic!("the actual backend owner must release first"),
@@ -1919,7 +1956,12 @@ fn geometry_backend_contention_releases_writers_and_waits_for_actual_backend_rel
     drop(state.kura.try_publication_lease().unwrap());
     assert_eq!(retry.block().encode_wire().unwrap(), wire);
     assert_eq!(
-        retry.journals.components.block_hashes.as_slice().as_ptr(),
+        retry
+            .journals
+            .components
+            .block_hashes
+            .get(0)
+            .map_or(std::ptr::null(), std::ptr::from_ref),
         hashes
     );
     let wakes = Arc::new(WakeCount::default());
@@ -2057,7 +2099,7 @@ fn changed_world_predecessor_releases_all_earlier_families_without_rebinding() {
         ))
     ));
     assert_fences_free_except(&state, "");
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     drop(state.transactions.block());
     drop(state.canonical_runtime.block());
     drop(state.commit_topology.block());
@@ -2080,7 +2122,7 @@ struct Reservation<'state> {
 }
 
 #[test]
-fn actual_validation_overlay_defers_at_hash_before_taking_its_world_writers() {
+fn actual_validation_overlay_releases_hash_before_retaining_membership_writers() {
     let (state, decision) = fixture_decision();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let validating = state.block(decision.block().header());
@@ -2092,10 +2134,11 @@ fn actual_validation_overlay_defers_at_hash_before_taking_its_world_writers() {
     assert!(matches!(
         &error,
         CarrierPhysicalPreparationError::Component {
-            field: "block_hashes",
+            field: "transactions",
             cause: mv::PublicationPreparationError::Busy(_),
         }
     ));
+    assert!(state.block_hashes.writer_available());
     assert_fences_free_except(&state, "");
     let mut wait = busy_wait(error).wait_for_release();
     let wakes = Arc::new(WakeCount::default());
@@ -2187,7 +2230,7 @@ impl Drop for Reservation<'_> {
                 .try_publication_lease()
                 .expect("Kura releases before reservations"),
         );
-        assert!(self.state.block_hashes.inner.try_write().is_some());
+        assert!(self.state.block_hashes.writer_available());
         drop(self.state.transactions.block());
         drop(self.state.world.accounts.block());
         drop(self.state.lane_consensus_contexts.block());
@@ -2247,8 +2290,8 @@ fn original_kura_contention_returns_exact_decided_carrier_and_release_driven_ret
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     let membership = std::ptr::from_ref(
         decision
             .journals
@@ -2284,10 +2327,15 @@ fn original_kura_contention_returns_exact_decided_carrier_and_release_driven_ret
             })
         ));
         assert_fences_free_except(&state, "state_commit_lock");
-        assert!(state.block_hashes.inner.try_write().is_some());
+        assert!(state.block_hashes.writer_available());
         assert_eq!(retry.block().encode_wire().unwrap(), wire);
         assert_eq!(
-            retry.journals.components.block_hashes.as_slice().as_ptr(),
+            retry
+                .journals
+                .components
+                .block_hashes
+                .get(0)
+                .map_or(std::ptr::null(), std::ptr::from_ref),
             hashes
         );
         assert_eq!(
@@ -2321,8 +2369,8 @@ fn original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owner
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     let membership = std::ptr::from_ref(
         decision
             .journals
@@ -2347,7 +2395,7 @@ fn original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owner
     ));
     drop(state_held);
     assert_fences_free_except(&state, "");
-    assert!(state.block_hashes.inner.try_write().is_some());
+    assert!(state.block_hashes.writer_available());
     // The full lease remains a typed storage error, never Busy from a leaked guard.
     assert!(matches!(
         state.kura.try_publication_lease(),
@@ -2358,7 +2406,12 @@ fn original_kura_storage_failure_returns_carrier_and_releases_all_acquired_owner
     drop(state.kura.canonical_publication_lease());
     assert_eq!(retry.block().encode_wire().unwrap(), wire);
     assert_eq!(
-        retry.journals.components.block_hashes.as_slice().as_ptr(),
+        retry
+            .journals
+            .components
+            .block_hashes
+            .get(0)
+            .map_or(std::ptr::null(), std::ptr::from_ref),
         hashes
     );
     assert_eq!(
@@ -2380,8 +2433,8 @@ fn checkpoint_storage_refusal_precedes_state_and_retains_exact_originals() {
         .journals
         .components
         .block_hashes
-        .as_slice()
-        .as_ptr();
+        .get(0)
+        .map_or(std::ptr::null(), std::ptr::from_ref);
     let membership = std::ptr::from_ref(
         decision
             .journals
@@ -2432,10 +2485,15 @@ fn checkpoint_storage_refusal_precedes_state_and_retains_exact_originals() {
                 .try_publication_lease()
                 .expect("all Kura fences released"),
         );
-        assert!(state.block_hashes.inner.try_write().is_some());
+        assert!(state.block_hashes.writer_available());
         assert_eq!(retry.block().encode_wire().unwrap(), wire);
         assert_eq!(
-            retry.journals.components.block_hashes.as_slice().as_ptr(),
+            retry
+                .journals
+                .components
+                .block_hashes
+                .get(0)
+                .map_or(std::ptr::null(), std::ptr::from_ref),
             hashes
         );
         assert_eq!(

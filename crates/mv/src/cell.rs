@@ -265,8 +265,14 @@ impl<V: Value, Charge: Send + Sync + 'static> CurrentReplacement<'_, V, Charge> 
             publication,
         } = self;
         *blocks.get_mut() = value;
-        publication.publish(|| blocks.release_with(|guard| guard.commit()));
-        drop(_revert);
+        publish_pair(
+            blocks,
+            _revert,
+            publication,
+            NextPublication::new(),
+            true,
+            false,
+        );
     }
 }
 
@@ -492,14 +498,60 @@ impl<V: Value, Admission, Installation, Charge: Send + Sync + 'static>
             next,
             admission,
         } = metadata;
-        publication.publish_prepared(next, || {
-            if dirty {
-                blocks.release_with(|guard| guard.commit());
-            }
-            revert.release_with(|guard| guard.commit());
-        });
+        publish_pair(blocks, revert, publication, next, dirty, true);
         (admission, installation)
     }
+}
+
+// The original EBR generations transfer without pinning the collector or
+// invoking callbacks. Both physical writers survive through identity rotation;
+// only the returned retirement owners may pin and schedule old generations.
+fn publish_pair<'a, V: Value, Charge: Send + Sync + 'static>(
+    blocks: CellWriter<'a, V, Charge>,
+    revert: CellWriter<'a, Option<V>, Charge>,
+    publication: &Publication,
+    next: NextPublication,
+    publish_current: bool,
+    publish_undo: bool,
+) {
+    let (blocks, unchanged_blocks) = if publish_current {
+        (
+            Some(blocks.map_preserving_release(|writer| writer.prepare_commit())),
+            None,
+        )
+    } else {
+        (None, Some(blocks))
+    };
+    let (revert, unchanged_revert) = if publish_undo {
+        (
+            Some(revert.map_preserving_release(|writer| writer.prepare_commit())),
+            None,
+        )
+    } else {
+        (None, Some(revert))
+    };
+    let retirement = publication.publish_retaining(
+        next,
+        || {
+            let blocks =
+                blocks.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));
+            let revert =
+                revert.map(|writer| writer.map_preserving_release(|prepared| prepared.publish()));
+            (blocks, revert)
+        },
+        |(blocks, revert)| {
+            let blocks =
+                blocks.map(|writer| writer.release_retaining(|published| published.release()));
+            let revert =
+                revert.map(|writer| writer.release_retaining(|published| published.release()));
+            let unchanged_blocks =
+                unchanged_blocks.map(|writer| writer.release_retaining(|writer| writer.detach()));
+            let unchanged_revert =
+                unchanged_revert.map(|writer| writer.release_retaining(|writer| writer.detach()));
+            (blocks, revert, unchanged_blocks, unchanged_revert)
+        },
+    );
+    drop(retirement);
 }
 
 #[cfg(test)]
@@ -559,14 +611,16 @@ mod block {
                 predecessor: _,
                 mode: _,
             } = self;
-            publication.publish(|| {
-                // Commit fields in the inverse order. Even an untouched block
-                // publishes its clear-undo transition and changes pair identity.
-                if dirty {
-                    blocks.release_with(|guard| guard.commit());
-                }
-                revert.release_with(|guard| guard.commit());
-            });
+            // Even an untouched block publishes its clear-undo transition and
+            // rotates pair identity before either writer can notify a waiter.
+            publish_pair(
+                blocks,
+                revert,
+                publication,
+                NextPublication::new(),
+                dirty,
+                true,
+            );
         }
 
         /// Admit metadata retention, then release writers around their original allocations.

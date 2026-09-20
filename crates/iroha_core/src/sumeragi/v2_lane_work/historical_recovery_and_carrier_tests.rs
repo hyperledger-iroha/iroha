@@ -4618,7 +4618,7 @@ fn former_producer_first_binds_view_zero_merge_body_after_view_change_with_owned
             &block,
             adapter.state.as_ref(),
             false,
-        )
+        ).unwrap()
     );
     let (round_zero, subject) = global_lock_for_block(&adapter, &block);
     assert_eq!(round_zero.view, 0);

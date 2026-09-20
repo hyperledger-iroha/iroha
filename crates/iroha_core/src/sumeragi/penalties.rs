@@ -250,7 +250,7 @@ impl<'a> PenaltyApplier<'a> {
             crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut scratch = self
             .state
-            .consensus_effects_probe_block(block_header.clone());
+            .consensus_effects_probe_block(block_header.clone())?;
         let mut actions = Vec::new();
         for (key, record) in pending {
             // Admission already validated and anchored this immutable context.
@@ -1768,7 +1768,9 @@ mod tests {
             );
         }
         {
-            let mut scratch = state.consensus_effects_probe_block(penalty_header(2));
+            let mut scratch = state
+                .consensus_effects_probe_block(penalty_header(2))
+                .unwrap();
             let mut transaction = scratch.consensus_effects_transaction();
             apply_slash_to_validator_without_observability(
                 &mut transaction,
