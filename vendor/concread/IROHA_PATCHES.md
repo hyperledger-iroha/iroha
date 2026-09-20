@@ -4,6 +4,12 @@ This is the source of the locked `concread` 0.5.10 crate (crates.io archive
 SHA-256 `6588e9e68e11207fb9a5aabd88765187969e6bcba98763c40bcad87b2a73e9f5`),
 with its MPL-2.0 license retained in `LICENSE.md`.
 
+The vendored package is an explicit workspace member, but not a default member.
+Its unit tests therefore use the checked-in workspace lockfile and the maintained
+Cargo metadata/build gate without a temporary harness. MV production still
+disables default features and selects `ebr`, `maps`, and `foldhash`; the release
+gate checks shipping binaries separately from the broader test feature graph.
+
 The local EBR change binds typed resource custody to the real allocated generation,
 including abandoned writers and epoch-delayed reclamation. It does not measure
 nested payloads or establish an aggregate Iroha memory quota. Consumer regression
@@ -148,3 +154,26 @@ and reverse consumption and implements `ExactSizeIterator`; its old size hint
 incorrectly kept the original length after consumption. Range iteration retains
 its separate conservative upper-bound contract. These operations support native
 Storage undo ownership without cloning a separate standard-map read image.
+
+### Closed prepaid current/undo insertion
+
+`try_insert_with_undo_owned_admitted` reattaches both exact retained map owners,
+plans the current edit and a missing first-preimage undo edit together, and
+consumes one move-only provider under both original writer locks. Existing undo
+entries, including `None`, are neither rewritten nor checkpointed. Checkpoints
+retain original roots and tracking storage for allocation-free abort; final
+provider cleanup and both private applies precede either returned owner.
+
+Callers bind the intended map pair and common budget and retain the budget's
+synchronous refund-notification deferral scope. This primitive covers closed
+insertion, not removal, clear, arbitrary payload mutation, touch-key storage,
+MV/World activation or complete carrier admission.
+
+Borrowed writer/checkpoint `try_insert_with_undo_admitted` uses the same pair
+planner and executor without releasing either physical writer. Nested applies
+transfer original saved buffers to their matching parent checkpoints. A stack
+failure guard outlives both child checkpoints and marks both cursors unusable on
+unwind, including cleanup after one apply. Typed refusal preserves both inputs
+and cursors. The caller must enclose the entire original writer lifetime in its
+common budget's refund-notification deferral scope; a scope around only one edit
+is insufficient. Ordered MV touch-key admission remains a separate prerequisite.

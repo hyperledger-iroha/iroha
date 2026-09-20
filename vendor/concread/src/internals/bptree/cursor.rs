@@ -64,19 +64,19 @@ where
 }
 
 unsafe impl<
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    M: CursorMode<K, V>,
-> Send for SuperBlock<K, V, M>
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V>,
+    > Send for SuperBlock<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-    K: Clone + Ord + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
-    M: CursorMode<K, V>,
-> Sync for SuperBlock<K, V, M>
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V>,
+    > Sync for SuperBlock<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -192,19 +192,19 @@ where
 }
 
 unsafe impl<
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    M: CursorMode<K, V>,
-> Send for CursorRead<K, V, M>
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V>,
+    > Send for CursorRead<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-    K: Clone + Ord + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
-    M: CursorMode<K, V>,
-> Sync for CursorRead<K, V, M>
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V>,
+    > Sync for CursorRead<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -227,19 +227,19 @@ where
 }
 
 unsafe impl<
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    M: CursorMode<K, V> + Send,
-> Send for CursorWrite<K, V, M>
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V> + Send,
+    > Send for CursorWrite<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-    K: Clone + Ord + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
-    M: CursorMode<K, V> + Send + Sync,
-> Sync for CursorWrite<K, V, M>
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V> + Send + Sync,
+    > Sync for CursorWrite<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -563,6 +563,49 @@ impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
                 drop(old);
             }
         }
+    }
+
+    /// Observe the original tracking allocations in custody regression tests.
+    #[cfg(test)]
+    pub(crate) fn admitted_tracking_addresses(&self) -> [usize; 2] {
+        self.assert_operable();
+        [
+            self.first_seen.as_ptr() as usize,
+            self.last_seen
+                .as_ref()
+                .expect("original retirement buffer")
+                .as_ptr() as usize,
+        ]
+    }
+
+    /// Move the completed edit's exact provider into a closed joined operation.
+    /// Keep failure armed through final cleanup under both original writers.
+    pub(crate) fn take_completed_admitted_funding(&mut self) -> P {
+        assert!(
+            self.edit_failed,
+            "only a completed unsealed edit can transfer funding"
+        );
+        self.funding.0.take().expect("original completed provider")
+    }
+
+    /// Seal after the one moved provider has been destroyed successfully.
+    /// Both original checkpoints and writer guards remain held by the caller.
+    pub(crate) fn seal_joined_admitted_edit(&mut self) {
+        assert!(
+            self.edit_failed,
+            "joined edit must remain unsealed through cleanup"
+        );
+        assert!(
+            self.funding.0.is_none(),
+            "joined remainder must have moved out"
+        );
+        self.edit_failed = false;
+    }
+
+    /// Keep a caught joined-operation unwind from exposing either partial cursor.
+    /// This is infallible and does not release storage or invoke user callbacks.
+    pub(crate) fn poison_joined_edit(&mut self) {
+        self.edit_failed = true;
     }
 
     /// Seal the one closed edit, returning only unused original admission.

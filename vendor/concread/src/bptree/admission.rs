@@ -7,6 +7,10 @@ use crate::internals::lincowcell::{InitialCharges, WriterAdmission, WriterCharge
 use crossbeam_utils::CachePadded;
 use std::alloc::Layout;
 
+#[path = "pair_admission.rs"]
+mod pair_admission;
+pub use pair_admission::PairInsertError;
+
 /// Checked sum of actual requested allocation layouts, not encoded sizes or RSS.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllocationDemand {
@@ -547,6 +551,63 @@ where
     }
 }
 
+struct EditPlan {
+    demand: AllocationDemand,
+    first: Option<TrackingGrowth>,
+    last: Option<TrackingGrowth>,
+}
+
+fn plan_edit<K, V, P>(
+    cursor: &CursorWrite<K, V, Prepaid<P>>,
+    key: &K,
+) -> Result<EditPlan, PlanningError>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V>,
+{
+    cursor.assert_operable();
+    // SAFETY: the exclusive original writer retains its base and tree. The
+    // path planner conservatively includes a clone at every level, even when
+    // a caller will advance the private generation through a checkpoint.
+    let plan = unsafe { plan_tree_insert::<K, V, P>(cursor.get_root(), cursor.len(), key) }?;
+    let mut demand = plan.tree_demand;
+    let [(first_len, first_capacity), (last_len, last_capacity)] = cursor.admitted_tracking();
+    let first =
+        plan_tracking_growth::<K, V, P>(first_len, first_capacity, plan.first, &mut demand)?;
+    let last = plan_tracking_growth::<K, V, P>(last_len, last_capacity, plan.last, &mut demand)?;
+    Ok(EditPlan {
+        demand,
+        first,
+        last,
+    })
+}
+
+// Consume only a plan made under this same held original writer. No caller can
+// mutate its tree/tracking between planning and execution; a private checkpoint
+// may advance only its generation, covered by the full-path clone bound.
+fn execute_edit<K, V, P>(
+    cursor: &mut CursorWrite<K, V, Prepaid<P>>,
+    key: K,
+    value: V,
+    mut provider: P,
+    plan: EditPlan,
+    saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+) -> Option<V>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V>,
+{
+    let first = allocate_tracking::<K, V, P>(plan.first, &mut provider);
+    let last = allocate_tracking::<K, V, P>(plan.last, &mut provider);
+    cursor.begin_admitted_edit();
+    cursor.resume_admitted_funding(provider, first, last, saved);
+    cursor
+        .try_insert(key, value)
+        .unwrap_or_else(|_| unreachable!("complete tracking bound planned under original writer"))
+}
+
 fn edit_admitted<K, V, P, E>(
     cursor: &mut CursorWrite<K, V, Prepaid<P>>,
     key: K,
@@ -559,32 +620,17 @@ where
     V: Clone,
     P: ClonePlanning<K, V>,
 {
-    cursor.assert_operable();
-    let preparation = (|| {
-        // SAFETY: this exclusive original cursor retains its base and root.
-        let plan = unsafe { plan_tree_insert::<K, V, P>(cursor.get_root(), cursor.len(), &key) }
-            .map_err(InsertAdmissionError::Planning)?;
-        let mut demand = plan.tree_demand;
-        let [(first_len, first_capacity), (last_len, last_capacity)] = cursor.admitted_tracking();
-        let first =
-            plan_tracking_growth::<K, V, P>(first_len, first_capacity, plan.first, &mut demand)
-                .map_err(InsertAdmissionError::Planning)?;
-        let last = plan_tracking_growth::<K, V, P>(last_len, last_capacity, plan.last, &mut demand)
-            .map_err(InsertAdmissionError::Planning)?;
-        let mut provider = admit(demand).map_err(InsertAdmissionError::Refused)?;
-        let first = allocate_tracking::<K, V, P>(first, &mut provider);
-        let last = allocate_tracking::<K, V, P>(last, &mut provider);
-        Ok((provider, first, last))
-    })();
-    let (provider, first, last) = match preparation {
-        Ok(prepared) => prepared,
-        Err(error) => return Err(((key, value), error)),
+    let plan = match plan_edit::<K, V, P>(cursor, &key) {
+        Ok(plan) => plan,
+        Err(error) => return Err(((key, value), InsertAdmissionError::Planning(error))),
     };
-    cursor.begin_admitted_edit();
-    cursor.resume_admitted_funding(provider, first, last, saved);
-    let previous = cursor
-        .try_insert(key, value)
-        .unwrap_or_else(|_| unreachable!("complete tracking bound planned under original writer"));
+    let provider = match admit(plan.demand) {
+        Ok(provider) => provider,
+        Err(error) => return Err(((key, value), InsertAdmissionError::Refused(error))),
+    };
+    let previous = execute_edit(cursor, key, value, provider, plan, saved);
+    // Keep the existing single-map contract: cleanup must finish before clearing
+    // edit_failed, including when callers catch a panic inside a borrowed writer.
     cursor.finish_admitted_funding();
     Ok(previous)
 }

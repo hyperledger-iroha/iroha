@@ -843,7 +843,7 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
     "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
     "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
-)), ("fee sponsor activation and prospective account bootstrap", (
+)), ("fee sponsor activation and public fee admission", (
     "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
     "smartcontracts::isi::world::isi::tests::fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards",
     "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap",
@@ -854,6 +854,7 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "state::tests::fee_sponsor_revision_activation_materializes_at_scheduled_block_height",
     "state::tests::fee_sponsor_revision_activation_waits_for_old_lease_to_drain",
     "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
+    "block::tests::public_contract_creation_fees::public_contract_artifact_stages_pay_fees_without_management_grants",
 )),)
 CORE_ADMISSION_STARTUP_STAGES += (("completed consensus outputs after durable restart", (
     "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
@@ -1648,6 +1649,13 @@ class SelectedRegressionFailures(CheckError):
                          + "; ".join(self.failures))
 
 
+def native_package_root(root: Path, package: str) -> Path:
+    """Bind each maintained native package to its one captured source owner."""
+    if package not in {target[3][1] for target in HARNESS_TARGETS.values()}:
+        raise CheckError("native package lacks a maintained source owner")
+    return root / ("vendor" if package == "concread" else "crates") / package
+
+
 def shipping_harnesses(root: Path) -> tuple[str, ...]:
     """Reconcile shipping binaries with manifests and early native compilation.
 
@@ -1676,7 +1684,7 @@ def shipping_harnesses(root: Path) -> tuple[str, ...]:
                        and arguments == ["-p", package, "--bin", name]]
             if len(matches) != 1:
                 raise CheckError("shipping binary lacks exact early native coverage: " + name)
-            package_root = root / "crates" / package
+            package_root = native_package_root(root, package)
             manifest = tomllib.loads((package_root / "Cargo.toml").read_text())
             targets = [target for target in manifest.get("bin", []) if target.get("name") == name]
             if manifest.get("package", {}).get("name") != package or len(targets) != 1:
@@ -1976,11 +1984,24 @@ MV_MAP_STAGES = (("original owned map successors across refusal and publication"
     'foreign_stale_and_equal_content_aba_refusals_return_the_exact_original_owner',
     'detached_owner_keeps_shared_nodes_after_source_drop_and_cross_thread_transfer',
     'old_reader_chain_retains_removed_payloads_across_splits_abort_and_later_commits',
+    'final_map_destruction_allocates_nothing_and_frees_every_original_layout',
+    'retained_reader_chain_and_final_tree_reclamation_do_not_allocate',
+    'final_detached_owner_reclaims_unpublished_nodes_and_retained_root_without_allocation',
+    'stale_detached_owner_reclaims_its_old_base_and_newer_committed_root_without_allocation',
     'sibling_candidate_cannot_adopt_after_another_commit_but_retains_its_shared_base',
     'poisoned_writer_refuses_adoption_without_consuming_the_original_generation',
     'clear_successor_preserves_old_reader_until_its_exact_payloads_are_released',
     'scalar_detach_contention_retry_abort_and_commit_allocate_no_new_successor',
     'fresh_map_first_commit_without_a_reader_allocates_no_new_successor',
+    'storage_transaction_abort_restores_both_parent_trees_without_allocating_or_cloning',
+    'storage_transaction_apply_keeps_original_current_and_undo_payloads_without_allocating',
+    'caught_transaction_preimage_clone_panic_cannot_apply_partial_touches',
+    'caught_remove_query_destructor_panic_cannot_apply_partial_transaction',
+    'caught_block_insert_preimage_panic_cannot_publish_an_unrevertible_mutation',
+    'caught_block_remove_preimage_panic_cannot_publish_an_unrevertible_mutation',
+    'caught_block_mutable_preimage_panic_cannot_reuse_or_publish_the_owner',
+    'caught_block_query_destructor_panic_cannot_commit_or_detach',
+    'caught_child_undo_cursor_panic_cannot_publish_the_healthy_current_tree',
 )),)
 
 
@@ -2109,6 +2130,10 @@ MV_ADMITTED_MAP_STAGES = (
         'admitted_empty_writer_starts_without_edits_and_grows_under_separate_admission',
         'admitted_populated_writer_shares_original_entries_and_aborts_without_allocations',
         'admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_demand',
+        'pair_complete_demand_refusal_preserves_original_inputs_and_exact_budget_retry',
+        'pair_first_none_and_some_preimages_survive_replacement_growth_and_reader_custody',
+        'pair_callback_and_nested_clone_panics_preserve_both_published_roots_and_reclaim_private_storage',
+        'pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission',
     )),
 )
 
@@ -2135,6 +2160,31 @@ CONCREAD_STAGES = (
         'internals::bptree::cursor::checkpoint::tests::nested_apply_transfers_original_buffers_and_outer_abort_restores_them',
         'internals::bptree::cursor::checkpoint::tests::applied_newest_tag_survives_and_sibling_reuse_follows_actual_child_reclamation',
         'internals::bptree::cursor::checkpoint::tests::exhausted_private_tag_refuses_without_allocating_or_changing_any_owner',
+        'internals::bptree::cursor::checkpoint::tests::untracked_final_generation_refuses_nested_checkpoint_and_restores_parent',
+        'internals::bptree::cursor::checkpoint::tests::untracked_abort_restores_parent_nodes_and_cuts_without_allocating_after_growth',
+        'internals::bptree::cursor::checkpoint::tests::public_untracked_checkpoint_reads_saved_values_and_applies_without_allocation',
+        'internals::bptree::cursor::checkpoint::tests::caught_untracked_insert_remove_and_mutable_clone_panics_fail_the_original_cursor',
+        'internals::bptree::cursor::checkpoint::tests::untracked_checkpoint_retains_only_live_rollback_metadata',
+    )),
+    ('joint current and undo admission custody', (
+        'bptree::admission::pair_admission::tests::exact_joined_limit_and_one_byte_below_preserve_original_owners',
+        'bptree::admission::pair_admission::tests::joined_growth_keeps_first_none_and_some_without_rewriting_existing_undo',
+        'bptree::admission::pair_admission::tests::both_checkpoints_abort_to_prior_private_roots_without_credit',
+        'bptree::admission::pair_admission::tests::undo_generation_is_required_only_for_missing_first_preimage',
+        'bptree::admission::pair_admission::tests::current_generation_refusal_preserves_both_inputs_before_callback',
+        'bptree::admission::pair_admission::tests::foreign_stale_busy_and_poisoned_roles_refuse_before_joined_admission',
+        'bptree::admission::pair_admission::tests::callback_clone_and_remainder_drop_panics_poison_both_without_publication',
+        'bptree::admission::pair_admission::tests::single_borrowed_edit_keeps_failure_armed_through_provider_drop',
+        'bptree::admission::pair_admission::tests::joined_sum_rejects_byte_and_allocation_overflow_without_changing_demand',
+    )),
+    ('borrowed current and undo admission custody', (
+        'bptree::admission::pair_admission::tests::borrowed::borrowed_writers_keep_original_locks_and_first_preimages',
+        'bptree::admission::pair_admission::tests::borrowed::parent_refusal_and_full_budget_abort_preserve_exact_original_buffers',
+        'bptree::admission::pair_admission::tests::borrowed::parent_apply_keeps_private_successors_and_outer_abort_restores_custody',
+        'bptree::admission::pair_admission::tests::borrowed::borrowed_parent_generation_refuses_before_callback_and_skips_existing_undo',
+        'bptree::admission::pair_admission::tests::borrowed::caught_callback_clone_and_provider_panics_invalidate_both_borrowed_parents',
+        'bptree::admission::pair_admission::tests::borrowed::first_and_second_apply_cleanup_failures_invalidate_both_attached_writers',
+        'bptree::admission::pair_admission::tests::borrowed::prefailed_parent_entry_invalidates_the_other_original_cursor_before_admission',
     )),
 )
 
@@ -2999,7 +3049,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                        "iroha3d-message-control": "irohad"}.get(selection)
             if package is None:
                 package = HARNESS_TARGETS[selection][3][1]
-            if record["manifest_path"] != str(root / "crates" / package / "Cargo.toml"):
+            if record["manifest_path"] != str(native_package_root(root, package) / "Cargo.toml"):
                 raise CheckError("native Cargo artifact manifest differs from the selected source")
             path = Path(record["executable"])
             if (not path.is_absolute() or path.resolve(strict=True) != path

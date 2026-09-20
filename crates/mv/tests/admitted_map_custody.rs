@@ -1600,3 +1600,607 @@ fn admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_deman
     reclaimed_since(0);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+// Proposed integration witnesses for the closed original current/undo insertion.
+// This tests finite MV credits supplied to Concread; it is not a Storage adapter.
+use concread::bptree::PairInsertError;
+
+thread_local! {
+    static PANIC_PAIR_UNDO_VALUE: Cell<bool> = const { Cell::new(false) };
+}
+
+impl NodeCloning<Payload, Option<Payload>> for Policy {
+    fn clone_key(&mut self, key: &Payload) -> Payload {
+        self.counters.keys.fetch_add(1, SeqCst);
+        self.copy(key)
+    }
+
+    fn clone_value(&mut self, value: &Option<Payload>) -> Option<Payload> {
+        value.as_ref().map(|value| {
+            self.counters.values.fetch_add(1, SeqCst);
+            let copied = self.copy(value);
+            assert!(
+                !PANIC_PAIR_UNDO_VALUE.with(|flag| flag.replace(false)),
+                "injected actual undo payload clone panic"
+            );
+            copied
+        })
+    }
+}
+
+impl ClonePlanning<Payload, Option<Payload>> for Policy {
+    fn plan_key(key: &Payload, demand: &mut AllocationDemand) -> Result<(), PlanningError> {
+        demand.add_layout(key.layout())
+    }
+
+    fn plan_value(
+        value: &Option<Payload>,
+        demand: &mut AllocationDemand,
+    ) -> Result<(), PlanningError> {
+        if let Some(value) = value {
+            demand.add_layout(value.layout())?;
+        }
+        Ok(())
+    }
+}
+
+type UndoMap = BptreeMap<Payload, Option<Payload>, Prepaid<Policy>>;
+type UndoOwned = BptreeMapOwned<Payload, Option<Payload>, Prepaid<Policy>>;
+
+fn undo_map(budget: &AllocationBudget, counters: &Arc<Counters>) -> UndoMap {
+    budget.with_deferred_refund_notifications(|| {
+        UndoMap::try_new_with_node_custody(|demand| Policy::admit(budget, counters, demand, None))
+            .unwrap()
+    })
+}
+
+fn undo_start(map: &UndoMap, budget: &AllocationBudget, counters: &Arc<Counters>) -> UndoOwned {
+    budget.with_deferred_refund_notifications(|| {
+        map.try_write_admitted(|demand| Policy::admit(budget, counters, demand, None))
+            .unwrap_or_else(|error| panic!("original undo start refused: {error:?}"))
+            .detach()
+    })
+}
+
+fn undo_commit(map: &UndoMap, budget: &AllocationBudget, owner: UndoOwned) {
+    without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            map.try_write_owned(owner)
+                .unwrap_or_else(|_| panic!("original undo owner refused"))
+                .commit();
+        });
+    });
+}
+
+fn pair_edit(
+    maps: (&Map, &UndoMap),
+    budget: &AllocationBudget,
+    counters: &Arc<Counters>,
+    owners: (Owned, UndoOwned),
+    input: (Payload, Payload),
+) -> ((Owned, UndoOwned), Option<Payload>) {
+    let start = NEXT_RECORD.load(SeqCst);
+    let calls = counters.admissions.load(SeqCst);
+    let mut complete_demand = None;
+    let (result, allocations) = counted(|| {
+        budget.with_deferred_refund_notifications(|| {
+            maps.0
+                .try_insert_with_undo_owned_admitted(
+                    owners.0,
+                    maps.1,
+                    owners.1,
+                    input.0,
+                    input.1,
+                    |demand| {
+                        assert!(complete_demand.replace(demand).is_none());
+                        Policy::admit(budget, counters, demand, None)
+                    },
+                )
+                .unwrap_or_else(|(_, error)| panic!("joined insertion refused: {error:?}"))
+        })
+    });
+    let complete_demand = complete_demand.unwrap();
+    assert_eq!(counters.admissions.load(SeqCst), calls + 1);
+    assert_eq!(allocations, NEXT_RECORD.load(SeqCst) - start);
+    assert!(allocations <= complete_demand.allocations());
+    let actual_bytes: usize = RECORDS[start..NEXT_RECORD.load(SeqCst)]
+        .iter()
+        .map(|record| record.bytes.load(SeqCst))
+        .sum();
+    assert!(actual_bytes <= complete_demand.bytes());
+    assert_live_credits(budget);
+    result
+}
+
+#[test]
+fn pair_complete_demand_refusal_preserves_original_inputs_and_exact_budget_retry() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let current = map(&budget, &counters);
+    let undo = undo_map(&budget, &counters);
+    let published = insert(&current, &budget, &counters, 7);
+    commit(&current, &budget, published);
+    let old = current.read();
+    let old_pointer = old.get(&7).unwrap().pointer();
+    let baseline = budget.reserved_bytes();
+    let private_start = NEXT_RECORD.load(SeqCst);
+    let owner = admitted_writer_start(&current, &budget, &counters);
+    let undo_owner = undo_start(&undo, &budget, &counters);
+    let (key, mut value) = input(&budget, 7);
+    value.bytes.fill(0xb7);
+    let input_pointers = (key.pointer(), value.pointer());
+    let clones = (counters.keys.load(SeqCst), counters.values.load(SeqCst));
+    let records = NEXT_RECORD.load(SeqCst);
+    let before = budget.reserved_bytes();
+    let mut planned = None;
+    let mut probes = 0;
+    let ((owner, undo_owner, key, value), error) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            current
+                .try_insert_with_undo_owned_admitted(
+                    owner,
+                    &undo,
+                    undo_owner,
+                    key,
+                    value,
+                    |demand| {
+                        probes += 1;
+                        planned = Some(demand);
+                        Err::<Policy, ()>(())
+                    },
+                )
+                .err()
+                .expect("the complete probe must refuse before either edit")
+        })
+    });
+    assert!(matches!(error, PairInsertError::Refused(())));
+    assert_eq!(probes, 1);
+    let demand = planned.unwrap();
+    assert!(demand.bytes() > 0 && demand.allocations() > 0);
+    assert_eq!((key.pointer(), value.pointer()), input_pointers);
+    assert_eq!(owner.get(&7).unwrap().pointer(), old_pointer);
+    assert!(undo_owner.to_snapshot().is_empty());
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    assert_eq!(budget.reserved_bytes(), before);
+    assert_eq!(
+        (counters.keys.load(SeqCst), counters.values.load(SeqCst)),
+        clones
+    );
+
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - before - demand.bytes() + 1)
+        .unwrap();
+    let held = budget.reserved_bytes();
+    let calls = counters.admissions.load(SeqCst);
+    let ((owner, undo_owner, key, value), error) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            current
+                .try_insert_with_undo_owned_admitted(
+                    owner,
+                    &undo,
+                    undo_owner,
+                    key,
+                    value,
+                    |observed| {
+                        assert_eq!(observed, demand);
+                        Policy::admit(&budget, &counters, observed, None)
+                    },
+                )
+                .err()
+                .expect("one byte below the joined demand must refuse")
+        })
+    });
+    let PairInsertError::Refused(AllocationRefusal::Capacity {
+        requested_bytes, ..
+    }) = error
+    else {
+        panic!("expected original joined capacity refusal");
+    };
+    assert_eq!(requested_bytes, demand.bytes());
+    assert_eq!(counters.admissions.load(SeqCst), calls + 1);
+    assert_eq!(budget.reserved_bytes(), held);
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    assert_eq!((key.pointer(), value.pointer()), input_pointers);
+    assert_eq!(owner.get(&7).unwrap().pointer(), old_pointer);
+    assert!(undo_owner.to_snapshot().is_empty());
+    assert_eq!(
+        (counters.keys.load(SeqCst), counters.values.load(SeqCst)),
+        clones
+    );
+    budget.with_deferred_refund_notifications(|| drop(blocker));
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - before - demand.bytes())
+        .unwrap();
+    let calls = counters.admissions.load(SeqCst);
+    let (((owner, undo_owner), previous), allocations) = counted(|| {
+        budget.with_deferred_refund_notifications(|| {
+            current
+                .try_insert_with_undo_owned_admitted(
+                    owner,
+                    &undo,
+                    undo_owner,
+                    key,
+                    value,
+                    |observed| {
+                        assert_eq!(observed, demand);
+                        Policy::admit(&budget, &counters, observed, None)
+                    },
+                )
+                .unwrap_or_else(|(_, error)| panic!("exact joined budget refused: {error:?}"))
+        })
+    });
+    assert_eq!(counters.admissions.load(SeqCst), calls + 1);
+    assert_eq!(allocations, NEXT_RECORD.load(SeqCst) - records);
+    assert!(allocations <= demand.allocations());
+    assert_eq!(owner.get(&7).unwrap().pointer(), input_pointers.1);
+    assert!(
+        owner
+            .get(&7)
+            .unwrap()
+            .bytes
+            .iter()
+            .all(|byte| *byte == 0xb7)
+    );
+    let first = undo_owner.get(&7).unwrap().as_ref().unwrap();
+    assert!(first.bytes.iter().all(|byte| *byte == 7));
+    assert_ne!(first.pointer(), old_pointer);
+    assert_eq!(old.get(&7).unwrap().pointer(), old_pointer);
+    assert_eq!(current.read().get(&7).unwrap().pointer(), old_pointer);
+    assert!(undo.read().is_empty());
+    budget.with_deferred_refund_notifications(|| drop(blocker));
+    assert_live_credits(&budget);
+    let blocker = budget
+        .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+        .unwrap();
+    assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+    without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| drop((owner, undo_owner, previous)))
+    });
+    budget.with_deferred_refund_notifications(|| drop(blocker));
+    assert_eq!(budget.reserved_bytes(), baseline);
+    reclaimed_since(private_start);
+    assert!(!current.is_poisoned() && !undo.is_poisoned());
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop(old)));
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop((current, undo))));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn pair_first_none_and_some_preimages_survive_replacement_growth_and_reader_custody() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(32 << 20);
+    let counters = Arc::new(Counters::default());
+    let current = map(&budget, &counters);
+    let undo = undo_map(&budget, &counters);
+    let published = insert(&current, &budget, &counters, 0);
+    commit(&current, &budget, published);
+    let old = current.read();
+    let original_pointer = old.get(&0).unwrap().pointer();
+    let original_id = old.get(&0).unwrap().id();
+    let old_undo = undo.read();
+    let mut owners = (
+        admitted_writer_start(&current, &budget, &counters),
+        undo_start(&undo, &budget, &counters),
+    );
+    for order in [0, 64] {
+        let (key, mut value) = input(&budget, order);
+        value.bytes.fill(0x91);
+        let value_pointer = value.pointer();
+        let (next, previous) =
+            pair_edit((&current, &undo), &budget, &counters, owners, (key, value));
+        assert_eq!(previous.is_some(), order == 0);
+        assert_eq!(next.0.get(&order).unwrap().pointer(), value_pointer);
+        budget.with_deferred_refund_notifications(|| drop(previous));
+        owners = next;
+    }
+    assert!(owners.1.get(&64).unwrap().is_none());
+    let undo_before: [(usize, usize, Option<usize>); 2] = std::array::from_fn(|index| {
+        let (key, value) = owners.1.iter().nth(index).unwrap();
+        (
+            key.order,
+            key.pointer(),
+            value.as_ref().map(Payload::pointer),
+        )
+    });
+    for marker in [0xa1, 0xb2, 0xc3] {
+        for order in [0, 64] {
+            let (key, mut value) = input(&budget, order);
+            value.bytes.fill(marker);
+            let value_pointer = value.pointer();
+            let (next, previous) =
+                pair_edit((&current, &undo), &budget, &counters, owners, (key, value));
+            assert!(previous.is_some());
+            assert_eq!(next.0.get(&order).unwrap().pointer(), value_pointer);
+            assert_eq!(next.1.to_snapshot().len(), 2);
+            for ((key, value), expected) in next.1.iter().zip(undo_before) {
+                assert_eq!(
+                    (
+                        key.order,
+                        key.pointer(),
+                        value.as_ref().map(Payload::pointer)
+                    ),
+                    expected
+                );
+            }
+            assert!(
+                next.1
+                    .get(&0)
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .bytes
+                    .iter()
+                    .all(|byte| *byte == 0)
+            );
+            budget.with_deferred_refund_notifications(|| drop(previous));
+            owners = next;
+        }
+    }
+    for order in 1..64 {
+        let (next, previous) = pair_edit(
+            (&current, &undo),
+            &budget,
+            &counters,
+            owners,
+            input(&budget, order),
+        );
+        assert!(previous.is_none());
+        assert!(next.1.get(&order).unwrap().is_none());
+        owners = next;
+    }
+    assert_eq!(owners.0.to_snapshot().len(), 65);
+    assert_eq!(owners.1.to_snapshot().len(), 65);
+    assert_eq!(current.read().len(), 1);
+    assert!(undo.read().is_empty());
+    // The pair API returns private owners. Each real existing publisher is
+    // invoked explicitly; this does not invent an atomic MV publication API.
+    commit(&current, &budget, owners.0);
+    undo_commit(&undo, &budget, owners.1);
+    assert_eq!(current.read().len(), 65);
+    assert_eq!(undo.read().len(), 65);
+    assert_eq!(old.get(&0).unwrap().pointer(), original_pointer);
+    assert!(old_undo.is_empty());
+    assert!(!RECORDS[original_id].freed.load(SeqCst));
+    assert!(!RECORDS[original_id].refunded.load(SeqCst));
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop((old, old_undo))));
+    assert!(RECORDS[original_id].freed.load(SeqCst));
+    assert!(RECORDS[original_id].refunded.load(SeqCst));
+    assert_live_credits(&budget);
+    without_allocations(|| budget.with_deferred_refund_notifications(|| drop((current, undo))));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn pair_callback_and_nested_clone_panics_preserve_both_published_roots_and_reclaim_private_storage()
+{
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for phase in 0..4 {
+        reset();
+        PANIC_PAIR_UNDO_VALUE.with(|flag| flag.set(false));
+        let budget = AllocationBudget::new(8 << 20);
+        let counters = Arc::new(Counters::default());
+        let current = map(&budget, &counters);
+        let undo = undo_map(&budget, &counters);
+        for order in [0, 1] {
+            let owner = insert(&current, &budget, &counters, order);
+            commit(&current, &budget, owner);
+        }
+        let (key, value) = input(&budget, 99);
+        let (undo_owner, replaced) = budget.with_deferred_refund_notifications(|| {
+            undo.try_insert_admitted(key, Some(value), |demand| {
+                Policy::admit(&budget, &counters, demand, None)
+            })
+            .unwrap_or_else(|_| panic!("published original undo fixture"))
+        });
+        assert!(replaced.is_none());
+        undo_commit(&undo, &budget, undo_owner);
+        let old = current.read();
+        let old_undo = undo.read();
+        let current_pointer = old.get(&0).unwrap().pointer();
+        let undo_pointer = old_undo.get(&99).unwrap().as_ref().unwrap().pointer();
+        let baseline = budget.reserved_bytes();
+        let start = NEXT_RECORD.load(SeqCst);
+        let owners = (
+            admitted_writer_start(&current, &budget, &counters),
+            undo_start(&undo, &budget, &counters),
+        );
+        let (key, value) = input(&budget, 0);
+        let mut callbacks = 0;
+        PANIC_PAIR_UNDO_VALUE.with(|flag| flag.set(phase == 3));
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            budget.with_deferred_refund_notifications(|| {
+                let _ = current.try_insert_with_undo_owned_admitted(
+                    owners.0,
+                    &undo,
+                    owners.1,
+                    key,
+                    value,
+                    |demand| {
+                        callbacks += 1;
+                        assert_ne!(phase, 0, "injected joined callback panic");
+                        // First-preimage key is copy1, its old value copy2,
+                        // then the current leaf begins before any undo edit.
+                        let fail_at = match phase {
+                            1 => Some(1),
+                            2 => Some(3),
+                            _ => None,
+                        };
+                        Policy::admit(&budget, &counters, demand, fail_at)
+                    },
+                );
+            });
+        }));
+        assert!(outcome.is_err(), "phase {phase} must actually unwind");
+        assert_eq!(callbacks, 1);
+        assert!(
+            !PANIC_PAIR_UNDO_VALUE.with(|flag| flag.replace(false)),
+            "undo payload fault was not reached"
+        );
+        assert!(current.is_poisoned() && undo.is_poisoned());
+        assert_eq!(current.read().len(), 2);
+        assert_eq!(undo.read().len(), 1);
+        assert_eq!(current.read().get(&0).unwrap().pointer(), current_pointer);
+        assert_eq!(
+            undo.read().get(&99).unwrap().as_ref().unwrap().pointer(),
+            undo_pointer
+        );
+        assert!(undo.read().get(&0).is_none());
+        assert_eq!(budget.reserved_bytes(), baseline);
+        reclaimed_since(start);
+        assert_live_credits(&budget);
+        without_allocations(|| budget.with_deferred_refund_notifications(|| drop((old, old_undo))));
+        without_allocations(|| budget.with_deferred_refund_notifications(|| drop((current, undo))));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let current = map(&budget, &counters);
+    let undo = undo_map(&budget, &counters);
+    let other_current = map(&budget, &counters);
+    let other_undo = undo_map(&budget, &counters);
+    let owner = insert(&current, &budget, &counters, 7);
+    let (undo_key, undo_value) = input(&budget, 99);
+    let (undo_owner, old) = budget.with_deferred_refund_notifications(|| {
+        undo.try_insert_admitted(undo_key, Some(undo_value), |demand| {
+            Policy::admit(&budget, &counters, demand, None)
+        })
+        .unwrap_or_else(|_| panic!("original private undo"))
+    });
+    assert!(old.is_none());
+    let (key, value) = input(&budget, 8);
+    let pointers = (
+        owner.get(&7).unwrap().pointer(),
+        undo_owner.get(&99).unwrap().as_ref().unwrap().pointer(),
+        key.pointer(),
+        value.pointer(),
+    );
+    let assert_identity =
+        |owner: &Owned, undo_owner: &UndoOwned, key: &Payload, value: &Payload| {
+            assert_eq!(
+                (
+                    owner.get(&7).unwrap().pointer(),
+                    undo_owner.get(&99).unwrap().as_ref().unwrap().pointer(),
+                    key.pointer(),
+                    value.pointer()
+                ),
+                pointers
+            );
+            assert_eq!(owner.to_snapshot().len(), 1);
+            assert_eq!(undo_owner.to_snapshot().len(), 1);
+            assert!(current.read().is_empty() && undo.read().is_empty());
+        };
+    let never = |_| -> Result<Policy, ()> { panic!("invalid owner must not reach pair admission") };
+    let records = NEXT_RECORD.load(SeqCst);
+    let calls = counters.admissions.load(SeqCst);
+    let ((owner, undo_owner, key, value), error) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            current
+                .try_insert_with_undo_owned_admitted(
+                    owner,
+                    &other_undo,
+                    undo_owner,
+                    key,
+                    value,
+                    never,
+                )
+                .err()
+                .expect("foreign undo owner")
+        })
+    });
+    assert!(matches!(
+        error,
+        PairInsertError::Undo(OwnedWriteError::Changed)
+    ));
+    assert_identity(&owner, &undo_owner, &key, &value);
+    let ((owner, undo_owner, key, value), error) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            other_current
+                .try_insert_with_undo_owned_admitted(owner, &undo, undo_owner, key, value, never)
+                .err()
+                .expect("foreign current owner")
+        })
+    });
+    assert!(matches!(
+        error,
+        PairInsertError::Current(OwnedWriteError::Changed)
+    ));
+    assert_identity(&owner, &undo_owner, &key, &value);
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    assert_eq!(counters.admissions.load(SeqCst), calls);
+
+    let competing_undo = undo_start(&undo, &budget, &counters);
+    let records = NEXT_RECORD.load(SeqCst);
+    let calls = counters.admissions.load(SeqCst);
+    let (owner, undo_owner, key, value) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            let held = undo
+                .try_write_owned(competing_undo)
+                .unwrap_or_else(|_| panic!("undo competitor"));
+            let (inputs, error) = current
+                .try_insert_with_undo_owned_admitted(owner, &undo, undo_owner, key, value, never)
+                .err()
+                .expect("busy undo owner");
+            assert!(matches!(
+                error,
+                PairInsertError::Undo(OwnedWriteError::Busy)
+            ));
+            drop(held);
+            inputs
+        })
+    });
+    assert_identity(&owner, &undo_owner, &key, &value);
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    assert_eq!(counters.admissions.load(SeqCst), calls);
+    let competing_current = admitted_writer_start(&current, &budget, &counters);
+    let records = NEXT_RECORD.load(SeqCst);
+    let calls = counters.admissions.load(SeqCst);
+    let (owner, undo_owner, key, value) = without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            let held = current
+                .try_write_owned(competing_current)
+                .unwrap_or_else(|_| panic!("current competitor"));
+            let (inputs, error) = current
+                .try_insert_with_undo_owned_admitted(owner, &undo, undo_owner, key, value, never)
+                .err()
+                .expect("busy current owner");
+            assert!(matches!(
+                error,
+                PairInsertError::Current(OwnedWriteError::Busy)
+            ));
+            drop(held);
+            inputs
+        })
+    });
+    assert_identity(&owner, &undo_owner, &key, &value);
+    assert_eq!(NEXT_RECORD.load(SeqCst), records);
+    assert_eq!(counters.admissions.load(SeqCst), calls);
+    let ((owner, undo_owner), previous) = pair_edit(
+        (&current, &undo),
+        &budget,
+        &counters,
+        (owner, undo_owner),
+        (key, value),
+    );
+    assert!(previous.is_none());
+    assert_eq!(owner.get(&8).unwrap().pointer(), pointers.3);
+    assert!(undo_owner.get(&8).unwrap().is_none());
+    without_allocations(|| {
+        budget.with_deferred_refund_notifications(|| {
+            drop((owner, undo_owner, current, undo, other_current, other_undo))
+        })
+    });
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}

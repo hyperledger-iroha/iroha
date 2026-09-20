@@ -327,6 +327,7 @@ members = [
     "crates/norito/accelerators/jsonstage1_cuda",
     "crates/norito/accelerators/jsonstage1_metal",
     "crates/iroha_ffi/proc_macro",
+    "vendor/concread",
     "vendor/find_cuda_helper",
     "mochi/*",
     "data_model/samples/*",

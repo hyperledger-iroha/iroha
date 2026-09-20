@@ -128,7 +128,11 @@ mod public_contract_creation_fees {
                     .unpack(|_| {});
                 let errors = valid
                     .as_ref()
-                    .errors()
+                    .output_results()
+                    .enumerate()
+                    .filter_map(|(index, result)| {
+                        result.as_ref().err().map(|reason| (index, reason))
+                    })
                     .map(|(index, error)| format!("{index}: {error:?}"))
                     .collect::<Vec<_>>();
                 if funded && bounded {

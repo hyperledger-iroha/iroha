@@ -241,7 +241,7 @@ mod writer_start {
     use crate::internals::bptree::node::allocation_tests::without_allocations;
     use crate::internals::bptree::node::{TXID_MASK, TXID_SHF};
     use std::cell::Cell;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     thread_local! {
         static PLANS: Cell<usize> = const { Cell::new(0) };
@@ -444,12 +444,10 @@ mod writer_start {
         let map = populated(1);
         let root = map.read().inner.as_ref().get_root();
         let txid = map.read().get_txid();
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| {
-                let _writer = map.try_write_admitted(|_| Ok::<_, ()>(Policy { panic_drop: true }));
-            }))
-            .is_err()
-        );
+        assert!(catch_unwind(AssertUnwindSafe(|| {
+            let _writer = map.try_write_admitted(|_| Ok::<_, ()>(Policy { panic_drop: true }));
+        }))
+        .is_err());
         assert!(map.is_poisoned());
         assert_eq!(map.read().inner.as_ref().get_root(), root);
         assert_eq!(map.read().get_txid(), txid);

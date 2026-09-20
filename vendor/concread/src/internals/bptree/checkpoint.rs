@@ -1,6 +1,6 @@
 //! Stack-owned rollback of an original private cursor and its tracking storage.
 
-use super::{CursorMode, CursorReadOps, CursorWrite, checked_next_generation};
+use super::{checked_next_generation, CursorMode, CursorReadOps, CursorWrite};
 use crate::bptree::{MapMode, NodeCloning};
 use crate::internals::bptree::{node::Node, tracking::TrackingBuffer};
 use std::{borrow::Borrow, fmt::Debug, mem, ptr::NonNull};
@@ -79,7 +79,9 @@ pub(crate) struct CursorCheckpoint<
 impl<'a, K: Clone + Ord + Debug, V: Clone, M: MapMode + NodeCloning<K, V>>
     CursorCheckpoint<'a, K, V, M>
 {
-    pub(super) fn new(
+    // A supplied parent must be this cursor's own original saved buffer slot,
+    // obtained together through edit_parts; never pair slots from other cursors.
+    pub(crate) fn new(
         cursor: &'a mut CursorWrite<K, V, M>,
         parent: Option<&'a mut CheckpointBuffers<K, V, M>>,
     ) -> Option<Self> {
@@ -128,6 +130,15 @@ impl<'a, K: Clone + Ord + Debug, V: Clone, M: MapMode + NodeCloning<K, V>>
         &mut self,
     ) -> (&mut CursorWrite<K, V, M>, &mut CheckpointBuffers<K, V, M>) {
         self.cursor.assert_operable();
+        self.joined_edit_parts()
+    }
+
+    /// Borrow live parts before a joint guard checks either cursor's failure.
+    /// The caller must guard both returned cursors before planning or mutation;
+    /// this permits a prefailed member to invalidate its whole borrowed pair.
+    pub(crate) fn joined_edit_parts(
+        &mut self,
+    ) -> (&mut CursorWrite<K, V, M>, &mut CheckpointBuffers<K, V, M>) {
         (
             self.cursor,
             &mut self.saved.as_mut().expect("live checkpoint").buffers,
