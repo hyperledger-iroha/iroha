@@ -3016,7 +3016,7 @@ pub(crate) enum V2RecoveryError {
 /// Build the exact clean-height-one recovery boundary used by the lifecycle
 /// runner's CompleteTip restart regression.
 #[cfg(all(test, feature = "bls"))]
-pub(in crate::sumeragi) fn production_empty_genesis_complete_tip_fixture_for_test() -> (
+pub(in crate::sumeragi) fn production_genesis_complete_tip_fixture_for_test() -> (
     std::sync::Arc<crate::kura::Kura>,
     std::sync::Arc<crate::state::State>,
     crate::sumeragi::v2::VerifiedHeightContext,
@@ -3024,7 +3024,7 @@ pub(in crate::sumeragi) fn production_empty_genesis_complete_tip_fixture_for_tes
     iroha_crypto::KeyPair,
     crate::sumeragi::v2_lifecycle_coordinator::RetiredRecoveredCompleteTipActivationAuthorityV1,
 ) {
-    tests::production_empty_genesis_complete_tip_fixture()
+    tests::production_genesis_complete_tip_fixture()
 }
 
 #[cfg(test)]

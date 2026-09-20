@@ -141,7 +141,7 @@ fn complete_tip_decision_activation_requires_exact_replayed_wal() {
 fn complete_tip_decision_activation_requires_exact_replayed_wal_body() {
     let _guard = crate::sumeragi::status::rbc_status_test_guard();
     let (_kura, _state, verified, _storage, _signer, _retirement) =
-        super::super::v2_recovery::production_empty_genesis_complete_tip_fixture_for_test();
+        super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let (_, keys, _) = authenticated_context();
     let directory = TempDir::new().expect("owned CompleteTip WAL tests");
     let decision = complete_tip_decision_authority_certificate(&verified, &keys, 0xE1);
@@ -251,7 +251,7 @@ fn complete_tip_decision_activation_rejects_incomplete_pending_and_applied_state
 fn complete_tip_decision_activation_rejects_incomplete_pending_and_applied_state_body() {
     let _guard = crate::sumeragi::status::rbc_status_test_guard();
     let (_kura, _state, verified, _storage, _signer, _retirement) =
-        super::super::v2_recovery::production_empty_genesis_complete_tip_fixture_for_test();
+        super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let (_, keys, _) = authenticated_context();
     let directory = TempDir::new().expect("owned CompleteTip state tests");
     let decision = complete_tip_decision_authority_certificate(&verified, &keys, 0xE3);
@@ -337,7 +337,7 @@ fn complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cac
 fn complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cache_body() {
     let _guard = crate::sumeragi::status::rbc_status_test_guard();
     let (_kura, _state, verified, _storage, _signer, _retirement) =
-        super::super::v2_recovery::production_empty_genesis_complete_tip_fixture_for_test();
+        super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let (_, keys, _) = authenticated_context();
     let directory = TempDir::new().expect("owned CompleteTip exact-quorum tests");
     let decision = complete_tip_decision_authority_certificate(&verified, &keys, 0xE4);

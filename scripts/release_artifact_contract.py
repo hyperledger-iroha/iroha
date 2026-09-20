@@ -547,7 +547,7 @@ def stable_open_relative(
     *,
     expected: StableFile,
 ):
-    """Yield a pinned read descriptor matching an earlier stable capture."""
+    """Yield a pinned descriptor and revalidate its captured content before close."""
 
     normalized = canonical_relative_path(relative_path)
     file_fd = -1
@@ -590,6 +590,19 @@ def stable_open_relative(
                 "stable capture"
             )
         yield file_fd
+        # A same-size write can retain both timestamps on supported filesystems.
+        # Recheck the pinned bytes before accepting the stream, without changing
+        # the caller's offset. Read only the captured size plus one growth byte.
+        digest = hashlib.sha256()
+        offset = 0
+        while offset < expected.size:
+            chunk = os.pread(file_fd, min(1024 * 1024, expected.size - offset), offset)
+            if not chunk:
+                _fail(f"release artifact {normalized!r} changed while it was streamed")
+            digest.update(chunk)
+            offset += len(chunk)
+        if os.pread(file_fd, 1, expected.size) or digest.hexdigest() != expected.sha256:
+            _fail(f"release artifact {normalized!r} changed while it was streamed")
         after = os.fstat(file_fd)
         named = os.stat(
             PurePosixPath(normalized).parts[-1],

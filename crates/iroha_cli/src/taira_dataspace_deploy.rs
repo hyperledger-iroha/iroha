@@ -1595,9 +1595,13 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
     let mut report = phase_report(&plan, observations);
     if report.state == "applied_verification_pending" {
         eprintln!("[dataspace-deploy] starting fresh four-validator finality verification");
-        if let Err(error) = complete_until(apply, deadline, &mut report, |report| {
-            finality::complete(context, &plan, &journal, report, deadline)
-        }) {
+        let verification: Result<()> = (|| {
+            let mut completion = finality::Completion::new(&plan, &journal, deadline)?;
+            complete_until(apply, deadline, &mut report, |report| {
+                completion.complete(context, report)
+            })
+        })();
+        if let Err(error) = verification {
             report.state = "applied_verification_pending".into();
             report.deployment_complete = false;
             report.completion_receipt = None;

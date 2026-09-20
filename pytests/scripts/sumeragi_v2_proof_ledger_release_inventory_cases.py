@@ -786,6 +786,11 @@ def _release_inventory_fixture_paths(module, paths: tuple[Path, ...]) -> tuple[P
             "canonical G-UNIT leg/crate/test inventory SHA-256",
         ),
         (
+            "  sumeragi::v2_lane_work::tests::grouped_native_amx_prevote_local_capacity_refusal_preserves_kura_and_wsv\n",
+            "  sumeragi::v2_lane_work::tests::grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or_wsv_mutation\n",
+            "canonical G-UNIT leg/crate/test inventory SHA-256",
+        ),
+        (
             "  sumeragi::v2_core::refinement::tests::"
             "in_flight_reservation_kernel_accepts_only_identity_bound_local_owner_steps\n",
             "  sumeragi::v2_core::refinement::tests::"
@@ -1923,7 +1928,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 531
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 532
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "d56dd7d418492418aaaec6f1626bcf7f6d6aca3388f7526d76b3aac49766fd81"
+        "a2240e515a7a344da4bfcb6fddc2e1b1d0e5bb3430906efbf1671716a72ee13f"
     )
     assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
         "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
@@ -1953,7 +1958,7 @@ def test_release_inventory_constants_match_current_source_seal(
             "9700af71a07b9b6e8c935f44e6e447c3d2087f89508733c6f124a3d4beedce51"
         ),
         "height::drain_lifecycle_v2_ingress": (
-            "bbd77022da85d8d4ae7a7b1114483f3d3437e8fdbce14de7cb702b5716f26ddd"
+            "9c5e311adff6cb0bad70ecec5b233f59b6a304786fbca1c3abe79bd276acc511"
         ),
         "height_test::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign": (
             "dd96ca9fb8271e423099f6a019259cbfa524d73d86f07d1afdd377aa80dc8e76"

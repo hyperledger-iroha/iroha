@@ -374,14 +374,20 @@ fn runtime_catalog_final_overlay_rechecks_late_validator_invalidation() {
 fn runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state() {
     run_catalog_test(|| {
         let (state, keys) = catalog_fixture(InvalidMember::None);
+        // This validator consumes frozen policy and explicit World versions, not
+        // a new public State snapshot after deliberately partial metadata writes.
+        let original_nexus = state.nexus_snapshot();
         let (_, pending) = staged_catalog_fixture(&state, &keys);
         install_fixture_runtime(&state, pending.runtime_catalog.unwrap());
+        let runtime_before = state.canonical_runtime.view().get().clone();
+        let predecessor_before = state.canonical_runtime.predecessor_view().get().clone();
+        let world_before = norito::json::to_json(&state.world).unwrap();
         let mut block = state.world.block();
         validate_runtime_catalog_block_overlay(
             block.parameters.get_before_block(),
             &block,
             &state.network_id,
-            &state.nexus_snapshot(),
+            &original_nexus,
             None,
             3,
         )
@@ -391,18 +397,25 @@ fn runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state()
             .get_mut()
             .custom
             .remove(&NexusRuntimeCatalogV1::parameter_id());
+        let removed_parameters = block.parameters.get().clone();
+        let original_parameters = block.parameters.get_before_block().clone();
+        let error = validate_runtime_catalog_block_overlay(
+            block.parameters.get_before_block(),
+            &block,
+            &state.network_id,
+            &original_nexus,
+            None,
+            3,
+        )
+        .expect_err("removing a protected catalog requires a staged transition");
         assert!(
-            validate_runtime_catalog_block_overlay(
-                block.parameters.get_before_block(),
-                &block,
-                &state.network_id,
-                &state.nexus_snapshot(),
-                None,
-                3
-            )
-            .is_err()
+            matches!(error, LaneLifecycleError::RuntimeCatalog(ref reason)
+                if reason == "protected runtime catalog changed without a staged catalog transition")
         );
+        assert_eq!(block.parameters.get(), &removed_parameters);
+        assert_eq!(block.parameters.get_before_block(), &original_parameters);
         drop(block);
+        assert_eq!(norito::json::to_json(&state.world).unwrap(), world_before);
         let mut world = state.world.block();
         world
             .parameters
@@ -414,17 +427,40 @@ fn runtime_catalog_final_overlay_rejects_removal_and_unchanged_malformed_state()
                 ),
             ));
         world.commit();
+        let malformed_world = norito::json::to_json(&state.world).unwrap();
         let accepted = state.world.block();
+        let malformed_parameters = accepted.parameters.get().clone();
+        assert_eq!(
+            accepted.parameters.get_before_block(),
+            &malformed_parameters
+        );
+        let error = validate_runtime_catalog_block_overlay(
+            accepted.parameters.get_before_block(),
+            &accepted,
+            &state.network_id,
+            &original_nexus,
+            None,
+            3,
+        )
+        .expect_err("an unchanged malformed catalog cannot pass equality validation");
         assert!(
-            validate_runtime_catalog_block_overlay(
-                accepted.parameters.get_before_block(),
-                &accepted,
-                &state.network_id,
-                &state.nexus_snapshot(),
-                None,
-                3
-            )
-            .is_err()
+            matches!(error, LaneLifecycleError::RuntimeCatalog(ref reason)
+                if reason.contains("Nexus runtime catalog codec"))
+        );
+        assert_eq!(accepted.parameters.get(), &malformed_parameters);
+        assert_eq!(
+            accepted.parameters.get_before_block(),
+            &malformed_parameters
+        );
+        drop(accepted);
+        assert_eq!(
+            norito::json::to_json(&state.world).unwrap(),
+            malformed_world
+        );
+        assert_eq!(state.canonical_runtime.view().get(), &runtime_before);
+        assert_eq!(
+            state.canonical_runtime.predecessor_view().get(),
+            &predecessor_before
         );
     });
 }

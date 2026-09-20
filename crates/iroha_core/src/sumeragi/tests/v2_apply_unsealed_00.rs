@@ -3008,6 +3008,51 @@ fn committed_state_geometry_refusal_retains_source_and_requires_recovery() {
     ));
 }
 
+/// Apply nonempty genesis with authenticated physical geometry for CompleteTip recovery.
+#[cfg(feature = "bls")]
+pub(in crate::sumeragi) fn canonical_genesis_complete_tip_fixture_for_test() -> (
+    Arc<Kura>,
+    Arc<State>,
+    super::super::v2::VerifiedHeightContext,
+    Vec<KeyPair>,
+    KeyPair,
+) {
+    let fixture = Box::new(ApplyFixture::new_with_lane_lifecycle());
+    let mut store = fixture.reopen_body_store();
+    fixture
+        .execute(&mut store)
+        .expect("apply nonempty genesis through the actual State/Kura publication owner");
+    fixture.assert_complete();
+    drop(store);
+    let block = fixture
+        .kura
+        .get_block(NonZeroUsize::new(1).expect("genesis height"))
+        .expect("retain the actual executed genesis");
+    assert!(block.external_entrypoint_count() > 0);
+    assert!(
+        block
+            .committed_fragment_count()
+            .is_some_and(|count| count > 0)
+    );
+    assert_eq!(
+        fixture.kura.configured_lane_catalog_baseline().unwrap(),
+        Some(
+            iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(
+                &fixture.state.nexus_snapshot().configured_lane_catalog,
+            )
+        ),
+        "physical recovery begins with the exact admitted configured catalog"
+    );
+    let verified = verified_context_for_fixture(&fixture, &fixture.context);
+    (
+        Arc::clone(&fixture.kura),
+        Arc::clone(&fixture.state),
+        verified,
+        fixture.validator_keys.clone(),
+        fixture.genesis_key.clone(),
+    )
+}
+
 /// Apply one ordinary lane carrier through the real service for terminal ingress tests.
 pub(in crate::sumeragi) fn canonical_ordinary_terminal_fixture_for_test() -> (
     Arc<State>,

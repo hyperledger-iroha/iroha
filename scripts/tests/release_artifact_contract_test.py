@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -168,3 +169,124 @@ def test_release_manifest_reader_requires_exact_canonical_bytes() -> None:
     ).encode()
     with pytest.raises(contract.ReleaseArtifactError, match="not in canonical"):
         contract.load_canonical_release_manifest(compact)
+
+
+def test_stable_open_rechecks_consumed_content_when_timestamps_collide(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "artifact.bin"
+    original = b"original content"
+    artifact.write_bytes(original)
+    expected = contract.stable_hash_path(artifact)
+    real_stat, real_fstat = os.stat, os.fstat
+
+    def colliding_times(info):
+        if (info.st_dev, info.st_ino) != (expected.device, expected.inode):
+            return info
+        fields = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+        return SimpleNamespace(**(fields | {
+            "st_mtime_ns": expected.mtime_ns,
+            "st_ctime_ns": expected.ctime_ns,
+        }))
+
+    # Deterministically model an allowed filesystem timestamp collision; preserve
+    # every other identity field. The original source bytes are already consumed.
+    monkeypatch.setattr(contract.os, "stat", lambda *a, **k: colliding_times(real_stat(*a, **k)))
+    monkeypatch.setattr(contract.os, "fstat", lambda *a, **k: colliding_times(real_fstat(*a, **k)))
+    with pytest.raises(contract.ReleaseArtifactError, match="changed while it was streamed"):
+        with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
+            assert os.read(fd, expected.size) == original
+            artifact.write_bytes(b"x" * expected.size)
+            assert artifact.stat().st_mtime_ns == expected.mtime_ns
+            assert artifact.stat().st_ctime_ns == expected.ctime_ns
+    assert artifact.read_bytes() != original
+
+
+def test_stable_open_final_hash_preserves_offset_and_bounds_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "artifact.bin"
+    payload = b"a" * (2 * 1024 * 1024 + 17)
+    artifact.write_bytes(payload)
+    expected = contract.stable_hash_path(artifact)
+    original_pread = os.pread
+    requests = []
+
+    def bounded_read(fd: int, size: int, offset: int) -> bytes:
+        assert os.lseek(fd, 0, os.SEEK_CUR) == 3
+        chunk = original_pread(fd, size, offset)
+        assert os.lseek(fd, 0, os.SEEK_CUR) == 3
+        requests.append((size, offset, len(chunk)))
+        return chunk
+
+    monkeypatch.setattr(contract.os, "pread", bounded_read)
+    with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
+        assert os.read(fd, 3) == payload[:3]
+    assert all(0 < size <= 1024 * 1024 for size, _, _ in requests)
+    assert sum(length for _, _, length in requests) == expected.size
+    assert requests[-1] == (1, expected.size, 0)
+    assert sum(size for size, _, _ in requests) == expected.size + 1
+
+
+@pytest.mark.parametrize("replacement", (b"", b"short", b"x" * 64))
+def test_stable_open_rejects_truncation_or_growth_with_bounded_final_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: bytes,
+) -> None:
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"original content")
+    expected = contract.stable_hash_path(artifact)
+    original_pread = os.pread
+    requests = []
+
+    def bounded_read(fd: int, size: int, offset: int) -> bytes:
+        requests.append((size, offset))
+        return original_pread(fd, size, offset)
+
+    monkeypatch.setattr(contract.os, "pread", bounded_read)
+    with pytest.raises(contract.ReleaseArtifactError, match="changed while it was streamed"):
+        with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
+            assert os.read(fd, expected.size) == b"original content"
+            artifact.write_bytes(replacement)
+    assert requests
+    assert all(0 < size <= 1024 * 1024 and offset + size <= expected.size + 1
+               for size, offset in requests)
+    if len(replacement) > expected.size:
+        assert sum(size for size, _ in requests) == expected.size + 1
+
+
+@pytest.mark.parametrize("mutation", ("mode", "path"))
+def test_stable_open_keeps_metadata_and_path_checks_after_final_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    artifact = tmp_path / "artifact.bin"
+    payload = b"original content"
+    artifact.write_bytes(payload)
+    expected = contract.stable_hash_path(artifact)
+    original_pread = os.pread
+    changed = False
+
+    def mutate_after_hash(fd: int, size: int, offset: int) -> bytes:
+        nonlocal changed
+        chunk = original_pread(fd, size, offset)
+        if offset == expected.size and size == 1 and not chunk:
+            changed = True
+            if mutation == "mode":
+                artifact.chmod(0o400)
+            else:
+                replacement = artifact.with_suffix(".next")
+                replacement.write_bytes(payload)
+                replacement.chmod(expected.mode)
+                os.replace(replacement, artifact)
+        return chunk
+
+    monkeypatch.setattr(contract.os, "pread", mutate_after_hash)
+    with pytest.raises(contract.ReleaseArtifactError, match="changed while it was streamed"):
+        with contract.stable_open_relative(tmp_path, artifact.name, expected=expected) as fd:
+            assert os.read(fd, expected.size) == payload
+    assert changed
