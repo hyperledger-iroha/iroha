@@ -421,3 +421,6 @@ impl Drop for AllocationCharge {
 #[cfg(test)]
 #[path = "allocation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::without_allocations;

@@ -110,9 +110,18 @@ pair; refusal or callback error leaves the published pair intact. A caught edit
 panic makes the aggregate unusable, including when the callback returns success.
 Read-only views and exclusive history retain original allocation owners.
 
+`Block::try_transaction_admitted` lends both original checkpoints to an insertion
+transaction. Its `try_insert_admitted` joins the canonical current/undo demand
+with the exact ordered touch-array growth and policy-owned key copy before one
+reservation. Repeated touches preserve the first owned key. `touched_entries`
+borrows a sorted slice without iterator allocation; no-op insertions remain
+explicit. Dropping the child restores both parent roots without allocation.
+Applying first destroys its touch keys under both rollback guards, then keeps
+both private successors. Cleanup panic also makes the original block unusable.
+
 World storage remains Untracked pending native lock/runtime and publication
-control storage, transaction touch keys, removal/mutable replacement, detached
-capture, concrete model payload policies and configured aggregate integration.
+control storage, removal/mutable replacement, detached capture, concrete model
+payload policies and configured aggregate integration.
 These operations are unavailable on prepaid Storage until their ownership paths
 are admitted; its insertion API does not claim complete State admission.
 

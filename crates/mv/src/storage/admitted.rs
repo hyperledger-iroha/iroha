@@ -2,8 +2,9 @@
 //!
 //! This admits original node, cursor, reader, tracking and copied payload owners.
 //! It does not admit publication/release control objects or iteration workspace.
-//! Transactions, capture/detachment, removal, mutable access and replacement
-//! blocks remain unavailable until their complete ownership paths are funded.
+//! Insertion transactions additionally admit their ordered local touch owners.
+//! Capture/detachment, removal, mutable access and replacement blocks remain
+//! unavailable until their complete ownership paths are funded.
 
 use super::*;
 use crate::{
@@ -103,7 +104,7 @@ fn policy<P: AdmittedStoragePolicy>(
     Ok(provider)
 }
 
-fn admit<P: AdmittedStoragePolicy>(
+pub(super) fn admit<P: AdmittedStoragePolicy>(
     budget: &AllocationBudget,
     demand: AllocationDemand,
 ) -> Result<P, AdmittedStorageError> {
@@ -284,7 +285,7 @@ where
     V: Value,
     P: AdmittedStoragePolicy + ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
-    fn assert_admitted_operable(&self) {
+    pub(super) fn assert_admitted_operable(&self) {
         assert!(
             !self.failed,
             "admitted block edit unwound; abandon both writers"
@@ -306,7 +307,7 @@ where
         self.failed = true;
         let result = self
             .blocks
-            .try_insert_with_undo_admitted(&mut self.revert, key, value, |demand| {
+            .try_insert_with_undo_admitted(&mut self.revert, key, value, |demand, _key| {
                 admit::<P>(budget, demand)
             })
             .map_err(|(input, error)| {

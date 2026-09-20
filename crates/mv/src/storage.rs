@@ -119,6 +119,9 @@ impl<K: Key, V: Value, M: StorageMode<K, V>> Storage<K, V, M> {
     }
 }
 
+#[path = "storage/touches.rs"]
+mod touches;
+
 #[path = "storage/admitted.rs"]
 mod admitted;
 pub use admitted::{AdmittedBlockError, AdmittedStorageError, AdmittedStoragePolicy, StorageRole};
@@ -583,8 +586,8 @@ mod block {
         /// Create transaction for the block
         pub fn transaction(&mut self) -> Transaction<'_, K, V> {
             self.assert_operable();
-            // TODO: propagate generation refusal through State admission before
-            // activating prepaid transaction construction.
+            // The Untracked API retains its infallible contract; the prepaid
+            // insertion API returns this generation refusal before admission.
             let blocks = self
                 .blocks
                 .checkpoint()
@@ -596,10 +599,12 @@ mod block {
             Transaction {
                 blocks: Some(blocks),
                 revert: Some(revert),
-                touched: BTreeSet::new(),
+                touched: TransactionTouches::Untracked(BTreeSet::new()),
                 dirty: self.dirty,
                 parent_dirty: &mut self.dirty,
                 failed: false,
+                allocation: None,
+                parent_failure: None,
             }
         }
         /// Apply aggregated changes to the storage
@@ -803,14 +808,56 @@ mod block {
     /// First preimages live in the block-undo checkpoint; transaction preimages
     /// are borrowed from the original current root instead of cloned into a log.
     pub struct Transaction<'block, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
-        blocks: Option<BptreeMapCheckpoint<'block, K, V, M>>,
-        revert: Option<BptreeMapCheckpoint<'block, K, Option<V>, M>>,
-        // TODO: admit ordered touch-key storage with both tree edits before
-        // activating the prepaid State transaction path.
-        touched: BTreeSet<K>,
-        parent_dirty: &'block mut bool,
-        dirty: bool,
-        failed: bool,
+        pub(super) blocks: Option<BptreeMapCheckpoint<'block, K, V, M>>,
+        pub(super) revert: Option<BptreeMapCheckpoint<'block, K, Option<V>, M>>,
+        // Constructors bind this one touch owner to the original map mode.
+        pub(super) touched: TransactionTouches<K>,
+        pub(super) parent_dirty: &'block mut bool,
+        pub(super) dirty: bool,
+        pub(super) failed: bool,
+        pub(super) allocation: Option<&'block crate::allocation::AllocationBudget>,
+        // LAST: both original checkpoints and all local touch keys/buffers must
+        // finish rollback/apply cleanup before this parent-failure guard drops.
+        pub(super) parent_failure: Option<super::admitted_transaction::ParentFailure<'block>>,
+    }
+
+    pub(super) enum TransactionTouches<K: Key> {
+        Untracked(BTreeSet<K>),
+        Admitted(super::touches::SortedTouches<K>),
+    }
+    impl<K: Key> TransactionTouches<K> {
+        fn untracked(&self) -> &BTreeSet<K> {
+            match self {
+                Self::Untracked(touches) => touches,
+                Self::Admitted(_) => {
+                    panic!("Untracked transaction requires its original touch mode")
+                }
+            }
+        }
+        fn untracked_mut(&mut self) -> &mut BTreeSet<K> {
+            match self {
+                Self::Untracked(touches) => touches,
+                Self::Admitted(_) => {
+                    panic!("Untracked transaction requires its original touch mode")
+                }
+            }
+        }
+        pub(super) fn admitted(&self) -> &super::touches::SortedTouches<K> {
+            match self {
+                Self::Admitted(touches) => touches,
+                Self::Untracked(_) => {
+                    panic!("admitted transaction requires its original touch mode")
+                }
+            }
+        }
+        pub(super) fn admitted_mut(&mut self) -> &mut super::touches::SortedTouches<K> {
+            match self {
+                Self::Admitted(touches) => touches,
+                Self::Untracked(_) => {
+                    panic!("admitted transaction requires its original touch mode")
+                }
+            }
+        }
     }
     impl<K: Key, V: Value> Transaction<'_, K, V> {
         fn assert_operable(&self) {
@@ -826,7 +873,7 @@ mod block {
         }
 
         fn record_touch(&mut self, key: &K) {
-            self.touched.insert(key.clone());
+            self.touched.untracked_mut().insert(key.clone());
             let revert = self.revert.as_mut().expect("live transaction undo root");
             if revert.get(key).is_none() {
                 let before = self
@@ -871,7 +918,7 @@ mod block {
             &self,
         ) -> impl DoubleEndedIterator<Item = TouchedEntry<'_, K, V>> + ExactSizeIterator {
             self.assert_operable();
-            self.touched.iter().map(|key| TouchedEntry {
+            self.touched.untracked().iter().map(|key| TouchedEntry {
                 key,
                 before: self.current().get_before(key),
                 after: self.current().get(key),
@@ -893,7 +940,10 @@ mod block {
                 .len();
             // A touched-key destructor must unwind while both rollback guards
             // are still armed, never after only part of the transaction applies.
-            drop(core::mem::take(&mut self.touched));
+            drop(core::mem::replace(
+                &mut self.touched,
+                TransactionTouches::Untracked(BTreeSet::new()),
+            ));
             self.blocks
                 .take()
                 .expect("live transaction current root")
@@ -988,6 +1038,8 @@ mod block {
     }
 }
 pub use block::{Block, Transaction};
+#[path = "storage/admitted_transaction.rs"]
+mod admitted_transaction;
 mod iter {
     use super::*;
     /// Iterate over entries in block, view or transaction

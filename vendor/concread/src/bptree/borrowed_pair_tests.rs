@@ -18,9 +18,18 @@ fn borrowed_writers_keep_original_locks_and_first_preimages() {
         (3, 32, Some(31)),
     ] {
         let calls = pool.callbacks.get();
+        let copies = pool.clones.get();
         assert_eq!(
-            cw.try_insert_with_undo_admitted(&mut uw, key, value, |d| pool.reserve(d))
-                .unwrap(),
+            cw.try_insert_with_undo_admitted(&mut uw, key, value, |d, incoming| {
+                assert_eq!(*incoming, key, "borrow the original incoming key");
+                assert_eq!(
+                    pool.clones.get(),
+                    copies,
+                    "borrow precedes every payload copy"
+                );
+                pool.reserve(d)
+            })
+            .unwrap(),
             before
         );
         assert_eq!(pool.callbacks.get(), calls + 1);
@@ -72,7 +81,7 @@ fn parent_refusal_and_full_budget_abort_preserve_exact_original_buffers() {
     pool.limit.set(pool.used.get() + plan.demand.bytes() - 1);
     let clones = pool.clones.get();
     let ((key, value), error) = without_allocations(|| {
-        cp.try_insert_with_undo_admitted(&mut up, 7, 70, |d| {
+        cp.try_insert_with_undo_admitted(&mut up, 7, 70, |d, _key| {
             assert_eq!(d, plan.demand);
             pool.reserve(d)
         })
@@ -88,7 +97,7 @@ fn parent_refusal_and_full_budget_abort_preserve_exact_original_buffers() {
     assert_eq!(pool.clones.get(), clones);
     pool.limit.set(pool.limit.get() + 1);
     assert_eq!(
-        cp.try_insert_with_undo_admitted(&mut up, key, value, |d| pool.reserve(d))
+        cp.try_insert_with_undo_admitted(&mut up, key, value, |d, _key| pool.reserve(d))
             .unwrap(),
         None
     );
@@ -132,7 +141,7 @@ fn parent_apply_keeps_private_successors_and_outer_abort_restores_custody() {
         let mut cp = outer_c.checkpoint().unwrap();
         let mut up = outer_u.checkpoint().unwrap();
         for (key, value) in [(7, 70), (8, 80), (7, 71), (8, 81)] {
-            cp.try_insert_with_undo_admitted(&mut up, key, value, |d| pool.reserve(d))
+            cp.try_insert_with_undo_admitted(&mut up, key, value, |d, _key| pool.reserve(d))
                 .unwrap();
         }
         assert_eq!(up.get(&7), Some(&Some(69)));
@@ -186,9 +195,14 @@ fn borrowed_parent_generation_refuses_before_callback_and_skips_existing_undo() 
             let calls = pool.callbacks.get();
             if exhausted_current || entry.is_none() {
                 let ((key, value), error) = without_allocations(|| {
-                    cp.try_insert_with_undo_admitted(&mut up, 7, 70, |_| -> Result<Policy, ()> {
-                        panic!("generation refusal before callback")
-                    })
+                    cp.try_insert_with_undo_admitted(
+                        &mut up,
+                        7,
+                        70,
+                        |_, _key| -> Result<Policy, ()> {
+                            panic!("generation refusal before callback")
+                        },
+                    )
                     .err()
                     .unwrap()
                 });
@@ -203,7 +217,7 @@ fn borrowed_parent_generation_refuses_before_callback_and_skips_existing_undo() 
                 );
                 assert_eq!(pool.callbacks.get(), calls);
             } else {
-                cp.try_insert_with_undo_admitted(&mut up, 7, 70, |d| pool.reserve(d))
+                cp.try_insert_with_undo_admitted(&mut up, 7, 70, |d, _key| pool.reserve(d))
                     .unwrap();
                 assert_eq!(identity(up.inner.as_ref()), before.1);
                 assert_eq!(up.get(&7), entry.as_ref().map(|(_, v)| v));
@@ -231,22 +245,23 @@ fn caught_callback_clone_and_provider_panics_invalidate_both_borrowed_parents() 
         let mut cp = cw.checkpoint().unwrap();
         let mut up = uw.checkpoint().unwrap();
         assert!(catch_unwind(AssertUnwindSafe(|| {
-            let _ = cp.try_insert_with_undo_admitted(&mut up, 7, 70, |d| -> Result<Policy, ()> {
-                if fault == 0 {
-                    panic!("joined callback failed");
-                }
-                let provider = pool.reserve(d)?;
-                if fault == 1 {
-                    pool.panic_clone.set(1);
-                }
-                if fault == 2 {
-                    pool.panic_clone.set(2);
-                }
-                if fault == 3 {
-                    pool.panic_drop.set(true);
-                }
-                Ok(provider)
-            });
+            let _ =
+                cp.try_insert_with_undo_admitted(&mut up, 7, 70, |d, _key| -> Result<Policy, ()> {
+                    if fault == 0 {
+                        panic!("joined callback failed");
+                    }
+                    let provider = pool.reserve(d)?;
+                    if fault == 1 {
+                        pool.panic_clone.set(1);
+                    }
+                    if fault == 2 {
+                        pool.panic_clone.set(2);
+                    }
+                    if fault == 3 {
+                        pool.panic_drop.set(true);
+                    }
+                    Ok(provider)
+                });
         }))
         .is_err());
         assert!(catch_unwind(AssertUnwindSafe(|| cp.len())).is_err());
@@ -291,7 +306,7 @@ fn first_and_second_apply_cleanup_failures_invalidate_both_attached_writers() {
         assert_eq!(current_grows, !second_apply);
         assert!(undo_plan.first.is_some() || undo_plan.last.is_some());
         assert!(catch_unwind(AssertUnwindSafe(|| {
-            let _ = cw.try_insert_with_undo_admitted(&mut uw, 7, 71, |d| {
+            let _ = cw.try_insert_with_undo_admitted(&mut uw, 7, 71, |d, _key| {
                 let provider = pool.reserve(d)?;
                 // No charge destruction can precede final provider cleanup in
                 // these scalar edits. The next charge is the saved buffer of
@@ -348,10 +363,11 @@ fn prefailed_parent_entry_invalidates_the_other_original_cursor_before_admission
         }
         let admitted = Cell::new(false);
         assert!(catch_unwind(AssertUnwindSafe(|| {
-            let _ = cp.try_insert_with_undo_admitted(&mut up, 7, 70, |_| -> Result<Policy, ()> {
-                admitted.set(true);
-                panic!("prefailed pair must not reach admission");
-            });
+            let _ =
+                cp.try_insert_with_undo_admitted(&mut up, 7, 70, |_, _key| -> Result<Policy, ()> {
+                    admitted.set(true);
+                    panic!("prefailed pair must not reach admission");
+                });
         }))
         .is_err());
         assert!(!admitted.get());

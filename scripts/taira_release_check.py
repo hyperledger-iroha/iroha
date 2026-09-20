@@ -1936,7 +1936,7 @@ MV_OWNERSHIP_STAGES = (
         'release::tests::partial_writer_acquisition_does_not_wake_its_own_refused_lock',
         'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
         'release::tests::release_racing_first_poll_cannot_be_lost',
-        'release::tests::storage_first_undo_clone_panic_wakes_an_already_registered_retry',
+        'release::tests::storage_revert_preimage_clone_panic_wakes_an_already_registered_retry',
         'release::tests::storage_prepared_drop_abort_and_publish_release_the_original_writers',
     )),
     ('charged current and undo Cell ownership', (
@@ -1970,6 +1970,15 @@ MV_OWNERSHIP_STAGES = (
         'storage::detached_tests::snapshot_json_and_history_projection_create_new_owners_with_exact_images',
         'storage::detached_tests::unchanged_replacement_and_undo_only_commit_have_distinct_pair_identity',
     )),
+    ('finite transaction touch-key custody', (
+        'storage::touches::tests::touch_sorted_unique_growth_moves_original_key_allocations_without_copying',
+        'storage::touches::tests::touch_exact_joined_capacity_and_one_byte_below_preserve_original_state',
+        'storage::touches::tests::touch_preparation_abandonment_and_copy_panic_leave_old_array_and_keys_exact',
+        'storage::touches::tests::touch_arbitrary_key_drop_panic_drains_remaining_prefix_and_refunds_real_owners',
+        'storage::touches::tests::touch_refused_payload_and_checked_growth_overflow_allocate_nothing',
+        'storage::touches::tests::touch_plan_extends_original_demand_and_preserves_exact_provider_remainder',
+    )),
+
 )
 
 MV_EBR_STAGES = (("actual epoch allocation and retained capacity custody", (
@@ -2145,6 +2154,14 @@ MV_ADMITTED_MAP_STAGES = (
         'storage_custody::actual_storage_edit_rejects_foreign_and_short_policy_before_cloning_or_mutation',
         'storage_custody::actual_storage_summed_startup_and_reset_refusal_preserve_both_committed_images',
         'storage_custody::actual_storage_caught_edit_panic_cannot_publish_and_reclaims_private_credits',
+    )),
+
+    ('production Transaction admission and original parent custody', (
+        'storage_custody::actual_transaction_joined_touch_and_pair_refusal_preserves_inputs_for_exact_retry',
+        'storage_custody::actual_transaction_ordered_unique_touches_preserve_noop_and_sibling_preimages',
+        'storage_custody::actual_transaction_full_budget_abort_restores_parent_and_outer_abort_preserves_readers',
+        'storage_custody::actual_transaction_caught_touch_and_pair_copy_panics_cannot_apply_or_publish',
+        'storage_custody::actual_transaction_touch_destructor_panic_cannot_apply_or_publish',
     )),
 
 )
@@ -3551,6 +3568,62 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
         label="pure FSM", description="pure consensus FSM (exact production reducer)")
 
 
+def validate_mv_test_registration(root: Path) -> None:
+    """Reject stale registered MV names before Cargo; native listing stays authoritative.
+
+    This is a bounded lexical guard for six explicit, flat test modules, not a
+    Rust parser or a claim that the selected subset exhausts each module.
+    The existing pure lexer runs from the same captured source as this gate.
+    """
+    owners = (
+        ("allocation::tests::", "allocation.rs", "allocation_tests.rs", "tests"),
+        ("release::tests::", "release.rs", "release_tests.rs", "tests"),
+        ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
+        ("storage::publication_tests::", "storage.rs", "storage/publication_tests.rs", "publication_tests"),
+        ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
+        ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
+    )
+    try:
+        helper = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        namespace = {"__name__": "taira_mv_source_text", "__file__": str(helper)}
+        exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
+        mask = namespace["mask_rust_comments"]
+        package = root / "crates/mv/src"
+        sources = {}
+        def source(relative):
+            if relative not in sources:
+                text = (package / relative).read_text()
+                sources[relative] = (text, mask(text))
+            return sources[relative]
+        def edge(parent, child, name):
+            text, masked = source(parent)
+            pattern = r'^#\[path = "' + re.escape(child) + r'"\]\s*\nmod ' + re.escape(name) + r';'
+            matches = [match for match in re.finditer(pattern, text, re.MULTILINE)
+                       if masked[match.start():match.start() + 2] == "#["]
+            if len(matches) != 1:
+                raise ValueError(f"registered MV module edge differs: {parent} -> {child}")
+        lib = source("lib.rs")[1]
+        for module in ("allocation", "release", "cell", "storage"):
+            if len(re.findall(r'^(?:pub )?mod ' + module + r';$', lib, re.MULTILINE)) != 1:
+                raise ValueError(f"registered MV crate module differs: {module}")
+        edge("storage.rs", "storage/touches.rs", "touches")
+        available = []
+        for prefix, parent, child, module in owners:
+            relative = str(Path(child).relative_to(Path(parent).parent))
+            edge(parent, relative, module)
+            masked = source(child)[1]
+            for match in re.finditer(r'^#\[test\]\s*\nfn (\w+)\s*\(', masked, re.MULTILINE):
+                before = masked[:match.start()]
+                if before.count("{") == before.count("}"):
+                    available.append(prefix + match.group(1))
+        selected = [name for _, names in MV_OWNERSHIP_STAGES for name in names]
+        missing = [name for name in selected if available.count(name) != 1]
+        if len(selected) != len(set(selected)) or missing:
+            raise ValueError("registered MV test lacks one actual source definition: " + ", ".join(missing))
+    except (OSError, UnicodeError, KeyError, TypeError, ValueError) as error:
+        raise CheckError("MV test source registration failed: " + str(error)) from error
+
+
 def validate_torii_lifecycle_test_registration(root: Path) -> None:
     """Bind lifecycle selectors to the explicit grouped Cargo target before build."""
     try:
@@ -3594,6 +3667,7 @@ def validate_torii_lifecycle_test_registration(root: Path) -> None:
 
 def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
     """Reject invalid source assets, then run shared contracts before Cargo."""
+    validate_mv_test_registration(root)
     validate_torii_lifecycle_test_registration(root)
     started = time.monotonic()
     print("[taira-check] start source-asset grammar and inventory audit", flush=True)

@@ -718,3 +718,532 @@ fn actual_storage_caught_edit_panic_cannot_publish_and_reclaims_private_credits(
         assert_eq!(budget.reserved_bytes(), 0);
     }
 }
+
+type NativeTransaction<'a> =
+    mv::storage::Transaction<'a, Payload, Payload, Prepaid<NativeStoragePolicy>>;
+
+fn transaction_put(
+    transaction: &mut NativeTransaction<'_>,
+    budget: &AllocationBudget,
+    order: usize,
+    marker: u8,
+) -> Option<Payload> {
+    let (key, mut value) = input(budget, order);
+    value.bytes.fill(marker);
+    transaction
+        .try_insert_admitted(key, value)
+        .unwrap_or_else(|(_, error)| panic!("original Transaction edit refused: {error:?}"))
+}
+
+#[test]
+fn actual_transaction_joined_touch_and_pair_refusal_preserves_inputs_for_exact_retry() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    seed(&storage, &budget, 0xb1);
+    let old = storage.view();
+    let original = old.get(&7).unwrap().pointer();
+    storage.try_with_admitted_block(|block| {
+        for order in [7, 9] {
+            let mut transaction = without_allocations(|| block.try_transaction_admitted()).unwrap();
+            let (key, mut value) = input(&budget, order);
+            value.bytes.fill(0xb2);
+            let input_pointers = (key.pointer(), value.pointer());
+            let counts = (counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst));
+            let records = NEXT_RECORD.load(SeqCst);
+            let held = budget.reserved_bytes();
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held).unwrap();
+            let ((key, value), error) = without_allocations(|| transaction.try_insert_admitted(key, value).err().expect("complete pair plus first touch must refuse"));
+            let AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes, .. }) = error else { panic!("original joined capacity refusal"); };
+            assert!(requested_bytes > 0);
+            assert_eq!((key.pointer(), value.pointer()), input_pointers);
+            assert_eq!(transaction.touched_entries().len(), 0);
+            assert!(!transaction.is_dirty());
+            assert_eq!(NEXT_RECORD.load(SeqCst), records);
+            assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), counts);
+            assert_eq!(transaction.get(&7).unwrap().pointer(), original);
+            drop(blocker);
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes + 1).unwrap();
+            let ((key, value), error) = without_allocations(|| transaction.try_insert_admitted(key, value).err().expect("one byte below the joined touch and pair demand must refuse"));
+            assert!(matches!(error, AdmittedStorageError::Allocation(AllocationRefusal::Capacity { requested_bytes: actual, .. }) if actual == requested_bytes));
+            assert_eq!((key.pointer(), value.pointer()), input_pointers);
+            assert_eq!(transaction.touched_entries().len(), 0);
+            assert_eq!(NEXT_RECORD.load(SeqCst), records);
+            assert_eq!((counters.admissions.load(SeqCst), counters.keys.load(SeqCst), counters.values.load(SeqCst)), counts);
+            drop(blocker);
+            let blocker = budget.try_reserve_bytes(budget.limit_bytes() - held - requested_bytes).unwrap();
+            let previous = transaction.try_insert_admitted(key, value).unwrap_or_else(|(_, error)| panic!("exact original joined budget refused: {error:?}"));
+            assert_eq!(transaction.get(&order).unwrap().pointer(), input_pointers.1);
+            assert!(transaction.is_dirty());
+            without_allocations(|| {
+                let mut touches = transaction.touched_entries();
+                assert_eq!(touches.len(), 1);
+                let row = touches.next().unwrap();
+                assert_eq!(row.key.order, order);
+                assert_ne!(row.key.pointer(), input_pointers.0);
+                assert_eq!(row.after.unwrap().pointer(), input_pointers.1);
+                assert_eq!(row.before.map(Payload::pointer), if order == 7 { Some(original) } else { None });
+                assert!(touches.next().is_none());
+            });
+            assert_eq!(old.get(&7).unwrap().pointer(), original);
+            drop((previous, blocker));
+            // Abort makes the next case start at the same actual parent roots.
+            without_allocations(|| drop(transaction));
+            assert_eq!(block.get(&7).unwrap().pointer(), original);
+            assert!(block.get(&9).is_none());
+            assert!(!block.is_dirty());
+        }
+        Ok::<_, ()>(())
+    }).unwrap();
+    assert_eq!(storage.view().get(&7).unwrap().pointer(), original);
+    drop(old);
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn actual_transaction_ordered_unique_touches_preserve_noop_and_sibling_preimages() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(8 << 20);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let mut storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    seed(&storage, &budget, 0xc1);
+    let old = storage.view();
+    let old_id = old.get(&7).unwrap().id();
+    let old_pointer = old.get(&7).unwrap().pointer();
+    let (query7, spare7) = input(&budget, 7);
+    let (query2, spare2) = input(&budget, 2);
+    drop((spare7, spare2));
+    storage
+        .try_with_admitted_block(|block| {
+            let mut transaction = block.try_transaction_admitted().unwrap();
+            assert!(transaction.touched_entries().next().is_none());
+            assert!(transaction_put(&mut transaction, &budget, 9, 0xc9).is_none());
+            drop(transaction_put(&mut transaction, &budget, 7, 0xc1));
+            let first_touch = transaction
+                .touched_entries()
+                .find(|row| row.key.order == 7)
+                .unwrap()
+                .key
+                .pointer();
+            let first_block_preimage = transaction.get_before_block(&query7).unwrap().pointer();
+            marker(transaction.get_before_block(&query7), 0xc1);
+            // Equal value bytes still represent an explicit first touch.
+            drop(transaction_put(&mut transaction, &budget, 7, 0xc1));
+            assert_eq!(
+                transaction.get_before_block(&query7).unwrap().pointer(),
+                first_block_preimage
+            );
+            let undo_copy_start = NEXT_RECORD.load(SeqCst);
+            // A new undo key checkpoints the shared leaf, copying its retained Some rows.
+            assert!(transaction_put(&mut transaction, &budget, 2, 0xc2).is_none());
+            without_allocations(|| {
+                let mut rows = transaction.touched_entries();
+                assert_eq!(rows.len(), 3);
+                let two = rows.next().unwrap();
+                assert_eq!(two.key.order, 2);
+                assert!(two.before.is_none());
+                marker(two.after, 0xc2);
+                let nine = rows.next_back().unwrap();
+                assert_eq!(nine.key.order, 9);
+                assert!(nine.before.is_none());
+                marker(nine.after, 0xc9);
+                let seven = rows.next().unwrap();
+                assert_eq!(seven.key.order, 7);
+                assert_eq!(seven.key.pointer(), first_touch);
+                assert_eq!(seven.before.unwrap().pointer(), old_pointer);
+                marker(seven.before, 0xc1);
+                marker(seven.after, 0xc1);
+                assert_eq!(rows.len(), 0);
+            });
+            assert_eq!(
+                transaction
+                    .get_before_transaction(&query7)
+                    .unwrap()
+                    .pointer(),
+                old_pointer
+            );
+            let copied_preimage = transaction.get_before_block(&query7).unwrap();
+            marker(Some(copied_preimage), 0xc1);
+            assert_ne!(copied_preimage.pointer(), first_block_preimage);
+            assert!(copied_preimage.id() >= undo_copy_start);
+            assert_eq!(
+                RECORDS[copied_preimage.id()].pointer.load(SeqCst),
+                copied_preimage.pointer()
+            );
+            assert!(!RECORDS[copied_preimage.id()].freed.load(SeqCst));
+            assert!(!RECORDS[copied_preimage.id()].refunded.load(SeqCst));
+            assert!(transaction.get_before_block(&query2).is_none());
+            without_allocations(|| transaction.apply());
+            let parent_pointer = block.get(&7).unwrap().pointer();
+            let parent_undo = block.get_before_block(&query7).unwrap().pointer();
+            let held = budget.reserved_bytes();
+            {
+                let mut sibling = block.try_transaction_admitted().unwrap();
+                assert_eq!(sibling.touched_entries().len(), 0);
+                assert_eq!(
+                    sibling.get_before_transaction(&query7).unwrap().pointer(),
+                    parent_pointer
+                );
+                assert_eq!(
+                    sibling.get_before_block(&query7).unwrap().pointer(),
+                    parent_undo
+                );
+                drop(transaction_put(&mut sibling, &budget, 7, 0xd1));
+                assert!(transaction_put(&mut sibling, &budget, 8, 0xd8).is_none());
+                assert_eq!(sibling.touched_entries().len(), 2);
+                without_allocations(|| drop(sibling));
+            }
+            assert_eq!(budget.reserved_bytes(), held);
+            assert_eq!(block.get(&7).unwrap().pointer(), parent_pointer);
+            assert_eq!(
+                block.get_before_block(&query7).unwrap().pointer(),
+                parent_undo
+            );
+            assert!(block.get(&8).is_none());
+            let mut sibling = block.try_transaction_admitted().unwrap();
+            assert_eq!(sibling.touched_entries().len(), 0);
+            drop(transaction_put(&mut sibling, &budget, 7, 0xc7));
+            drop(transaction_put(&mut sibling, &budget, 2, 0xc3));
+            assert_eq!(
+                sibling.get_before_transaction(&query7).unwrap().pointer(),
+                parent_pointer
+            );
+            assert_eq!(
+                sibling.get_before_block(&query7).unwrap().pointer(),
+                parent_undo
+            );
+            assert!(sibling.get_before_block(&query2).is_none());
+            without_allocations(|| sibling.apply());
+            assert_eq!(
+                block.get_before_block(&query7).unwrap().pointer(),
+                parent_undo
+            );
+            assert!(block.get_before_block(&query2).is_none());
+            assert!(block.is_dirty());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    marker(storage.view().get(&7), 0xc7);
+    marker(storage.view().get(&2), 0xc3);
+    assert!(storage.view().get(&8).is_none());
+    assert_eq!(old.get(&7).unwrap().pointer(), old_pointer);
+    assert!(!RECORDS[old_id].freed.load(SeqCst));
+    drop(old);
+    {
+        let history = storage.history();
+        marker(history.get_before_block(&7), 0xc1);
+        assert!(history.get_before_block(&2).is_none());
+        assert!(history.get_before_block(&9).is_none());
+    }
+    drop((query7, query2));
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn actual_transaction_full_budget_abort_restores_parent_and_outer_abort_preserves_readers() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    reset();
+    let budget = AllocationBudget::new(16 << 20);
+    let counters = Arc::new(Counters::default());
+    let _context = PolicyContext::new(&counters);
+    let storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+    seed(&storage, &budget, 0xe1);
+    let old = storage.view();
+    let original = old.get(&7).unwrap().pointer();
+    let (query7, spare7) = input(&budget, 7);
+    let (query8, spare8) = input(&budget, 8);
+    drop((spare7, spare8));
+    let baseline = budget.reserved_bytes();
+    let result = storage.try_with_admitted_block(|block| {
+        drop(put(block, &budget, 7, 0xe2));
+        assert!(put(block, &budget, 8, 0xe8).is_none());
+        let parent = (
+            block.get(&7).unwrap().pointer(),
+            block.get(&8).unwrap().pointer(),
+            block.get_before_block(&query7).unwrap().pointer(),
+        );
+        let held = budget.reserved_bytes();
+        let records = NEXT_RECORD.load(SeqCst);
+        let mut transaction = without_allocations(|| block.try_transaction_admitted()).unwrap();
+        for order in (0..40).rev() {
+            drop(transaction_put(&mut transaction, &budget, order, 0xef));
+        }
+        assert_eq!(transaction.len(), 40);
+        assert_eq!(transaction.touched_entries().len(), 40);
+        let blocker = budget
+            .try_reserve_bytes(budget.limit_bytes() - budget.reserved_bytes())
+            .unwrap();
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        without_allocations(|| drop(transaction));
+        assert_eq!(budget.reserved_bytes(), held + blocker.remaining_bytes());
+        reclaimed_since(records);
+        assert_eq!(
+            (
+                block.get(&7).unwrap().pointer(),
+                block.get(&8).unwrap().pointer(),
+                block.get_before_block(&query7).unwrap().pointer()
+            ),
+            parent
+        );
+        assert_eq!(block.len(), 2);
+        assert!(block.get_before_block(&query8).is_none());
+        assert!(block.is_dirty());
+        drop(blocker);
+        let mut applied = block.try_transaction_admitted().unwrap();
+        drop(transaction_put(&mut applied, &budget, 7, 0xe3));
+        assert_eq!(
+            applied.get_before_block(&query7).unwrap().pointer(),
+            parent.2
+        );
+        let undo_copy_start = NEXT_RECORD.load(SeqCst);
+        assert!(transaction_put(&mut applied, &budget, 9, 0xe9).is_none());
+        let copied_preimage = applied.get_before_block(&query7).unwrap();
+        marker(Some(copied_preimage), 0xe1);
+        assert_ne!(copied_preimage.pointer(), parent.2);
+        assert!(copied_preimage.id() >= undo_copy_start);
+        assert_eq!(
+            RECORDS[copied_preimage.id()].pointer.load(SeqCst),
+            copied_preimage.pointer()
+        );
+        assert!(!RECORDS[copied_preimage.id()].freed.load(SeqCst));
+        assert!(!RECORDS[copied_preimage.id()].refunded.load(SeqCst));
+        let applied_undo = copied_preimage.pointer();
+        without_allocations(|| applied.apply());
+        marker(block.get(&7), 0xe3);
+        marker(block.get(&9), 0xe9);
+        assert_eq!(
+            block.get_before_block(&query7).unwrap().pointer(),
+            applied_undo
+        );
+        marker(block.get_before_block(&query7), 0xe1);
+        Err::<(), _>("abort original parent after applied child")
+    });
+    assert!(matches!(
+        result,
+        Err(AdmittedBlockError::Callback(
+            "abort original parent after applied child"
+        ))
+    ));
+    assert_eq!(budget.reserved_bytes(), baseline);
+    assert_eq!(storage.view().get(&7).unwrap().pointer(), original);
+    assert_eq!(old.get(&7).unwrap().pointer(), original);
+    assert_eq!(storage.view().len(), 1);
+    drop((old, query7, query8));
+    without_allocations(|| drop(storage));
+    reclaimed_since(0);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
+fn actual_transaction_caught_touch_and_pair_copy_panics_cannot_apply_or_publish() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for (fault, already_touched) in [(3, false), (4, false), (4, true)] {
+        reset();
+        let budget = AllocationBudget::new(8 << 20);
+        let counters = Arc::new(Counters::default());
+        let _context = PolicyContext::new(&counters);
+        let mut storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+        seed(&storage, &budget, 0xf1);
+        storage
+            .try_with_admitted_block(|block| {
+                drop(put(block, &budget, 7, 0xf2));
+                assert!(put(block, &budget, 8, 0xf8).is_none());
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        let before = {
+            let history = storage.history();
+            (
+                history.current().get(&7).unwrap().pointer(),
+                history.current().get(&8).unwrap().pointer(),
+                history.get_before_block(&7).unwrap().pointer(),
+            )
+        };
+        let old = storage.view();
+        let held = budget.reserved_bytes();
+        let records = NEXT_RECORD.load(SeqCst);
+        let callback_returned_ok = Cell::new(false);
+        let aggregate = catch_unwind(AssertUnwindSafe(|| {
+            storage.try_with_admitted_block(|block| {
+                let mut transaction = block.try_transaction_admitted().unwrap();
+                if already_touched {
+                    drop(transaction_put(&mut transaction, &budget, 7, 0xf3));
+                    assert_eq!(transaction.touched_entries().len(), 1);
+                } else {
+                    assert_eq!(transaction.touched_entries().len(), 0);
+                }
+                let (key, value) = input(&budget, 7);
+                let copies = counters.keys.load(SeqCst);
+                let partial = NEXT_RECORD.load(SeqCst);
+                FACTORY_FAULT.with(|mode| mode.set(fault));
+                let edit = catch_unwind(AssertUnwindSafe(|| {
+                    let _ = transaction.try_insert_admitted(key, value);
+                }));
+                assert!(
+                    edit.is_err(),
+                    "actual policy factory/touch/pair copy must panic"
+                );
+                assert_eq!(FACTORY_FAULT.with(Cell::get), 0);
+                if fault == 3 {
+                    assert_eq!(counters.keys.load(SeqCst), copies);
+                    assert_eq!(NEXT_RECORD.load(SeqCst), partial);
+                } else {
+                    assert!(counters.keys.load(SeqCst) > copies);
+                    assert!(
+                        NEXT_RECORD.load(SeqCst) > partial,
+                        "copy panic follows an actual nested allocation"
+                    );
+                }
+                assert!(
+                    catch_unwind(AssertUnwindSafe(|| transaction.apply())).is_err(),
+                    "caught edit cannot apply either checkpoint"
+                );
+                callback_returned_ok.set(true);
+                Ok::<_, ()>(())
+            })
+        }));
+        assert!(callback_returned_ok.get());
+        assert!(
+            aggregate.is_err(),
+            "original parent must refuse publication after caught child failure"
+        );
+        assert_eq!(budget.reserved_bytes(), held);
+        reclaimed_since(records);
+        assert_eq!(
+            (
+                old.get(&7).unwrap().pointer(),
+                old.get(&8).unwrap().pointer()
+            ),
+            (before.0, before.1)
+        );
+        drop(old);
+        {
+            let history = storage.history();
+            assert_eq!(
+                (
+                    history.current().get(&7).unwrap().pointer(),
+                    history.current().get(&8).unwrap().pointer(),
+                    history.get_before_block(&7).unwrap().pointer()
+                ),
+                before
+            );
+            assert!(history.get_before_block(&8).is_none());
+        }
+        assert!(matches!(
+            storage.try_with_admitted_block(|_| -> Result<(), ()> {
+                panic!("poisoned parent cannot admit another callback")
+            }),
+            Err(AdmittedBlockError::Admission(
+                AdmittedStorageError::Poisoned { .. }
+            ))
+        ));
+        without_allocations(|| drop(storage));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
+fn actual_transaction_touch_destructor_panic_cannot_apply_or_publish() {
+    let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    for apply in [false, true] {
+        reset();
+        let budget = AllocationBudget::new(8 << 20);
+        let counters = Arc::new(Counters::default());
+        let _context = PolicyContext::new(&counters);
+        let mut storage = NativeStorage::try_new_admitted(budget.clone()).unwrap();
+        seed(&storage, &budget, 0x91);
+        storage
+            .try_with_admitted_block(|block| {
+                drop(put(block, &budget, 7, 0x92));
+                assert!(put(block, &budget, 8, 0x98).is_none());
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        let before = {
+            let history = storage.history();
+            (
+                history.current().get(&7).unwrap().pointer(),
+                history.current().get(&8).unwrap().pointer(),
+                history.get_before_block(&7).unwrap().pointer(),
+            )
+        };
+        let old = storage.view();
+        let held = budget.reserved_bytes();
+        let records = NEXT_RECORD.load(SeqCst);
+        let callback_returned_ok = Cell::new(false);
+        let aggregate = catch_unwind(AssertUnwindSafe(|| {
+            storage.try_with_admitted_block(|block| {
+                let mut transaction = block.try_transaction_admitted().unwrap();
+                drop(transaction_put(&mut transaction, &budget, 7, 0x93));
+                assert!(transaction_put(&mut transaction, &budget, 9, 0x99).is_none());
+                let touch_id = transaction.touched_entries().next().unwrap().key.id();
+                assert!(!RECORDS[touch_id].freed.load(SeqCst));
+                PANIC_CHARGE.store(touch_id, SeqCst);
+                let cleanup = catch_unwind(AssertUnwindSafe(|| {
+                    if apply {
+                        transaction.apply();
+                    } else {
+                        drop(transaction);
+                    }
+                }));
+                assert!(
+                    cleanup.is_err(),
+                    "actual touched-key destructor must run before settlement"
+                );
+                assert_eq!(PANIC_CHARGE.load(SeqCst), usize::MAX);
+                assert!(RECORDS[touch_id].freed.load(SeqCst));
+                assert!(RECORDS[touch_id].refunded.load(SeqCst));
+                callback_returned_ok.set(true);
+                Ok::<_, ()>(())
+            })
+        }));
+        assert!(callback_returned_ok.get());
+        assert!(
+            aggregate.is_err(),
+            "caught cleanup cannot publish a partially settled transaction"
+        );
+        assert_eq!(budget.reserved_bytes(), held);
+        reclaimed_since(records);
+        assert_eq!(
+            (
+                old.get(&7).unwrap().pointer(),
+                old.get(&8).unwrap().pointer()
+            ),
+            (before.0, before.1)
+        );
+        drop(old);
+        {
+            let history = storage.history();
+            assert_eq!(
+                (
+                    history.current().get(&7).unwrap().pointer(),
+                    history.current().get(&8).unwrap().pointer(),
+                    history.get_before_block(&7).unwrap().pointer()
+                ),
+                before
+            );
+            assert!(history.get_before_block(&8).is_none());
+        }
+        assert!(matches!(
+            storage.try_with_admitted_block(|_| -> Result<(), ()> {
+                panic!("cleanup-poisoned parent cannot admit another callback")
+            }),
+            Err(AdmittedBlockError::Admission(
+                AdmittedStorageError::Poisoned { .. }
+            ))
+        ));
+        without_allocations(|| drop(storage));
+        reclaimed_since(0);
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}

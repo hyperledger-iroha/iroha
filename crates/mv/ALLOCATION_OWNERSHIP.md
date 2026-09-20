@@ -77,9 +77,24 @@ and owned-query destruction, including work outside either tree cursor. Every
 value read, new edit, capture and publication preflights that state and both
 cursor states. A caught child undo-cursor panic therefore cannot publish a
 healthy current tree before discovering the failed undo owner.
-The ordered touch set still allocates without admission. Transaction touch
-admission and checked generation refusal through State remain required;
-these checkpoints do not enable prepaid State transactions.
+The explicit prepaid insertion transaction retains these same two checkpoints.
+Checked generation refusal occurs before admission or payload copying. Its ordered
+local touches use a concrete `Box<[MaybeUninit<K>]>` plus the original exact array
+charge. Planning extends the canonical pair demand with checked array growth and
+`ClonePlanning::plan_key`; the one original provider prepares the key and optional
+array before either map edit. Existing keys move without cloning. Repeated touches
+add no demand and preserve the original owned key. Installation has no payload
+callbacks and returns the emptied old array for explicit cleanup while aggregate
+failure remains armed. Abandonment leaves the original touch storage unchanged.
+
+Touch destruction removes each key from the initialized prefix before its Drop;
+if one destructor unwinds, a stack cleanup guard drains the remaining prefix.
+The real array deallocates before its concrete charge refunds. A second destructor
+panic retains ordinary Rust fail-stop behavior. Ordered iteration borrows the
+initialized slice without allocating. Transaction cleanup, including a caught
+checkpoint-apply panic, poisons the original block before it can publish.
+These component operations do not enable prepaid State transactions; concrete
+model payload policies and configured aggregate admission remain required.
 
 The same MV Storage family also exposes explicit prepaid construction and
 insertion blocks. One checked startup reservation is partitioned between both
@@ -93,8 +108,8 @@ copied nested payloads require an explicit `AdmittedStoragePolicy`.
 
 World currently instantiates Untracked Storage. Native mutex/runtime and
 publication/release control storage remain outside constructor admission. Real
-model payload policies, transaction touch storage, iterator stacks, detached
-capture and removal/mutable replacement admission remain unfinished. Final-tree
+model payload policies, general map iterator stacks, detached capture and
+removal/mutable replacement admission remain unfinished. Final-tree
 teardown walks original child pointers with a bounded stack and allocates nothing.
 
 Extract node charges before destroying their cache-padded Box and refund only
@@ -274,8 +289,8 @@ Abort destroys the entire private successor without obtaining more capacity.
 without fabricating one aggregate Layout. Actual allocations still split exact
 layouts and retain their own charges through physical free. Initial node, root
 and reader custody is explicit; native mutex/runtime ownership, real model
-payload policies, MV transaction storage and configured aggregate State integration
-remain open.
+payload policies, remaining MV mutation paths and configured aggregate State
+integration remain open.
 Real callback-bearing charges need their original notification-deferral scope
 around physical guards and destruction. The [closed insertion record](../../docs/history/2026-09-20/closed-admitted-insertion.md)
 records the initial operation. The [retained edit record](../../docs/history/2026-09-20/retained-admitted-edits.md)

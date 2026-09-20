@@ -37,7 +37,7 @@ fn insert_borrowed<K, V, P, E>(
     undo_parent: Option<&mut CheckpointBuffers<K, Option<V>, Prepaid<P>>>,
     key: K,
     value: V,
-    admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
+    admit: impl FnOnce(AllocationDemand, &K) -> Result<P, E>,
 ) -> Result<Option<V>, ((K, V), PairInsertError<E>)>
 where
     K: Clone + Ord + Debug,
@@ -56,7 +56,7 @@ where
             return Err(((key, value), PairInsertError::Planning(error)));
         }
     };
-    let provider = match admit(plan.demand) {
+    let provider = match admit(plan.demand, &key) {
         Ok(provider) => provider,
         Err(error) => {
             pair.resolved = true;
@@ -95,7 +95,11 @@ where
 {
     /// Insert current and a missing first undo preimage under already-held writers.
     ///
-    /// One callback admits the same checked pair demand as the owned entrypoint.
+    /// One callback receives the checked pair demand and a borrow of the original
+    /// incoming key before any checkpoint or payload copy. The borrow lets an
+    /// aggregate include its metadata in the same reservation without copying
+    /// the key beforehand. Any metadata it prepares remains the caller's owner;
+    /// this method itself funds only the pair and publishes no metadata.
     /// Typed planning/admission refusal returns the original key/value without
     /// changing either cursor. Existing undo None/Some is never checkpointed or
     /// rewritten. Success applies only to these private writers and publishes
@@ -115,7 +119,7 @@ where
         undo: &mut BptreeMapWriteTxn<'_, K, Option<V>, Prepaid<P>>,
         key: K,
         value: V,
-        admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
+        admit: impl FnOnce(AllocationDemand, &K) -> Result<P, E>,
     ) -> Result<Option<V>, ((K, V), PairInsertError<E>)> {
         insert_borrowed(
             self.inner.as_mut(),
@@ -137,6 +141,8 @@ where
 {
     /// Insert through two original parent checkpoints under one joined admission.
     ///
+    /// The callback borrows the original incoming key after complete pair
+    /// preflight and before either child or copy, as in the writer operation.
     /// Each temporary child checkpoint retains its own parent's displaced
     /// buffers. Applying these children transfers custody to those exact parents;
     /// dropping either parent later restores its original tree without new credit.
@@ -154,7 +160,7 @@ where
         undo: &mut BptreeMapCheckpoint<'_, K, Option<V>, Prepaid<P>>,
         key: K,
         value: V,
-        admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
+        admit: impl FnOnce(AllocationDemand, &K) -> Result<P, E>,
     ) -> Result<Option<V>, ((K, V), PairInsertError<E>)> {
         let (current, current_parent) = self.inner.joined_edit_parts();
         let (undo, undo_parent) = undo.inner.joined_edit_parts();
