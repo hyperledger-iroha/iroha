@@ -1176,7 +1176,7 @@ mod soracloud;
 mod soranet_privacy_ingress;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 mod telemetry;
-#[cfg(feature = "app_api")]
+#[cfg(all(feature = "app_api", any(test, feature = "test-fixtures")))]
 pub mod test_utils;
 #[cfg(feature = "app_api")]
 mod tx_history_alias_policy;

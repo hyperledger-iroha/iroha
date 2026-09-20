@@ -235,7 +235,7 @@ build and four-validator test. It needs no second Cargo test build. Its manifest
 bin target kind and test profile distinguish it from the Rust SDK's `iroha`
 library harness and the production CLI. Each completed test copy is released
 through its existing owner. Any collected test failure stops before production
-compilation or network execution; production snapshots remain retained. Configuration
+codegen or network execution; production snapshots remain retained. Configuration
 and proof-bound checks retain their selected cases in both scopes. Adding the CLI changes the combined test feature union,
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
@@ -248,8 +248,16 @@ reconciliation completion, even when it contains no reservation owners. Full-sco
 partial publication, recover independently pruned pairs using an authenticated
 retention frontier, and reject corrupt or missing retained history. Discarded local
 certificate history cannot be resurrected after replica application advances. The remaining startup
-groups collect their failures before stopping expensive work. On
-success, the remaining groups execute each selected test once. The checkpoint
+groups collect their failures before stopping expensive work. On success, a separate
+`cargo check` selects only the authoritative shipping binaries with default features,
+without test targets, a test profile or fixture-feature overrides. It preserves the
+warm target, tool environment and locks, and must observe every production binary.
+Core and Torii library artifact events must exclude their `iroha-core-tests` and
+`test-fixtures` features, so a dependency/default-feature leak also fails this gate.
+This metadata check runs before CLI and long independent tests, including when their
+checkpoint is reused. It supplies no qualification evidence and does not replace
+later shipping codegen or network execution. The remaining groups execute each
+selected test once. The checkpoint
 binds the explicit scope, exact selected census and artifact identity. Core and daemon
 copies stay retained until their final selected stage. A failed startup preflight
 never publishes independent-check success. Strict storage construction and both

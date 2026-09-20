@@ -235,6 +235,14 @@ resolving the union of their existing default features. Configuration runs first
 and fails immediately, including when an independent-test checkpoint can be reused.
 Core, Torii and daemon startup recovery checks run next; failures are collected
 across those startup groups before stopping, without running CLI or network tests.
+After these prerequisites pass, a separate `cargo check` selects only the four
+authoritative shipping binaries with their default features. It uses the same warm
+target, tool environment and locks, without a test profile or dev-feature injection.
+Cargo library artifact events must also exclude Core's `iroha-core-tests` and
+Torii's `test-fixtures`, including accidental default or normal-dependency opt-ins.
+Production metadata errors stop before CLI and long independent tests. This check
+reruns even when the independent-test checkpoint is reused and supplies no test or
+artifact qualification; the later shipping build and network checks remain required.
 These include bounded regressions for failure reporting and worker teardown under
 a held lifecycle operation, plus retained-output recovery through real actor admission.
 Live Decision cleanup also exercises the shared runner reconciliation after an idle
