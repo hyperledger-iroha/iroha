@@ -31,7 +31,7 @@ pub(in crate::state) enum CaptureError<E> {
         /// Mode actually retained by the mismatching component.
         actual: BlockMode,
     },
-    /// Caller admission refused retention before any journal values were copied.
+    /// Caller admission refused retention before detaching original journal values.
     #[error("World journal retention admission failed")]
     Admission(E),
 }
@@ -80,8 +80,10 @@ pub(in crate::state) struct FieldSummary {
 /// Actual original World deltas and extras, with no World reference or lifetime.
 ///
 /// The admission must cover the flat vector, one wrapper per inventory field,
-/// touched final-value copies, overlap and future installation resources. No
-/// serialized-length estimate or default resource policy is supplied here.
+/// publication metadata, retained original current/undo allocations and future
+/// installation resources. Detachment does not clone the payloads; their earlier
+/// execution and nested allocations require admission before they are created.
+/// No serialized-length estimate or default resource policy is supplied here.
 /// Rust drops the admission last, after every retained payload and event.
 ///
 /// TODO: compose these original journals with all other State owners, admitted
@@ -405,7 +407,7 @@ impl WorldBlock<'_> {
     /// callback admits all retained allocation and installation resources once;
     /// it sees the complete immutable overlay, including block-local extras.
     /// Refusal drops all original writers without publication. Success moves
-    /// extras and MV preimages and copies only touched final MV values.
+    /// extras and the original MV current/undo allocations without cloning them.
     pub(in crate::state) fn try_detach_journals<Admission, E>(
         self,
         admit: impl FnOnce(&Self) -> Result<Admission, E>,

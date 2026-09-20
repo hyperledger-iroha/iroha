@@ -628,6 +628,20 @@ impl RateLimiter {
     pub fn new(rate_per_sec: Option<u32>, burst: Option<u32>) -> Self {
         Self::new_with_capacity(rate_per_sec, burst, DEFAULT_MAX_BUCKETS)
     }
+    /// Keep a finite burst without wall-clock refill in handler identity tests.
+    ///
+    /// Real custody I/O may exceed a refill interval. These tests exercise the
+    /// same bucket accounting with zero refill so they do not depend on its speed.
+    #[cfg(test)]
+    pub(crate) fn new_without_refill_for_tests(burst: std::num::NonZeroU32) -> Self {
+        Self {
+            inner: Arc::new(ShardedLimiter::new(
+                Some(0.0),
+                f64::from(burst.get()),
+                DEFAULT_MAX_BUCKETS,
+            )),
+        }
+    }
     /// Create a limiter from an exact requests-per-minute rate.
     ///
     /// Fractional per-second refill is preserved, so rates below 60/minute do
@@ -1563,6 +1577,22 @@ mod tests {
         assert!(limiter.allow("a").await);
         // Third should be limited
         assert!(!limiter.allow("a").await);
+    }
+    #[tokio::test]
+    async fn limiter_without_refill_retains_spent_tokens_across_slow_io() {
+        let limiter = RateLimiter::new_without_refill_for_tests(
+            std::num::NonZeroU32::new(1).expect("positive test burst"),
+        );
+        assert!(!limiter.inner.disabled);
+        assert!(limiter.allow("slow-principal").await);
+        assert!(
+            !limiter.inner.shard_for("slow-principal").lock().allow_cost(
+                "slow-principal",
+                1,
+                Instant::now() + Duration::from_secs(86_400),
+            )
+        );
+        assert!(limiter.allow("different-principal").await);
     }
     #[tokio::test]
     async fn configured_token_digests_seed_exact_authenticated_limiter_keys() {

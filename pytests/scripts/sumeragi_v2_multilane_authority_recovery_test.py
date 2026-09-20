@@ -482,14 +482,8 @@ MUTATIONS = ((0,
   False),
  (7,
   'P01',
-  'crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {\n'
-  '                // The exact durable frontier is occupied. Owned Apply recovery\n'
-  '                // must complete before a new participant slot can be planned.\n'
-  '                return Ok(None);',
-  'crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {\n'
-  '                // The exact durable frontier is occupied. Owned Apply recovery\n'
-  '                // must complete before a new participant slot can be planned.\n'
-  '                return Ok(Some((0, None)));',
+  'Some(\n                crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)\n                | crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)\n                | crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),\n            ) => {\n                // The authenticated highest slot is occupied but incomplete.\n                // Owned Apply recovery must finish it before planning a successor.\n                // The history reader still rejects corrupt or conflicting evidence;\n                // a valid interrupted publication is retryable, not storage failure.\n                return Ok(None);',
+  'Some(\n                crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)\n                | crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)\n                | crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),\n            ) => {\n                // The authenticated highest slot is occupied but incomplete.\n                // Owned Apply recovery must finish it before planning a successor.\n                // The history reader still rejects corrupt or conflicting evidence;\n                // a valid interrupted publication is retryable, not storage failure.\n                return Ok(Some((0, None)));',
   'Pending Native index occupancy cannot become empty.',
   True),
  (7,

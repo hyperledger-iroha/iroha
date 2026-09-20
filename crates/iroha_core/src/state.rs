@@ -387,7 +387,9 @@ mod carrier_geometry_preparation;
 mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
-pub(crate) use carrier_preparation::{PreparedCarrier, PreparedCarrierJournals};
+pub(crate) use carrier_preparation::{
+    PreparedCarrier, PreparedCarrierJournals, PublishedNativeApply,
+};
 mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;
@@ -1670,6 +1672,25 @@ pub struct BlockHashes {
 // Process-local identities are neither serializable nor caller-constructible.
 struct BlockHashOwner;
 struct BlockHashPublication;
+
+/// Original process-local State family retained by a native lane's physical owner.
+/// This opaque identity is never reconstructed from wire or finalized context bytes.
+#[derive(Clone)]
+pub(crate) struct NativeLaneStateOwner(Arc<BlockHashOwner>);
+
+impl NativeLaneStateOwner {
+    /// Check the actual State family without depending on its advancing generation.
+    pub(crate) fn matches_state(&self, state: &State) -> bool {
+        Arc::ptr_eq(&self.0, &state.block_hashes.owner)
+    }
+}
+
+impl State {
+    /// Retain this exact State family across native physical opening and closure.
+    pub(crate) fn native_lane_state_owner(&self) -> NativeLaneStateOwner {
+        NativeLaneStateOwner(Arc::clone(&self.block_hashes.owner))
+    }
+}
 
 enum BlockHashStorage {
     Owned {

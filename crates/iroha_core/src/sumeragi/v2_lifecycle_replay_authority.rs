@@ -4945,7 +4945,9 @@ pub(super) struct PreparedDurableCertifiedBodyPipelineStartupV1 {
     entries: Vec<PreparedDurableCertifiedBodyPipelineStartupEntryV1>,
     replay_steps: Vec<CertifiedBodyPipelineColdReplayStepV1>,
     output_frontier: Option<crate::sumeragi::v2::LeaderWireRecoveryAuthority>,
-    pending_kura_apply: Option<PendingKuraApplyComparisonV1>,
+    // Keep the passive native Apply comparison off every ordinary recovery
+    // frame. The same allocation moves into the output census when present.
+    pending_kura_apply: Option<Box<PendingKuraApplyComparisonV1>>,
 }
 /// One heap-owned prepared carrier, retained through registry installation errors.
 pub(super) enum PreparedDurableCertifiedBodyPipelineWorkV1 {
@@ -5433,11 +5435,11 @@ impl PreparedDurableCertifiedBodyPipelineStartupV1 {
         mut self,
         pending: Option<PendingKuraApplyComparisonV1>,
     ) -> Self {
-        self.pending_kura_apply = pending;
+        self.pending_kura_apply = pending.map(Box::new);
         self
     }
     /// Transfer the passive comparison exactly once into the owner-held census.
-    pub(super) fn take_pending_kura_apply(&mut self) -> Option<PendingKuraApplyComparisonV1> {
+    pub(super) fn take_pending_kura_apply(&mut self) -> Option<Box<PendingKuraApplyComparisonV1>> {
         self.pending_kura_apply.take()
     }
 }

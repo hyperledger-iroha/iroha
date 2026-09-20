@@ -7288,7 +7288,7 @@ fn sccp_sora_outbound_material_for_route(
 #[path = "routing/sccp_shared_wire_tests.rs"]
 mod sccp_shared_wire_tests;
 #[cfg(test)]
-mod sccp_first_release_api_tests {
+pub(crate) mod sccp_first_release_api_tests {
     use super::*;
     fn empty_taira_state() -> CoreState {
         CoreState::new_with_chain_for_testing(
@@ -7399,13 +7399,27 @@ mod sccp_first_release_api_tests {
         Arc::new(block)
     }
     fn exact_archived_sccp_state() -> (CoreState, [u8; 32]) {
-        exact_archived_sccp_state_with_settlement_spec(Some(NumericSpec::fractional(
-            iroha_data_model::bridge::SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
-        )))
+        let (state, _, message_id) = exact_sccp_state_with_settlement_spec(
+            Some(NumericSpec::fractional(
+                iroha_data_model::bridge::SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            )),
+            true,
+        );
+        (state, message_id)
     }
-    fn exact_archived_sccp_state_with_settlement_spec(
+    /// Reuse the complete governed outbox fixture before its separate body-eviction phase.
+    pub(crate) fn exact_persisted_sccp_state_with_kura() -> (CoreState, Arc<Kura>, [u8; 32]) {
+        exact_sccp_state_with_settlement_spec(
+            Some(NumericSpec::fractional(
+                iroha_data_model::bridge::SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE,
+            )),
+            false,
+        )
+    }
+    fn exact_sccp_state_with_settlement_spec(
         settlement_spec: Option<NumericSpec>,
-    ) -> (CoreState, [u8; 32]) {
+        evict_body: bool,
+    ) -> (CoreState, Arc<Kura>, [u8; 32]) {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let genesis = signed_empty_archive_boundary_block(1, None);
         let finalized_genesis =
@@ -7424,7 +7438,7 @@ mod sccp_first_release_api_tests {
         let transaction_key = KeyPair::try_random().expect("SCCP archive transaction key");
         let authority = AccountId::new(transaction_key.public_key().clone());
         let transaction = TransactionBuilder::new(
-            routing_test_network_id(0x34),
+            iroha_sccp::sccp_taira_finality_network_id_v1(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -7510,18 +7524,6 @@ mod sccp_first_release_api_tests {
             .expect("completed SCCP artifact is cryptographically valid");
         let block = Arc::new(block);
         let tail = signed_empty_archive_boundary_block(3, Some(block.as_ref()));
-        let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(
-            std::num::NonZeroUsize::new(1).expect("one retained body"),
-        );
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store SCCP archive genesis block");
-        kura.store_block(Arc::clone(&block))
-            .expect("store exact SCCP archive block");
-        kura.store_block(Arc::clone(&tail))
-            .expect("store SCCP archive tail block");
-        let _receipt = kura
-            .store_v2_finality_artifact(&finality.finality_artifact)
-            .expect("store exact SCCP archive finality");
         let world = settlement_spec.map_or_else(iroha_core::state::World::default, |spec| {
             let authority = AccountId::new(
                 KeyPair::try_random()
@@ -7543,13 +7545,61 @@ mod sccp_first_release_api_tests {
                 [definition],
             )
         });
-        let mut state = CoreState::new_with_chain_for_testing(
+        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let kura_config = iroha_config::parameters::actual::Kura {
+            init_mode: iroha_config::kura::InitMode::Strict,
+            // The authenticated temporary constructor owns the isolated directory.
+            store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: std::num::NonZeroUsize::new(1).expect("one retained body"),
+            lane_history_retention:
+                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
+            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        };
+        let kura = Kura::new_temporary_with_configured_lane_catalog(
+            &kura_config,
+            &nexus.lane_config,
+            &nexus.configured_lane_catalog,
+        )
+        .expect("authenticate configured SCCP storage before constructing State");
+        let mut state = CoreState::try_new_with_chain_and_network_id_with_default_telemetry(
             world,
             Arc::clone(&kura),
             iroha_core::query::store::LiveQueryStore::start_test(),
             iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
                 .parse()
                 .expect("Taira chain id"),
+            iroha_sccp::sccp_taira_finality_network_id_v1(),
+        )
+        .expect("open exact-network SCCP State before physical geometry is provisioned");
+        state
+            .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+            .expect("authenticate the SCCP fixture's configured primary geometry");
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .expect("restore the SCCP fixture's original configured lane segments");
+        state
+            .set_nexus_from_config(nexus)
+            .expect("install canonical SCCP fixture geometry before the first block");
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store SCCP archive genesis block");
+        kura.store_block(Arc::clone(&block))
+            .expect("store exact SCCP archive block");
+        kura.store_block(Arc::clone(&tail))
+            .expect("store SCCP archive tail block");
+        let _receipt = kura
+            .store_v2_finality_artifact(&finality.finality_artifact)
+            .expect("store exact SCCP archive finality");
+        assert_eq!(
+            *state.network_id_ref(),
+            finality.finality_artifact.height_context.network_id,
+            "the archive reader and original signed finality share one exact network",
         );
         for canonical in [&genesis, &block, &tail] {
             state.push_block_hash_for_testing(canonical.hash());
@@ -7666,30 +7716,32 @@ mod sccp_first_release_api_tests {
                 .expect("one bounded SCCP payload fits pending usage")
         );
         drop(world);
-        let height = std::num::NonZeroUsize::new(2).expect("two is nonzero");
-        assert_eq!(kura.get_block(height).as_deref(), Some(block.as_ref()));
-        let payload_len = kura
-            .advertise_required_replicas_for_bench(height)
-            .expect("stored SCCP body length");
-        assert!(
-            kura.evict_block_bodies_for_bench(payload_len)
-                .expect("evict exact SCCP historical body")
-                >= payload_len
-        );
-        kura.remove_evicted_block_sidecar_for_testing(height)
-            .expect("make exact SCCP historical body remote-only");
-        assert!(kura.get_block(height).is_none());
-        assert_eq!(
-            kura.get_block(std::num::NonZeroUsize::new(1).expect("one is nonzero"))
-                .as_deref(),
-            Some(genesis.as_ref())
-        );
-        assert_eq!(
-            kura.get_block(std::num::NonZeroUsize::new(3).expect("three is nonzero"))
-                .as_deref(),
-            Some(tail.as_ref())
-        );
-        (state, fixture.bundle.commitment.message_id)
+        if evict_body {
+            let height = std::num::NonZeroUsize::new(2).expect("two is nonzero");
+            assert_eq!(kura.get_block(height).as_deref(), Some(block.as_ref()));
+            let payload_len = kura
+                .advertise_required_replicas_for_bench(height)
+                .expect("stored SCCP body length");
+            assert!(
+                kura.evict_block_bodies_for_bench(payload_len)
+                    .expect("evict exact SCCP historical body")
+                    >= payload_len
+            );
+            kura.remove_evicted_block_sidecar_for_testing(height)
+                .expect("make exact SCCP historical body remote-only");
+            assert!(kura.get_block(height).is_none());
+            assert_eq!(
+                kura.get_block(std::num::NonZeroUsize::new(1).expect("one is nonzero"))
+                    .as_deref(),
+                Some(genesis.as_ref())
+            );
+            assert_eq!(
+                kura.get_block(std::num::NonZeroUsize::new(3).expect("three is nonzero"))
+                    .as_deref(),
+                Some(tail.as_ref())
+            );
+        }
+        (state, kura, fixture.bundle.commitment.message_id)
     }
     routing_test! { sync message_id_parser_rejects_malleability_and_zero
         let canonical = "ab".repeat(32);
@@ -8871,28 +8923,82 @@ mod sccp_first_release_api_tests {
         assert!(
             norito::json::from_value::<BridgeMessageSubmitDto>(Value::Object(missing)).is_err()
         );
+    }
+    #[cfg(feature = "app_api")]
+    routing_test! { sync replay_witness_decoder_preserves_hash_space_and_rejects_invalid_admission
         use base64::Engine as _;
-        for (mut witness, label) in [
-            (
-                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-                "zero expected root",
-            ),
-            (
-                iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-                "membership witness",
-            ),
-        ] {
-            if label == "zero expected root" {
-                witness.expected_shard_root = [0; 32];
-            } else {
-                witness.prior_record_digest = [0xA5; 32];
-            }
-            let encoded = base64::engine::general_purpose::STANDARD.encode(
-                norito::to_bytes(&witness).expect("encode invalid replay witness fixture"),
+        use iroha_data_model::bridge::{
+            SccpNetworkV1, SccpReplayAccumulatorError, SccpReplayActorV1,
+            SccpReplayBoundaryV1, SccpReplayDomainV1, SccpReplayForestV1,
+            SccpReplayPrincipalV1, SccpReplayRecordV1, SccpSparseMerkleWitnessV1,
+        };
+        let encode = |witness: &SccpSparseMerkleWitnessV1| {
+            base64::engine::general_purpose::STANDARD.encode(
+                norito::to_bytes(witness).expect("encode replay witness fixture"),
+            )
+        };
+        let domain = SccpReplayDomainV1 {
+            source_network: SccpNetworkV1::EthereumMainnet,
+            target_network: SccpNetworkV1::SoraTaira,
+            boundary: SccpReplayBoundaryV1::SoraInboundRelease,
+            route_revision: 7,
+            route_configuration_hash: [0x44; 32],
+            actor: SccpReplayActorV1::Route,
+        };
+        let recipient = KeyPair::try_from_seed(
+            b"iroha:torii:sccp:replay-witness-recipient".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive replay recipient");
+        let record = SccpReplayRecordV1 {
+            operation: domain.boundary,
+            replay_id: [0x11; 32],
+            payload_sha256: [0x22; 32],
+            amount: 9,
+            principal: SccpReplayPrincipalV1::SoraAccount(AccountId::new(
+                recipient.public_key().clone(),
+            )),
+            auxiliary_identity_sha256: [0x55; 32],
+        };
+        let mut forest = SccpReplayForestV1::default();
+        let before = forest.clone();
+        let empty = SccpSparseMerkleWitnessV1::empty_shard();
+        let decoded = decode_sccp_replay_witness_b64(&encode(&empty))
+            .expect("canonical nonmembership witness decodes");
+        assert_eq!(decoded, empty);
+        forest.verify_non_membership(&domain, record.replay_id, &decoded)
+            .expect("the original empty witness matches authoritative state");
+        // Roots are full-width hashes. Decoding checks canonical shape; only
+        // the authoritative forest can decide whether the exact root is current.
+        for root in [[0; 32], [0x88; 32]] {
+            let mut stale = empty.clone();
+            stale.expected_shard_root = root;
+            let decoded = decode_sccp_replay_witness_b64(&encode(&stale))
+                .expect("no hash value is a decoder sentinel");
+            assert_eq!(decoded, stale);
+            assert_eq!(
+                forest.verify_non_membership(&domain, record.replay_id, &decoded),
+                Err(SccpReplayAccumulatorError::StaleRoot),
             );
+            assert_eq!(
+                forest.occupy(&domain, &record, &decoded),
+                Err(SccpReplayAccumulatorError::StaleRoot),
+            );
+            assert_eq!(forest, before, "invalid roots cannot mutate replay custody");
+        }
+        forest.occupy(&domain, &record, &empty)
+            .expect("the same authoritative owner admits the exact valid witness");
+        for fault in 0..3 {
+            let mut invalid = empty.clone();
+            match fault {
+                0 => invalid.prior_record_digest = [0xA5; 32],
+                1 => invalid.sibling_bitmap[0] = 1, // Reserved high-level bit.
+                2 => invalid.siblings.push([0x77; 32]), // No corresponding bitmap bit.
+                _ => unreachable!(),
+            }
             assert!(
-                decode_sccp_replay_witness_b64(&encoded).is_err(),
-                "{label} must reject"
+                decode_sccp_replay_witness_b64(&encode(&invalid)).is_err(),
+                "occupied or noncanonical witness must reject: {fault}",
             );
         }
     }
@@ -12922,84 +13028,6 @@ mod ingress_routing_tests {
         );
         assert_eq!(selected, (7, expected));
     }
-}
-pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    accepted: Vec<(iroha_core::tx::AcceptedTransaction<'static>, RoutingPlan)>,
-) -> Result<usize> {
-    if accepted.is_empty() {
-        return Ok(0);
-    }
-    for (transaction, _) in &accepted {
-        ensure_generic_transaction_batch_entrypoint_allowed(
-            queue.as_ref(),
-            transaction.entrypoint(),
-        )?;
-    }
-    let pressure = {
-        let block_time = state.sumeragi_block_cadence();
-        queue.refresh_pressure_budget_from_block_time(block_time)
-    };
-    if pressure.saturated_by_age {
-        if let Some((accepted_tx, _)) = accepted.first() {
-            iroha_logger::debug!(
-                tx_hash = %accepted_tx.hash(),
-                queued = pressure.queued_tx_count,
-                tracked = pressure.tracked_tx_count,
-                capacity = pressure.capacity.get(),
-                oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
-                "local queue is latency-saturated; keeping ingress open until capacity is exhausted"
-            );
-        }
-    }
-    queue
-        .push_batch_with_lane_with_state_and_routing_plans(accepted, state.as_ref())
-        .map_err(|queue::Failure { tx, err }| {
-            iroha_logger::warn!(
-                tx_hash=%tx.as_ref().hash(), ?err,
-                "Failed to push transaction batch into queue"
-            );
-            drop(tx);
-            (err, queue.current_backpressure())
-        })
-        .map_err(|(err, backpressure)| Error::PushIntoQueue {
-            source: Box::new(err),
-            backpressure,
-        })
-        .inspect(|accepted_count| {
-            iroha_logger::debug!(
-                accepted = accepted_count,
-                "transaction batch enqueued successfully"
-            );
-        })
-}
-
-const GENERIC_BATCH_QUEUE_PLAN_SYNCED_REASON: &str =
-    "QueuePlanSynced transaction batch requires per-entry globally certified admission";
-
-fn generic_transaction_batch_unresolved_route(queue: &Queue, reason: &str) -> Error {
-    Error::PushIntoQueue {
-        source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
-            reason: reason.to_owned(),
-        }),
-        backpressure: queue.current_backpressure(),
-    }
-}
-
-pub(crate) fn ensure_generic_transaction_batch_entrypoint_allowed(
-    queue: &Queue,
-    entrypoint: &TransactionEntrypoint,
-) -> Result<()> {
-    if entrypoint.admission_intent()
-        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    {
-        return Err(generic_transaction_batch_unresolved_route(
-            queue,
-            GENERIC_BATCH_QUEUE_PLAN_SYNCED_REASON,
-        ));
-    }
-    Ok(())
 }
 fn handle_transaction_inner_sync(
     queue: Arc<Queue>,

@@ -1975,7 +1975,9 @@ impl ConsensusIngressLimiter {
         use iroha_core::sumeragi::message::BlockMessage;
         match msg {
             iroha_core::NetworkMessage::SumeragiBlock(block) => match block.as_ref().as_ref() {
-                BlockMessage::LaneBlockProposal(_)
+                BlockMessage::NativeLane(_)
+                | BlockMessage::NativeLaneDecision(_)
+                | BlockMessage::LaneBlockProposal(_)
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneBlockCertificate(_)
@@ -2563,7 +2565,9 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
             BlockMessage::V2(_) | BlockMessage::KuraReplicaAdvert(_) => {
                 Some(SumeragiRelayClass::V2)
             }
-            BlockMessage::LaneBlockProposal(_)
+            BlockMessage::NativeLane(_)
+            | BlockMessage::NativeLaneDecision(_)
+            | BlockMessage::LaneBlockProposal(_)
             | BlockMessage::LaneExecutablePayload(_)
             | BlockMessage::LaneBlockNewViewVote(_)
             | BlockMessage::LaneBlockNewViewCertificate(_)
@@ -4552,6 +4556,29 @@ impl NetworkRelayShared {
             | LaneBlockCertificate(_)
             | LaneHistoricalRecoveryRequest(_)
             | LaneHistoricalRecoveryResponse(_) => Self::lane_block_message_meta(msg),
+            NativeLane(envelope) => {
+                use iroha_data_model::block::lane_consensus::LaneMessageV1;
+                let (label, round) = match &envelope.message {
+                    LaneMessageV1::Proposal(proposal) => {
+                        ("NativeLaneProposal", proposal.body.round)
+                    }
+                    LaneMessageV1::Vote(vote) => ("NativeLaneVote", vote.statement.round),
+                    LaneMessageV1::QuorumCertificate(qc) => ("NativeLaneQc", qc.statement.round),
+                    LaneMessageV1::TimeoutVote(vote) => ("NativeLaneTimeoutVote", vote.body.round),
+                    LaneMessageV1::TimeoutCertificate(tc) => {
+                        ("NativeLaneTimeoutCertificate", tc.round)
+                    }
+                };
+                (label, Some(round.lane_height), Some(round.voting_view))
+            }
+            NativeLaneDecision(decision) => {
+                let round = decision.commit_qc.statement.round;
+                (
+                    "NativeLaneDecision",
+                    Some(round.lane_height),
+                    Some(round.voting_view),
+                )
+            }
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
             V2(message) => Self::v2_block_message_meta(&message.payload),
         }
@@ -5953,6 +5980,142 @@ mod network_relay_tests {
             ("LaneBlockCert", Some(5), Some(7))
         );
     }
+    #[test]
+    fn native_lane_transport_classification_keeps_distinct_round_metadata() {
+        use iroha_data_model::block::lane_consensus::{
+            LANE_MESSAGE_VERSION_V1, LaneDecisionV1, LaneJustificationV1, LaneManifestV1,
+            LaneMessageEnvelopeV1, LaneMessageV1, LanePhaseV1, LaneProposalBodyV1, LaneProposalV1,
+            LaneQcV1, LaneRoundV1, LaneSignatureShareV1, LaneTcV1, LaneTimeoutBodyV1,
+            LaneTimeoutVoteV1, LaneValueKindV1, LaneValueRefV1, LaneVoteStatementV1, LaneVoteV1,
+        };
+        use iroha_p2p::network::message::{ClassifyTopic, Topic};
+
+        // Untrusted wire-shape fixtures exercise relay accounting only. The
+        // Native consumer must independently authenticate its actual committee.
+        let hash = Hash::new(b"native daemon relay classification");
+        let round = LaneRoundV1 {
+            instance_id: hash,
+            lane_height: 5,
+            voting_view: 7,
+        };
+        let value = LaneValueRefV1 {
+            instance_id: hash,
+            admitted_binding_hash: hash,
+            kind: LaneValueKindV1::Execution,
+            origin_view: 2,
+            origin_producer: 0,
+            descriptor_hash: hash,
+            payload_hash: hash,
+            availability_hash: hash,
+        };
+        let manifest = LaneManifestV1 {
+            value,
+            layout: consensus_v2::DataAvailabilityLayout {
+                encoding: consensus_v2::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 8192,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 2 * 1024 * 1024,
+                max_chunk_count: 512,
+            },
+            chunk_root: hash,
+            byte_len: 1,
+            chunk_count: 2,
+        };
+        let share = LaneSignatureShareV1 {
+            signer: 0,
+            signature: vec![0x71; 96],
+        };
+        let statement = LaneVoteStatementV1 {
+            round,
+            phase: LanePhaseV1::Commit,
+            value,
+        };
+        let qc = LaneQcV1 {
+            statement,
+            shares: (0..3)
+                .map(|signer| LaneSignatureShareV1 {
+                    signer,
+                    ..share.clone()
+                })
+                .collect(),
+        };
+        let timeout = LaneTimeoutVoteV1 {
+            body: LaneTimeoutBodyV1 {
+                round,
+                highest_prepare: None,
+            },
+            share: share.clone(),
+        };
+        let controls = [
+            (
+                "NativeLaneProposal",
+                LaneMessageV1::Proposal(LaneProposalV1 {
+                    body: LaneProposalBodyV1 {
+                        round,
+                        proposer: 0,
+                        manifest: manifest.clone(),
+                        justification: LaneJustificationV1::Opening,
+                    },
+                    signature: share.signature.clone(),
+                }),
+            ),
+            (
+                "NativeLaneVote",
+                LaneMessageV1::Vote(LaneVoteV1 { statement, share }),
+            ),
+            ("NativeLaneQc", LaneMessageV1::QuorumCertificate(qc.clone())),
+            (
+                "NativeLaneTimeoutVote",
+                LaneMessageV1::TimeoutVote(timeout.clone()),
+            ),
+            (
+                "NativeLaneTimeoutCertificate",
+                LaneMessageV1::TimeoutCertificate(LaneTcV1 {
+                    round,
+                    votes: vec![timeout],
+                }),
+            ),
+        ];
+        let mut messages = controls
+            .into_iter()
+            .map(|(label, message)| {
+                (
+                    label,
+                    BlockMessage::NativeLane(LaneMessageEnvelopeV1 {
+                        version: LANE_MESSAGE_VERSION_V1,
+                        message,
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        messages.push((
+            "NativeLaneDecision",
+            BlockMessage::NativeLaneDecision(Box::new(LaneDecisionV1 {
+                manifest,
+                commit_qc: qc,
+            })),
+        ));
+        for (label, message) in messages {
+            assert_eq!(
+                NetworkRelayShared::block_message_meta(&message),
+                (label, Some(5), Some(7))
+            );
+            let network = sumeragi_msg(message);
+            assert_eq!(network.topic(), Topic::Consensus);
+            assert_eq!(
+                sumeragi_relay_class(&network),
+                Some(SumeragiRelayClass::Lane)
+            );
+            let policy = ConsensusIngressLimiter::ingress_policy(&network);
+            assert_eq!(policy.rate_class, Some(IngressRateClass::Critical));
+            assert!(!policy.apply_penalty);
+            assert!(!NetworkRelayShared::should_apply_low_priority_ingress(
+                &network
+            ));
+        }
+    }
+
     #[test]
     fn block_message_meta_reports_v2_round_when_available() {
         assert_eq!(

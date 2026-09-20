@@ -125,7 +125,7 @@ fn native_preparation_new_admission(
 // prepared journals and running their assertions on the default test stack.
 #[inline(never)]
 fn assert_native_preparation_success(atomic: bool) {
-    let fixture = native_control_execution_fixture(atomic);
+    let fixture = native_control_execution_fixture(atomic, true);
     assert_native_preparation_success_in_fixture(fixture, atomic);
 }
 
@@ -358,7 +358,7 @@ state_test! { sync native_preparation_atomic_retains_real_suffix_controls_and_un
 
 // Keep the real fixture constructor off the later journal/authentication frame.
 fn assert_native_durable_source_authentication(atomic: bool) {
-    let fixture = native_control_execution_fixture(atomic);
+    let fixture = native_control_execution_fixture(atomic, true);
     assert_native_durable_source_authentication_in_fixture(fixture);
 }
 
@@ -597,19 +597,19 @@ fn assert_native_preparation_refusal(
 }
 
 state_test! { sync native_preparation_rejects_signed_noncanonical_time
-    let fixture = native_control_execution_fixture(false);
+    let fixture = native_control_execution_fixture(false, false);
     let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::from_millis(1), false);
     assert_native_preparation_refusal(&fixture, carrier, "canonical logical time");
 }
 
 state_test! { sync native_preparation_rejects_signed_confidential_policy_substitution
-    let fixture = native_control_execution_fixture(false);
+    let fixture = native_control_execution_fixture(false, false);
     let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, true);
     assert_native_preparation_refusal(&fixture, carrier, "confidential");
 }
 
 state_test! { sync native_preparation_rejects_wrong_and_multiple_origin_signatures
-    let fixture = native_control_execution_fixture(true);
+    let fixture = native_control_execution_fixture(true, false);
     let context = fixture.applying.context();
     let keys = native_preparation_global_keys(context);
     let original = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, false);
@@ -645,7 +645,7 @@ state_test! { sync native_preparation_rejects_wrong_and_multiple_origin_signatur
 
 state_test! { sync native_preparation_rejects_stale_source_without_execution_or_publication
     use super::NativeLaneBatchSourcePreparationV1;
-    let fixture = native_control_execution_fixture(false);
+    let fixture = native_control_execution_fixture(false, false);
     let state = &fixture.economic.native.state;
     let carrier = native_preparation_carrier(&fixture, Vec::new(), None, Duration::ZERO, false);
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
@@ -666,7 +666,7 @@ state_test! { sync native_preparation_rejects_stale_source_without_execution_or_
 }
 
 state_test! { sync native_preparation_retained_prefix_does_not_authorize_raw_state_commit
-    let fixture = native_control_execution_fixture(false);
+    let fixture = native_control_execution_fixture(false, false);
     assert_native_preparation_raw_commit_refusal(fixture);
 }
 
@@ -835,7 +835,7 @@ fn native_preparation_publish_later_admission(
 }
 
 state_test! { sync native_preparation_refreshes_source_after_actual_finalized_height_advance
-    let fixture = native_control_execution_fixture(false);
+    let fixture = native_control_execution_fixture(false, false);
     assert_native_preparation_after_height_advance(fixture);
 }
 
@@ -898,7 +898,7 @@ pub(super) struct NativePublicationFixture {
 /// End original genesis/State construction before the terminal assertion frame.
 #[inline(never)]
 pub(super) fn native_publication_fixture(atomic: bool) -> Box<NativePublicationFixture> {
-    native_publication_fixture_from_control(native_control_execution_fixture(atomic))
+    native_publication_fixture_from_control(native_control_execution_fixture(atomic, true))
 }
 
 #[inline(never)]
@@ -923,6 +923,374 @@ fn native_publication_fixture_from_control(
 }
 
 impl NativePublicationFixture {
+    /// Borrow the genuine fixture's configured physical limits.
+    pub(super) fn process_limits() -> crate::sumeragi::v2_lane_instance::LaneProcessLimits {
+        native_process_limits_for_test()
+    }
+
+    /// Select a real key from the exact frozen four-validator committee.
+    pub(super) fn key_for(&self, lane: &VerifiedLaneContext, signer: usize) -> KeyPair {
+        self.original
+            .economic
+            .native
+            .validators
+            .iter()
+            .find(|key| key.public_key() == lane.frozen().committee[signer].public_key())
+            .unwrap()
+            .clone()
+    }
+
+    /// Move the same State family after actual journal detachment, without
+    /// introducing a second instance, physical pool or publication authority.
+    pub(super) fn into_shared_state(self: Box<Self>) -> Arc<State> {
+        Arc::from(self.original.economic.native.state)
+    }
+
+    /// Open real local WAL/body owners for the already authenticated Decisions.
+    /// Alternate quorum signers prove that publication settles the value, while
+    /// preserving the exact local certificate/effect rather than replacing it.
+    pub(super) fn local_apply_owners(
+        &self,
+    ) -> Vec<(
+        VerifiedLaneContext,
+        crate::sumeragi::v2_lane_instance::LaneInstance,
+    )> {
+        use crate::sumeragi::{
+            output_guard::ConsensusOutputGuard,
+            v2_core as core,
+            v2_lane_instance::{
+                LaneBodyLaunch, LaneBodyProgress, LaneBodyWait, LaneInputOutcome, LaneInstance,
+                LaneService,
+            },
+        };
+        use iroha_data_model::block::lane_consensus::LaneMessageV1;
+        let state = self.state();
+        let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
+        let batch = self
+            .carrier
+            .execution_context()
+            .unwrap()
+            .native_lane_decisions
+            .as_ref()
+            .unwrap();
+        batch
+            .groups
+            .iter()
+            .flat_map(|group| &group.decisions)
+            .map(|published| {
+                let lane = observed
+                    .contexts()
+                    .iter()
+                    .find(|lane| {
+                        Hash::from(lane.instance_id().0) == published.manifest.value.instance_id
+                    })
+                    .unwrap();
+                let key = self
+                    .original
+                    .economic
+                    .native
+                    .validators
+                    .iter()
+                    .find(|key| {
+                        key.public_key()
+                            == lane.frozen().committee
+                                [published.manifest.value.origin_producer as usize]
+                                .public_key()
+                    })
+                    .unwrap()
+                    .clone();
+                let now = std::time::Instant::now();
+                let mut owner = LaneInstance::open_with_worker_for_test(
+                    state,
+                    &observed,
+                    lane,
+                    key,
+                    ConsensusOutputGuard::isolated(),
+                    now,
+                    Duration::from_secs(1),
+                    Duration::from_millis(100),
+                    3 * core::MAX_EFFECTS_PER_STEP,
+                )
+                .unwrap();
+                let LaneBodyLaunch::Job(job) = owner.take_body_job(state, &observed).unwrap()
+                else {
+                    panic!("actual original producer must own its physical source job");
+                };
+                let completed = run_native_lane_body_worker_for_test(job, state);
+                let mut original = published.clone();
+                self.resign_local_decision(lane, &mut original);
+                assert_ne!(original.commit_qc.shares, published.commit_qc.shares);
+                assert_eq!(original.manifest, published.manifest);
+                assert!(matches!(
+                    owner
+                        .offer(
+                            state,
+                            &observed,
+                            &LaneMessageV1::QuorumCertificate(original.commit_qc.clone())
+                        )
+                        .unwrap(),
+                    LaneInputOutcome::Stepped(_)
+                ));
+                assert!(matches!(
+                    owner.service_with_worker(state, &observed, now).unwrap(),
+                    LaneService::PersistedAwaitingAck
+                ));
+                assert!(matches!(
+                    owner.finish_body_job(completed, state, &observed).unwrap(),
+                    LaneBodyProgress::Waiting(LaneBodyWait::ControlCompletion)
+                ));
+                service_native_lane_control_for_body_test(&mut owner, state, &observed, now);
+                assert!(matches!(
+                    owner.service_body_completion(state, &observed).unwrap(),
+                    LaneBodyProgress::Stepped(_)
+                ));
+                assert_eq!(owner.native_decision().unwrap().as_ref(), Some(&original));
+                // The earlier local preparation is not the Commit's issued
+                // Fetch/Store/Validate chain. Finish those actual physical jobs
+                // before asking the reducer to expose its original Apply.
+                for _ in 0..8 {
+                    if owner
+                        .held_effects()
+                        .any(|effect| matches!(effect, core::Effect::Apply { .. }))
+                    {
+                        break;
+                    }
+                    service_native_lane_control_for_body_test(&mut owner, state, &observed, now);
+                    let _ = owner.service_body_completion(state, &observed).unwrap();
+                    let _ = run_one_native_lane_body_job_for_test(&mut owner, state, &observed);
+                }
+                assert_eq!(owner.native_decision().unwrap().as_ref(), Some(&original));
+                assert!(
+                    owner
+                        .held_effects()
+                        .any(|effect| matches!(effect, core::Effect::Apply { .. })),
+                    "actual committed body work must produce its original Apply; retained: {:?}",
+                    owner.held_effects().collect::<Vec<_>>()
+                );
+                (lane.clone(), owner)
+            })
+            .collect()
+    }
+
+    /// Open a real matching instance from a separately restored State family.
+    /// The exact snapshot, Kura and frozen context match; the original State
+    /// owner does not. A different genuine committee signer avoids sharing the
+    /// original instance's physical WAL/body writer.
+    #[inline(never)]
+    pub(super) fn foreign_apply_owner(
+        &self,
+    ) -> Box<crate::sumeragi::v2_lane_instance::LaneInstance> {
+        use crate::sumeragi::{
+            output_guard::ConsensusOutputGuard,
+            v2_core as core,
+            v2_lane_instance::{LaneInputOutcome, LaneInstance},
+        };
+        use iroha_data_model::block::lane_consensus::LaneMessageV1;
+        let foreign = self.restored_foreign_state();
+        let observed = foreign.verified_lane_consensus_contexts().unwrap().unwrap();
+        let published = &self
+            .carrier
+            .execution_context()
+            .unwrap()
+            .native_lane_decisions
+            .as_ref()
+            .unwrap()
+            .groups[0]
+            .decisions[0];
+        let lane = observed
+            .contexts()
+            .iter()
+            .find(|lane| Hash::from(lane.instance_id().0) == published.manifest.value.instance_id)
+            .unwrap();
+        let original = self
+            .state()
+            .verified_lane_consensus_contexts()
+            .unwrap()
+            .unwrap();
+        assert!(
+            original
+                .contexts()
+                .iter()
+                .any(|context| context.frozen() == lane.frozen())
+        );
+        let signer =
+            (published.manifest.value.origin_producer as usize + 2) % lane.frozen().committee.len();
+        let key = self
+            .original
+            .economic
+            .native
+            .validators
+            .iter()
+            .find(|key| key.public_key() == lane.frozen().committee[signer].public_key())
+            .unwrap()
+            .clone();
+        let now = std::time::Instant::now();
+        let mut owner = Box::new(
+            LaneInstance::open_with_worker_for_test(
+                &foreign,
+                &observed,
+                lane,
+                key,
+                ConsensusOutputGuard::isolated(),
+                now,
+                Duration::from_secs(1),
+                Duration::from_millis(100),
+                3 * core::MAX_EFFECTS_PER_STEP,
+            )
+            .unwrap(),
+        );
+        assert!(!owner.state_owner_for_test().matches_state(self.state()));
+        assert!(owner.state_owner_for_test().matches_state(&foreign));
+        let mut decision = published.clone();
+        self.resign_local_decision(lane, &mut decision);
+        assert!(matches!(
+            owner
+                .offer(
+                    &foreign,
+                    &observed,
+                    &LaneMessageV1::QuorumCertificate(decision.commit_qc.clone())
+                )
+                .unwrap(),
+            LaneInputOutcome::Stepped(_)
+        ));
+        for _ in 0..8 {
+            service_native_lane_control_for_body_test(&mut owner, &foreign, &observed, now);
+            let _ = owner.service_body_completion(&foreign, &observed).unwrap();
+            let _ = run_one_native_lane_body_job_for_test(&mut owner, &foreign, &observed);
+            if owner
+                .held_effects()
+                .any(|effect| matches!(effect, core::Effect::Apply { .. }))
+            {
+                assert_eq!(owner.native_decision().unwrap().as_ref(), Some(&decision));
+                return owner;
+            }
+        }
+        panic!("actual foreign State WAL/body work must produce its original Apply");
+    }
+
+    // End snapshot decoding before opening any physical lane owner. No snapshot
+    // field or context is rewritten to make the foreign family appear current.
+    #[inline(never)]
+    fn restored_foreign_state(&self) -> Box<State> {
+        let state = self.state();
+        let restored = deserialize::KuraSeed {
+            kura: Arc::clone(&state.kura),
+            lane_manifests: state.lane_manifests.read().clone(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        }
+        .into_state_from_json(norito::json::to_value(state).unwrap())
+        .expect("restore the genuine original snapshot into a distinct State family");
+        assert!(restored.matches_kura_instance(&state.kura));
+        assert_eq!(restored.network_id, state.network_id);
+        assert_eq!(
+            restored.latest_block_hash_fast(),
+            state.latest_block_hash_fast()
+        );
+        restored
+    }
+
+    /// Genuine alternate 2f+1 certificate from this exact four-validator fixture.
+    pub(super) fn resign_local_decision(
+        &self,
+        lane: &VerifiedLaneContext,
+        decision: &mut iroha_data_model::block::lane_consensus::LaneDecisionV1,
+    ) {
+        use iroha_data_model::block::lane_consensus::LaneSignatureShareV1;
+        decision.commit_qc.statement.value = decision.manifest.value;
+        let preimage = decision.commit_qc.statement.signature_preimage().unwrap();
+        decision.commit_qc.shares = [1, 2, 3]
+            .into_iter()
+            .map(|index| {
+                let key = self
+                    .original
+                    .economic
+                    .native
+                    .validators
+                    .iter()
+                    .find(|key| key.public_key() == lane.frozen().committee[index].public_key())
+                    .unwrap();
+                LaneSignatureShareV1 {
+                    signer: index as u32,
+                    signature: Signature::try_new(key.private_key(), &preimage)
+                        .unwrap()
+                        .payload()
+                        .to_vec(),
+                }
+            })
+            .collect();
+        crate::sumeragi::v2_lane_wire::LaneAuthenticator::new(lane)
+            .decision_certificate(decision)
+            .unwrap();
+    }
+
+    /// Actual unopened-work instance: publication alone cannot mint local Ready.
+    #[inline(never)]
+    pub(super) fn local_unready_owner(
+        &self,
+    ) -> Box<crate::sumeragi::v2_lane_instance::LaneInstance> {
+        let state = self.state();
+        let observed = state.verified_lane_consensus_contexts().unwrap().unwrap();
+        let lane = &observed.contexts()[0];
+        let origin = self
+            .carrier
+            .execution_context()
+            .unwrap()
+            .native_lane_decisions
+            .as_ref()
+            .unwrap()
+            .groups[0]
+            .decisions[0]
+            .manifest
+            .value
+            .origin_producer as usize;
+        let other = (origin + 1) % lane.frozen().committee.len();
+        let key = self
+            .original
+            .economic
+            .native
+            .validators
+            .iter()
+            .find(|key| key.public_key() == lane.frozen().committee[other].public_key())
+            .unwrap()
+            .clone();
+        Box::new(
+            crate::sumeragi::v2_lane_instance::LaneInstance::open_with_worker_for_test(
+                state,
+                &observed,
+                lane,
+                key,
+                crate::sumeragi::output_guard::ConsensusOutputGuard::isolated(),
+                std::time::Instant::now(),
+                Duration::from_secs(1),
+                Duration::from_millis(100),
+                3 * crate::sumeragi::v2_core::MAX_EFFECTS_PER_STEP,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// Move the same State family into the actual process-lived driver after
+    /// borrowed preparation has released every writer into owned journals.
+    pub(super) fn into_shared_driver(
+        self: Box<Self>,
+    ) -> (
+        Arc<State>,
+        crate::sumeragi::v2_lane_driver::NativeLaneDriver,
+    ) {
+        let key = self.original.economic.native.validators[0].clone();
+        let state: Arc<State> = Arc::from(self.original.economic.native.state);
+        let driver = crate::sumeragi::v2_lane_driver::NativeLaneDriver::new(
+            Arc::clone(&state),
+            crate::sumeragi::output_guard::ConsensusOutputGuard::isolated(),
+            key,
+            native_driver_limits_for_test(),
+        )
+        .unwrap();
+        (state, driver)
+    }
+
     /// Original State whose authenticated admission and sources are retained.
     pub(super) fn state(&self) -> &State {
         &self.original.economic.native.state

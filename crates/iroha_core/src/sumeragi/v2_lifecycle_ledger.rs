@@ -3317,7 +3317,7 @@ impl ProductionLifecycleOwnerV1 {
         verified: VerifiedHeightContext,
         projection: AuthenticatedRecoveredWalStandaloneSignProjection,
         ledger_root: &Path,
-        body_store: V2BodyStore,
+        mut body_store: V2BodyStore,
         config: &SumeragiV2Config,
         reply_route_source_capacity: usize,
         payload_store: CertifiedServePayloadStoreV1,
@@ -3767,34 +3767,42 @@ impl ProductionLifecycleOwnerV1 {
                 adapter_startup,
             );
         }
-        #[inline(never)]
-        #[allow(
-            clippy::items_after_statements,
-            clippy::result_large_err,
-            clippy::too_many_arguments
-        )]
-        fn open_recovered_control_sign_startup(
-            verified: VerifiedHeightContext,
-            projection: AuthenticatedRecoveredWalStandaloneSignProjection,
-            ledger_store: LifecycleLedgerStoreV1,
-            opened: LifecycleLedgerV1,
-            mut body_store: V2BodyStore,
-            config: &SumeragiV2Config,
-            reply_route_source_capacity: usize,
-            mut payload_store: CertifiedServePayloadStoreV1,
-            serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        // Storage authentication and volatile registry installation have disjoint
+        // temporary owners. Finish the first phase before opening the second;
+        // otherwise both large debug frames overlap recursive authority decoding.
+        struct ReplayedRecoveredControlSignStartup {
+            repaired: LifecycleLedgerV1,
+            body_pipeline: super::replay_authority::PreparedDurableCertifiedBodyPipelineStartupV1,
             adapter_startup: ProductionLifecycleAdapterStartupV1,
-        ) -> Result<ProductionLifecycleOwnerV1, ProductionRecoveredWalControlStartupErrorV1>
-        {
+        }
+        struct PreparedRecoveredControlSignStartup {
+            repaired: LifecycleLedgerV1,
+            recovery: AuthenticatedLifecycleRecoveryCut,
+            body_pipeline: super::replay_authority::PreparedDurableCertifiedBodyPipelineStartupV1,
+            adapter_startup: ProductionLifecycleAdapterStartupV1,
+        }
+        #[inline(never)]
+        #[allow(clippy::items_after_statements, clippy::too_many_arguments)]
+        fn prepare_recovered_control_sign_startup(
+            verified: &VerifiedHeightContext,
+            projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
+            ledger_store: &LifecycleLedgerStoreV1,
+            opened: LifecycleLedgerV1,
+            body_store: &mut V2BodyStore,
+            adapter_startup: ProductionLifecycleAdapterStartupV1,
+        ) -> Result<
+            Box<ReplayedRecoveredControlSignStartup>,
+            ProductionRecoveredWalControlStartupErrorV1,
+        > {
             let (reconciled, staged_timeout_supersession) = opened
-                .reconcile_superseded_timeout_broadcast(&verified, &projection)
+                .reconcile_superseded_timeout_broadcast(verified, projection)
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
                         "recovered control timeout supersession invariant failed",
                     )
                 })?;
             let (repaired, ordinal, staged) = reconciled
-                .stage_authenticated_wal_control_sign(&projection)
+                .stage_authenticated_wal_control_sign(projection)
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
                         "recovered control durable row is absent-or-exact invariant failed",
@@ -3807,7 +3815,7 @@ impl ProductionLifecycleOwnerV1 {
                         &opened,
                         &reconciled,
                         &repaired,
-                        &projection,
+                        projection,
                         ordinal,
                     )
                     .map_err(|_error| {
@@ -3835,7 +3843,7 @@ impl ProductionLifecycleOwnerV1 {
                 ));
             }
             let body_pipeline = repaired
-                .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
+                .authenticate_durable_certified_body_pipeline_startup(verified, body_store)
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
                         "recovered control body-pipeline census authentication failed",
@@ -3843,9 +3851,9 @@ impl ProductionLifecycleOwnerV1 {
                 })?;
             let (repaired, body_pipeline) = repaired
                 .reconcile_timeout_body_pipeline_startup(
-                    &verified,
-                    &body_store,
-                    &ledger_store,
+                    verified,
+                    body_store,
+                    ledger_store,
                     &adapter_startup,
                     body_pipeline,
                 )
@@ -3853,24 +3861,70 @@ impl ProductionLifecycleOwnerV1 {
             let (body_pipeline, adapter_startup) = body_pipeline
                 .replay_adapter_startup(adapter_startup)
                 .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+            Ok(Box::new(ReplayedRecoveredControlSignStartup {
+                repaired,
+                body_pipeline,
+                adapter_startup,
+            }))
+        }
+        #[inline(never)]
+        #[allow(clippy::items_after_statements)]
+        fn assemble_recovered_control_sign_startup(
+            replayed: Box<ReplayedRecoveredControlSignStartup>,
+            body_store: &mut V2BodyStore,
+            projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
+            serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        ) -> Result<
+            Box<PreparedRecoveredControlSignStartup>,
+            ProductionRecoveredWalControlStartupErrorV1,
+        > {
             let (recovery, body_pipeline) =
             AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_wal_control_sign_and_body_pipeline_startup(
-                repaired.clone(),
+                replayed.repaired.clone(),
                 serve_payloads,
-                &mut body_store,
-                &projection,
-                body_pipeline,
+                body_store,
+                projection,
+                replayed.body_pipeline,
             )
             .map_err(ProductionRecoveredWalControlStartupErrorV1::from_assembly)?;
+            Ok(Box::new(PreparedRecoveredControlSignStartup {
+                repaired: replayed.repaired,
+                recovery,
+                body_pipeline,
+                adapter_startup: replayed.adapter_startup,
+            }))
+        }
+        #[inline(never)]
+        #[allow(
+            clippy::items_after_statements,
+            clippy::result_large_err,
+            clippy::too_many_arguments
+        )]
+        fn open_recovered_control_sign_startup(
+            verified: VerifiedHeightContext,
+            projection: AuthenticatedRecoveredWalStandaloneSignProjection,
+            ledger_store: LifecycleLedgerStoreV1,
+            prepared: Box<PreparedRecoveredControlSignStartup>,
+            body_store: V2BodyStore,
+            config: &SumeragiV2Config,
+            reply_route_source_capacity: usize,
+            mut payload_store: CertifiedServePayloadStoreV1,
+        ) -> Result<ProductionLifecycleOwnerV1, ProductionRecoveredWalControlStartupErrorV1>
+        {
             let mut registry = LifecycleWorkRegistryHolder::empty();
             let mut installed = registry
                 .registry_mut()
-                .install_recovered_wal_control_sign(&verified, &ledger_store, &repaired, projection)
+                .install_recovered_wal_control_sign(
+                    &verified,
+                    &ledger_store,
+                    &prepared.repaired,
+                    projection,
+                )
                 .map_err(|error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                 })?;
             installed
-                .install_body_pipeline(body_pipeline)
+                .install_body_pipeline(prepared.body_pipeline)
                 .map_err(|error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                 })?;
@@ -3886,7 +3940,7 @@ impl ProductionLifecycleOwnerV1 {
                     authority,
                     ledger_store,
                     &mut payload_store,
-                    recovery,
+                    prepared.recovery,
                 )
                 .map_err(|error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
@@ -3906,20 +3960,33 @@ impl ProductionLifecycleOwnerV1 {
                 body_store_identity: None,
                 kura_binding: None,
                 apply_service: None,
-                adapter_startup: Some(adapter_startup),
+                adapter_startup: Some(prepared.adapter_startup),
             })
         }
+        let replayed = prepare_recovered_control_sign_startup(
+            &verified,
+            &projection,
+            &ledger_store,
+            opened,
+            &mut body_store,
+            adapter_startup,
+        )?;
+        let prepared = assemble_recovered_control_sign_startup(
+            replayed,
+            &mut body_store,
+            &projection,
+            serve_payloads,
+        )?;
+
         open_recovered_control_sign_startup(
             verified,
             projection,
             ledger_store,
-            opened,
+            prepared,
             body_store,
             config,
             reply_route_source_capacity,
             payload_store,
-            serve_payloads,
-            adapter_startup,
         )
     }
     /// Repair/coalesce and open one exact Decision-owned certified Fetch.

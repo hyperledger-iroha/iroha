@@ -29,6 +29,8 @@ pub(in crate::state::carrier_preparation::journals) struct PublishedCarrier<A, B
     committed_event: iroha_data_model::events::pipeline::BlockEvent,
     events: Vec<EventBox>,
     checkpoint: KuraWsvCheckpointReceipt,
+    // Original opaque State family, retained without a State borrow or pointer ABA.
+    state_owner: std::sync::Arc<crate::state::BlockHashOwner>,
     source: super::super::super::super::execution_prefix::ValidatedExecutionPrefix,
     // These outlive all values retained for completion delivery.
     admission: A,
@@ -36,7 +38,132 @@ pub(in crate::state::carrier_preparation::journals) struct PublishedCarrier<A, B
     installation: I,
 }
 
+/// Borrowed proof of completed global publication of the original Native source.
+///
+/// Only the terminal publisher exposes this value. Its borrows retain the actual
+/// carrier/source and their resource owners; wire evidence cannot construct it.
+#[must_use]
+pub(crate) struct PublishedNativeApply<'published> {
+    state_owner: &'published std::sync::Arc<crate::state::BlockHashOwner>,
+    block: &'published iroha_data_model::block::SignedBlock,
+    source: &'published crate::state::NativeExecutionCustody,
+}
+
+impl PublishedNativeApply<'_> {
+    // Authenticate the actual published group before using it for either Apply
+    // settlement or terminal retirement. A global finality/QC by itself cannot
+    // construct this borrowed proof or replace its original State/source owner.
+    fn published_instance(
+        &self,
+        owner: &crate::state::NativeLaneStateOwner,
+        instance: &crate::state::VerifiedLaneContext,
+    ) -> Result<
+        (
+            &iroha_data_model::block::lane_consensus::LaneDecisionV1,
+            crate::sumeragi::v2_core::Subject,
+        ),
+        String,
+    > {
+        if !std::sync::Arc::ptr_eq(self.state_owner, &owner.0)
+            || !self
+                .source
+                .retains_carrier(self.block, self.source.context().context())
+        {
+            return Err("Native application proof belongs to another State or source".into());
+        }
+        let auth = crate::sumeragi::v2_lane_wire::LaneAuthenticator::new(instance);
+        for group in self.source.sources() {
+            for (context, published) in group.contexts().iter().zip(group.decisions()) {
+                if context.instance_id() != instance.instance_id() {
+                    continue;
+                }
+                if context.frozen() != instance.frozen() {
+                    return Err(
+                        "Native application proof differs from the original frozen context".into(),
+                    );
+                }
+                let actual = auth
+                    .decision_certificate(published)
+                    .map_err(|error| error.to_string())?;
+                return Ok((published, actual.subject()));
+            }
+        }
+        Err("Native application proof does not contain this original instance/group".into())
+    }
+
+    /// Authenticate one original local Decision against its published group.
+    /// Quorum signer subsets may differ; the entire immutable value may not.
+    pub(crate) fn authorizes(
+        &self,
+        owner: &crate::state::NativeLaneStateOwner,
+        instance: &crate::state::VerifiedLaneContext,
+        original: &iroha_data_model::block::lane_consensus::LaneDecisionV1,
+    ) -> Result<(), String> {
+        let (published, published_subject) = self.published_instance(owner, instance)?;
+        let auth = crate::sumeragi::v2_lane_wire::LaneAuthenticator::new(instance);
+        let local = auth
+            .decision_certificate(original)
+            .map_err(|error| error.to_string())?;
+        if original.manifest != published.manifest {
+            return Err(
+                "Native application proof differs from the original immutable value".into(),
+            );
+        }
+        if local.subject() != published_subject {
+            return Err("Native application proof differs from the original subject".into());
+        }
+        Ok(())
+    }
+
+    /// Authorize terminal in-memory retirement for this exact original instance.
+    /// Every actual fsynced or retained issued Decision must authenticate the published
+    /// value, even before its reducer acknowledgement or body manifest exists.
+    /// Earlier proposal, lock/vote and timeout intents need not name that value.
+    pub(crate) fn authorizes_terminal<'qc>(
+        &self,
+        owner: &crate::state::NativeLaneStateOwner,
+        instance: &crate::state::VerifiedLaneContext,
+        local_decisions: impl IntoIterator<
+            Item = &'qc iroha_data_model::block::lane_consensus::LaneQcV1,
+        >,
+    ) -> Result<(), String> {
+        let (published, published_subject) = self.published_instance(owner, instance)?;
+        let auth = crate::sumeragi::v2_lane_wire::LaneAuthenticator::new(instance);
+        for original in local_decisions {
+            // The actual published manifest supplies the complete value join.
+            // This neither changes the original QC nor infers body readiness.
+            let original = iroha_data_model::block::lane_consensus::LaneDecisionV1 {
+                manifest: published.manifest,
+                commit_qc: original.clone(),
+            };
+            let local = auth
+                .decision_certificate(&original)
+                .map_err(|error| error.to_string())?;
+            if local.subject() != published_subject {
+                return Err(
+                    "Native terminal publication differs from a durable local Decision".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<A, B, I> PublishedCarrier<A, B, I> {
+    /// Borrow exact Native completion authority only from actual State publication.
+    pub(in crate::state::carrier_preparation::journals) fn native_apply(
+        &self,
+    ) -> Option<PublishedNativeApply<'_>> {
+        let source = self.source.native()?;
+        source
+            .retains_carrier(self.block(), source.context().context())
+            .then_some(PublishedNativeApply {
+                state_owner: &self.state_owner,
+                block: self.block(),
+                source,
+            })
+    }
+
     /// Borrow the exact result-bearing carrier that became visible.
     pub(in crate::state::carrier_preparation::journals) fn block(
         &self,
@@ -134,6 +261,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             _fences: fences,
         } = components;
 
+        let state_owner = std::sync::Arc::clone(&target.block_hashes.owner);
         let generation = target.begin_state_view_write();
         transactions.publish();
         runtime.publish();
@@ -175,6 +303,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             committed_event,
             events: publication_events,
             checkpoint,
+            state_owner,
             source: source_prefix,
             admission,
             binding,

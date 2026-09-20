@@ -625,6 +625,7 @@ impl<Admission, BindingAdmission, Installation>
 
 #[path = "publication.rs"]
 mod publication;
+pub(crate) use publication::PublishedNativeApply;
 
 #[cfg(test)]
 #[path = "physical_publication_tests.rs"]

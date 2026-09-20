@@ -745,88 +745,223 @@ V2IoCommand::LifecycleValidate(task) => {
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
         """
-let guarded = match result {
-    Ok(executed) => GuardedLifecycleValidateWorkerResultV1::new(key, executed, output_guard),
-    Err((super::v2_body_store::V2BodyStoreError::LocalBusy(dependency), dispatch)) => {
-        GuardedLifecycleValidateWorkerResultV1::local_busy(
-            key, dispatch, dependency, output_guard,
-        )
-    }
-    Err((error, _dispatch)) => return Err(error.to_string()),
-};
-Ok(V2IoCompletion::LifecycleValidate(Box::new(guarded)))
+    let guarded = match result {
+        Ok(executed) => GuardedLifecycleValidateWorkerResultV1::new(key, executed, output_guard),
+        Err((error, dispatch)) => {
+            let refusal = match error {
+                super::v2_body_store::V2BodyStoreError::LocalValidation(refusal) => refusal,
+                error => super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
+                    error.to_string(),
+                ),
+            };
+            GuardedLifecycleValidateWorkerResultV1::deferred(key, dispatch, refusal, output_guard)
+        }
+    };
+    Ok(V2IoCompletion::LifecycleValidate(Box::new(guarded)))
 """,
         "physical refusal must retain the original dispatch and output guard in its typed completion",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
         """
-let release = Some(dependency.wait.clone().wait_for_release());
-Self {
-    key,
-    result: Some(LifecycleValidateWorkerResultV1::LocalBusy {
-        dispatch, dependency, release,
-    }),
-    drop_guard: LifecycleValidateCompletionDropGuardV1::new(output_guard),
-}
+    pub(in crate::sumeragi) fn into_local_or_publication(
+        self,
+    ) -> Result<Self, RetainedLocalLifecycleValidateV1> {
+        if matches!(
+            self.guarded.result(),
+            LifecycleValidateWorkerResultV1::Completed(_)
+        ) {
+            return Ok(self);
+        }
+        let Self {
+            guarded,
+            queue,
+            physical_completion,
+        } = self;
+        let (key, result, drop_guard) = (*guarded).into_parts();
+        let LifecycleValidateWorkerResultV1::Deferred { dispatch, refusal } = result else {
+            unreachable!("local branch retains the local dispatch")
+        };
+        let release = match &refusal {
+            super::v2_body_store::LocalValidationRefusal::PhysicalBusy(dependency) => {
+                Some(dependency.wait.clone().wait_for_release())
+            }
+            super::v2_body_store::LocalValidationRefusal::QueueRelease { wait, .. } => {
+                Some(wait.clone().wait_for_release())
+            }
+            super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_) => None,
+        };
+        Err(RetainedLocalLifecycleValidateV1 {
+            dispatch,
+            refusal,
+            release,
+            ack: LifecycleValidateCompletionAckV1 {
+                key,
+                queue,
+                drop_guard,
+                physical_completion,
+            },
+        })
+    }
 """,
         "local Validate must retain its original physical release observation without a guard",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
         """
-pub(in crate::sumeragi) fn retry_local(mut self) -> LifecycleValidateLocalRetryV1 {
-    let Some(LifecycleValidateWorkerResultV1::LocalBusy {
-        dependency, release, ..
-    }) = self.guarded.result.as_mut() else {
-        return LifecycleValidateLocalRetryV1::Executed(self);
-    };
-    if self.guarded.drop_guard.output_guard.restart_required() {
-        return LifecycleValidateLocalRetryV1::RestartRequired;
-    }
-if let Some(future) = release.as_mut() {
-    let mut context = std::task::Context::from_waker(dependency.waker());
-    if std::future::Future::poll(std::pin::Pin::new(future), &mut context).is_pending() {
-        return LifecycleValidateLocalRetryV1::Waiting(self);
-    }
-    *release = None;
-}
-let Self { guarded, queue, physical_completion, } = self;
-let (key, result, mut drop_guard) = (*guarded).into_parts();
-let LifecycleValidateWorkerResultV1::LocalBusy { dispatch, dependency, .. } = result else {
-    unreachable!("only the retained physical wait reaches retry");
-};
-match queue.retry_lifecycle_validate(LifecycleValidateTaskV1 { key, dispatch }) {
-    Ok(()) => {
-        drop_guard.disarm();
-        LifecycleValidateLocalRetryV1::Requeued
-    }
+    pub(in crate::sumeragi) fn retry(mut self) -> LocalLifecycleValidateRetryV1 {
+        use super::v2_body_store::LocalValidationRefusal;
+        use std::{future::Future, pin::Pin, task::Context};
+
+        let wake = match &self.refusal {
+            LocalValidationRefusal::PhysicalBusy(dependency) => dependency.waker().clone(),
+            LocalValidationRefusal::QueueRelease { wake, .. } => wake.clone(),
+            LocalValidationRefusal::RecoveryRequired(reason) => {
+                self.ack
+                    .drop_guard
+                    .output_guard
+                    .retain_effect_failure(reason.clone());
+                self.ack
+                    .drop_guard
+                    .output_guard
+                    .close_admission_for_restart();
+                return LocalLifecycleValidateRetryV1::RecoveryRequired(self);
+            }
+        };
+        if self.ack.drop_guard.output_guard.restart_required() {
+            return LocalLifecycleValidateRetryV1::RecoveryRequired(self);
+        }
+        if let Some(release) = self.release.as_mut() {
+            if Pin::new(release)
+                .poll(&mut Context::from_waker(&wake))
+                .is_pending()
+            {
+                return LocalLifecycleValidateRetryV1::Waiting(self);
+            }
+            self.release = None;
+        }
+        let output_guard = Arc::clone(&self.ack.drop_guard.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            return LocalLifecycleValidateRetryV1::RecoveryRequired(self);
+        };
+        let Self {
+            dispatch,
+            refusal,
+            release,
+            mut ack,
+        } = self;
+        let task = LifecycleValidateTaskV1 {
+            key: ack.key,
+            dispatch,
+        };
+        match ack.queue.retry_lifecycle_validate(task) {
+            Ok(()) => {
+                ack.drop_guard.disarm();
+                operation.complete();
+                LocalLifecycleValidateRetryV1::Requeued
+            }
 """,
         "physical release must precede same-key retry and disarm only after queue publication",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
         """
-Err(LifecycleValidateRetryQueueErrorV1::Unavailable { task, release }) => {
-    let mut release = release.wait_for_release();
-    let mut context = std::task::Context::from_waker(dependency.waker());
-    if std::future::Future::poll(std::pin::Pin::new(&mut release), &mut context).is_ready() {
-        dependency.waker().wake_by_ref();
-    }
-    LifecycleValidateLocalRetryV1::Waiting(Self {
-        guarded: Box::new(GuardedLifecycleValidateWorkerResultV1 {
-            key,
-            result: Some(LifecycleValidateWorkerResultV1::LocalBusy {
-                dispatch: task.dispatch, dependency, release: Some(release),
-            }),
-            drop_guard,
-        }),
-        queue,
-        physical_completion,
-    })
-}
+            Err(LifecycleValidateRetryQueueErrorV1::Unavailable { task, release }) => {
+                let mut release = release.wait_for_release();
+                if Pin::new(&mut release)
+                    .poll(&mut Context::from_waker(&wake))
+                    .is_ready()
+                {
+                    // A release between the failed probe and registration schedules
+                    // one bounded turn instead of spinning or losing the wake.
+                    wake.wake_by_ref();
+                }
+                let retained = Self {
+                    dispatch: task.dispatch,
+                    refusal,
+                    release: Some(release),
+                    ack,
+                };
+                operation.complete();
+                LocalLifecycleValidateRetryV1::Waiting(retained)
+            }
 """,
         "worker backpressure must retain the same dispatch and register the original release wake",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
+        """
+    fn retry_local_lifecycle_validate(
+        &mut self,
+        retained: RetainedLocalLifecycleValidateV1,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        match retained.retry() {
+            LocalLifecycleValidateRetryV1::Waiting(retained) => {
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
+            }
+            LocalLifecycleValidateRetryV1::Requeued => {
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued
+            }
+            LocalLifecycleValidateRetryV1::RecoveryRequired(retained) => {
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                ProductionLifecycleCompletionSelectionV1::RestartRequired
+            }
+        }
+    }
+""",
+        "the local retry reducer must retain the original owner in both waiting and recovery states",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        """
+    pub(in crate::sumeragi) fn into_publication_parts(
+        self,
+    ) -> (
+        ExecutedDurableValidateDispatch,
+        LifecycleValidateCompletionAckV1,
+    ) {
+        let Self {
+            guarded,
+            queue,
+            physical_completion,
+        } = self;
+        let (key, result, drop_guard) = (*guarded).into_parts();
+        let LifecycleValidateWorkerResultV1::Completed(dispatch) = result else {
+            panic!("local validation refusal cannot enter semantic publication")
+        };
+        (
+            dispatch,
+            LifecycleValidateCompletionAckV1 {
+                key,
+                queue,
+                drop_guard,
+                physical_completion,
+            },
+        )
+    }
+""",
+        "only executed Validate results may cross the semantic publication split",
+    )
+    require_sequence(
+        "crates/iroha_core/src/sumeragi/v2_worker_completion.rs",
+        """
+    fn deferred(
+        key: LifecycleValidateDispatchKeyV1,
+        dispatch: DurableValidateDispatch,
+        refusal: super::v2_body_store::LocalValidationRefusal,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self {
+            key,
+            result: Some(LifecycleValidateWorkerResultV1::Deferred { dispatch, refusal }),
+            drop_guard: LifecycleValidateCompletionDropGuardV1::new(output_guard),
+        }
+    }
+""",
+        "deferred worker completion must retain the original typed dispatch and armed guard",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -858,65 +993,47 @@ Ok(())
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         """
-let Some(completion) =
-    PendingLifecycleCompletionV1::take_validate(pending_lifecycle_completion)
-else {
-    services
-        .lifecycle_output_guard()
-        .close_admission_for_restart();
-    return ProductionLifecycleCompletionSelectionV1::RestartRequired;
-};
-let completion = match completion.retry_local() {
-    crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Executed(completion) => {
-        completion
-    }
-    crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Waiting(completion) => {
-        *pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::Validate(completion));
-        return ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting;
-    }
-    crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::Requeued => {
-        return ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued;
-    }
-    crate::sumeragi::v2_worker::LifecycleValidateLocalRetryV1::RestartRequired => {
-        services.lifecycle_output_guard().close_admission_for_restart();
-        return ProductionLifecycleCompletionSelectionV1::RestartRequired;
-    }
-};
-let (dispatch, ack) = completion.into_publication_parts();
-let physical_completion = ack.physical_completion();
-match owner.coordinator.complete_durable_validate_dispatch(
-    &mut owner.registry,
-    dispatch,
-)
+        let Some(completion) =
+            PendingLifecycleCompletionV1::take_validate(pending_lifecycle_completion)
+        else {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+        };
+        let completion = match completion.into_local_or_publication() {
+            Ok(completion) => completion,
+            Err(retained) => return self.retry_local_lifecycle_validate(retained),
+        };
+        let (dispatch, ack) = completion.into_publication_parts();
+        let physical_completion = ack.physical_completion();
+        match owner.coordinator.complete_durable_validate_dispatch(
+            &mut owner.registry,
+            dispatch,
+        )
 """,
         "the turn driver must rejoin the guarded completion to its coordinator row",
     )
     require_sequence(
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         """
-PendingLifecycleCompletionV1::Validate(completion) => {
-    self.pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::Validate(completion));
-    let selected = self.settle_parked_lifecycle_validate_completion();
-    if matches!(selected, ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting) {
-        match self.services.prepare_ordinary_completion_behind_validate_fence() {
-            Ok(true) => {
-                return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
-            }
-            Ok(false) => {}
-            Err(reason) => {
-                iroha_logger::error!(
-                    %reason,
-                    "ordinary Completion physical-wait classification failed closed"
-                );
-                self.close_output_for_restart();
-                return ProductionLifecycleCompletionPreGateV1::Selected(
-                    ProductionLifecycleCompletionSelectionV1::RestartRequired,
-                );
-            }
-        }
-    }
-    selected
-}
+                PendingLifecycleCompletionV1::LocalValidate(retained) => {
+                    let selected = self.retry_local_lifecycle_validate(retained);
+                    if matches!(selected, ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting) {
+                        match self.services.prepare_ordinary_completion_behind_validate_fence() {
+                            Ok(true) => return ProductionLifecycleCompletionPreGateV1::Ordinary(runner),
+                            Ok(false) => {},
+                            Err(reason) => {
+                                self.services.lifecycle_output_guard().retain_effect_failure(reason);
+                                self.close_output_for_restart();
+                                return ProductionLifecycleCompletionPreGateV1::Selected(
+                                    ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                                );
+                            }
+                        }
+                    }
+                    selected
+                },
 """,
         "physical Validate wait must preserve its parked owner and use only the authenticated ordinary completion drain",
     )

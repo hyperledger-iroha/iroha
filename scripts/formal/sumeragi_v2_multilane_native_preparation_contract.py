@@ -418,6 +418,8 @@ PREPARATION_OWNER_BINDINGS = (
         'provider\n                    .try_prepare()', 'reputation\n                    .try_prepare()', "return Err((self, error));",
         "self.journals.provider_capture = self.provider.take()", "self.journals.reputation_capture = self.reputation.take()",
         'owner\n                .into_prepared()', "Ok(self.journals)",
+        'if let Some(provider) = &mut self.provider {\n                provider\n                    .try_prepare()\n                    .map_err(|error| CarrierArchivePreparationError::Provider(Arc::new(error)))?;\n            }',
+        'if let Some(reputation) = &mut self.reputation {\n                reputation\n                    .try_prepare()\n                    .map_err(|error| CarrierArchivePreparationError::Reputation(Arc::new(error)))?;\n            }',
     )),
     (OUTPUT, "struct", "SealedExecutionOutputs", (
         "proposal:", "wire_hash: Hash", "wire_bytes: u64", "world_delta:", "sources: OwnedExecutionSources",
@@ -555,6 +557,8 @@ TERMINAL_OWNER_BINDINGS = (
         "original.journals.provider_capture.as_ref()", "original.journals.reputation_capture.as_ref()",
         'capture\n                    .reauthenticate_under_publication_lease(\n                        &owner.kura,\n                        original.checkpoint.finality_receipt(),\n                    )',
         "Err(error) => Err((owner.release(), error))",
+        'if let Some(capture) = original.journals.provider_capture.as_ref() {\n                capture\n                    .reauthenticate_under_publication_lease(\n                        &owner.kura,\n                        original.checkpoint.finality_receipt(),\n                    )\n                    .map_err(CarrierPhysicalPreparationError::Provider)?;\n            }',
+        'if let Some(capture) = original.journals.reputation_capture.as_ref() {\n                capture\n                    .reauthenticate_under_publication_lease(\n                        &owner.kura,\n                        original.checkpoint.finality_receipt(),\n                    )\n                    .map_err(CarrierPhysicalPreparationError::Reputation)?;\n            }',
     )),
     (PHYSICAL_CARRIER, "fn", "try_prepare_physical", (
         "admit: impl FnOnce(&Self, &State)", "admit(&original, target)",

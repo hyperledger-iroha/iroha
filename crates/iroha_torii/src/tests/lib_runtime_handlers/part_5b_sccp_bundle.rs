@@ -71,27 +71,48 @@ fn app_with_indexed_sccp_message_for_test(
     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
     builder.push_transaction(tx);
     let mut block = builder.build_with_signature(0, keypair.private_key());
-    crate::test_utils::attach_fixture_execution_outputs(
-        &mut block,
-        vec![iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
-            iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
-                input_index: 0,
-                result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
-                completions: vec![],
-            },
-        )],
-    );
     let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
     assert_eq!(messages.len(), 1);
     let message = &messages[0];
     let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
         .expect("SCCP commitment root");
     block.set_sccp_commitment_root(Some(commitment_root));
-    block.replace_signatures(
-        [checked_torii_test_block_signature(
-            0, &keypair, &block.header(), "sign SCCP fixture with final proposal commitment",
-        )].into_iter().collect(),
-    ).expect("signature binds the complete SCCP fixture proposal");
+    // Finalize the proposal before attaching outputs: changing its SCCP root
+    // invalidates any previously attached execution result.
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut block,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
+    );
+    assert!(block.has_results());
+    block
+        .validate_output_merkle_cache()
+        .expect("SCCP fixture retains its exact Network output");
+    assert_eq!(
+        iroha_core::bridge::sccp_commitment_root_from_messages(
+            &iroha_core::bridge::collect_sccp_messages_from_signed_block(&block),
+        ),
+        Some(commitment_root),
+    );
+    block
+        .replace_signatures(
+            [checked_torii_test_block_signature(
+                0,
+                &keypair,
+                &block.header(),
+                "sign SCCP fixture with final proposal commitment",
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .expect("signature binds the complete SCCP fixture proposal");
     let block_hash = block.hash();
     let message_id = message.commitment.message_id;
     let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(context.lane, message_id)

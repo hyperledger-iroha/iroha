@@ -27,6 +27,7 @@ use std::{
 
 // Immutable routing identity only. No key secret, mutable view, vote or lock copy.
 struct IssuedOpening {
+    state_owner: crate::state::NativeLaneStateOwner,
     instance: HeightContextId,
     signer: u32,
     peer: PeerId,
@@ -34,6 +35,7 @@ struct IssuedOpening {
 }
 
 struct OpeningResources {
+    state_owner: crate::state::NativeLaneStateOwner,
     verified: VerifiedLaneContext,
     key: KeyPair,
     now: Instant,
@@ -76,6 +78,7 @@ impl OpeningResources {
             return Err((bad("completed opening lost a physical owner"), self));
         }
         Ok(Box::new(LaneInstance {
+            state_owner: self.state_owner,
             verified: self.verified,
             reducer,
             wal: self.wal.take(),
@@ -94,6 +97,7 @@ impl OpeningResources {
             base_timeout: self.base_timeout,
             retransmit_interval: self.retransmit_interval,
             held: Vec::new(),
+            retired: std::collections::VecDeque::new(),
             completion: None,
             effect_limit: self.effect_limit,
             failed: false,
@@ -295,7 +299,9 @@ impl LaneOpening {
         if !Arc::ptr_eq(&self.issued, &completed.issued) {
             return Err((bad("foreign native opening completion"), self, completed));
         }
-        if !state.matches_kura_instance(&self.issued.kura) {
+        if !self.issued.state_owner.matches_state(state)
+            || !state.matches_kura_instance(&self.issued.kura)
+        {
             return Err((
                 bad("opening adoption has a foreign State storage owner"),
                 self,
@@ -477,7 +483,9 @@ impl LaneInstance {
         let Some(operation) = guard.begin_fail_stop_operation() else {
             return Err(bad("consensus output is closed"));
         };
+        let state_owner = state.native_lane_state_owner();
         let issued = Arc::new(IssuedOpening {
+            state_owner: state_owner.clone(),
             instance: verified.instance_id(),
             signer,
             peer: PeerId::new(key.public_key().clone()),
@@ -493,6 +501,7 @@ impl LaneInstance {
             after_wal_open: None,
             issued,
             resources: Some(OpeningResources {
+                state_owner,
                 verified: verified.clone(),
                 key,
                 now,

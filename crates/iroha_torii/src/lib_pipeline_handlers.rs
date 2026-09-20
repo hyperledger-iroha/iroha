@@ -43,134 +43,178 @@ fn transaction_batch_submission_response(accepted_count: usize) -> Response {
     }
     response
 }
-async fn allow_transaction_batch_rate_limit(
-    limiter: &limits::RateLimiter,
-    verified_authorities: &[AccountId],
-) -> bool {
-    admit_verified_transaction_authorities(limiter, verified_authorities)
-        .await
-        .is_ok()
-}
+/// Batch preflight is side-effect free. After dispatch starts, every input has
+/// an explicit result; no aggregate rejection may conceal durable acceptance.
 async fn handler_post_transactions_batch(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
 ) -> Result<Response, Error> {
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
+    use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
+    // This deadline stops new dispatch and bounds cancellable transport waits.
+    // A physical journal write already in progress cannot be preempted: retain
+    // its completed result, then decline to dispatch further fresh entries.
+    #[cfg(feature = "connect")]
+    let deadline = tokio::time::Instant::now() + TORII_PROXY_EXECUTION_BUDGET;
+    let token = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
     validate_transaction_batch_body_size(&body, app.transaction_batch_max_bytes)?;
-    let compute_permit =
+    let permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
-    let (transactions, compute_permit) = run_transaction_ingress_compute_job(
-        compute_permit,
+    let max_transactions = app.transaction_batch_max_transactions;
+    let (transactions, permit) = run_transaction_ingress_compute_job(
+        permit,
         "transaction_batch_decode_worker_failed",
-        {
-            let queue = app.queue.clone();
-            let state = app.state.clone();
-            let max_transactions = app.transaction_batch_max_transactions;
-            move || {
-                decode_transaction_batch_request(
-                    body,
-                    max_transactions,
-                    queue.as_ref(),
-                    state.as_ref(),
-                )
-            }
-        },
+        move || decode_transaction_batch_request(body, max_transactions),
     )
     .await?;
-    admit_transaction_api_token_preauth(
-        &app.tx_preauth_rate_limiter,
-        token_hdr,
-        transactions.len(),
-    )
-    .await?;
-    let ((accepted_transactions, stateless_cache_warm), compute_permit) = {
-        let app = app.clone();
-        run_transaction_ingress_compute_job(
-            compute_permit,
-            "transaction_batch_admission_worker_failed",
-            move || {
-                let mut accepted_transactions = Vec::with_capacity(transactions.len());
-                let mut stateless_cache_warm = Vec::new();
-                let prechecks = precheck_transaction_batch_ed25519(
-                    &transactions,
-                    app.state.pipeline.signature_batch_max_ed25519,
-                );
-                for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
-                    let accepted_tx =
-                        routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
-                            app.state.clone(),
-                            transaction,
-                            &app.telemetry,
-                            precheck.single_ed25519_prechecked,
-                            precheck.precheck_rejection,
-                        )?;
-                    // No route in the batch may mask a later reserved entrypoint's
-                    // dedicated admission boundary.
-                    routing::ensure_generic_transaction_batch_entrypoint_allowed(
-                        app.queue.as_ref(),
-                        accepted_tx.entrypoint(),
-                    )?;
-                    if precheck.single_ed25519_prechecked {
-                        stateless_cache_warm.push(accepted_tx.clone());
-                    }
-                    accepted_transactions.push(accepted_tx);
-                }
-                let mut accepted = Vec::with_capacity(accepted_transactions.len());
-                #[cfg(feature = "connect")]
-                let mut local_route_cache = Vec::new();
-                for accepted_tx in accepted_transactions {
-                    let routing_plan = app
-                        .queue
-                        .route_plan_with_state(&accepted_tx, app.state.as_ref())
-                        .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
-                    let routing_decision = routing_plan.coordinator_route();
-                    #[cfg(feature = "connect")]
-                    if !should_execute_route_locally_cached(
-                        app.as_ref(),
-                        routing_decision,
-                        &mut local_route_cache,
-                    ) {
-                        return Err(Error::AppServiceUnavailable {
-                            code: "transaction_batch_route_not_local",
-                            message: "batched transaction submission currently accepts only transactions routed to the receiving Torii node".to_owned(),
-                        });
-                    }
-                    accepted.push((accepted_tx, routing_plan));
-                }
-                Ok::<_, Error>((accepted, stateless_cache_warm))
-            },
-        )
-        .await?
-    };
-    let verified_authorities = accepted_transactions
-        .iter()
-        .map(|(transaction, _)| transaction.authority().clone())
-        .collect::<Vec<_>>();
-    let rate_limit_reservation =
-        reserve_verified_transaction_authorities(&app.tx_rate_limiter, &verified_authorities)
-            .await?;
-    let accepted_count = accepted_transactions.len();
-    let app_for_push = app.clone();
-    let (_, _compute_permit) = run_transaction_ingress_compute_job(
-        compute_permit,
-        "transaction_batch_queue_worker_failed",
+    admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token, transactions.len())
+        .await?;
+    let worker_app = app.clone();
+    let (prepared, permit) = run_transaction_ingress_compute_job(
+        permit,
+        "transaction_batch_admission_worker_failed",
         move || {
-            routing::push_accepted_transactions_for_ingress_with_routing_plans(
-                app_for_push.queue.clone(),
-                app_for_push.state.clone(),
-                accepted_transactions,
-            )?;
-            rate_limit_reservation.commit();
-            app_for_push
-                .state
-                .warm_stateless_validation_cache_for_torii_prechecked_batch(&stateless_cache_warm);
-            Ok::<(), Error>(())
+            let prechecks = precheck_transaction_batch_ed25519(
+                &transactions,
+                worker_app.state.pipeline.signature_batch_max_ed25519,
+            );
+            let mut prepared = Vec::with_capacity(transactions.len());
+            // Authenticate the entire batch before any route selection or mutation.
+            // Canonical retries check their actual signature but not fresh TTL/limits.
+            for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
+                let hash = transaction.hash();
+                #[cfg(feature = "connect")]
+                if let Some(authenticated) = AuthenticatedQueuePlanRetry::from_signed(
+                    worker_app.state.network_id_ref(),
+                    transaction.signed(),
+                )? && let Some(response) = canonical_queue_plan_submission_response(
+                    &worker_app,
+                    &authenticated,
+                    true,
+                    ResponseFormat::Json,
+                ) {
+                    prepared.push((hash, PreparedTransactionIngress::Canonical(response)));
+                    continue;
+                }
+                let accepted =
+                    routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
+                        worker_app.state.clone(),
+                        transaction,
+                        &worker_app.telemetry,
+                        precheck.single_ed25519_prechecked,
+                        precheck.precheck_rejection,
+                    )?;
+                prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));
+            }
+            // Keep route/policy preflight before the first durable write. Ordinary
+            // inputs have exactly the same authenticated lifecycle exception.
+            prepared
+                .into_iter()
+                .map(|(hash, prepared)| {
+                    let prepared = match prepared {
+                        #[cfg(feature = "connect")]
+                        PreparedTransactionIngress::Canonical(response) => {
+                            PreparedBatchEntry::Canonical(response)
+                        }
+                        PreparedTransactionIngress::Fresh(transaction) => {
+                            let prepared =
+                                prepare_fresh_transaction_ingress(&worker_app, transaction)?;
+                            #[cfg(feature = "connect")]
+                            if prepared.transaction.entrypoint().admission_intent()
+                                != TransactionAdmissionIntent::QueuePlanSynced
+                            {
+                                threshold_key_lifecycle_ingress::authenticate(
+                                    &worker_app,
+                                    prepared.transaction.entrypoint(),
+                                    &prepared.routing_plan,
+                                )
+                                .map_err(|message| {
+                                    Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+                                        message,
+                                    ))
+                                })?;
+                            }
+                            PreparedBatchEntry::Fresh(prepared)
+                        }
+                    };
+                    Ok((hash, prepared))
+                })
+                .collect::<Result<Vec<_>, Error>>()
         },
     )
     .await?;
-    Ok(transaction_batch_submission_response(accepted_count))
+    drop(permit);
+    let mut outcomes = Vec::with_capacity(prepared.len());
+    for (hash, entry) in prepared {
+        let response = match entry {
+            #[cfg(feature = "connect")]
+            PreparedBatchEntry::Canonical(response) => response,
+            PreparedBatchEntry::Fresh(prepared) => {
+                #[cfg(feature = "connect")]
+                {
+                    if tokio::time::Instant::now() >= deadline {
+                        torii_proxy_error_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "transaction_batch_not_dispatched",
+                            "batch deadline elapsed before this entry was dispatched",
+                        )
+                    } else {
+                        let entrypoint_hash = prepared.transaction.entrypoint().hash();
+                        match tokio::time::timeout_at(
+                            deadline,
+                            submit_prepared_transaction_ingress(
+                                &app,
+                                prepared,
+                                true,
+                                ResponseFormat::Json,
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(result) => result.unwrap_or_else(IntoResponse::into_response),
+                            Err(_) => queue_plan_outcome_unknown_response(
+                                entrypoint_hash,
+                                Some(hash),
+                                "batch deadline elapsed after this entry was dispatched",
+                            ),
+                        }
+                    }
+                }
+                #[cfg(not(feature = "connect"))]
+                submit_prepared_transaction_ingress(&app, prepared, true, ResponseFormat::Json)
+                    .await
+                    .unwrap_or_else(IntoResponse::into_response)
+            }
+        };
+        outcomes.push(TransactionBatchEntryOutcome {
+            signed_transaction_hash: hash,
+            status: response.status().as_u16(),
+            reject_code: response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
+        });
+    }
+    let accepted = outcomes.iter().filter(|entry| entry.status == 202).count();
+    if accepted == outcomes.len() {
+        return Ok(transaction_batch_submission_response(accepted));
+    }
+    let mut response = crate::utils::JsonBody(outcomes).into_response();
+    *response.status_mut() = StatusCode::MULTI_STATUS;
+    response.headers_mut().insert(
+        HeaderName::from_static("x-iroha-transactions-accepted"),
+        HeaderValue::from_str(&accepted.to_string()).expect("decimal count is a header"),
+    );
+    Ok(response)
 }
+
+enum PreparedBatchEntry {
+    #[cfg(feature = "connect")]
+    Canonical(Response),
+    Fresh(PreparedFreshTransactionIngress),
+}
+
 #[cfg(feature = "app_api")]
 async fn handler_proof_record_get(
     State(app): State<SharedAppState>,

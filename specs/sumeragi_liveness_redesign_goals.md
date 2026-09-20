@@ -120,6 +120,28 @@ counterexample expectation with bounded certified progress after integration,
 then exercise silent/equivocating authors, partial payload delivery, competing
 locks, restart cuts, cross-lane progress and committee reconfiguration.
 
+The compiled native transport and the existing global candidate assembler now
+share authenticated Decision inputs, exact complete-carrier fitting and current
+State checks. Their [scoped integration evidence](../docs/history/2026-09-20/native-candidate-and-transport.md)
+does not activate the runner. Native ingress remains closed: global-roster reset
+must preserve its original accounting, the canonical prepared execution must
+survive Validate through Apply, and only actual publication may settle the
+original native Apply effect. These remain one production cutover.
+
+The [publication completion seam](../docs/history/2026-09-20/native-published-apply.md)
+now binds that original Apply to actual State publication, allowing different
+authenticated quorum signer subsets for the same immutable value. Runtime
+publication also checks original current/undo allocation identity from before
+detachment through abort and publication. Driver progress leaves retired effects,
+packets and returned body results with the original capacity-accounted instance;
+an explicit consuming handoff preserves that custody through closure. Actual
+publication now authorizes terminal consumption of drained original owners and
+separately transferred closed bodies. Pending and fsynced local Decisions must
+authenticate the published value; held Apply still requires its real reducer
+settlement. Refusal returns the same armed owner.
+These prerequisites do not supply the live retained validator's resource policy
+or activate the Native runner.
+
 ### One economic admission and lane execution pipeline
 
 **Decision: implement; migration and evidence remain open.** Every network economic
@@ -133,8 +155,9 @@ production network economic bypass. Time and consensus-system inputs retain
 explicit internal ownership and cannot carry arbitrary external executables.
 
 This replaces real production paths. Public single-transaction and entrypoint
-submission already require signed `QueuePlanSynced`, whereas generic Torii
-adapters and the public batch handler still admit Ordinary work. M3's strict
+submission and the public batch handler require signed `QueuePlanSynced`
+(or the exact certified key-lifecycle exception); generic Torii adapters still
+need migration. M3's strict
 admission, autonomous progress, grouped/mixed-role Native settlement, exact-once
 application, bounded recovery, and mandatory signed RS16 remain requirements.
 Admission's existing `f + 1` durable-storage certificate is distinct from the
@@ -245,7 +268,7 @@ Never relabel or re-sign caller-signed bytes during submission.
 | Multisig: `handle_post_contract_call_multisig_propose/approve`, `handle_post_multisig_cancel/propose/approve` → generic transaction helpers | Preserve user approval quorum, proposal identity, cancellation and immediate-execution routing. Migrate shared draft/quote/sign helpers and submit owner; user multisig approval is separate from lane consensus quorum. |
 | Account recovery: `execute_account_recovery_mutation`; prepared onboarding/faucet: `handle_v1_accounts_onboard_submit_prepared`, `handle_v1_accounts_faucet_submit_prepared` | Preserve authorization, exact prepared payload/hash, account registration and issuance economics. These are service/user transactions, not consensus-system artifacts. |
 | SoraFS: `handle_post_sorafs_register_manifest`, `handle_post_sorafs_register_capacity_declaration`, `handle_post_sorafs_record_capacity_telemetry` | Preserve provider signatures, authority, instruction semantics and bounded responses; migrate signing/draft and admission together. |
-| Public batch: `lib_pipeline_handlers.rs::handler_post_transactions_batch` → `push_accepted_transactions_for_ingress_with_routing_plans`; `ensure_generic_transaction_batch_entrypoint_allowed` currently rejects synced intent | Preserve bounded full-batch decode/signature/routing preflight before any mutation, rate-limit accounting and invalid-later-element behavior. Obtain exact durable admission for every entry. Local atomic queue push does not establish distributed atomic acceptance: either preserve all-or-none admission with an authenticated group protocol, or define exact per-entry durable outcomes and idempotent retry in the first-release API. Never report a blanket rejection after durable partial acceptance. This API decision remains open. |
+| Public batch: `lib_pipeline_handlers.rs::handler_post_transactions_batch` → the shared `prepare_fresh_transaction_ingress` / `submit_prepared_transaction_ingress` owner | Implemented bounded complete decode/signature/route preflight before dispatch, exact per-entry durable admission, 202 only for complete acknowledgement, and ordered 207 results after partial admission. Original hashes and rejection/ambiguity codes survive in Rust and JavaScript clients. Authentication precedes canonical retry; current custody is refreshed before charging authority quota. The independent local atomic writer and synced-intent rejection were removed. Runtime and formal evidence are scoped separately; carry this contract through full qualification. |
 | Alias prepared plans: `lib.rs` alias-plan `TransactionPayload` construction currently selects Ordinary | Bind mandatory intent before canonical payload sizing, fee quotation and prepared-plan hashing. Preserve exact alias leases, permissions, dependency checks and caller-signed plan identity. |
 | Core Ordinary economic candidate: `sumeragi/v2_lane_work.rs::CandidateWorkProvider::prepare`, especially `prepare_native_participant_controls` and `prepare_native_receipt` | Replace its production economic path with admitted autonomous work. The existing code rejects synced candidates but still constructs Ordinary Native controls; both paths must converge on the same frozen slot before any signing. Retain every native role/group/source/settlement predicate. |
 | Queue and gossip: `queue.rs::push_with_lane_with_state*`, `QueuePlanGossipAdmission`, `gossiper.rs` owned/shared receive paths | All network economic admission, peer gossip, follower validation and replay require the same immutable admission owner. An unbound local journal entry can await certification but cannot obtain a lane reservation/signature or execute through an Ordinary fallback. Keep byte/capacity bounds, FIFO ownership and crash-safe promotion/retirement. |
@@ -2004,11 +2027,16 @@ and unchanged four/seven-validator campaigns remain required. L1–L6 remain ope
 The capture-admission implementation must first close its input surface:
 `prepare_journals` currently exposes StateBlock and execution prefix, while the
 retained owner also contains the ValidBlock, context, manifest, effects, events,
-tiered snapshot, geometry and archive plans. Events and the possible full cold
-tiered snapshot are already allocated during preparation. Reserve those earlier
-phases at their actual allocation boundaries and retain one aggregate ownership
-chain through capture, decision binding and installation. Installation must cover
-current/undo COW and delayed EBR reclamation, not only detached deltas. Existing
+tiered snapshot, geometry and archive plans. Events are already allocated during
+preparation; the possible full cold tiered snapshot and geometry/archive
+projections follow journal admission. Reserve earlier execution/event allocations
+at their actual boundaries, fund those later projections before they allocate,
+and retain one aggregate ownership chain through capture, decision binding and
+installation. Installation must cover
+publication and delayed EBR reclamation, not only detached deltas. Current/undo
+COW allocation admission belongs before acquisition and first mutation;
+detachment and reattachment move those original allocations without cloning.
+Existing
 body-store limits and `MeasuredBytes` are not a complete journal reservation; an
 allocating encoded-size fallback, omitted container nodes or saturating arithmetic
 cannot establish the required admission bound. This is an open implementation
@@ -2089,9 +2117,9 @@ unchanged within each run. The [dated record](../docs/history/2026-09-19/retaine
 preserves precise scope, the four repaired fixture-stack failures and the earlier
 formal token-normalization failure. No assertion or production stack was weakened.
 
-First connect Torii empty-Queue canonical submission retry to exact State pending
-custody before its fresh route preflight; current handoff evidence covers Queue,
-not that network path. Then connect exact terminal reconciliation before drain
+The following canonical-retry checkpoint connects Torii empty-Queue submission
+to the exact State pending custody before fresh routing/capacity. Fresh-policy
+independence remains open. Connect exact terminal reconciliation before drain
 through the original Queue/State/Kura owner. A Queue release can restore FIFO before Kura writes its
 Complete outcome; absent Complete authorization never proves the input had no
 old autonomous owner. Preserve that crash cut, exact group/alias evidence and
@@ -2100,3 +2128,44 @@ canonical carry/terminal disposition for late and partial receipts. The actual
 shared-lane execution/publication cutover, prepared Validate-to-Apply ownership,
 full workspace and unchanged four/seven-validator campaigns remain open. L1–L6
 remain open.
+
+
+### Canonical ingress and recovery qualification, builds64–71
+
+Public canonical QueuePlan retries now return a signed/minimal receipt before
+fresh route or Queue-capacity checks. Peer retries verify the exact request and
+journal binding, read the original authenticated first carrier under the original
+proxy memory reservation and deadline, then rejoin the same State custody. A
+missing, corrupt, changed or evicted canonical input cannot fall back to new
+admission. All historical read/decoder working sets belong to that reservation;
+State locks do not span physical Kura I/O. Build71 still applied current TTL/NTS/crypto/size policy before this lookup;
+the build72 checkpoint below replaces that ordering.
+
+Build64 passes with 1,707/1,709 selected runtime controls on unchanged inputs and
+binaries. The two failures exposed an obsolete test oracle and production
+recovery stack overlap. Actual retained-Validate projection assertions and
+heap-owned startup state with separated recovery phases address those causes.
+Build71 passes all 2,094 selected runtime tests on unchanged source and binaries:
+1,615 Core, 415 data-model and 64 Torii. This includes all 563 recovery controls,
+16 critical regressions and seven observed default-stack overflow cases, plus
+the 1,531 residual ingress/storage/model controls on the same artifacts.
+No failing control is removed and no default stack is increased. The canonical
+formal gate passes with 132/134 focused controls on unchanged inputs; two broader
+successor-source positives still expose 100 nested owner-binding diagnostics.
+The completed Validate, construction and inventory scopes retain their negative
+controls. Detailed failed
+attempts and exact scopes live in the [canonical retry record](../docs/history/2026-09-19/canonical-admission-retries.md).
+
+Authentication-only canonical retry without creating fresh
+AcceptedTransaction authority is implemented and qualified separately by build72:
+67 selected Torii runtime controls pass, including expiry/current-policy bypass
+only for authenticated canonical custody, forged-signature and absent-input
+refusal, and exact sealed-reveal identity. The full canonical multilane structural gate and all 135 canonical-retry,
+ledger and capacity controls pass on 8,358 unchanged captured inputs. Broader
+successor-source proof qualification remains open.
+Reconcile the 17 older Torii fixtures with the first-release QueuePlan contract,
+and resolve generic batch admission consistency.
+Exact terminal Queue reconciliation, committee-bound receipt carry/closure,
+prepared Validate-to-Apply custody and production shared-lane cutover remain open.
+Full workspace and unchanged real four/seven-validator campaigns remain required;
+L1–L6 are not complete.

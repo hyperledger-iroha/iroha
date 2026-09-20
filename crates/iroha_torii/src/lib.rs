@@ -17840,16 +17840,18 @@ fn transaction_submission_receipt_response(
     response
 }
 #[cfg(feature = "connect")]
+mod queue_plan_retry_authentication;
+#[cfg(feature = "connect")]
+use queue_plan_retry_authentication::AuthenticatedQueuePlanRetry;
+
+#[cfg(feature = "connect")]
 fn canonical_queue_plan_submission_response(
     app: &AppState,
-    transaction: &TransactionEntrypoint,
+    authenticated: &AuthenticatedQueuePlanRetry,
     minimal_response: bool,
     format: ResponseFormat,
 ) -> Option<Response> {
-    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return None;
-    }
-    let entrypoint_hash = transaction.hash();
+    let entrypoint_hash = authenticated.entrypoint_hash();
     match app
         .state
         .queue_plan_admission_registry_entrypoint_present(entrypoint_hash)
@@ -17858,7 +17860,7 @@ fn canonical_queue_plan_submission_response(
         Ok(true) => Some(transaction_submission_receipt_response(
             app,
             entrypoint_hash,
-            signed_transaction_hash_for_entrypoint(transaction),
+            Some(authenticated.signed_transaction_hash()),
             minimal_response,
             format,
         )),
@@ -17871,11 +17873,21 @@ fn canonical_queue_plan_submission_response(
 #[cfg(feature = "connect")]
 fn canonical_queue_plan_synced_response(
     app: &SharedAppState,
+    authenticated: &AuthenticatedQueuePlanRetry,
     binding: &QueuePlanAdmissionBindingV1,
     routing_decision: RoutingDecision,
     proxy_memory: Option<&ToriiProxyMemoryReservation>,
     read_deadline: tokio::time::Instant,
 ) -> Option<Response> {
+    if authenticated.entrypoint_hash() != binding.entrypoint_hash
+        || Some(authenticated.signed_transaction_hash()) != binding.signed_transaction_hash
+    {
+        return Some(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            "QueuePlanSynced binding differs from the authenticated retry identity",
+        ));
+    }
     match app
         .state
         .queue_plan_admission_binding_registry_match(binding)
@@ -25420,15 +25432,24 @@ async fn execute_torii_transaction_via_proxy(
     // globally bound claim may enter the retry reconstruction branch.
     let durable_retry_claim =
         durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some());
-    if durable_retry_claim.is_none()
-        && let Some(response) = canonical_queue_plan_submission_response(
+    let already_durably_admitted = durable_retry_claim.is_some();
+    if durable_retry_claim.is_none() {
+        let authenticated = match AuthenticatedQueuePlanRetry::from_accepted(
+            app.state.network_id_ref(),
+            &accepted_transaction,
+        ) {
+            Ok(Some(authenticated)) => authenticated,
+            Ok(None) => unreachable!("QueuePlanSynced intent was checked above"),
+            Err(error) => return error.into_response(),
+        };
+        if let Some(response) = canonical_queue_plan_submission_response(
             app.as_ref(),
-            &transaction,
+            &authenticated,
             minimal_response,
             format,
-        )
-    {
-        return response;
+        ) {
+            return response;
+        }
     }
     let request_id =
         queue_plan_synced_proxy_request_id_for_entrypoint(app.as_ref(), entrypoint_hash.clone());
@@ -25528,12 +25549,14 @@ async fn execute_torii_transaction_via_proxy(
         }
         Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}
     }
-    if let Err(error) = routing::reject_ingress_if_queue_capacity_saturated(
-        app.queue.as_ref(),
-        app.state.as_ref(),
-        1,
-    ) {
-        return error.into_response();
+    if !already_durably_admitted {
+        if let Err(error) = routing::reject_ingress_if_queue_capacity_saturated(
+            app.queue.as_ref(),
+            app.state.as_ref(),
+            1,
+        ) {
+            return error.into_response();
+        }
     }
     let response = execute_torii_proxy_request_with_fallback(
         app,
@@ -27827,12 +27850,12 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                     );
                 }
             };
-            let accepted_tx = match routing::accept_transaction_for_ingress(
-                app.state.clone(),
-                transaction,
-                &app.telemetry,
+            let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint(
+                app.state.network_id_ref(),
+                &transaction,
             ) {
-                Ok(accepted_tx) => accepted_tx,
+                Ok(Some(authenticated)) => authenticated,
+                Ok(None) => unreachable!("QueuePlanSynced intent was checked above"),
                 Err(error) => return error.into_response(),
             };
             let Some(admission_binding) = admission_binding else {
@@ -27851,7 +27874,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             }
             let canonical_request_id = queue_plan_synced_proxy_request_id_for_entrypoint(
                 app.as_ref(),
-                accepted_tx.entrypoint().hash(),
+                authenticated.entrypoint_hash(),
             );
             if admission_binding.request_id != canonical_request_id {
                 return torii_proxy_error_response(
@@ -27863,7 +27886,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             if let Err(error) = iroha_core::torii_proxy::validate_queue_plan_binding_for_request(
                 &admission_binding,
                 app.state.network_id_ref(),
-                accepted_tx.entrypoint(),
+                &transaction,
                 &ingress_plan,
             ) {
                 return torii_proxy_error_response(
@@ -27876,6 +27899,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             // retry on an empty local Queue must not reopen a closed lane.
             if let Some(response) = canonical_queue_plan_synced_response(
                 app,
+                &authenticated,
                 &admission_binding,
                 ingress_plan.coordinator_route(),
                 proxy_memory.as_ref(),
@@ -27883,6 +27907,15 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             ) {
                 return response;
             }
+            // Only an absent canonical owner enters current admission policy.
+            let accepted_tx = match routing::accept_transaction_for_ingress(
+                app.state.clone(),
+                transaction,
+                &app.telemetry,
+            ) {
+                Ok(accepted_tx) => accepted_tx,
+                Err(error) => return error.into_response(),
+            };
             // Only an absent canonical owner may create a new durable claim.
             if let Some(response) = queue_plan_service_input_capacity_error(
                 app,
@@ -35798,22 +35831,6 @@ async fn admit_transaction_api_token_preauth(
         .ok_or_else(transaction_rate_limit_error)
 }
 
-async fn admit_verified_transaction_authorities(
-    limiter: &limits::RateLimiter,
-    authorities: &[AccountId],
-) -> Result<(), Error> {
-    let reservation = limiter
-        .reserve_many_repeated(
-            authorities
-                .iter()
-                .map(|authority| (transaction_verified_authority_key(authority), 1)),
-        )
-        .await
-        .ok_or_else(transaction_rate_limit_error)?;
-    reservation.commit();
-    Ok(())
-}
-
 async fn reserve_verified_transaction_authorities(
     limiter: &limits::RateLimiter,
     authorities: &[AccountId],
@@ -35903,6 +35920,14 @@ pub(crate) async fn submit_signed_transaction_for_ingress_strict_durable(
     submit_signed_transaction_for_ingress_queue_plan_certified(app, headers, accept, transaction)
         .await
 }
+/// Physical ingress work either acknowledges existing custody or completes all
+/// fresh policy checks. Authentication-only retry identities cannot become Queue inputs.
+enum PreparedTransactionIngress {
+    #[cfg(feature = "connect")]
+    Canonical(Response),
+    Fresh(iroha_core::tx::AcceptedTransaction<'static>),
+}
+
 async fn submit_signed_transaction_for_ingress_queue_plan_certified(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
@@ -35919,7 +35944,11 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
     let telemetry = app.telemetry.clone();
-    let (accepted_tx, compute_permit) = run_transaction_ingress_compute_job(
+    #[cfg(feature = "connect")]
+    let retry_app = app.clone();
+    #[cfg(feature = "connect")]
+    let minimal_response = transaction_submission_prefers_minimal_response(&headers);
+    let (prepared, compute_permit) = run_transaction_ingress_compute_job(
         compute_permit,
         "transaction_admission_worker_failed",
         move || {
@@ -35942,6 +35971,18 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
                         .to_owned(),
                 });
             }
+            #[cfg(feature = "connect")]
+            if let Some(authenticated) = AuthenticatedQueuePlanRetry::from_signed(
+                state.network_id_ref(),
+                transaction.signed(),
+            )? && let Some(response) = canonical_queue_plan_submission_response(
+                retry_app.as_ref(),
+                &authenticated,
+                minimal_response,
+                format,
+            ) {
+                return Ok(PreparedTransactionIngress::Canonical(response));
+            }
             let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress(
                 state,
                 transaction,
@@ -35956,77 +35997,146 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
                         .to_owned(),
                 });
             }
-            Ok(accepted_tx)
+            Ok(PreparedTransactionIngress::Fresh(accepted_tx))
         },
     )
     .await?;
     drop(compute_permit);
-    // Already-canonical input owns no new queue capacity and needs no fresh
-    // route. Its original route may now be closed or retired.
-    #[cfg(feature = "connect")]
-    if let Some(response) = canonical_queue_plan_submission_response(
-        app.as_ref(),
-        accepted_tx.entrypoint(),
+    let accepted_tx = match prepared {
+        #[cfg(feature = "connect")]
+        PreparedTransactionIngress::Canonical(response) => return Ok(response),
+        PreparedTransactionIngress::Fresh(accepted_tx) => accepted_tx,
+    };
+    let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;
+    submit_prepared_transaction_ingress(
+        &app,
+        prepared,
         transaction_submission_prefers_minimal_response(&headers),
         format,
-    ) {
-        return Ok(response);
-    }
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
-    #[allow(unused_variables)]
+    )
+    .await
+}
+
+/// Exact accepted transaction and its resolved route, shared by single and batch ingress.
+struct PreparedFreshTransactionIngress {
+    transaction: iroha_core::tx::AcceptedTransaction<'static>,
+    routing_plan: RoutingPlan,
+    durable_retry_claim: Option<queue::QueuePlanDurableAdmissionV1>,
+}
+
+fn prepare_fresh_transaction_ingress(
+    app: &SharedAppState,
+    transaction: iroha_core::tx::AcceptedTransaction<'static>,
+) -> Result<PreparedFreshTransactionIngress, Error> {
     let durable_retry_claim = app
         .queue
-        .durable_plan_admission_claim_with_state(&accepted_tx, app.state.as_ref())
-        .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
-    #[allow(unused_variables)]
-    let routing_plan = if let Some(claim) = durable_retry_claim.as_ref() {
+        .durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())
+        .map_err(|error| routing_resolve_error_to_torii_error(app, error))?;
+    if !durable_retry_claim
+        .as_ref()
+        .is_some_and(|claim| claim.global_admission_identity.is_some())
+    {
+        routing::reject_ingress_if_queue_capacity_saturated(
+            app.queue.as_ref(),
+            app.state.as_ref(),
+            1,
+        )?;
+    }
+    let routing_plan = if let Some(claim) = &durable_retry_claim {
         claim.routing_plan.clone()
     } else {
         app.queue
-            .route_plan_with_state(&accepted_tx, app.state.as_ref())
-            .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?
+            .route_plan_with_state(&transaction, app.state.as_ref())
+            .map_err(|error| routing_resolve_error_to_torii_error(app, error))?
     };
+    Ok(PreparedFreshTransactionIngress {
+        transaction,
+        routing_plan,
+        durable_retry_claim,
+    })
+}
+
+/// Run the sole durable admission owner; only fresh custody pays an authority token.
+async fn submit_prepared_transaction_ingress(
+    app: &SharedAppState,
+    prepared: PreparedFreshTransactionIngress,
+    minimal_response: bool,
+    format: ResponseFormat,
+) -> Result<Response, Error> {
+    let PreparedFreshTransactionIngress {
+        transaction,
+        routing_plan,
+        durable_retry_claim,
+    } = prepared;
     #[cfg(feature = "connect")]
     {
+        // Preflight is a snapshot. An earlier batch entry or concurrent ingress
+        // may have established custody before this entry reaches dispatch.
+        if let Some(authenticated) =
+            AuthenticatedQueuePlanRetry::from_accepted(app.state.network_id_ref(), &transaction)?
+            && let Some(response) = canonical_queue_plan_submission_response(
+                app.as_ref(),
+                &authenticated,
+                minimal_response,
+                format,
+            )
+        {
+            return Ok(response);
+        }
+        let durable_retry_claim = app
+            .queue
+            .durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())
+            .map_err(|error| routing_resolve_error_to_torii_error(app, error))?
+            .or(durable_retry_claim);
+        let routing_plan = durable_retry_claim
+            .as_ref()
+            .map_or(routing_plan, |claim| claim.routing_plan.clone());
         let already_durably_admitted = durable_retry_claim
             .as_ref()
             .is_some_and(|claim| claim.global_admission_identity.is_some());
-        let rate_limit_reservation = if already_durably_admitted {
+        let reservation = if already_durably_admitted {
             None
         } else {
             Some(
                 reserve_verified_transaction_authority(
                     &app.tx_rate_limiter,
-                    accepted_tx.authority_opt(),
+                    transaction.authority_opt(),
                 )
                 .await?,
             )
         };
         let response = execute_torii_transaction_via_proxy(
-            &app,
-            accepted_tx,
+            app,
+            transaction,
             routing_plan,
             durable_retry_claim,
-            transaction_submission_prefers_minimal_response(&headers),
+            minimal_response,
             format,
         )
         .await;
         if response.status() == StatusCode::ACCEPTED
-            && let Some(reservation) = rate_limit_reservation
+            && let Some(reservation) = reservation
         {
             reservation.commit();
         }
-        return Ok(response);
+        Ok(response)
     }
     #[cfg(not(feature = "connect"))]
     {
-        let _ = (routing_plan, durable_retry_claim);
-        return Err(Error::AppServiceUnavailable {
+        let _ = (
+            app,
+            transaction,
+            routing_plan,
+            durable_retry_claim,
+            minimal_response,
+            format,
+        );
+        Err(Error::AppServiceUnavailable {
             code: "queue_plan_synced_transport_unavailable",
             message:
                 "quorum-certified QueuePlan admission requires an authenticated peer transport"
                     .to_owned(),
-        });
+        })
     }
 }
 async fn handler_post_transaction_entrypoint(
@@ -36047,80 +36157,45 @@ async fn handler_post_transaction_entrypoint(
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
     let state = app.state.clone();
     let telemetry = app.telemetry.clone();
-    let (accepted_tx, compute_permit) = run_transaction_ingress_compute_job(
+    #[cfg(feature = "connect")]
+    let retry_app = app.clone();
+    #[cfg(feature = "connect")]
+    let minimal_response = transaction_submission_prefers_minimal_response(&headers);
+    let (prepared, compute_permit) = run_transaction_ingress_compute_job(
         compute_permit,
         "transaction_entrypoint_admission_worker_failed",
-        move || routing::accept_transaction_for_ingress(state, transaction, &telemetry),
+        move || {
+            #[cfg(feature = "connect")]
+            if let Some(authenticated) =
+                AuthenticatedQueuePlanRetry::from_entrypoint(state.network_id_ref(), &transaction)?
+                && let Some(response) = canonical_queue_plan_submission_response(
+                    retry_app.as_ref(),
+                    &authenticated,
+                    minimal_response,
+                    format,
+                )
+            {
+                return Ok(PreparedTransactionIngress::Canonical(response));
+            }
+            routing::accept_transaction_for_ingress(state, transaction, &telemetry)
+                .map(PreparedTransactionIngress::Fresh)
+        },
     )
     .await?;
     drop(compute_permit);
-    // Already-canonical input owns no new queue capacity and needs no fresh
-    // route. Its original route may now be closed or retired.
-    #[cfg(feature = "connect")]
-    if let Some(response) = canonical_queue_plan_submission_response(
-        app.as_ref(),
-        accepted_tx.entrypoint(),
+    let accepted_tx = match prepared {
+        #[cfg(feature = "connect")]
+        PreparedTransactionIngress::Canonical(response) => return Ok(response),
+        PreparedTransactionIngress::Fresh(accepted_tx) => accepted_tx,
+    };
+    let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;
+    submit_prepared_transaction_ingress(
+        &app,
+        prepared,
         transaction_submission_prefers_minimal_response(&headers),
         format,
-    ) {
-        return Ok(response);
-    }
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
-    #[allow(unused_variables)]
-    let durable_retry_claim = app
-        .queue
-        .durable_plan_admission_claim_with_state(&accepted_tx, app.state.as_ref())
-        .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
-    #[allow(unused_variables)]
-    let routing_plan = if let Some(claim) = durable_retry_claim.as_ref() {
-        claim.routing_plan.clone()
-    } else {
-        app.queue
-            .route_plan_with_state(&accepted_tx, app.state.as_ref())
-            .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?
-    };
-    #[cfg(feature = "connect")]
-    {
-        let already_durably_admitted = durable_retry_claim
-            .as_ref()
-            .is_some_and(|claim| claim.global_admission_identity.is_some());
-        let rate_limit_reservation = if already_durably_admitted {
-            None
-        } else {
-            Some(
-                reserve_verified_transaction_authority(
-                    &app.tx_rate_limiter,
-                    accepted_tx.authority_opt(),
-                )
-                .await?,
-            )
-        };
-        let response = execute_torii_transaction_via_proxy(
-            &app,
-            accepted_tx,
-            routing_plan,
-            durable_retry_claim,
-            transaction_submission_prefers_minimal_response(&headers),
-            format,
-        )
-        .await;
-        if response.status() == StatusCode::ACCEPTED
-            && let Some(reservation) = rate_limit_reservation
-        {
-            reservation.commit();
-        }
-        return Ok(response);
-    }
-    #[cfg(not(feature = "connect"))]
-    {
-        let _ = (routing_plan, durable_retry_claim);
-        Err::<Response, Error>(Error::AppServiceUnavailable {
-            code: "queue_plan_synced_transport_unavailable",
-            message:
-                "quorum-certified QueuePlan admission requires an authenticated peer transport"
-                    .to_owned(),
-        })
-    }
+    )
+    .await
 }
 fn decode_transaction_batch_payloads(
     payloads: Vec<Vec<u8>>,
@@ -36171,8 +36246,6 @@ fn validate_transaction_batch_body_size(body: &Bytes, max_bytes: usize) -> Resul
 fn decode_transaction_batch_request(
     body: Bytes,
     max_transactions: usize,
-    queue: &Queue,
-    state: &CoreState,
 ) -> Result<Vec<DecodedVersionedSignedTransaction>, Error> {
     let count = match norito::inspect_stream_vec_len_bounded_from_reader::<_, Vec<u8>>(
         std::io::Cursor::new(body.as_ref()),
@@ -36195,10 +36268,9 @@ fn decode_transaction_batch_request(
             message: "transaction batch must contain at least one signed transaction".to_owned(),
         });
     }
-    // This exact count comes from Norito's authoritative top-level sequence
-    // decoder. Apply queue pressure before allocating or decoding any inner
-    // transaction payload.
-    routing::reject_ingress_if_queue_capacity_saturated(queue, state, count)?;
+    // Decode is bounded by the authenticated request byte/count corridor.
+    // Fresh queue pressure follows signature authentication and canonical retry
+    // lookup: an already admitted input must remain retryable when Queue is full.
     let payloads =
         norito::stream_vec_collect_from_reader::<_, Vec<u8>>(std::io::Cursor::new(body.as_ref()))
             .map_err(invalid_transaction_batch_envelope)?;

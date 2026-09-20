@@ -19952,6 +19952,7 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 lane_plan.proposals,
             );
             Ok(PreparedCandidateWork {
+                native_lane_decisions: None,
                 native_amx_receipts: receipts,
                 lane_payload_ownerships: lane_plan.ownerships,
                 autonomous_lane_payloads,

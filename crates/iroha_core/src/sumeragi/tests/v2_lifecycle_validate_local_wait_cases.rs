@@ -187,12 +187,42 @@ fn physical_validate_retry_preserves_original_owner_fixture(
         launched.park_local_validate_completion_for_test(retained);
         let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, worker);
         let assert_completion_claim = |launched: &ReadyLocalProposalSignLaunchedFixtureGuard| {
-            assert_eq!(
-                launched
-                    .producer_claim_projection()
-                    .expect("read original physical owner"),
-                Claim::AwaitingCompletion,
-            );
+            use super::super::{LifecycleDigest, WaitSource, wait_token_for_test};
+
+            let claim = launched
+                .producer_claim_projection()
+                .expect("read original physical owner");
+            assert_eq!(claim, Claim::AwaitingCompletion);
+            assert!(claim.requires_yield());
+            assert!(claim.permits_runtime_for_test());
+            assert_eq!(claim.fresh_admission_permissions_for_test(), (false, false));
+            // A retry selection cannot mint an unrelated scheduling owner. These
+            // are observations of the actual parked/queued request, not a replay
+            // of completion labels through a second transition model.
+            for foreign in [
+                Claim::Eligible,
+                Claim::AwaitingValidateSuccessor { ordinal },
+                Claim::AwaitingValidateFence {
+                    ordinal,
+                    wait: wait_token_for_test(
+                        WaitSource::External(LifecycleDigest::new([7; 32])),
+                        1,
+                    ),
+                },
+                Claim::AwaitingLiveApplyQueue {
+                    parent_ordinal: ordinal,
+                    child_ordinal: ordinal + 1,
+                },
+                Claim::AwaitingValidateSidecar,
+                Claim::AwaitingApplyCompletion,
+                Claim::ApplyTerminalSettled,
+                Claim::AwaitingReplayCompletion,
+            ] {
+                assert_ne!(
+                    claim, foreign,
+                    "physical retry retains its exact completion owner"
+                );
+            }
         };
         assert_completion_claim(&launched);
         let (mut lane_work, _) =
@@ -409,5 +439,11 @@ fn physical_validate_retry_observes_release_before_registration() {
 #[cfg(feature = "bls")]
 #[test]
 fn physical_validate_retry_retains_dispatch_through_worker_backpressure() {
+    physical_validate_retry_preserves_original_owner(false, true);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn local_validate_retry_keeps_only_the_original_completion_claim() {
     physical_validate_retry_preserves_original_owner(false, true);
 }

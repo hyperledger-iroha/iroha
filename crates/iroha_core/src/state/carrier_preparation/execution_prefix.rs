@@ -204,6 +204,14 @@ impl ValidatedExecutionPrefix {
                 }
             }
     }
+    /// Borrow the exact source custody without granting publication authority.
+    pub(in crate::state) fn native(&self) -> Option<&lane_decision_batch::NativeExecutionCustody> {
+        match &self.authority {
+            PrefixSourceAuthority::Ordinary => None,
+            PrefixSourceAuthority::Native(native) => Some(native),
+        }
+    }
+
     #[cfg(test)]
     pub(in crate::state) fn native_for_test(
         &self,

@@ -167,7 +167,33 @@ fn runtime_publication_holds_all_four_writers_and_matches_direct_current_and_und
     let mut reference = blocks(&direct, BlockMode::Ordinary);
     mutate(&mut original, 2);
     mutate(&mut reference, 2);
+    // Capture allocation identity before detachment, not merely after it. Value
+    // equality would let a reconstructed successor/preimage pass this regression.
+    macro_rules! allocations {
+        ($runtime:expr, $topology:expr, $previous:expr, $contexts:expr) => {{
+            [
+                std::ptr::from_ref($runtime.touched_value().unwrap().before).cast::<()>(),
+                std::ptr::from_ref($runtime.touched_value().unwrap().after).cast::<()>(),
+                std::ptr::from_ref($topology.touched_value().unwrap().before).cast::<()>(),
+                std::ptr::from_ref($topology.touched_value().unwrap().after).cast::<()>(),
+                std::ptr::from_ref($previous.touched_value().unwrap().before).cast::<()>(),
+                std::ptr::from_ref($previous.touched_value().unwrap().after).cast::<()>(),
+                std::ptr::from_ref($contexts.touched_value().unwrap().before).cast::<()>(),
+                std::ptr::from_ref($contexts.touched_value().unwrap().after).cast::<()>(),
+            ]
+        }};
+    }
+    let originals = allocations!(original.0, original.1, original.2, original.3);
     let journal = capture(original, ());
+    let retained = |journal: &RuntimeJournals<()>| {
+        allocations!(
+            journal.canonical_runtime,
+            journal.commit_topology,
+            journal.prev_commit_topology,
+            journal.lane_consensus_contexts
+        )
+    };
+    assert_eq!(retained(&journal), originals);
     let pointer = original_topology_allocation(&journal);
     let prepared = prepare(journal, &state);
     assert_eq!(images(&state), before);
@@ -186,11 +212,29 @@ fn runtime_publication_holds_all_four_writers_and_matches_direct_current_and_und
     held!(prev_commit_topology);
     held!(lane_consensus_contexts);
     let journal = prepared.abort();
+    assert_eq!(retained(&journal), originals);
     assert_eq!(original_topology_allocation(&journal), pointer);
     assert!(journal.matches_current(&state));
     assert_writers_released_except(&state, None);
     commit(reference);
     prepare(journal, &state).publish();
+    macro_rules! published {
+        ($field:ident, $index:expr) => {
+            assert_eq!(
+                std::ptr::from_ref(state.$field.predecessor_view().get().as_ref().unwrap())
+                    .cast::<()>(),
+                originals[$index]
+            );
+            assert_eq!(
+                std::ptr::from_ref(state.$field.view().get()).cast::<()>(),
+                originals[$index + 1]
+            );
+        };
+    }
+    published!(canonical_runtime, 0);
+    published!(commit_topology, 2);
+    published!(prev_commit_topology, 4);
+    published!(lane_consensus_contexts, 6);
     assert_eq!(images(&state), images(&direct));
     assert_writers_released_except(&state, None);
 }

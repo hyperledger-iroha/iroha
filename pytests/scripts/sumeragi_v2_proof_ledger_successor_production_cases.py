@@ -674,7 +674,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_runner_authority.rs",
         "struct ProductionLifecycleCompleteTipRunnerActivationV1",
-        "retirement.authorizes_successor_status(&successor)",
+        "retirement.authorizes_successor_status_with_decision(&successor, decision.as_ref())",
         "true",
         "runner-owned CompleteTip lifecycle activation authority must preserve exact production order",
     ),
@@ -2640,9 +2640,9 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-        "output.abort_before_publication()",
-        "drop(output)",
-        "typed recovered Proposal pre-fsync output release must preserve exact production order",
+        "drop(output);",
+        "let _ = output.abort_before_publication();",
+        "restart-closed recovered Proposal reserved output",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
@@ -2752,23 +2752,23 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
         "fn reload_payload_census_strict(",
-        "fs::read_dir(&self.directory)",
-        "fs::read_dir(temporary_path_for_mutation)",
+        "self.scan_payload_census(false)?",
+        "self.scan_payload_census(true)?",
         "CompleteTip Serve payload directory census must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-        "fn reload_payload_census_strict(",
-        "fs::symlink_metadata(&self.directory)",
-        "fs::metadata(&self.directory)",
-        "CompleteTip Serve payload directory census must preserve exact production order",
+        "fn from_opened_directory(",
+        "fs::symlink_metadata(&expected_path)",
+        "fs::metadata(&expected_path)",
+        "retained Serve directory bound_descriptor",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
-        "fn reload_payload_census_strict(",
-        "self.load_path(&path, metadata.len())?",
-        "return Ok(payloads);",
-        "CompleteTip Serve payload directory census must preserve exact production order",
+        "fn scan_payload_census(",
+        "self.load_leaf_with_bound(&leaf)?",
+        "self.load_unbound_leaf_for_mutation(&leaf)?",
+        "retained Serve directory census_scan",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
@@ -2793,7 +2793,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-        "fn authorizes_successor_status(",
+        "fn authorizes_successor_status_with_decision(",
         "self.complete_tip.successor_context_id() == successor.height_context_id",
         "true",
         "CompleteTip restart publication authority must preserve exact production order",
@@ -4001,3 +4001,409 @@ def test_recovered_fetch_canonical_selector_owner_gates_reject_mutations(
         sources[source_index] = source[:declaration_start] + "    #[cfg(test)]\n" + source[declaration_start:]
     errors = module._recovered_fetch_canonical_selector_owner_errors(*sources)
     assert errors, owner
+
+
+# These focused controls isolate one complete migrated owner family. The two
+# full successor positives still run separately and retain unrelated failures.
+_CERTIFIED_SERVE_DIRECTORY_MUTATIONS = (
+    ("recovery_mint", "permit.authorizes(kura, verified, signature_policy, genesis_account)", "true"),
+    ("ordinary_open", "(false, Some(authority))", "(true, Some(authority))"),
+    ("ordinary_open", "kura,\n                            authority,", "kura,\n                            forged_authority,"),
+    ("predecessor_kura", "complete_tip.authorizes_predecessor_kura(kura)", "true"),
+    ("predecessor_open", "open_with_kura_authority(kura, authority, context)", "open_with_kura_authority(kura, substituted_authority, context)"),
+    ("directory_context", "self.height == context.height", "true"),
+    ("directory_current", "kura.bound_storage_directory_unchanged(&self.directory)", "true"),
+    ("directory_consume", "self.is_current_for(kura, context)", "true"),
+    ("bound_directory", "!authority.matches_kura(kura)", "false"),
+    ("bound_directory", "!authority.matches_context(context)", "false"),
+    ("bound_directory", "authority_path != expected_path", "false"),
+    ("bound_descriptor", "fs::symlink_metadata(&expected_path)", "fs::metadata(&expected_path)"),
+    ("bound_descriptor", "canonical_path != mint_time_canonical_path", "false"),
+    ("bound_descriptor", "bound.verify_linked()?;", ""),
+    ("census_scan", "checked_mul(2)", "checked_mul(usize::MAX)"),
+    ("census_scan", "self.bound_directory()?.inventory(traversal_capacity)?", "substituted_directory.inventory(traversal_capacity)?"),
+    ("census_scan", "self.load_leaf_with_bound(&leaf)?", "self.load_unbound_leaf_for_mutation(&leaf)?"),
+    ("census_scan", "expected_path != path", "false"),
+    ("census_scan", "!terminal_companion_matches(canonical, terminal)", "false"),
+    ("census_scan", "count > self.max_entries", "count > usize::MAX"),
+    ("strict_reload", "self.scan_payload_census(false)?", "self.scan_payload_census(true)?"),
+    ("strict_reload", "census.removed != self.removed", "false"),
+    ("strict_reload", "census.quarantine != self.quarantine", "false"),
+    ("directory_kura", "self.kura_identity.matches(kura)", "true"),
+    ("factory_entry", "body_store,\n            None,", "body_store,\n            substituted_pending,"),
+    ("factory_inner", "pending_kura.is_some() && !matches!(self.authority, RecoveredWalStartupAuthorityV1::None)", "false"),
+    ("factory_inner", "!Arc::ptr_eq(&adapter_owner, &self.factory_owner)", "false"),
+    ("factory_inner", "into_revalidated_lifecycle_startup(&apply_service, &context, validation_authority)", "into_unchecked_lifecycle_startup(&apply_service, &context, validation_authority)"),
+    ("factory_inner", "authority: serve_payload_directory_authority,", "authority: None,"),
+)
+
+
+def test_certified_serve_retained_directory_owner_current_source() -> None:
+    module = load_checker()
+    assert module._certified_serve_directory_owner_errors(ROOT_DIR) == []
+
+
+@pytest.mark.parametrize(("key", "old", "new"), _CERTIFIED_SERVE_DIRECTORY_MUTATIONS)
+def test_certified_serve_retained_directory_owner_mutations_fail_closed(
+    tmp_path: Path, key: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    rows = module._CERTIFIED_SERVE_DIRECTORY_OWNER_RELATIONS
+    for relative in {row[1] for row in rows}:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    assert module._certified_serve_directory_owner_errors(tmp_path) == []
+    row, = (row for row in rows if row[0] == key)
+    _, relative, owner, name, attributes, _ = row
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    errors = []
+    item = module._certified_serve_directory_owner_item(
+        path, source, owner, name, attributes, errors,
+    )
+    assert errors == [] and item is not None
+    assert old in item.source, (key, old)
+    changed = item.source.replace(old, new, 1)
+    assert changed != item.source
+    start = sum(len(line) for line in source.splitlines(keepends=True)[:item.line - 1])
+    assert source[start:start + len(item.source)] == item.source
+    path.write_text(source[:start] + changed + source[start + len(item.source):], encoding="utf-8")
+    errors = module._certified_serve_directory_owner_errors(tmp_path)
+    assert any(f"retained Serve directory {key}" in error for error in errors), errors
+
+_RECOVERED_SUCCESSOR_STATUS_MUTATIONS = (
+    ("ordinary_frontier", "finalized_height,\n        finalized_height,", "finalized_height,\n        successor.height,"),
+    ("checked_frontier", "successor.last_committed_height != expected_commit_height", "false"),
+    ("checked_frontier", "marker.generation == successor.liveness.generation", "true"),
+    ("checked_frontier", "marker.age_ms == 0", "true"),
+    ("recovered_publish", "authority_kind == SUCCESSOR_AUTHORITY_RECOVERED_DECIDED_COMPLETE_TIP", "true"),
+    ("recovered_publish", "check_production_recovered_successor_transition(trace)", "unchecked_recovered_transition(trace)"),
+    ("recovered_publish", "set_v2_status_at(successor, now);", "set_v2_status_at(substituted_successor, now);"),
+    ("complete_tip_bridge", "!authority.authorizes_successor_status_with_decision(&successor, decision.as_ref())", "false"),
+    ("complete_tip_bridge", "if decision.is_some()", "if true"),
+    ("retired_status", "self.authorizes_retained_successor()", "true"),
+    ("retired_status", "self.complete_tip.successor_context_id() == successor.height_context_id", "true"),
+    ("complete_tip_decision", "&self.artifact.commit_qc", "&substituted_commit_qc"),
+    ("decision_identity", "self.wal_identity.is_exact()", "true"),
+    ("decision_identity", "self.parent_commit_qc == *parent_commit_qc", "true"),
+    ("decision_identity", "status.last_committed_subject == Some(self.decision.subject)", "true"),
+    ("decision_identity", "status.last_commit_qc.as_ref() == Some(&self.decision_status)", "true"),
+    ("decision_identity", "status.phase == wire::SumeragiV2StatusPhase::PendingApply", "true"),
+    ("decision_identity", "status.pending_persistence_id.is_none()", "true"),
+    ("decision_mint", "self.reducer.durable_state().last_id().get() == 0", "false"),
+    ("decision_mint", "self.reducer.applied_subject().is_some()", "false"),
+    ("decision_mint", "self.authenticate_recovered_wal_frontier()?;", ""),
+    ("decision_mint", "candidate == decision", "true"),
+    ("runner_publish", "!Arc::ptr_eq(&self.block_ingress, launched_ingress)", "false"),
+    ("runner_publish", "retirement, successor, decision,", "retirement, successor, None,"),
+    ("retained_floor", "record.owner().first_admission_ordinal() > self.retained_high_water", "true"),
+    ("retained_parent", "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)", "true"),
+    ("retained_frame", "successor == &self.successor_ledger", "true"),
+    ("retained_successor", "self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)", "true"),
+    ("publication_target", "self.directory.same_directory(&other.directory)", "true"),
+    ("publication_open", "Some((frame, frame))", "Some((foreign_frame, frame))"),
+    ("publication_cas", "loaded != *current", "false"),
+    ("publication_cas", "self.persist_locked(&guard, successor)?;", ""),
+    ("publication_cas", "if current != successor || !frame_present", "if current != successor"),
+    ("publication_record", "*previous == current", "true"),
+    ("publication_record", "*lineage = None;", "*previous = successor;"),
+    ("publication_take", "self.owner_open_publications.lock().ok()?.take()?", "self.owner_open_publications.lock().ok()?.clone()?"),
+    ("publication_join", "self.store.same_publication_target(retirement_store)", "true"),
+    ("publication_join", "coordinator.frame_identity() == self.successor_frame_identity", "true"),
+    ("publication_join", "self.store.load().ok().as_ref() == Some(loaded)", "true"),
+    ("publication_bind", "!retirement_frame_authorizes && !owner_open_publication_authorizes", "!retirement_frame_authorizes || !owner_open_publication_authorizes"),
+    ("publication_bind", "!self.matches_successor_owner_ledger(&mut owner, &successor_ledger)", "false"),
+    ("publication_bind", "!self.exactly_matches_successor_owner(&mut owner)", "false"),
+    ("activation", "self.pending_kura_apply_replay.is_some()", "false"),
+    ("activation", "ProductionLifecycleActivationPublicationV1::RecoveredCompleteTip { .. }", "ProductionLifecycleActivationPublicationV1::Runner(_)"),
+    ("activation", "status,\n            recovered_decision,", "status,\n            None,"),
+    ("activation", "activation.complete();", "drop(activation);"),
+    ("publication_variant", "if decision.is_some()", "if false"),
+    ("publication_variant", "ingress, retirement, status, decision", "ingress, retirement, status, None"),
+    ("ordinary_publication", "!Arc::ptr_eq(&self.block_ingress, launched_ingress)", "false"),
+    ("ordinary_publication", "super::super::status::activate_v2_successor_height(\n                expected_predecessor,", "super::super::status::activate_v2_successor_height(\n                foreign_predecessor,"),
+    ("ready_validate_install", "work.install_into(reservation);", "drop(reservation);"),
+    ("ready_validate_install", "self.commit_after_standalone_admission();", "self.commit_unchecked();"),
+    ("ready_validate_commit", "self.armed && self.persisted_sign.is_none() && self.registry_work.is_none()", "true"),
+    ("ready_validate_commit", "self.adapter.status_publication_enabled", "true"),
+)
+
+
+def test_recovered_successor_status_current_owner_source() -> None:
+    module = load_checker()
+    assert module._recovered_successor_status_owner_errors(ROOT_DIR) == []
+
+
+@pytest.mark.parametrize(("key", "old", "new"), _RECOVERED_SUCCESSOR_STATUS_MUTATIONS)
+def test_recovered_successor_status_owner_mutations_fail_closed(
+    tmp_path: Path, key: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    rows = module._RECOVERED_SUCCESSOR_STATUS_OWNER_RELATIONS
+    for relative in {row[1] for row in rows}:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    assert module._recovered_successor_status_owner_errors(tmp_path) == []
+    _, relative, owner, name, attributes, _ = next(row for row in rows if row[0] == key)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    errors = []
+    item = module._reviewed_recovery_owner_item(
+        path, source, owner, name, attributes, errors,
+    )
+    assert errors == [] and item is not None
+    assert old in item.source, (key, old)
+    changed = item.source.replace(old, new, 1)
+    assert changed != item.source
+    assert source.count(item.source) == 1
+    path.write_text(source.replace(item.source, changed, 1), encoding="utf-8")
+    errors = module._recovered_successor_status_owner_errors(tmp_path)
+    assert any(f"recovered successor status {key}" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("name", (
+    "settle_recovered_lifecycle_proposal_prepare_wal",
+    "settle_recovered_lifecycle_proposal_broadcast_and_sign",
+))
+@pytest.mark.parametrize(("old", "new"), (
+    ("drop(output);", "let _ = output.abort_before_publication();"),
+    ("Some(PendingLifecycleCompletionV1::RecoveredSign(completion))", "None"),
+    ("completion.acknowledge_after_publication();", "drop(completion);"),
+    ("output.commit_after_publication();", "drop(output);"),
+    ("transition.persist_exact_successor().is_err()", "false"),
+))
+def test_recovered_proposal_armed_output_refusals_fail_closed(
+    tmp_path: Path, name: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    relative = "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT_DIR / relative, path)
+    assert module._recovered_proposal_restart_closed_errors(tmp_path) == []
+    source = path.read_text(encoding="utf-8")
+    items = module.rust_items(source, name)
+    assert len(items) == 1
+    item, = items
+    assert old in item.source
+    changed = item.source.replace(old, new, 1)
+    path.write_text(source.replace(item.source, changed, 1), encoding="utf-8")
+    assert module._recovered_proposal_restart_closed_errors(tmp_path)
+
+
+def test_recovered_proposal_armed_output_current_owner_source() -> None:
+    module = load_checker()
+    assert module._recovered_proposal_restart_closed_errors(ROOT_DIR) == []
+
+
+_TERMINAL_VALIDATE_OWNER_MUTATIONS = (
+    ("bound_only", "Some(*ordinal)", "None"),
+    ("bind", "if ordinal == 0", "if false"),
+    ("bind", "*existing == ordinal", "true"),
+    ("bind", "DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_) => Err(", "DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_) => Ok("),
+    ("release", "self.lifecycle_state() != &DurableValidateRetryLifecycleStateV1::Bound(outcome.ordinal())", "false"),
+    ("release", "DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(outcome)", "DurableValidateRetryLifecycleStateV1::PendingAdmission"),
+    ("protected_readmission", "current_protected_body_occurrence(effect, incoming, frontier)", "current_protected_body_occurrence(effect, substituted_projection, frontier)"),
+    ("incoming_authority", "frontier.tag != Some(*tag)", "false"),
+    ("incoming_authority", "statement.context_id() != round.context_id", "false"),
+    ("incoming_authority", "frontier.decision.is_none()", "true"),
+    ("incoming_authority", "frontier.lock_is_authoritative", "true"),
+    ("incoming_authority", "statement.execution_commitment() == Some(decision.3)", "true"),
+    ("current_prepare", "certificate.proposal_round == statement.proposal_round()", "true"),
+    ("cold_mint", "claim.matches_outcome(&outcome)", "true"),
+    ("durable_mint", "coordinator.persist_exact_staged_successor(&staged)", "coordinator.persist_unchecked_successor(&staged)"),
+    ("durable_mint", "*coordinator = staged;", "drop(staged);"),
+    ("original_outcome", "assert_eq!(terminal.ordinal, address.ordinal);", ""),
+    ("original_outcome", "effect: completion.incumbent.effect,", "effect: replacement_effect,"),
+    ("original_outcome", "outcome: completion.outcome,", "outcome: replacement_outcome,"),
+    ("original_occurrence", "seal\n                    .permits_resolved_readmission(effect, evidence, frontier)", "seal\n                    .permits_resolved_readmission(effect, strengthened_evidence, frontier)"),
+    ("original_occurrence", "if self.pending_durable_validate_admissions.contains_key(&key)", "if false"),
+    ("replay_before_admission", "if recovered != receipt", "if false"),
+    ("replay_before_admission", "previous.terminal().as_ref() != terminal.as_ref()", "false"),
+    ("replay_before_admission", "assert_eq!(previous.is_some(), replacing_resolved);\n            return Ok(None);", "assert_eq!(previous.is_some(), replacing_resolved);\n            continue_fresh_admission();"),
+)
+
+
+def test_terminal_validate_original_owner_current_source() -> None:
+    module = load_checker()
+    assert module._terminal_validate_owner_errors(ROOT_DIR) == []
+
+
+@pytest.mark.parametrize(("key", "old", "new"), _TERMINAL_VALIDATE_OWNER_MUTATIONS)
+def test_terminal_validate_original_owner_mutations_fail_closed(
+    tmp_path: Path, key: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    rows = module._TERMINAL_VALIDATE_OWNER_RELATIONS
+    for relative in {row[1] for row in rows}:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    assert module._terminal_validate_owner_errors(tmp_path) == []
+    _, relative, owner, name, attributes, _ = next(row for row in rows if row[0] == key)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    errors = []
+    item = module._reviewed_recovery_owner_item(
+        path, source, owner, name, attributes, errors,
+    )
+    assert errors == [] and item is not None
+    assert old in item.source, (key, old)
+    changed = item.source.replace(old, new, 1)
+    assert changed != item.source and source.count(item.source) == 1
+    path.write_text(source.replace(item.source, changed, 1), encoding="utf-8")
+    errors = module._terminal_validate_owner_errors(tmp_path)
+    assert any(f"terminal Validate owner {key}" in error for error in errors), errors
+
+
+_CHUNK_SIGNING_OWNER_MUTATIONS = (
+    ("canonical_encoder", "context.validate()?;", ""),
+    ("canonical_encoder", "Hash::new(payload) != subject.payload_hash", "false"),
+    ("canonical_encoder", "payload_len > context.da_layout.max_payload_size_bytes", "false"),
+    ("canonical_encoder", "wire::PayloadManifest::derive(context, round, subject, payload_len, &chunks)?", "substituted_manifest"),
+    ("original_parts", "(self.manifest, self.chunks)", "(foreign_manifest, self.chunks)"),
+    ("sign_encoded", "chunks.len() != validated.manifest().chunk_hashes.len()", "false"),
+    ("sign_encoded", ".committed_chunk_signature_payload(index, sender)", ".committed_chunk_signature_payload(0, sender)"),
+    ("sign_encoded", "Signature::try_new(self.key_pair.private_key(), &preimage)", "Signature::try_new(foreign_key, &preimage)"),
+    ("validate_manifest", "manifest.validate(context)?;", ""),
+    ("committed_preimage", "self.chunk_hash(index)?", "foreign_hash"),
+    ("committed_preimage", "self.validator(sender)?;", ""),
+    ("committed_preimage", "context_id: manifest.round.context_id", "context_id: foreign_context_id"),
+)
+
+
+def test_recovered_chunk_signing_current_owner_source() -> None:
+    module = load_checker()
+    assert module._recovered_chunk_signing_owner_errors(ROOT_DIR) == []
+
+
+@pytest.mark.parametrize(("key", "old", "new"), _CHUNK_SIGNING_OWNER_MUTATIONS)
+def test_recovered_chunk_signing_owner_mutations_fail_closed(
+    tmp_path: Path, key: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    rows = module._CHUNK_SIGNING_OWNER_RELATIONS
+    for relative in {row[1] for row in rows}:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    assert module._recovered_chunk_signing_owner_errors(tmp_path) == []
+    _, relative, owner, name, attributes, _ = next(row for row in rows if row[0] == key)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    errors = []
+    item = module._reviewed_recovery_owner_item(path, source, owner, name, attributes, errors)
+    assert errors == [] and item is not None and old in item.source
+    changed = item.source.replace(old, new, 1)
+    assert changed != item.source and source.count(item.source) == 1
+    path.write_text(source.replace(item.source, changed, 1), encoding="utf-8")
+    assert module._recovered_chunk_signing_owner_errors(tmp_path)
+
+
+_FIXTURE_DELEGATION_OWNER_MUTATIONS = (
+    ("factory_root", "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body,", "unrelated_fixture_body,"),
+    ("complete_tip_root", "production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body,", "unrelated_fixture_body,"),
+    ("marker_root", "return run_marker_replay_test_on_stack();", "return;"),
+    ("marker_root", "(0xB7_u8, true, false, false, Some(true)),", ""),
+    ("marker_thread", ".spawn(production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies)", ".spawn(unrelated_fixture_body)"),
+    ("marker_thread", "std::panic::resume_unwind(payload);", "drop(payload);"),
+    ("fixture_thread", ".spawn(run)", ".spawn(|| ())"),
+    ("fixture_thread", "std::panic::resume_unwind(payload);", "drop(payload);"),
+    ("decision_root", "recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources_body,", "unrelated_fixture_body,"),
+)
+
+
+def test_reviewed_fixture_delegation_current_source() -> None:
+    module = load_checker()
+    assert module._fixture_delegation_owner_errors(ROOT_DIR) == []
+
+
+@pytest.mark.parametrize(("key", "old", "new"), _FIXTURE_DELEGATION_OWNER_MUTATIONS)
+def test_reviewed_fixture_delegation_mutations_fail_closed(
+    tmp_path: Path, key: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    rows = module._FIXTURE_DELEGATION_OWNER_RELATIONS
+    for relative in {row[1] for row in rows}:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    assert module._fixture_delegation_owner_errors(tmp_path) == []
+    _, relative, owner, name, attributes, _ = next(row for row in rows if row[0] == key)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    errors = []
+    item = module._reviewed_recovery_owner_item(path, source, owner, name, attributes, errors)
+    assert errors == [] and item is not None and old in item.source
+    changed = item.source.replace(old, new, 1)
+    assert changed != item.source
+    start = sum(len(line) for line in source.splitlines(keepends=True)[:item.line - 1])
+    assert source[start:start + len(item.source)] == item.source
+    path.write_text(source[:start] + changed + source[start + len(item.source):], encoding="utf-8")
+    errors = module._fixture_delegation_owner_errors(tmp_path)
+    assert any(f"reviewed fixture delegation {key}" in error for error in errors), errors
+
+
+_CONSUMER_ELIGIBILITY_OWNER_MUTATIONS = (
+    ("adapter_mint", "LeaderWireRecoveryAuthority::from_adapter(self)", "unchecked_consumer_authority()"),
+    ("wal_mint", "adapter.ensure_ingress()?;", ""),
+    ("wal_mint", "durable.commit_intent_for_lock(locked).is_some()", "true"),
+    ("wal_mint", "wal_id: durable.last_id()", "wal_id: foreign_wal_id"),
+    ("authority_hash", "bytes.extend(self.wal_id.get().to_le_bytes());", ""),
+    ("accepts", "view <= current_view", "true"),
+    ("accepts", "Phase::CommitVote => exact_commit", "Phase::CommitVote => true"),
+    ("accepts", "installed_same_round: self.installed_timeout_view == Some(view)", "installed_same_round: true"),
+    ("retains", "Phase::PrepareQc => self", "Phase::PrepareQc => foreign"),
+    ("waiting", "position.height == self.height", "true"),
+    ("waiting", "&& !self.consumer_accepts(", "&& self.consumer_accepts("),
+    ("driver", "self.leader_wire_recovery_authority().map(Some)", "Ok(None)"),
+    ("refresh", "if authority.is_none()", "if false"),
+    ("refresh", "authority.consumer_tag() != self.driver.current_tag()", "false"),
+    ("ingress_refresh", "owner.consumer_position != queued.command.leader_wire_consumer_position()", "false"),
+    ("ingress_wait", "&self.selection_source_identity", "&foreign_source_identity"),
+    ("ready", "&& !self.consumer_waits(queued)", ""),
+    ("minimum", "&& !self.consumer_waits(queued)", ""),
+    ("snapshot_hash", "append_runtime_identity_u64(&mut projection, snapshot.consumer_pending_count);", ""),
+    ("snapshot_partition", "u64::try_from(pending_count) == Ok(self.consumer_pending_count)", "true"),
+    ("snapshot_partition", "count.checked_add(self.consumer_pending_count)", "Some(count)"),
+    ("select", "&& !self.consumer_waits(queued)", ""),
+    ("select", "let _authorized_service = checked_service.into_projection();\n        self.next_class = next;\n        for skipped_class", "let _authorized_service = checked_service.into_projection();\n        for skipped_class"),
+    ("selected_seal", "before.consumer_authority == after.consumer_authority", "true"),
+    ("selected_seal", "!before.consumer_waits_at(self.selected_position as usize)", "true"),
+    ("step", "self.refresh_ingress_consumer_eligibility()?;", ""),
+    ("dispatch", ".restore_selected_command(retry_command, &candidate)", ".admit_new_command(retry_command)"),
+    ("regression", "forged_partition.validate_exact().is_err()", "true"),
+)
+
+
+def test_consumer_eligibility_current_owner_source() -> None:
+    module = load_checker()
+    assert module._consumer_eligibility_owner_errors(ROOT_DIR) == []
+
+
+@pytest.mark.parametrize(("key", "old", "new"), _CONSUMER_ELIGIBILITY_OWNER_MUTATIONS)
+def test_consumer_eligibility_owner_mutations_fail_closed(
+    tmp_path: Path, key: str, old: str, new: str,
+) -> None:
+    module = load_checker()
+    rows = module._CONSUMER_ELIGIBILITY_OWNER_RELATIONS
+    for relative in {row[1] for row in rows}:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    assert module._consumer_eligibility_owner_errors(tmp_path) == []
+    _, relative, owner, name, attributes, _ = next(row for row in rows if row[0] == key)
+    path = tmp_path / relative
+    source = path.read_text(encoding="utf-8")
+    errors = []
+    item = module._reviewed_recovery_owner_item(path, source, owner, name, attributes, errors)
+    assert errors == [] and item is not None and old in item.source
+    changed = item.source.replace(old, new, 1)
+    assert changed != item.source
+    start = sum(len(line) for line in source.splitlines(keepends=True)[:item.line - 1])
+    assert source[start:start + len(item.source)] == item.source
+    path.write_text(source[:start] + changed + source[start + len(item.source):], encoding="utf-8")
+    errors = module._consumer_eligibility_owner_errors(tmp_path)
+    assert any(f"consumer eligibility owner {key}" in error for error in errors), errors

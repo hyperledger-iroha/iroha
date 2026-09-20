@@ -357,7 +357,7 @@ impl ProductionLifecycleAdapterStartupV1 {
         mut self,
         replay: RecoveredPendingKuraApplyReplayV1,
     ) -> Self {
-        match &mut self.state {
+        match self.state.as_mut() {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 effects,
                 pending_kura_apply,
@@ -393,7 +393,7 @@ impl ProductionLifecycleAdapterStartupV1 {
         ),
         crate::sumeragi::v2_runtime::RuntimeConfigError,
     > {
-        match self.state {
+        match *self.state {
             ProductionLifecycleAdapterStartupStateV1::Recovered {
                 adapter,
                 effects,

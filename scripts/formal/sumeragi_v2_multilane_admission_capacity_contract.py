@@ -176,12 +176,13 @@ BINDINGS = (
  'iroha_core::torii_proxy::validate_queue_plan_binding_for_request(\n'
  '                &admission_binding,\n'
  '                app.state.network_id_ref(),\n'
- '                accepted_tx.entrypoint(),\n'
+ '                &transaction,\n'
  '                &ingress_plan,\n'
  '            )',
  '.route_plan_with_state(&accepted_tx, app.state.as_ref())',
  'if let Some(response) = canonical_queue_plan_synced_response(\n'
  '                app,\n'
+ '                &authenticated,\n'
  '                &admission_binding,\n'
  '                ingress_plan.coordinator_route(),\n'
  '                proxy_memory.as_ref(),\n'
@@ -189,7 +190,9 @@ BINDINGS = (
  '            ) {\n'
  '                return response;\n'
  '            }',
- 'execution_deadline: tokio::time::Instant')),
+ 'execution_deadline: tokio::time::Instant',
+ 'let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint(',
+ 'authenticated.entrypoint_hash()')),
 )
 # Existing registry bindings retain this owner's full persistence obligations.
 EXTRA_ITEMS = ((TORII, "fn", PERSIST), (TORII, "fn", AGGREGATOR), (RUNNER, "fn", "candidate_attachments"))

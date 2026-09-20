@@ -257,7 +257,7 @@ def test_merge_sidecar_holder_semantics_survive_item_digest_refresh(
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "try_push_at",
+            "try_push_owned_at",
             "merged.merge_with_receipt(candidate)",
             "merged.merge_with_receipt(retained)",
             "coalesced ingress shadow-merges route capacity and attempt cursors without mutating the retained owner",
@@ -1059,18 +1059,18 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     mutate_rust_item_source(
         module,
         core_path,
-        "try_push_at",
+        "try_push_owned_at",
         "let source_lane_is_new = !state.lanes.contains_key(&source);",
         "let source_lane_is_new = false;",
     )
     mutate_rust_item_source(
         module,
         core_path,
-        "try_push_at",
+        "try_push_owned_at",
         "let retained_authenticated_non_validator_sources = state\n"
         "                .lanes\n"
         "                .keys()\n"
-        "                .filter(|source| matches!(source, FairV2IngressSource::Authenticated(_)))\n"
+        "                .filter(|source| source.uses_authenticated_capacity())\n"
         "                .count();",
         "let retained_authenticated_non_validator_sources = state\n"
         "                .lanes\n"
@@ -1081,8 +1081,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         module,
         core_path,
         "dequeue_selected_locked",
-        "} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {",
-        "} else if false && matches!(&source, FairV2IngressSource::Authenticated(_)) {",
+        "} else if source.uses_authenticated_capacity() {",
+        "} else if false && source.uses_authenticated_capacity() {",
     )
     mutate_rust_item_source(
         module,
@@ -1426,13 +1426,13 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
             "exact v2 and lane-local progress/completion/recovery ceilings",
         ),
         (
-            "try_push_at",
+            "try_push_owned_at",
             "queued.ownership_snapshot = ownership_snapshot;",
             "let _ = ownership_snapshot;",
             "validated ingress route shadow commits atomically beside its exact ownership evidence",
         ),
         (
-            "try_push_at",
+            "try_push_owned_at",
             "&& !authenticated_historical_recovery_response",
             "&& false",
             "current-roster or proof-carrying historical authority premise",
@@ -1610,7 +1610,7 @@ def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
                 "state.configured_network_id = None;",
             ),
             (
-                "try_push_at",
+                "try_push_owned_at",
                 "request.matches_configured_network("
                 "state.configured_network_id.as_ref())",
                 "true",
@@ -1628,7 +1628,7 @@ def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
             "new_with_source_geometry_and_transport_frame_caps",
             "configure_roster_for_context",
             "configure_roster_with_byte_requirements",
-            "try_push_at",
+            "try_push_owned_at",
         ):
             history_item_source = next(
                 candidate
@@ -1702,7 +1702,7 @@ def test_core_runtime_moved_helper_semantics_survive_digest_refresh(
             "authoritative fair-v2 ingress geometry classify",
         ),
         (
-            "try_push_at",
+            "try_push_owned_at",
             (("impl", "FairV2Ingress"),),
             "&& !authenticated_historical_recovery_response",
             "&& false",

@@ -62,8 +62,22 @@ pub enum BlockMessage {
     /// Explicitly versioned global Sumeragi v2 message.
     #[codec(index = 10)]
     V2(#[skip_try_from] ConsensusMessageV2),
+    /// Versioned native lane control evidence for the shared lane reducer.
+    /// This wire value alone grants no execution or publication authority.
+    #[codec(index = 11)]
+    NativeLane(#[skip_try_from] iroha_data_model::block::lane_consensus::LaneMessageEnvelopeV1),
+    /// V1 native Decision evidence; the distinct wire tag fixes its schema.
+    /// The exact original input and frozen lane context must authenticate it.
+    #[codec(index = 12)]
+    NativeLaneDecision(
+        #[skip_try_from] Box<iroha_data_model::block::lane_consensus::LaneDecisionV1>,
+    ),
 }
 impl BlockMessage {
+    /// Native evidence is kept separate from the retired lane-local signer.
+    pub(crate) const fn is_native_lane(&self) -> bool {
+        matches!(self, Self::NativeLane(_) | Self::NativeLaneDecision(_))
+    }
     /// Whether this belongs to the independent lane-local consensus protocol.
     pub(crate) const fn is_lane_local(&self) -> bool {
         matches!(
@@ -92,6 +106,9 @@ impl BlockMessage {
                     "refusing to emit non-canonical Sumeragi v2 message: {error}"
                 ))
             }),
+            Self::NativeLane(_) | Self::NativeLaneDecision(_) => {
+                self.ensure_supported_wire_version()
+            }
             Self::KuraReplicaAdvert(advert) => advert.verify_keeper_signature().map_err(|error| {
                 ncore::Error::Message(format!(
                     "refusing to emit an invalid Kura replica advert: {error}"
@@ -113,6 +130,14 @@ impl BlockMessage {
             Self::V2(message) => message.validate_version().map_err(|error| {
                 ncore::Error::Message(format!("unsupported Sumeragi v2 message version: {error}"))
             }),
+            Self::NativeLane(envelope)
+                if envelope.version
+                    != iroha_data_model::block::lane_consensus::LANE_MESSAGE_VERSION_V1 =>
+            {
+                Err(ncore::Error::Message(
+                    "unsupported native lane envelope revision".to_owned(),
+                ))
+            }
             _ => Ok(()),
         }
     }
@@ -770,7 +795,7 @@ mod tests {
     }
     #[test]
     fn unknown_block_message_discriminants_fail_decode() {
-        for tag in [11_u32, u32::MAX] {
+        for tag in [13_u32, u32::MAX] {
             let frame = retagged_block_message_frame(tag);
             assert!(
                 norito_core::decode_from_bytes::<BlockMessage>(&frame).is_err(),

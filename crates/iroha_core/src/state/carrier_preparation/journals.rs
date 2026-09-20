@@ -26,6 +26,7 @@ mod runtime_journals;
 
 #[path = "decision_binding.rs"]
 pub(crate) mod decision_binding;
+pub(crate) use decision_binding::PublishedNativeApply;
 #[cfg(test)]
 use runtime_journals::RuntimeJournalInputs;
 use runtime_journals::RuntimeJournals;
@@ -242,8 +243,10 @@ impl<'state> PreparedCarrier<'state> {
     ///
     /// StateReadOnly is used only before decomposition. No surrogate State,
     /// reconstructed membership writer or second World tail is introduced.
-    /// The required admission callback sees the complete original StateBlock and retained execution prefix
-    /// before any final journal value is copied. Its returned reservation stays
+    /// The required admission callback sees the complete original StateBlock and
+    /// retained execution prefix before projections and journal detachment.
+    /// Detachment moves original MV allocations without cloning; execution's
+    /// earlier allocations require their own prior admission. The reservation stays
     /// alive until all journals and deferred effects have been released. Archive
     /// arguments must be the exact predecessor owners reserved before execution.
     /// Admission refusal returns the original borrowed carrier and these owners

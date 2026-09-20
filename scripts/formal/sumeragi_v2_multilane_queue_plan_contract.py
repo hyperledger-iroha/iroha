@@ -2162,13 +2162,13 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'canonical_queue_plan_submission_response',
-  ('if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n'
-   '        return None;\n'
-   '    }',
+  ('authenticated: &AuthenticatedQueuePlanRetry',
    '.queue_plan_admission_registry_entrypoint_present(entrypoint_hash)',
    'Ok(false) => None,',
    'Ok(true) => Some(transaction_submission_receipt_response(',
-   'Err(error) => Some(queue_plan_admission_registry_conflict_response(')),
+   'Err(error) => Some(queue_plan_admission_registry_conflict_response(',
+   'let entrypoint_hash = authenticated.entrypoint_hash();',
+   'Some(authenticated.signed_transaction_hash())')),
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'canonical_queue_plan_synced_response',
@@ -2193,37 +2193,273 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    '    ))',
    'read_deadline: tokio::time::Instant',
    'if tokio::time::Instant::now() >= read_deadline {\n'
-   '        return Some(queue_plan_outcome_unknown_response(')),
+   '        return Some(queue_plan_outcome_unknown_response(',
+   'authenticated: &AuthenticatedQueuePlanRetry',
+   'if authenticated.entrypoint_hash() != binding.entrypoint_hash\n'
+   '        || Some(authenticated.signed_transaction_hash()) != binding.signed_transaction_hash')),
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'submit_signed_transaction_for_ingress_queue_plan_certified',
-  ('durable_plan_admission_claim_with_state',
-   'route_plan_with_state',
-   'execute_torii_transaction_via_proxy',
-   'queue_plan_synced_transport_unavailable',
+  ('let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;',
+   'submit_prepared_transaction_ingress(',
    'routing::accept_decoded_signed_transaction_for_ingress(',
-   'if let Some(response) = canonical_queue_plan_submission_response(\n'
-   '        app.as_ref(),\n'
-   '        accepted_tx.entrypoint(),\n'
-   '        transaction_submission_prefers_minimal_response(&headers),\n'
-   '        format,\n'
-   '    ) {\n'
-   '        return Ok(response);\n'
-   '    }',
-   'routing::reject_ingress_if_queue_capacity_saturated(')),
+   'run_transaction_ingress_compute_job(',
+   'AuthenticatedQueuePlanRetry::from_signed(',
+   'canonical_queue_plan_submission_response(',
+   'return Ok(PreparedTransactionIngress::Canonical(response));',
+   'PreparedTransactionIngress::Canonical(response) => return Ok(response),',
+   'PreparedTransactionIngress::Fresh(accepted_tx) => accepted_tx')),
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'handler_post_transaction_entrypoint',
   ('routing::accept_transaction_for_ingress(state, transaction, &telemetry)',
-   'if let Some(response) = canonical_queue_plan_submission_response(\n'
-   '        app.as_ref(),\n'
-   '        accepted_tx.entrypoint(),\n'
-   '        transaction_submission_prefers_minimal_response(&headers),\n'
-   '        format,\n'
-   '    ) {\n'
-   '        return Ok(response);\n'
+   'let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;',
+   'submit_prepared_transaction_ingress(',
+   'run_transaction_ingress_compute_job(',
+   'AuthenticatedQueuePlanRetry::from_entrypoint(',
+   'canonical_queue_plan_submission_response(',
+   'return Ok(PreparedTransactionIngress::Canonical(response));',
+   'PreparedTransactionIngress::Canonical(response) => return Ok(response),',
+   'PreparedTransactionIngress::Fresh(accepted_tx) => accepted_tx')),
+ ('crates/iroha_torii/src/lib.rs',
+  'struct',
+  'PreparedFreshTransactionIngress',
+  ("transaction: iroha_core::tx::AcceptedTransaction<'static>",
+   'routing_plan: RoutingPlan',
+   'durable_retry_claim: Option<queue::QueuePlanDurableAdmissionV1>')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'prepare_fresh_transaction_ingress',
+  ("transaction: iroha_core::tx::AcceptedTransaction<'static>",
+   '.durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())',
+   'if !durable_retry_claim\n'
+   '        .as_ref()\n'
+   '        .is_some_and(|claim| claim.global_admission_identity.is_some())\n'
+   '    {\n'
+   '        routing::reject_ingress_if_queue_capacity_saturated(\n'
+   '            app.queue.as_ref(),\n'
+   '            app.state.as_ref(),\n'
+   '            1,\n'
+   '        )?;\n'
    '    }',
-   'routing::reject_ingress_if_queue_capacity_saturated(')),
+   'let routing_plan = if let Some(claim) = &durable_retry_claim {\n'
+   '        claim.routing_plan.clone()\n'
+   '    } else {',
+   '.route_plan_with_state(&transaction, app.state.as_ref())',
+   'Ok(PreparedFreshTransactionIngress {\n'
+   '        transaction,\n'
+   '        routing_plan,\n'
+   '        durable_retry_claim,\n'
+   '    })')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'submit_prepared_transaction_ingress',
+  ('prepared: PreparedFreshTransactionIngress',
+   'let PreparedFreshTransactionIngress {\n'
+   '        transaction,\n'
+   '        routing_plan,\n'
+   '        durable_retry_claim,\n'
+   '    } = prepared;',
+   'if let Some(authenticated) =\n'
+   '            AuthenticatedQueuePlanRetry::from_accepted(app.state.network_id_ref(), &transaction)?\n'
+   '            && let Some(response) = canonical_queue_plan_submission_response(\n'
+   '                app.as_ref(),\n'
+   '                &authenticated,\n'
+   '                minimal_response,\n'
+   '                format,\n'
+   '            )\n'
+   '        {\n'
+   '            return Ok(response);\n'
+   '        }',
+   'let durable_retry_claim = app\n'
+   '            .queue\n'
+   '            .durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())\n'
+   '            .map_err(|error| routing_resolve_error_to_torii_error(app, error))?\n'
+   '            .or(durable_retry_claim);',
+   'let routing_plan = durable_retry_claim\n'
+   '            .as_ref()\n'
+   '            .map_or(routing_plan, |claim| claim.routing_plan.clone());',
+   '.is_some_and(|claim| claim.global_admission_identity.is_some())',
+   'let reservation = if already_durably_admitted {\n'
+   '            None\n'
+   '        } else {',
+   'reserve_verified_transaction_authority(\n'
+   '                    &app.tx_rate_limiter,\n'
+   '                    transaction.authority_opt(),\n'
+   '                )',
+   'let response = execute_torii_transaction_via_proxy(\n'
+   '            app,\n'
+   '            transaction,\n'
+   '            routing_plan,\n'
+   '            durable_retry_claim,\n'
+   '            minimal_response,\n'
+   '            format,\n'
+   '        )',
+   'if response.status() == StatusCode::ACCEPTED\n'
+   '            && let Some(reservation) = reservation\n'
+   '        {\n'
+   '            reservation.commit();\n'
+   '        }',
+   'Ok(response)',
+   'queue_plan_synced_transport_unavailable')),
+ ('crates/iroha_torii/src/lib.rs',
+  'fn',
+  'execute_torii_transaction_via_proxy',
+  ("accepted_transaction: iroha_core::tx::AcceptedTransaction<'static>",
+   'if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n'
+   '        return threshold_key_lifecycle_ingress::submit(\n'
+   '            app.clone(),\n'
+   '            accepted_transaction,\n'
+   '            routing_plan,\n'
+   '            minimal_response,\n'
+   '            format,\n'
+   '        )\n'
+   '        .await;\n'
+   '    }',
+   'durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some())',
+   'let already_durably_admitted = durable_retry_claim.is_some();',
+   'if durable_retry_claim.is_none() {',
+   'AuthenticatedQueuePlanRetry::from_accepted(\n'
+   '            app.state.network_id_ref(),\n'
+   '            &accepted_transaction,\n'
+   '        )',
+   'canonical_queue_plan_submission_response(',
+   'queue_plan_synced_proxy_request_id_for_entrypoint(app.as_ref(), entrypoint_hash.clone())',
+   'let binding = if let Some(claim) = durable_retry_claim {',
+   'iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(&claim)',
+   'if binding.request_id != request_id {',
+   '.plan_admission_context_with_state(app.state.as_ref(), &routing_plan)',
+   'iroha_core::torii_proxy::validate_queue_plan_binding_for_request(\n'
+   '        &binding,\n'
+   '        app.state.network_id_ref(),\n'
+   '        &transaction,\n'
+   '        &routing_plan,\n'
+   '    )',
+   '.queue_plan_admission_binding_registry_match(&binding)',
+   'Ok(QueuePlanAdmissionRegistryMatch::Exact) => {\n'
+   '            return transaction_submission_response(',
+   'Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {\n'
+   '            return queue_plan_admission_registry_conflict_response(',
+   'Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}',
+   'if !already_durably_admitted {\n'
+   '        if let Err(error) = routing::reject_ingress_if_queue_capacity_saturated(\n'
+   '            app.queue.as_ref(),\n'
+   '            app.state.as_ref(),\n'
+   '            1,\n'
+   '        ) {\n'
+   '            return error.into_response();\n'
+   '        }\n'
+   '    }',
+   'let response = execute_torii_proxy_request_with_fallback(\n'
+   '        app,\n'
+   '        routing_decision,\n'
+   '        ToriiProxyRequestKindV1::SubmitTransaction {\n'
+   '            transaction,\n'
+   '            expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),\n'
+   '            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,\n'
+   '            admission_binding: Some(binding),\n'
+   '        },\n'
+   '    )')),
+ ('crates/iroha_torii/src/lib_pipeline_handlers.rs',
+ 'enum',
+ 'PreparedBatchEntry',
+ ('Canonical(Response)', 'Fresh(PreparedFreshTransactionIngress)')),
+ ('crates/iroha_torii/src/lib_pipeline_handlers.rs',
+ 'fn',
+ 'transaction_batch_submission_response',
+ ('*response.status_mut() = StatusCode::ACCEPTED;',
+  'HeaderValue::from_str(&accepted_count.to_string())')),
+ ('crates/iroha_torii/src/lib_pipeline_handlers.rs',
+  'fn',
+  'handler_post_transactions_batch',
+  ('validate_transaction_batch_body_size(&body, app.transaction_batch_max_bytes)?;',
+   'move || decode_transaction_batch_request(body, max_transactions)',
+   'admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token, '
+   'transactions.len())',
+   'precheck_transaction_batch_ed25519(\n'
+   '                &transactions,\n'
+   '                worker_app.state.pipeline.signature_batch_max_ed25519,\n'
+   '            )',
+   'for (transaction, precheck) in transactions.into_iter().zip(prechecks) {',
+   'let hash = transaction.hash();',
+   'AuthenticatedQueuePlanRetry::from_signed(\n'
+   '                    worker_app.state.network_id_ref(),\n'
+   '                    transaction.signed(),\n'
+   '                )?',
+   'canonical_queue_plan_submission_response(\n'
+   '                    &worker_app,\n'
+   '                    &authenticated,\n'
+   '                    true,\n'
+   '                    ResponseFormat::Json,\n'
+   '                )',
+   'prepared.push((hash, PreparedTransactionIngress::Canonical(response)));\n'
+   '                    continue;',
+   'routing::accept_decoded_signed_transaction_for_ingress_with_precheck(\n'
+   '                        worker_app.state.clone(),\n'
+   '                        transaction,\n'
+   '                        &worker_app.telemetry,\n'
+   '                        precheck.single_ed25519_prechecked,\n'
+   '                        precheck.precheck_rejection,\n'
+   '                    )?',
+   'prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));\n'
+   '            }\n'
+   '            // Keep route/policy preflight before the first durable write. Ordinary\n'
+   '            // inputs have exactly the same authenticated lifecycle exception.\n'
+   '            prepared\n'
+   '                .into_iter()\n'
+   '                .map(|(hash, prepared)| {',
+   'PreparedTransactionIngress::Canonical(response) => {\n'
+   '                            PreparedBatchEntry::Canonical(response)\n'
+   '                        }',
+   'prepare_fresh_transaction_ingress(&worker_app, transaction)?;',
+   'if prepared.transaction.entrypoint().admission_intent()\n'
+   '                                != TransactionAdmissionIntent::QueuePlanSynced\n'
+   '                            {\n'
+   '                                threshold_key_lifecycle_ingress::authenticate(\n'
+   '                                    &worker_app,\n'
+   '                                    prepared.transaction.entrypoint(),\n'
+   '                                    &prepared.routing_plan,\n'
+   '                                )',
+   'PreparedBatchEntry::Fresh(prepared)',
+   'Ok((hash, prepared))\n'
+   '                })\n'
+   '                .collect::<Result<Vec<_>, Error>>()\n'
+   '        },\n'
+   '    )\n'
+   '    .await?;\n'
+   '    drop(permit);',
+   'let mut outcomes = Vec::with_capacity(prepared.len());\n'
+   '    for (hash, entry) in prepared {',
+   'PreparedBatchEntry::Canonical(response) => response,',
+   'if tokio::time::Instant::now() >= deadline {',
+   'tokio::time::timeout_at(\n'
+   '                            deadline,\n'
+   '                            submit_prepared_transaction_ingress(\n'
+   '                                &app,\n'
+   '                                prepared,\n'
+   '                                true,\n'
+   '                                ResponseFormat::Json,\n'
+   '                            ),\n'
+   '                        )',
+   'Ok(result) => result.unwrap_or_else(IntoResponse::into_response)',
+   'Err(_) => queue_plan_outcome_unknown_response(\n'
+   '                                entrypoint_hash,\n'
+   '                                Some(hash),\n'
+   '                                "batch deadline elapsed after this entry was '
+   'dispatched",\n'
+   '                            )',
+   'outcomes.push(TransactionBatchEntryOutcome {\n'
+   '            signed_transaction_hash: hash,\n'
+   '            status: response.status().as_u16(),\n'
+   '            reject_code: response\n'
+   '                .headers()',
+   'let accepted = outcomes.iter().filter(|entry| entry.status == 202).count();',
+   'if accepted == outcomes.len() {\n'
+   '        return Ok(transaction_batch_submission_response(accepted));\n'
+   '    }',
+   'let mut response = crate::utils::JsonBody(outcomes).into_response();\n'
+   '    *response.status_mut() = StatusCode::MULTI_STATUS;',
+   'HeaderValue::from_str(&accepted.to_string()).expect(')),
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'execute_incoming_torii_proxy_request_with_admission_inner',
@@ -2241,12 +2477,13 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    'iroha_core::torii_proxy::validate_queue_plan_binding_for_request(\n'
    '                &admission_binding,\n'
    '                app.state.network_id_ref(),\n'
-   '                accepted_tx.entrypoint(),\n'
+   '                &transaction,\n'
    '                &ingress_plan,\n'
    '            )',
    '.route_plan_with_state(&accepted_tx, app.state.as_ref())',
    'if let Some(response) = canonical_queue_plan_synced_response(\n'
    '                app,\n'
+   '                &authenticated,\n'
    '                &admission_binding,\n'
    '                ingress_plan.coordinator_route(),\n'
    '                proxy_memory.as_ref(),\n'
@@ -2254,7 +2491,9 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    '            ) {\n'
    '                return response;\n'
    '            }',
-   'execution_deadline: tokio::time::Instant')),
+   'execution_deadline: tokio::time::Instant',
+   'let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint(',
+   'authenticated.entrypoint_hash()')),
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'transaction_submission_receipt_response',
@@ -2376,7 +2615,48 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
    '            proxy_memory,\n'
    '            deadline,\n'
    '        ),\n'
-   '    )')))
+   '    )')),
+ ('crates/iroha_torii/src/queue_plan_retry_authentication.rs',
+  'struct',
+  'AuthenticatedQueuePlanRetry',
+  ('entrypoint_hash: HashOf<TransactionEntrypoint>',
+   'signed_transaction_hash: HashOf<SignedTransaction>')),
+ ('crates/iroha_torii/src/queue_plan_retry_authentication.rs',
+  'method',
+  'AuthenticatedQueuePlanRetry::from_signed',
+  ('if signed.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n'
+   '            return Ok(None);\n'
+   '        }',
+   'Self::check_network(network_id, signed)?;',
+   'signed.verify_signature().map_err(|error| {',
+   'entrypoint_hash: signed.hash_as_entrypoint(),',
+   'signed_transaction_hash: signed.hash()')),
+ ('crates/iroha_torii/src/queue_plan_retry_authentication.rs',
+  'method',
+  'AuthenticatedQueuePlanRetry::from_entrypoint',
+  ('TransactionEntrypoint::External(signed) => signed,',
+   'TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),',
+   'TransactionEntrypoint::SealedCommitment(_) => return Ok(None)',
+   'Self::from_signed(network_id, signed)?',
+   'authenticated.entrypoint_hash = entrypoint.hash();')),
+ ('crates/iroha_torii/src/queue_plan_retry_authentication.rs',
+  'method',
+  'AuthenticatedQueuePlanRetry::from_accepted',
+  ("accepted: &AcceptedTransaction<'_>",
+   'let entrypoint = accepted.entrypoint();',
+   'if entrypoint.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n'
+   '            return Ok(None);\n'
+   '        }',
+   'Self::check_network(network_id, signed)?;',
+   'entrypoint_hash: entrypoint.hash(),',
+   'signed_transaction_hash: signed.hash()')),
+ ('crates/iroha_torii/src/queue_plan_retry_authentication.rs',
+  'method',
+  'AuthenticatedQueuePlanRetry::check_network',
+  ('let expected = TransactionDomain::Network(*network_id);',
+   'if signed.domain() != &expected {',
+   'AcceptTransactionFail::TransactionDomainMismatch(Mismatch {',
+   'actual: *signed.domain()')))
 
 QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = _merge_retained_queue_plan_bindings(
     QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS, QUEUE_PLAN_CANONICAL_RETRY_BINDINGS
@@ -2422,15 +2702,86 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
         ("submit_signed_transaction_for_ingress_queue_plan_certified", "accept_decoded_signed_transaction_for_ingress("),
         ("handler_post_transaction_entrypoint", "accept_transaction_for_ingress("),
     ):
-        ordered(symbol, accept, "drop(compute_permit);", "canonical_queue_plan_submission_response(",
-                "return Ok(response);", "reject_ingress_if_queue_capacity_saturated(")
+        authenticate = "AuthenticatedQueuePlanRetry::from_signed(" if symbol.startswith("submit_") else "AuthenticatedQueuePlanRetry::from_entrypoint("
+        ordered(symbol, "run_transaction_ingress_compute_job(", authenticate,
+                "canonical_queue_plan_submission_response(",
+                "return Ok(PreparedTransactionIngress::Canonical(response));", accept,
+                "drop(compute_permit);", "PreparedTransactionIngress::Canonical(response) => return Ok(response)",
+                "let prepared = prepare_fresh_transaction_ingress(&app, accepted_tx)?;",
+                "submit_prepared_transaction_ingress(")
+    ordered("prepare_fresh_transaction_ingress",
+            ".durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())",
+            "if !durable_retry_claim", "claim.global_admission_identity.is_some()",
+            "reject_ingress_if_queue_capacity_saturated(",
+            "if let Some(claim) = &durable_retry_claim", "claim.routing_plan.clone()",
+            ".route_plan_with_state(&transaction, app.state.as_ref())",
+            "Ok(PreparedFreshTransactionIngress {")
+    ordered("submit_prepared_transaction_ingress",
+            "let PreparedFreshTransactionIngress {", "} = prepared;",
+            "AuthenticatedQueuePlanRetry::from_accepted(",
+            "canonical_queue_plan_submission_response(", "return Ok(response);",
+            ".durable_plan_admission_claim_with_state(&transaction, app.state.as_ref())",
+            ".or(durable_retry_claim);",
+            ".map_or(routing_plan, |claim| claim.routing_plan.clone());",
+            "claim.global_admission_identity.is_some()",
+            "reserve_verified_transaction_authority(",
+            "execute_torii_transaction_via_proxy(",
+            "if response.status() == StatusCode::ACCEPTED",
+            "reservation.commit();", "Ok(response)")
+    ordered("execute_torii_transaction_via_proxy",
+            "threshold_key_lifecycle_ingress::submit(",
+            "durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some())",
+            "let already_durably_admitted = durable_retry_claim.is_some();",
+            "AuthenticatedQueuePlanRetry::from_accepted(",
+            "canonical_queue_plan_submission_response(",
+            "let binding = if let Some(claim) = durable_retry_claim",
+            "queue_plan_binding_from_durable_admission(&claim)",
+            "if binding.request_id != request_id",
+            "validate_queue_plan_binding_for_request(",
+            "queue_plan_admission_binding_registry_match(&binding)",
+            "if !already_durably_admitted",
+            "reject_ingress_if_queue_capacity_saturated(",
+            "execute_torii_proxy_request_with_fallback(")
+    ordered("handler_post_transactions_batch",
+            "validate_transaction_batch_body_size(", "decode_transaction_batch_request(",
+            "admit_transaction_api_token_preauth(", "precheck_transaction_batch_ed25519(",
+            "for (transaction, precheck) in transactions.into_iter().zip(prechecks)",
+            "AuthenticatedQueuePlanRetry::from_signed(", "canonical_queue_plan_submission_response(",
+            "accept_decoded_signed_transaction_for_ingress_with_precheck(",
+            "prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));",
+            "prepare_fresh_transaction_ingress(", "threshold_key_lifecycle_ingress::authenticate(",
+            ".collect::<Result<Vec<_>, Error>>()", "drop(permit);",
+            "for (hash, entry) in prepared", "submit_prepared_transaction_ingress(",
+            "outcomes.push(TransactionBatchEntryOutcome", "let accepted = outcomes.iter()",
+            "if accepted == outcomes.len()", "transaction_batch_submission_response(accepted)",
+            "JsonBody(outcomes)", "StatusCode::MULTI_STATUS")
+    batch = code_items.get("handler_post_transactions_batch", "")
+    preflight, separator, dispatch = batch.partition(_code("drop(permit);"))
+    if not separator or "submit_prepared_transaction_ingress(" in preflight:
+        errors.append("handler_post_transactions_batch: dispatch escapes complete preflight")
+    if "?" in dispatch or "returnErr(" in dispatch:
+        errors.append("handler_post_transactions_batch: aggregate rejection hides per-entry dispatch outcomes")
+    for forbidden in ("push_accepted_transaction", ".queue.push(", "routing::push_"):
+        if forbidden in batch:
+            errors.append("handler_post_transactions_batch: direct queue insertion bypasses the shared durable owner")
     ordered("execute_incoming_torii_proxy_request_with_admission_inner",
-            "let accepted_tx = match routing::accept_transaction_for_ingress(",
+            "AuthenticatedQueuePlanRetry::from_entrypoint(",
             "if admission_binding.request_id != request_head.request_id", "if admission_binding.request_id != canonical_request_id",
             "validate_queue_plan_binding_for_request(", "canonical_queue_plan_synced_response(",
-            "return response;", "queue_plan_service_input_capacity_error(", ".route_plan_with_state(",
+            "return response;", "let accepted_tx = match routing::accept_transaction_for_ingress(",
+            "queue_plan_service_input_capacity_error(", ".route_plan_with_state(",
             "push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(")
-    ordered("canonical_queue_plan_synced_response", "queue_plan_admission_binding_registry_match(binding)",
+    ordered("AuthenticatedQueuePlanRetry::from_signed", "Self::check_network(network_id, signed)?;",
+            "signed.verify_signature()", "Ok(Some(Self {")
+    ordered("AuthenticatedQueuePlanRetry::from_entrypoint", "Self::from_signed(network_id, signed)?",
+            "authenticated.entrypoint_hash = entrypoint.hash();", "Ok(Some(authenticated))")
+    for symbol in ("AuthenticatedQueuePlanRetry::from_signed", "AuthenticatedQueuePlanRetry::from_entrypoint"):
+        for forbidden in ("AcceptedTransaction::", "accept_transaction_for_ingress(", "into_accepted(",
+                          "transaction_admission_limits(", "admission_snapshot(", "allowed_signing", "PrecheckedSingleEd25519"):
+            if forbidden in code_items.get(symbol, ""):
+                errors.append(f"{symbol}: retry authentication acquired fresh admission policy or authority")
+    ordered("canonical_queue_plan_synced_response", "authenticated.entrypoint_hash() != binding.entrypoint_hash",
+            "queue_plan_admission_binding_registry_match(binding)",
             "canonical_queue_plan_admitted_input(binding.entrypoint_hash)",
             "if &input.input().certificate.binding == binding", "if tokio::time::Instant::now() >= read_deadline", "NoritoBody(input.into_input().certificate)")
     for symbol in ("canonical_queue_plan_submission_response", "canonical_queue_plan_synced_response"):

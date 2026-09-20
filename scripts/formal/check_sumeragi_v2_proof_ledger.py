@@ -26417,9 +26417,10 @@ assert!(matches!(
 enum FairV2IngressSource {
     Validator(PeerId),
     Authenticated(PeerId),
+    Native(PeerId),
 }
 """,
-        "two-way authenticated fair-ingress source ownership inventory",
+        "global and process-lived authenticated fair-ingress source ownership inventory",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -26439,10 +26440,16 @@ enum FairV2IngressSourceClass {
         core_source,
         """
 impl FairV2IngressSource {
+    const fn is_native(&self) -> bool {
+        matches!(self, Self::Native(_))
+    }
+    const fn uses_authenticated_capacity(&self) -> bool {
+        matches!(self, Self::Authenticated(_) | Self::Native(_))
+    }
     const fn class(&self) -> FairV2IngressSourceClass {
         match self {
             Self::Validator(_) => FairV2IngressSourceClass::Validator,
-            Self::Authenticated(_) => FairV2IngressSourceClass::Authenticated,
+            Self::Authenticated(_) | Self::Native(_) => FairV2IngressSourceClass::Authenticated,
         }
     }
 }
@@ -26528,7 +26535,7 @@ open: false,
         errors,
     )
 
-    push = _require_rust_item(core_path, core_source, "try_push_at", errors)
+    push = _require_rust_item(core_path, core_source, "try_push_owned_at", errors)
     _require_rust_token_sequence(
         core_path,
         push,
@@ -26637,7 +26644,9 @@ let wire_key = Some(FairV2IngressWireKey {
         core_path,
         push,
         """
-let source = if state.roster.contains(inbound.via()) {
+let source = if inbound.message().is_native_lane() {
+    FairV2IngressSource::Native(inbound.via.clone())
+} else if state.roster.contains(inbound.via()) {
     FairV2IngressSource::Validator(inbound.via.clone())
 } else {
     FairV2IngressSource::Authenticated(inbound.via.clone())
@@ -26702,7 +26711,7 @@ if let Some((key, owner_source)) = wire_key.as_ref().and_then(|key| {
 let retained_authenticated_non_validator_sources = state
     .lanes
     .keys()
-    .filter(|source| matches!(source, FairV2IngressSource::Authenticated(_)))
+    .filter(|source| source.uses_authenticated_capacity())
     .count();
 if self
     .authenticated_non_validator_source_capacity
@@ -27207,7 +27216,7 @@ if let Some(key) = &entry.wire_key {
         """
 if remains_ready {
     state.ready.push_back(source.clone());
-} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {
+} else if source.uses_authenticated_capacity() {
     let removed = state.lanes.remove(&source).expect(
         "an emptied authenticated non-validator lane remains indexed until dequeue",
     );
@@ -60785,58 +60794,169 @@ assert!(observed.iter().all(|request| request == &exact_request));
         lifecycle_runner_path,
         lifecycle_runner_items.get("ordinary_active"),
         """
-let finalization_ready = if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {
-    activated.ready_for_finalized_rollover(&mut active_runner)?
-} else {
-    false
-};
-if ready_to_finish && !finalization_ready {
-    let _ = wake_rx.recv_timeout(IDLE_POLL);
-    continue;
-}
-let rollover_ready = if finalization_ready {
-    activated.with_runner_runtime(
-        &mut active_runner,
-        |_owner, executor, services, _local_proposal| {
-            if !services.matches_lifecycle_lane_work(&lane_work) {
-                return Err(V2RunnerError::Service(
-                    "finalized lifecycle borrowed a foreign lane-work adapter".to_owned(),
-                ));
+let finalization_ready =
+            if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {
+                activated.ready_for_finalized_rollover(&mut active_runner)?
+            } else {
+                false
+            };
+        if ready_to_finish && !finalization_ready {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
+
+        if finalization_ready {
+            successor_timings.record_first(SuccessorTimingStage::LifecycleReady, Instant::now());
+        }
+        let rollover_ready = if finalization_ready {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    if !services.matches_lifecycle_lane_work(&lane_work) {
+                        return Err(V2RunnerError::Service(
+                            "finalized lifecycle borrowed a foreign lane-work adapter".to_owned(),
+                        ));
+                    }
+                    super::preflight_finalized_lane_rollover(
+                        executor,
+                        services,
+                        &mut lane_work,
+                        &mut canonical_lane_body_recovered,
+                    )
+                },
+            )?
+        } else {
+            false
+        };
+        if rollover_ready {
+            successor_timings.record_first(SuccessorTimingStage::LaneRolloverReady, Instant::now());
+        }
+        if finalization_ready && !rollover_ready {
+            // Recover the finite prefix already queued behind this incomplete
+            // lane boundary before repeating broad hydration and strict storage
+            // authentication. Each occurrence keeps its checked fair-ingress
+            // authority and Completion priority. No successful readiness result
+            // is cached: the next outer turn reruns the full preflight.
+            let drained_terminal_ingress =
+                drain_open_preflight_recovery_batch(receiver, control_queue_capacity, |mode| {
+                    cleanup_supervisor.reap_finished();
+                    if output_guard.restart_required() {
+                        return Err(V2RunnerError::RestartRequired);
+                    }
+                    if shutdown_signal.is_sent() {
+                        return Ok(false);
+                    }
+                    liveness_watchdog.poll(Instant::now());
+                    let drain_disposition = drain_lifecycle_v2_ingress(
+                        &mut activated,
+                        &mut active_runner,
+                        receiver,
+                        &mut lane_work,
+                        kura.as_ref(),
+                        &common_config.key_pair,
+                        block_sync_server,
+                        block_sync,
+                        &mut block_sync_request,
+                        npos_beacon,
+                        body_queue_capacity,
+                        control_queue_capacity,
+                        terminal_finalization_cut.as_ref(),
+                    )?;
+                    producer_claim = activated.producer_claim_projection()?;
+                    if let Some(reason) = drain_disposition.advance_executor_yield() {
+                        last_advance_executor_yield =
+                            Some(("open-preflight", reason, Instant::now()));
+                    }
+                    if drain_disposition.requires_yield()
+                        || producer_claim.requires_yield()
+                        || block_sync_server.has_pending_historical_body_serve()
+                    {
+                        return Ok(false);
+                    }
+                    let Some(cut) = terminal_finalization_cut.as_ref() else {
+                        return Err(V2RunnerError::Service(
+                            "open preflight recovery lost its terminal scheduler cut".to_owned(),
+                        ));
+                    };
+                    let _ = activated
+                        .reconcile_decided_lane_certified_serve(
+                            &mut active_runner,
+                            cut.decided_lane_recovery_permit(),
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                    activated.with_runner_runtime(
+                        &mut active_runner,
+                        |_owner, executor, services, _local_proposal| {
+                            if !executor.ready_to_finish() {
+                                return Err(V2RunnerError::Service(
+                                    "open preflight recovery reopened executor ownership"
+                                        .to_owned(),
+                                ));
+                            }
+                            let _ = reconcile_terminal_lane_output_handoffs(
+                                cut.decided_lane_recovery_permit(),
+                                &mut lane_work,
+                                services,
+                                control_queue_capacity,
+                            )?;
+                            let drained = drain_decided_lane_recovery_ingress(
+                                receiver,
+                                executor,
+                                services,
+                                &mut lane_work,
+                                executor.current_tag().view(),
+                                kura.as_ref(),
+                                block_sync_server,
+                                mode,
+                            )?;
+                            dispatch_lane_work_effects(
+                                &mut lane_work,
+                                services,
+                                control_queue_capacity,
+                            )?;
+                            Ok::<_, V2RunnerError>(drained.is_some())
+                        },
+                    )
+                })? != 0;
+            if shutdown_signal.is_sent() {
+                activated.into_clean_shutdown(&mut active_runner)?;
+                return Ok(HeightRunOutcome::Shutdown);
             }
-            super::preflight_finalized_lane_rollover(
-                executor,
-                services,
-                &mut lane_work,
-                &mut canonical_lane_body_recovered,
-            )
-        },
-    )?
-} else {
-    false
-};
-if finalization_ready && !rollover_ready {
-    let drained_terminal_ingress = activated.with_runner_runtime(
-        &mut active_runner,
-        |_owner, executor, services, _local_proposal| {
-            let drained = drain_decided_lane_recovery_ingress(
-                receiver,
-                executor,
-                services,
-                &mut lane_work,
-                executor.current_tag().view(),
-                kura.as_ref(),
-                block_sync_server,
-                DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, _executor, services, _local_proposal| {
+                    let now = Instant::now();
+                    if now >= next_lane_retransmit {
+                        lane_work.schedule_retransmission()?;
+                        next_lane_retransmit = deadline_after(now, retransmit_interval);
+                    }
+                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
+                },
             )?;
-            let now = Instant::now();
-            if now >= next_lane_retransmit {
-                lane_work.schedule_retransmission()?;
-                next_lane_retransmit = deadline_after(now, retransmit_interval);
+            if terminal_stall_due {
+                // Report the actual completed preflight, not a second storage
+                // audit after ingress may have changed the durable lane state.
+                let pending_historical_recovery = activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, _executor, _services, _local_proposal| {
+                        lane_work
+                            .has_pending_historical_recovery()
+                            .map_err(V2RunnerError::from)
+                    },
+                )?;
+                iroha_logger::warn!(
+                    height = context.height,
+                    canonical_lane_body_recovered,
+                    pending_historical_recovery,
+                    rollover_preflight_ready = rollover_ready,
+                    "Sumeragi v2 finalized lane rollover preflight stalled"
+                );
             }
-            dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
-            Ok::<_, V2RunnerError>(drained.is_some())
-        },
-    )?;
+            if !drained_terminal_ingress {
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
+            }
+            continue;
+        }
 """,
         "ordinary lifecycle must keep only authenticated decided-lane recovery service alive until finalized-lane durability preflight succeeds",
         errors,

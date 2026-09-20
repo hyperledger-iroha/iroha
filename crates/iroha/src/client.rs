@@ -15682,6 +15682,80 @@ fn tx_confirmation_final_report(report: eyre::Report) -> eyre::Report {
 fn tx_confirmation_unresolved_final_report(report: eyre::Report) -> eyre::Report {
     TxConfirmationFinalError::unresolved(report).into()
 }
+/// A dispatched batch did not produce an all-accepted acknowledgement.
+///
+/// Inspect input-ordered outcomes when available. Missing or malformed results
+/// leave every submitted hash unresolved; never automatically resend the batch.
+#[derive(Debug)]
+pub struct TransactionBatchAdmissionError {
+    hashes: Vec<HashOf<SignedTransaction>>,
+    outcomes: Option<Vec<iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome>>,
+    cause: eyre::Report,
+}
+impl TransactionBatchAdmissionError {
+    /// Locally computed signed identities in original request order.
+    #[must_use]
+    pub fn hashes(&self) -> &[HashOf<SignedTransaction>] {
+        &self.hashes
+    }
+    /// Exact matched per-entry results, or `None` if the response was ambiguous.
+    #[must_use]
+    pub fn outcomes(
+        &self,
+    ) -> Option<&[iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome]> {
+        self.outcomes.as_deref()
+    }
+}
+impl fmt::Display for TransactionBatchAdmissionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "transaction batch was not fully acknowledged; reconcile each submitted hash before retrying: {}",
+            self.cause
+        )
+    }
+}
+impl std::error::Error for TransactionBatchAdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+fn transaction_batch_outcomes(
+    response: &Response<Vec<u8>>,
+    hashes: &[HashOf<SignedTransaction>],
+) -> Result<Vec<iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome>> {
+    use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
+    let outcomes: Vec<TransactionBatchEntryOutcome> = norito::json::from_slice(response.body())
+        .wrap_err("invalid transaction batch outcome body")?;
+    if outcomes.len() != hashes.len()
+        || outcomes.iter().zip(hashes).any(|(outcome, hash)| {
+            &outcome.signed_transaction_hash != hash
+                || !(outcome.status == 202 || (400..=599).contains(&outcome.status))
+        })
+    {
+        return Err(eyre!(
+            "transaction batch outcomes differ from the exact requested identities"
+        ));
+    }
+    let accepted = outcomes
+        .iter()
+        .filter(|outcome| outcome.status == 202)
+        .count();
+    if response
+        .headers()
+        .get("x-iroha-transactions-accepted")
+        .and_then(|value| value.to_str().ok())
+        != Some(accepted.to_string().as_str())
+        || accepted == outcomes.len()
+    {
+        return Err(eyre!(
+            "transaction batch outcome count contradicts its acknowledgement"
+        ));
+    }
+    Ok(outcomes)
+}
+
 /// `QueuePlan` admission may have crossed its durability boundary, but the client could not
 /// determine whether the submitted transaction was applied, rejected, or expired.
 ///
@@ -17157,7 +17231,9 @@ impl AccountClient {
     /// # Errors
     /// Fails if sending the batch to the peer fails, if Torii returns a non-success response, if
     /// the accepted-count acknowledgement does not match the requested batch size, or if the submit
-    /// compatibility advert is missing or incompatible.
+    /// compatibility advert is missing or incompatible. After dispatch, partial results or a lost
+    /// response return [`TransactionBatchAdmissionError`] with original identities and any exact
+    /// per-entry outcomes. Batching does not provide atomic admission or execution.
     pub async fn submit_prepared_transaction_payload_batch(
         &self,
         payloads: &[PreparedTransactionPayload],
@@ -17184,28 +17260,58 @@ impl AccountClient {
                 join_torii_url(&client.torii_url, torii_uri::TRANSACTIONS_BATCH),
             )
             .header("Content-Type", APPLICATION_NORITO)
-            .header("Accept", client.wire_format_preference.accept_header())
+            .header("Accept", "application/json")
             .header("Prefer", "return=minimal")
-            .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
+            .max_response_bytes(1024 * 1024);
         request = request.headers(client.transaction_headers_without_content_type());
-        let response = request
-            .body(body)
-            .build()?
-            .send()
-            .await
-            .wrap_err("Failed to send transaction batch")?;
-        TransactionResponseHandler::handle(&response)?;
-        let accepted_count = response
+        let result = request.body(body).build()?.send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(cause) => {
+                return Err(TransactionBatchAdmissionError {
+                    hashes,
+                    outcomes: None,
+                    cause,
+                }
+                .into());
+            }
+        };
+        if response.status() == StatusCode::MULTI_STATUS {
+            let (outcomes, cause) = match transaction_batch_outcomes(&response, &hashes) {
+                Ok(outcomes) => (
+                    Some(outcomes),
+                    eyre!("one or more entries were not accepted"),
+                ),
+                Err(error) => (None, error),
+            };
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes,
+                cause,
+            }
+            .into());
+        }
+        if response.status() != StatusCode::ACCEPTED {
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes: None,
+                cause: TransactionResponseHandler::rejection_report(&response),
+            }
+            .into());
+        }
+        let expected_count = payloads.len().to_string();
+        if response
             .headers()
             .get("x-iroha-transactions-accepted")
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        if accepted_count != payloads.len() {
-            return Err(eyre!(
-                "transaction batch accepted {accepted_count} item(s), expected {}",
-                payloads.len()
-            ));
+            != Some(expected_count.as_str())
+        {
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes: None,
+                cause: eyre!("batch acknowledgement count mismatch"),
+            }
+            .into());
         }
         Ok(hashes)
     }
@@ -25816,6 +25922,53 @@ mod tests {
         assert_eq!(body_b, b"transport-b");
         assert_eq!(sends_a.load(Ordering::Relaxed), 1);
         assert_eq!(sends_b.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn transaction_batch_outcomes_require_exact_order_status_and_count() {
+        use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
+        let hashes =
+            [0x51, 0x52].map(|byte| HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])));
+        let outcomes = vec![
+            TransactionBatchEntryOutcome {
+                signed_transaction_hash: hashes[0],
+                status: 202,
+                reject_code: None,
+            },
+            TransactionBatchEntryOutcome {
+                signed_transaction_hash: hashes[1],
+                status: 503,
+                reject_code: Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()),
+            },
+        ];
+        let response = |items: &Vec<TransactionBatchEntryOutcome>, count: &str| {
+            HttpResponse::builder()
+                .status(StatusCode::MULTI_STATUS)
+                .header("x-iroha-transactions-accepted", count)
+                .body(norito::json::to_vec(items).unwrap())
+                .unwrap()
+        };
+        assert_eq!(
+            transaction_batch_outcomes(&response(&outcomes, "1"), &hashes).unwrap(),
+            outcomes
+        );
+        assert!(transaction_batch_outcomes(&response(&outcomes, "2"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed.swap(0, 1);
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed[1].status = 200;
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed.pop();
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let error = TransactionBatchAdmissionError {
+            hashes: hashes.to_vec(),
+            outcomes: Some(outcomes.clone()),
+            cause: eyre!("partial"),
+        };
+        assert_eq!(error.hashes(), &hashes);
+        assert_eq!(error.outcomes(), Some(outcomes.as_slice()));
     }
 
     #[tokio::test]

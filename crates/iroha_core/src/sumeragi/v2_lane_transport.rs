@@ -3,8 +3,9 @@
 //! This is a bounded physical fanout, not a reducer or an acknowledgement of
 //! economic Apply. A blocked destination retains its original post and actor
 //! ticket while other destinations and other instances continue to progress.
-//! TODO: register together with native wire/ingress and the candidate consumer;
-//! the legacy fresh signer must retire at that same connected activation.
+//! Native framing is registered, but live ingress stays closed. TODO: connect
+//! the sole process-lifetime consumer and candidate handoff, retiring the legacy
+//! fresh lane signer at that same connected activation.
 
 use std::{
     collections::{BTreeSet, VecDeque},

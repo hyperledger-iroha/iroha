@@ -81831,7 +81831,7 @@
     },
     "/v1/pipeline/transactions/batch": {
       "post": {
-        "description": "Submit a non-empty Norito-encoded batch of SignedTransaction payloads. The encoded and declared-decoded byte size is bounded by `torii.max_content_len`, the exact top-level count is bounded by `torii.transaction_ingress.max_batch_transactions`, and queue admission is atomic for the whole batch.",
+        "description": "Submit a bounded non-empty Norito batch of exact signed transactions. Full decode, signature, policy and route preflight precede dispatch. Each entry then uses canonical single-transaction durable admission; batching is not atomic admission or execution. HTTP 202 acknowledges every input with x-iroha-transactions-accepted. HTTP 207 returns every signed identity in input order with its HTTP status and rejection code. Reconcile any unknown outcome before retrying its exact transaction; never resend the whole batch automatically.",
         "requestBody": {
           "content": {
             "application/x-norito": {
@@ -81845,15 +81845,58 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
+            "description": "Every input durably admitted; empty body.",
+            "headers": {
+              "x-iroha-transactions-accepted": {
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "207": {
+            "description": "Dispatched batch with per-entry outcomes; earlier acceptance remains durable.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "signed_transaction_hash",
+                      "status",
+                      "reject_code"
+                    ],
+                    "properties": {
+                      "signed_transaction_hash": {
+                        "type": "string",
+                        "pattern": "^[A-Fa-f0-9]{64}$"
+                      },
+                      "status": {
+                        "type": "integer",
+                        "description": "202 or the single-submit error status."
+                      },
+                      "reject_code": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
                 }
               }
-            },
-            "description": "Successful response"
+            }
+          },
+          "400": {
+            "description": "Full-batch preflight rejected before any new entry was dispatched."
+          },
+          "429": {
+            "description": "Request preauthentication capacity rejected before dispatch."
           }
         },
         "summary": "Submit a batch of versioned signed transactions.",

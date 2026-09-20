@@ -474,6 +474,297 @@ fn pipeline_status_local_read_evicts_stale_queued_cache() {
     assert!(app.pipeline_status_cache.lookup(&tx_hash).is_none());
 }
 #[cfg(feature = "connect")]
+struct FreshQueuePlanIngressFixture {
+    peer: SharedAppState,
+    journal_dir: Arc<tempfile::TempDir>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    server: Option<tokio::task::JoinHandle<()>>,
+}
+#[cfg(feature = "connect")]
+impl FreshQueuePlanIngressFixture {
+    fn assert_durable(&self, app: &SharedAppState, transaction: &SignedTransaction) {
+        let mut bindings = Vec::new();
+        for (name, receiver) in [("local", app), ("peer", &self.peer)] {
+            assert!(
+                receiver
+                    .queue
+                    .contains_pending_hash(transaction.hash_as_entrypoint(), &receiver.state,)
+            );
+            assert!(
+                !receiver
+                    .state
+                    .queue_plan_admission_registry_entrypoint_present(
+                        transaction.hash_as_entrypoint(),
+                    )
+                    .expect("coherent canonical registry"),
+                "this fixture must exercise fresh receipt admission, not canonical retry"
+            );
+            let accepted = routing::accept_transaction_for_ingress(
+                receiver.state.clone(),
+                TransactionEntrypoint::External(transaction.clone()),
+                &receiver.telemetry,
+            )
+            .expect("inspect the actually admitted signed input");
+            let claim = receiver
+                .queue
+                .durable_plan_admission_claim_with_state(&accepted, &receiver.state)
+                .expect("original durable claim is coherent")
+                .expect("real receipt receiver retains its original journal owner");
+            assert!(claim.global_admission_identity.is_some());
+            bindings.push(
+                iroha_core::torii_proxy::queue_plan_binding_from_durable_admission(&claim)
+                    .expect("original receipt binding"),
+            );
+            assert!(
+                std::fs::metadata(self.journal_dir.path().join(format!("{name}.norito")))
+                    .expect("actual receiver journal")
+                    .len()
+                    > 0
+            );
+        }
+        assert_eq!(
+            bindings[0], bindings[1],
+            "both real authorities admitted the exact same binding"
+        );
+    }
+
+    async fn finish(mut self) {
+        let _ = self
+            .shutdown
+            .take()
+            .expect("one peer shutdown owner")
+            .send(());
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            self.server.take().expect("one peer task"),
+        )
+        .await
+        .expect("signed peer should shut down")
+        .expect("signed peer should finish");
+    }
+}
+#[cfg(feature = "connect")]
+impl Drop for FreshQueuePlanIngressFixture {
+    fn drop(&mut self) {
+        // A failed assertion still closes the server without aborting an in-flight receipt.
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+}
+#[cfg(feature = "connect")]
+#[inline(never)]
+fn seed_fresh_queue_plan_submitter_for_test(state: &IrohaState, authority: &AccountId) {
+    let missing = state.view().world().account(authority).is_err();
+    if !missing {
+        return;
+    }
+    // End this large StateBlock frame before entering the validator setup frames.
+    let mut block = state.block(BlockHeader::new(
+        NonZeroU64::new(1).unwrap(),
+        None,
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction();
+    Register::account(Account::new(authority.clone()))
+        .execute(&ALICE_ID, &mut tx)
+        .expect("seed original universal submitter account");
+    tx.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("publish fixture account");
+}
+#[cfg(feature = "connect")]
+fn install_fresh_queue_plan_authorities_for_test(
+    app: &mut SharedAppState,
+    signers: &[KeyPair],
+    local_index: usize,
+    transactions: &[&SignedTransaction],
+) {
+    let app = Arc::get_mut(app).expect("unique fresh ingress app");
+    app.local_peer_id = Some(PeerId::new(signers[local_index].public_key().clone()));
+    app.torii_proxy_bridge_signer = signers[local_index].clone();
+    let state = Arc::get_mut(&mut app.state).expect("unique fresh ingress State");
+    for transaction in transactions {
+        assert_eq!(
+            transaction.admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced
+        );
+        assert!(
+            !state
+                .queue_plan_admission_registry_entrypoint_present(transaction.hash_as_entrypoint(),)
+                .expect("empty canonical admission registry")
+        );
+        seed_fresh_queue_plan_submitter_for_test(state, transaction.authority());
+    }
+    let bindings = signers
+        .iter()
+        .enumerate()
+        .map(|(index, signer)| {
+            let validator = AccountId::new(signer.public_key().clone());
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &validator,
+                signer,
+                &format!("fresh-ingress-{index}"),
+            );
+            (validator, PeerId::new(signer.public_key().clone()))
+        })
+        .collect::<Vec<_>>();
+    let mut topology = state.commit_topology.block();
+    topology.clear();
+    for (_, peer) in &bindings {
+        topology.push(peer.clone());
+    }
+    topology.commit();
+    install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, bindings)]);
+    app.sumeragi = Some(queue_plan_capacity_handle_for_test(
+        *state.network_id_ref(),
+        iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
+        signers,
+    ));
+}
+#[cfg(feature = "connect")]
+async fn fresh_queue_plan_ingress_for_test(
+    app: &mut SharedAppState,
+    transactions: &[&SignedTransaction],
+) -> FreshQueuePlanIngressFixture {
+    fresh_queue_plan_ingress_with_peer_for_test(app, mk_app_state_for_tests(), transactions).await
+}
+#[cfg(feature = "connect")]
+async fn fresh_queue_plan_ingress_with_peer_for_test(
+    app: &mut SharedAppState,
+    mut peer: SharedAppState,
+    transactions: &[&SignedTransaction],
+) -> FreshQueuePlanIngressFixture {
+    // Same real four-authority path as the live-pending regression below. The
+    // origin and signed HTTP receiver each persist a claim before their receipt.
+    let signers = (0_u8..4)
+        .map(|index| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xe0 + index,
+                Algorithm::BlsNormal,
+                "fresh QueuePlan receipt authority",
+            )
+        })
+        .collect::<Vec<_>>();
+    install_fresh_queue_plan_authorities_for_test(app, &signers, 0, transactions);
+    install_fresh_queue_plan_authorities_for_test(&mut peer, &signers, 1, transactions);
+    let journal_dir = Arc::new(tempfile::tempdir().expect("fresh QueuePlan receiver journals"));
+    for (name, receiver) in [("local", &*app), ("peer", &peer)] {
+        receiver
+            .queue
+            .install_plan_journal(
+                &journal_dir.path().join(format!("{name}.norito")),
+                1024 * 1024,
+                true,
+            )
+            .expect("install original receiver journal");
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind real receipt receiver");
+    let peer_url = format!("http://{}/", listener.local_addr().unwrap());
+    let validators = signers
+        .iter()
+        .enumerate()
+        .map(|(index, signer)| {
+            (
+                AccountId::new(signer.public_key().clone()),
+                PeerId::new(signer.public_key().clone()),
+                (index == 1).then_some(peer_url.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+    for receiver in [&*app, &peer] {
+        install_lane_manifest_registry_with_torii_urls_for_test(
+            &receiver.state,
+            &[(LaneId::SINGLE, validators.clone())],
+        );
+    }
+    let plan = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+    let context = app
+        .queue
+        .plan_admission_context_with_state(&app.state, &plan)
+        .expect("original route authority");
+    assert_eq!(single_route_queue_plan_authorities(&context).len(), 4);
+    assert_eq!(
+        context,
+        peer.queue
+            .plan_admission_context_with_state(&peer.state, &plan)
+            .expect("peer route authority")
+    );
+    let layer = axum::middleware::from_fn_with_state::<
+        _,
+        _,
+        (axum::extract::State<SharedAppState>, axum::extract::Request),
+    >(
+        peer.clone(),
+        operator_signatures::enforce_torii_proxy_peer_signature,
+    );
+    let router = axum::Router::new()
+        .route(
+            TORII_INTERNAL_PROXY_HTTP_PATH,
+            axum::routing::post(handler_internal_torii_proxy_request).layer(layer),
+        )
+        .with_state(peer.clone());
+    let (shutdown, requested) = tokio::sync::oneshot::channel();
+    let journal_owner = journal_dir.clone();
+    let server = tokio::spawn(async move {
+        // Keep both paths alive through graceful shutdown even if the test unwinds.
+        let _journal_owner = journal_owner;
+        axum::serve(listener, router.into_make_service())
+            .with_graceful_shutdown(async move {
+                let _ = requested.await;
+            })
+            .await
+            .expect("serve authenticated fresh receipts");
+    });
+    FreshQueuePlanIngressFixture {
+        peer,
+        journal_dir,
+        shutdown: Some(shutdown),
+        server: Some(server),
+    }
+}
+#[cfg(feature = "connect")]
+fn signed_queue_plan_log_for_test(
+    network_id: NetworkId,
+    authority: AccountId,
+    message: &str,
+    keypair: &KeyPair,
+) -> SignedTransaction {
+    TransactionBuilder::new(
+        network_id,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, message.to_owned())])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .sign(keypair.private_key())
+}
+#[cfg(feature = "connect")]
+fn lifecycle_transaction_with_nonce_for_test(
+    app: &SharedAppState,
+    key: &KeyPair,
+    certificate: &ThresholdKeyLifecycleCertificateV1,
+    nonce: u32,
+) -> SignedTransaction {
+    let mut builder = TransactionBuilder::new(
+        *app.state.network_id_ref(),
+        AccountId::new(key.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([ApplyThresholdKeyLifecycleCertificateV1 {
+        certificate: certificate.clone(),
+    }])
+    .with_admission_intent(TransactionAdmissionIntent::Ordinary);
+    builder.set_nonce(NonZeroU32::new(nonce).expect("distinct nonzero fixture nonce"));
+    builder.sign(key.private_key())
+}
+#[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
     // Public Log admission requires an exact QueuePlan certificate. Keep four real

@@ -812,7 +812,7 @@ def _check_successor_snapshot_authority(
         "recover_active_height_with_plan snapshot authority",
         recovery,
         (
-            "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
+            "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan, &V2SnapshotStartupPolicy::from_state(state)?, )?;",
             "if record.context() != &bootstrap.context || record.proofs_of_possession() != bootstrap.validator_set_pops",
             "let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;",
             "RecoveredSuccessorActivationAuthority::SnapshotBootstrap( SnapshotSuccessorActivationAuthority::new(bootstrap), )",
@@ -3544,15 +3544,13 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             )
     pending_lifecycle_fixture = item(
         "startup_test",
-        "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+        "exercise_production_marker_replay_cases",
     )
     require_order(
         "startup_test",
         pending_lifecycle_fixture,
         "production Kura-first pending-Kura lifecycle fixture",
         (
-            "(0xB5_u8, true, false, false, Some(false))",
-            "(0xB6_u8, true, false, false, Some(true))",
             "semantic_probe.fail_after_kura_store_for_test()",
             "V2ApplyError::InjectedCrashAfterKuraStore",
             "drop(body_store)",
@@ -3565,7 +3563,7 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
     )
     pending_behavior = item(
         "wal_test",
-        "recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources",
+        "recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources_body",
     )
     require_order(
         "wal_test",

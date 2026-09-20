@@ -99,7 +99,7 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
 - `[torii.transaction_ingress]`: Physical transaction-submission resource corridor.
   `max_concurrent_compute_jobs` (default: `4`) bounds blocking transaction
   admission work: batch-envelope and transaction decode, canonicalization,
-  signature verification, routing, and atomic queue admission across single,
+  signature verification and routing across single,
   entrypoint, and batch submission routes. Torii fails fast when all slots are
   occupied, and each owned slot remains in the physical worker until it exits
   even if the HTTP request times out or disconnects.
@@ -107,7 +107,11 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   count accepted by `/v1/pipeline/transactions/batch`. Torii authenticates and
   enforces encoded and declared-decoded byte limits before compute admission,
   then uses Norito's authoritative sequence decoder to reject count overflow
-  and exact queue pressure before decoding any signed transaction payload.
+  before decoding any signed transaction payload. Canonical retries precede fresh
+  queue pressure. Batches use per-entry certified admission after full preflight:
+  202 confirms all inputs; 207 returns every input's signed hash, status and reject
+  code. Partial acceptance is durable, so clients reconcile each uncertain entry
+  and never automatically resend the whole batch.
   `verified_source_max_concurrent_compiles` (default: `1`, V1 maximum: `4`)
   bounds complete Kotodama compiler working sets for verified-source jobs. Its
   fail-fast permit is acquired before Torii polls or decodes the signed request

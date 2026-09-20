@@ -169,7 +169,7 @@ state_test! { sync native_transport_decision_reaches_global_nonmembers_and_keeps
     transport.poll_with_global_for_test(&observed,&global,|post,ticket| {
         assert!(ticket.is_none());assert_eq!(post.peer_id,recipients[0]);
         let crate::NetworkMessage::SumeragiBlock(wire) = &post.data else {panic!("native Decision frame")};
-        assert!(matches!(wire.message().as_ref(),crate::sumeragi::message::BlockMessage::NativeLaneDecision(exact) if exact.as_ref()==&decision));
+        assert!(matches!(wire.as_message(),crate::sumeragi::message::BlockMessage::NativeLaneDecision(exact) if exact.as_ref()==&decision));
         frame = Some(Arc::clone(wire));
         let (fixture,ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);owner=Some(fixture);
         Err(NetworkActorAdmissionError::Backpressured{message:post,ticket:Some(ticket),rank:1})

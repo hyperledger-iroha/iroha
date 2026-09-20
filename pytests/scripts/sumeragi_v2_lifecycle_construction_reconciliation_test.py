@@ -127,6 +127,51 @@ def test_complete_checker_calls_construction_contract_with_repo_root():
     ("key", "original", "replacement"),
     (
         (
+            'open_recovery_batch',
+            'let physical_cut = receiver.next_physical_admission_ordinal();',
+            'let physical_cut = u128::MAX;',
+        ),
+        (
+            'open_recovery_batch',
+            'let budget = receiver.len().min(limit);',
+            'let budget = receiver.len();',
+        ),
+        (
+            'open_recovery_batch',
+            'if !service_one(DecidedLaneRecoveryIngressDrainMode::OpenPreflightBatch { physical_cut })? { break; }',
+            'if false { break; }',
+        ),
+        (
+            'finalized_output_rollover',
+            'if !lane_work.durable_completion_matches_finality(artifact)? {',
+            'if false {',
+        ),
+        (
+            'finalized_output_rollover',
+            '.seal_applied_height_output_handoff(receipt, artifact, &durable_lane_authority)',
+            '.seal_applied_height_output_handoff(receipt, artifact, &foreign_authority)',
+        ),
+        (
+            'finalized_output_drain',
+            'if retired == 0 && dispatched == 0 && after == 0 && !pending {',
+            'if retired == 0 && dispatched == 0 && after == 0 {',
+        ),
+        (
+            'ordinary_active',
+            'let mut producer_claim = activated.producer_claim_projection()?;',
+            'let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();',
+        ),
+        (
+            'ordinary_active',
+            'producer_claim = activated.producer_claim_projection()?; if producer_claim.requires_yield() {',
+            'producer_claim = activated.producer_claim_projection()?; if false {',
+        ),
+        (
+            'pending_loop',
+            'if queue.lane_reservation_startup_reconciliation_pending() {',
+            'if false {',
+        ),
+        (
             "ordinary_loop",
             "LaneReservationReconciliationPlanning::AlreadyCompleted(observation) => { "
             "break observe_completed_lane_reservation_reconciliation("
@@ -142,14 +187,14 @@ def test_complete_checker_calls_construction_contract_with_repo_root():
             "queue.as_ref(), kura.as_ref(), observation,).unwrap_or_default()",
         ),
         (
-            "ordinary_active",
-            "let pending = lane_work.has_pending_historical_recovery()?;",
-            "let pending = lane_work.has_pending_historical_recovery().unwrap_or(false);",
+            "finalized_preflight",
+            "if lane_work.has_pending_historical_recovery()? {",
+            "if lane_work.has_pending_historical_recovery().unwrap_or(false) {",
         ),
         (
-            "ordinary_active",
-            "let pending = lane_work.has_pending_historical_recovery()?;",
-            "let pending = lane_work.has_pending_historical_recovery().unwrap_or(true);",
+            "finalized_preflight",
+            "if lane_work.has_pending_historical_recovery()? {",
+            "if lane_work.has_pending_historical_recovery().unwrap_or(true) {",
         ),
     ),
 )

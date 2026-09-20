@@ -6,7 +6,7 @@
 //! routing, worker admission and group application must precede production activation.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::{
         Arc,
         mpsc::{SyncSender, TrySendError},
@@ -40,7 +40,8 @@ mod persistence;
 #[path = "v2_lane_process.rs"]
 mod process;
 pub(crate) use body::{
-    LaneBodyCompletion, LaneBodyJob, LaneBodyLaunch, LaneBodyProgress, LaneBodyWait,
+    LaneApplySettlement, LaneBodyCompletion, LaneBodyJob, LaneBodyLaunch, LaneBodyProgress,
+    LaneBodyWait,
 };
 pub(crate) use opening::{
     LaneOpening, LaneOpeningAdoption, LaneOpeningCompletion, LaneOpeningDrain, LaneOpeningDrained,
@@ -75,13 +76,11 @@ pub(crate) enum LaneCurrentGate {
     InstanceClosed,
 }
 
-/// Accepted reducer input and exact unlaunched obligations retired by its authority.
+/// Non-owning reducer disposition. Actual retired obligations remain charged to
+/// the original instance until its explicit retirement handoff is consumed.
 #[derive(Debug)]
 pub(crate) struct LaneStepReceipt {
     pub(crate) disposition: reducer::StepDisposition,
-    /// No output was acknowledged. These exact obligations became obsolete only
-    /// because the shared reducer replaced its control or installed a durable TC.
-    pub(crate) retired: Vec<LaneRetiredEffect>,
 }
 
 /// Exact unlaunched effect retired by a shared-reducer transition.
@@ -91,6 +90,107 @@ pub(crate) struct LaneRetiredEffect {
     pub(crate) effect: reducer::Effect,
     /// Already materialized native bytes, when present, follow the retirement.
     pub(crate) packet: Option<LaneOutbound>,
+}
+
+/// Original retired custody. This is a consuming physical handoff, not an Apply,
+/// Ready, persistence, transport-delivery or terminal-recovery acknowledgement.
+#[must_use]
+pub(crate) struct LaneRetirement {
+    state_owner: crate::state::NativeLaneStateOwner,
+    verified: VerifiedLaneContext,
+    kind: RetirementKind,
+}
+
+enum RetirementKind {
+    Effect(LaneRetiredEffect),
+    Body(body::RetiredBody),
+}
+
+// Private proof-bound permission used only after all fallible checks. It keeps
+// the real PublishedCarrier borrow live through original custody consumption.
+struct PublishedTerminalRetirement<'proof, 'published> {
+    _published: &'proof crate::state::PublishedNativeApply<'published>,
+}
+
+impl LaneRetirement {
+    /// Consume only a separately transferred closure-body result after genuine
+    /// publication of its original instance. Refusal returns the same armed token.
+    /// This does not acknowledge an effect, release another owner or delete disk data.
+    pub(crate) fn retire_published(
+        self,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> std::result::Result<(), (Self, LaneInstanceError)> {
+        if !self.requires_recovery() {
+            return Err((
+                self,
+                bad("terminal publication requires original closure-body custody"),
+            ));
+        }
+        if let Err(error) =
+            published.authorizes_terminal(&self.state_owner, &self.verified, std::iter::empty())
+        {
+            return Err((self, bad(error)));
+        }
+        let authorized = PublishedTerminalRetirement {
+            _published: published,
+        };
+        // The kind was checked above without changing the token. Only this
+        // original body is consumed; the original closed instance remains armed.
+        if let RetirementKind::Body(body) = self.kind {
+            body.retire_published(&authorized);
+        }
+        Ok(())
+    }
+    /// Exact original immutable instance; no current-height reconstruction.
+    pub(crate) fn instance(&self) -> iroha_data_model::block::consensus_v2::HeightContextId {
+        self.verified.instance_id()
+    }
+    /// The original opening State family follows physical custody.
+    pub(crate) fn belongs_to(&self, state: &State) -> bool {
+        self.state_owner.matches_state(state)
+    }
+    /// Unfinished closure custody keeps the original output guard armed even
+    /// after transfer. Dropping it requires restart, never semantic success.
+    pub(crate) fn requires_recovery(&self) -> bool {
+        matches!(&self.kind, RetirementKind::Body(retired) if retired.requires_recovery())
+    }
+    /// Original issued effect, if this retirement came from an issued operation.
+    pub(crate) fn effect(&self) -> Option<&reducer::Effect> {
+        match &self.kind {
+            RetirementKind::Effect(retired) => Some(&retired.effect),
+            RetirementKind::Body(retired) => retired.effect(),
+        }
+    }
+    /// Original materialized packet, including its exact bytes and destinations.
+    pub(crate) fn packet(&self) -> Option<&LaneOutbound> {
+        match &self.kind {
+            RetirementKind::Effect(retired) => retired.packet.as_ref(),
+            RetirementKind::Body(_) => None,
+        }
+    }
+    /// Original signed ingress proposal, if present.
+    pub(crate) fn proposal(
+        &self,
+    ) -> Option<&iroha_data_model::block::lane_consensus::LaneProposalV1> {
+        match &self.kind {
+            RetirementKind::Body(retired) => retired.proposal(),
+            RetirementKind::Effect(_) => None,
+        }
+    }
+    /// Retained deterministic proposal diagnostic, never a synthetic completion.
+    pub(crate) fn rejection(&self) -> Option<&str> {
+        match &self.kind {
+            RetirementKind::Body(retired) => retired.rejection(),
+            RetirementKind::Effect(_) => None,
+        }
+    }
+    /// Original canonical body allocation returned by the real physical worker.
+    pub(crate) fn body_bytes(&self) -> Option<&[u8]> {
+        match &self.kind {
+            RetirementKind::Body(retired) => retired.body_bytes(),
+            RetirementKind::Effect(_) => None,
+        }
+    }
 }
 
 /// Borrowed input remains with the caller unless the reducer accepts/classifies it.
@@ -163,6 +263,7 @@ struct LaneClock {
 /// retain it across global rollover, and drain it after authenticated closure.
 /// No global-height adapter or old signer constructs this type today.
 pub(crate) struct LaneInstance {
+    state_owner: crate::state::NativeLaneStateOwner,
     verified: VerifiedLaneContext,
     reducer: reducer::Reducer,
     wal: Option<LaneSafetyWal>,
@@ -180,6 +281,8 @@ pub(crate) struct LaneInstance {
     base_timeout: Duration,
     retransmit_interval: Duration,
     held: Vec<HeldEffect>,
+    /// Original obligations stay in the same per-instance descriptor budget.
+    retired: VecDeque<RetirementKind>,
     completion: Option<reducer::Event>,
     effect_limit: usize,
     failed: bool,
@@ -213,7 +316,16 @@ impl LaneInstance {
         }
     }
     fn current_gate(&self, state: &State, observed: &VerifiedLaneContexts) -> LaneCurrentGate {
+        if !self.state_owner.matches_state(state) {
+            return LaneCurrentGate::ObservationChanged;
+        }
         Self::gate_for(&self.verified, state, observed)
+    }
+
+    /// Borrow the actual opening State identity without constructing a replacement.
+    #[cfg(test)]
+    pub(crate) fn state_owner_for_test(&self) -> &crate::state::NativeLaneStateOwner {
+        &self.state_owner
     }
     fn check_open(&self) -> Result<()> {
         if self.failed {
@@ -222,22 +334,112 @@ impl LaneInstance {
             Ok(())
         }
     }
-    fn reserve_step(&self) -> bool {
+    fn reserve_effects(&self, additional: usize) -> bool {
         self.held
             .len()
-            .checked_add(self.body.retained_job_count())
+            .checked_add(self.retired.len())
+            .and_then(|count| count.checked_add(self.body.retained_job_count()))
             .and_then(|count| count.checked_add(usize::from(self.persistence.is_some())))
-            .and_then(|count| count.checked_add(reducer::MAX_EFFECTS_PER_STEP))
+            .and_then(|count| count.checked_add(additional))
             .is_some_and(|count| count <= self.effect_limit)
     }
 
+    fn reserve_step(&self) -> bool {
+        self.reserve_effects(reducer::MAX_EFFECTS_PER_STEP)
+    }
+
     fn reserve_ingress(&self) -> bool {
-        self.held
+        self.reserve_effects(2 * reducer::MAX_EFFECTS_PER_STEP)
+    }
+
+    /// Leave no free descriptor slots around the original actual obligations.
+    /// This changes only the fixture's capacity, never its reducer or effects.
+    #[cfg(test)]
+    pub(crate) fn restrict_effect_capacity_to_retained_for_test(&mut self) {
+        self.effect_limit = self
+            .held
             .len()
-            .checked_add(self.body.retained_job_count())
+            .checked_add(self.retired.len())
+            .and_then(|count| count.checked_add(self.body.retained_job_count()))
             .and_then(|count| count.checked_add(usize::from(self.persistence.is_some())))
-            .and_then(|count| count.checked_add(2 * reducer::MAX_EFFECTS_PER_STEP))
-            .is_some_and(|count| count <= self.effect_limit)
+            .expect("fixture retained descriptors fit usize");
+        assert!(self.reserve_effects(0));
+        assert!(!self.reserve_step());
+    }
+
+    /// Borrow retained retirement occupancy without releasing its reservation.
+    pub(crate) fn retirement_count(&self) -> usize {
+        self.retired.len()
+    }
+
+    /// Transfer exactly one original retirement to the downstream owner. Taking
+    /// custody frees its instance descriptor; it does not acknowledge any effect.
+    pub(crate) fn take_retirement(&mut self) -> Option<LaneRetirement> {
+        self.retired.pop_front().map(|kind| LaneRetirement {
+            state_owner: self.state_owner.clone(),
+            verified: self.verified.clone(),
+            kind,
+        })
+    }
+
+    fn authorize_terminal_retirement<'proof, 'published>(
+        &self,
+        published: &'proof crate::state::PublishedNativeApply<'published>,
+    ) -> Result<PublishedTerminalRetirement<'proof, 'published>> {
+        self.check_open()?;
+        if self.wal.is_some()
+            || self.body_store.is_some()
+            || self.persistence.is_some()
+            || self.body.worker_in_flight()
+        {
+            return Err(bad(
+                "terminal retirement requires the original completed physical drain",
+            ));
+        }
+        if self
+            .held
+            .iter()
+            .any(|held| matches!(held.effect, reducer::Effect::Apply { .. }))
+            || self.retired.iter().any(|retired| {
+                matches!(
+                    retired,
+                    RetirementKind::Effect(LaneRetiredEffect {
+                        effect: reducer::Effect::Apply { .. },
+                        ..
+                    })
+                )
+            })
+        {
+            return Err(bad(
+                "original Apply requires genuine publication settlement before retirement",
+            ));
+        }
+        published
+            .authorizes_terminal(
+                &self.state_owner,
+                &self.verified,
+                self.native_records
+                    .iter()
+                    .chain(self.held.iter().filter_map(|held| held.native.as_ref()))
+                    .filter_map(|record| match &record.record {
+                        LaneWalRecordV1::Decision(qc) => Some(qc),
+                        _ => None,
+                    }),
+            )
+            .map_err(bad)?;
+        Ok(PublishedTerminalRetirement {
+            _published: published,
+        })
+    }
+
+    // All authentication precedes this infallible consumption. No reducer event
+    // or persistence acknowledgement is synthesized; disk records stay intact.
+    fn consume_published_retirements(&mut self, authorized: &PublishedTerminalRetirement<'_, '_>) {
+        for retired in self.retired.drain(..) {
+            if let RetirementKind::Body(body) = retired {
+                body.retire_published(authorized);
+            }
+        }
     }
 
     /// Borrow the physical owner for a future checked body adapter. This grants
@@ -382,12 +584,20 @@ impl LaneInstance {
         event: reducer::Event,
         native_input: Option<&LaneMessageV1>,
     ) -> Result<LaneStepReceipt> {
-        if !self.reserve_step() {
+        // Application completion consumes an existing obligation and the shared
+        // reducer emits no effects. Requiring new-work headroom here would make
+        // a saturated closed owner wait for the capacity it must itself release.
+        let effect_budget = if matches!(&event, reducer::Event::ApplicationCompleted { .. }) {
+            0
+        } else {
+            reducer::MAX_EFFECTS_PER_STEP
+        };
+        if !self.reserve_effects(effect_budget) {
             return Err(bad("complete effect reservation was not held"));
         }
         let old_tag = self.tag();
         let outcome = self.reducer.step(event).map_err(bad)?;
-        if outcome.effects().len() > reducer::MAX_EFFECTS_PER_STEP {
+        if outcome.effects().len() > effect_budget {
             self.failed = true;
             self.output_guard.close_admission_for_restart();
             return Err(bad(
@@ -451,7 +661,6 @@ impl LaneInstance {
             }
         }
         let tag = self.tag();
-        let mut retired = Vec::new();
         let mut retained = Vec::with_capacity(self.held.len());
         for held in self.held.drain(..) {
             let obsolete = match &held.effect {
@@ -468,10 +677,11 @@ impl LaneInstance {
                 _ => false,
             };
             if obsolete {
-                retired.push(LaneRetiredEffect {
-                    effect: held.effect,
-                    packet: held.packet,
-                });
+                self.retired
+                    .push_back(RetirementKind::Effect(LaneRetiredEffect {
+                        effect: held.effect,
+                        packet: held.packet,
+                    }));
             } else {
                 retained.push(held);
             }
@@ -485,10 +695,7 @@ impl LaneInstance {
             })
         });
         self.body.prune(&self.reducer, &self.held);
-        Ok(LaneStepReceipt {
-            disposition,
-            retired,
-        })
+        Ok(LaneStepReceipt { disposition })
     }
 
     /// Complete one control action. A Broadcast never sits ahead of persistence,

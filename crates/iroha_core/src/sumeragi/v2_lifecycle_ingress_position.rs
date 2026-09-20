@@ -1761,7 +1761,9 @@ fn entry_storage_is_exact(
     let Some(key) = entry.wire_key.as_ref() else {
         return false;
     };
-    let expected_source = if state.roster.contains(entry.inbound.via()) {
+    let expected_source = if entry.inbound.message().is_native_lane() {
+        FairV2IngressSource::Native(entry.inbound.via().clone())
+    } else if state.roster.contains(entry.inbound.via()) {
         FairV2IngressSource::Validator(entry.inbound.via().clone())
     } else {
         FairV2IngressSource::Authenticated(entry.inbound.via().clone())
@@ -1999,7 +2001,9 @@ fn target_lifecycle_context(
             wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => return None,
         },
         BlockMessage::V2(_) => return None,
-        BlockMessage::KuraReplicaAdvert(_)
+        BlockMessage::NativeLane(_)
+        | BlockMessage::NativeLaneDecision(_)
+        | BlockMessage::KuraReplicaAdvert(_)
         | BlockMessage::LaneBlockProposal(_)
         | BlockMessage::LaneExecutablePayload(_)
         | BlockMessage::LaneBlockNewViewVote(_)
