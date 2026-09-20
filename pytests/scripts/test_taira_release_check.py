@@ -27,7 +27,8 @@ from unittest.mock import MagicMock, patch
 # three linked PendingKura owner recovery controls, 56 MV ownership controls,
 # four typed lane-manifest controls, authenticated default genesis staging,
 # canonical Taira stake-asset selection during no-config signing, and one
-# inert PendingKura validation preview control.
+# inert PendingKura validation preview control, and six invocation-owned
+# authenticated finality prefix controls, and two faucet-policy doctor controls.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -36,8 +37,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -51,8 +52,15 @@ gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
 
 
-def isolate_shipping_fixture(case):
+def isolate_shipping_fixture(case, *, keep_network_prerequisites=False):
     """Keep unrelated orchestration fixtures focused on their selected harnesses."""
+    if not keep_network_prerequisites:
+        prerequisites = patch.object(gate, "require_network_fixture_prerequisites")
+        prerequisites.start()
+        case.addCleanup(prerequisites.stop)
+    inspector = patch.object(gate, "require_native_artifact_inspector")
+    inspector.start()
+    case.addCleanup(inspector.stop)
     audit = patch.object(gate, "shipping_harnesses", return_value=())
     audit.start()
     case.addCleanup(audit.stop)
@@ -96,6 +104,37 @@ class BeaconGateTests(unittest.TestCase):
                         focused = selected_gate.focused_regression_stages(scope, ("test-network=" + regression,))
                         self.assertEqual(tuple(focused), ("test-network",))
                         self.assertEqual([name for _, tests in focused["test-network"] for name in tests], [regression])
+                        listing = "\n".join(name + ": test" for name in names if name != regression)
+                        with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
+                            selected_gate.require_tests(listing, stages)
+
+    def test_finality_prefix_controls_are_exact_required_and_focused_on_both_platforms(self):
+        required = (
+            'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_batches_and_pending_retries_authenticate_each_height_once',
+            'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_rejects_changed_or_deleted_authenticated_disk_proof',
+            'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_fresh_owner_reauthenticates_corrupted_disk_prefix',
+            'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_invalid_successor_does_not_advance_retained_verifier',
+            'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_publication_or_deadline_failure_does_not_commit_trial',
+            'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_lower_tip_keeps_frontier_and_rejects_conflicting_decision',
+        )
+        leaf = (SCRIPT.resolve().parents[1] / "crates/iroha_cli/src/taira_authenticated_height_tests.rs").read_text()
+        self.assertIn("mod deployment_prefix {", leaf)
+        for regression in required:
+            self.assertEqual(leaf.count("    #[test]\n    fn " + regression.rsplit("::", 1)[1] + "()"), 1)
+        for platform in ("darwin", "linux"):
+            spec = importlib.util.spec_from_file_location("finality_prefix_gate", gate.__file__)
+            selected_gate = importlib.util.module_from_spec(spec)
+            with patch.object(sys, "platform", platform):
+                spec.loader.exec_module(selected_gate)
+            for scope in selected_gate.QUALIFICATION_SCOPES:
+                stages = selected_gate.qualification_stages(scope)["cli"]
+                names = [name for _, tests in stages for name in tests]
+                for regression in required:
+                    with self.subTest(platform=platform, scope=scope, regression=regression):
+                        self.assertEqual(names.count(regression), 1)
+                        focused = selected_gate.focused_regression_stages(scope, ("cli=" + regression,))
+                        self.assertEqual(tuple(focused), ("cli",))
+                        self.assertEqual([name for _, tests in focused["cli"] for name in tests], [regression])
                         listing = "\n".join(name + ": test" for name in names if name != regression)
                         with self.assertRaisesRegex(selected_gate.CheckError, "required regressions missing"):
                             selected_gate.require_tests(listing, stages)
@@ -394,6 +433,14 @@ class FixtureCopies(dict):
 
 
 class BasicReleaseQualificationTests(unittest.TestCase):
+    def setUp(self):
+        prerequisites = patch.object(gate, "require_network_fixture_prerequisites")
+        prerequisites.start()
+        self.addCleanup(prerequisites.stop)
+        inspector = patch.object(gate, "require_native_artifact_inspector")
+        inspector.start()
+        self.addCleanup(inspector.stop)
+
     def test_mv_ownership_census_is_exact_required_and_focused_on_both_platforms(self):
         library_groups = {
             "allocation::tests::": 6,
@@ -568,8 +615,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "sumeragi::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
                 "sumeragi::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
                 "sumeragi::v2_runner::tests::authenticated_terminal_startup_idles_without_constructing_a_successor",
-                "block::tests::parallel_account_profile_preserves_delegated_metadata_results",
-                "block::tests::parallel_account_profile_rejects_foreign_permission_payloads",
+                "block::valid::tests::account_profile_validation_preserves_delegated_metadata_results",
+                "block::valid::tests::account_profile_validation_rejects_foreign_permission_payloads",
             ),
             "network": (
                 "dataspace_deploy_cli::remaining_cli_budget_keeps_original_deadline_and_never_rounds_up",
@@ -850,7 +897,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (1016, 1194)), ("linux", (1021, 1199))):
+        for platform, counts in (("darwin", (1024, 1202)), ("linux", (1029, 1207))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)
@@ -1015,6 +1062,20 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for _, names in gate.CORE_ADMISSION_STARTUP_STAGES:
             for name in names:
                 self.assertEqual(full_core.count(name), 1)
+        current = "sumeragi::v2_apply::tests::ordinary_lane_frontier_preserves_third_certified_source_after_merge_execution_rejection"
+        self.assertEqual(full_core.count(current), 1)
+        self.assertNotIn(current, [name for _, names in basic["core"] for name in names])
+        focused = gate.focused_regression_stages("full", ("core=" + current,))
+        self.assertEqual(tuple(focused), ("core",))
+        self.assertEqual([name for _, names in focused["core"] for name in names], [current])
+        with self.assertRaisesRegex(gate.CheckError, "not selected in this scope"):
+            gate.focused_regression_stages("basic", ("core=" + current,))
+        listing = "\n".join(name + ": test" for name in full_core if name != current)
+        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+            gate.require_tests(listing, full["core"])
+        source = SCRIPT.resolve().parents[1] / "crates/iroha_core/src/sumeragi/tests"
+        leaf = (source / "v2_apply_unsealed_01c_ordinary_to_autonomous.rs").read_text()
+        self.assertEqual(leaf.count("v2_apply_test!(\n    " + current.rsplit("::", 1)[1] + ","), 1)
 
     def test_both_scopes_require_exact_terminal_history_and_shared_outcome_recovery(self):
         required = (
@@ -1135,11 +1196,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "client::evidence_http_tests::canonical_executed_block_reader_requires_authenticated_execution_commitment",
             ),
             "data-model": (
-                "query::certified_merge_inclusion_tests::certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs",
-                "query::certified_merge_inclusion_tests::ordinary_committed_transaction_verifies_against_exact_carrier_block",
-                "query::certified_merge_inclusion_tests::authenticated_execution_inclusion_binds_ordinary_and_merge_carriers",
-                "query::certified_merge_inclusion_tests::authenticated_execution_inclusion_rejects_unbound_wire_and_header_material",
-                "query::certified_merge_inclusion_tests::authenticated_execution_inclusion_binds_time_and_exact_indices",
+                "query::canonical_output_inclusion_tests::ordinary_committed_transaction_verifies_against_exact_carrier_block",
+                "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_binds_complete_carrier_and_rejects_merge_authority",
+                "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_rejects_unbound_wire_and_header_material",
+                "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_joins_network_indices_without_time_inputs",
+                "query::canonical_output_inclusion_tests::committed_query_rejects_retired_parallel_result_and_merge_wire",
             ),
         }
         for scope in gate.QUALIFICATION_SCOPES:
@@ -1148,6 +1209,18 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 for regression in regressions:
                     with self.subTest(scope=scope, harness=harness, regression=regression):
                         self.assertEqual(selected.count(regression), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + regression,))
+                        self.assertEqual(tuple(focused), (harness,))
+                        self.assertEqual([name for _, names in focused[harness] for name in names], [regression])
+                        listing = "\n".join(name + ": test" for name in selected if name != regression)
+                        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                            gate.require_tests(listing, gate.qualification_stages(scope)[harness])
+        source = SCRIPT.resolve().parents[1] / "crates/iroha_data_model/src/query"
+        self.assertIn('include!("query_tail_tests.rs");', (source / "mod.rs").read_text())
+        leaf = (source / "query_tail_tests.rs").read_text()
+        self.assertIn('mod canonical_output_inclusion_tests {', leaf)
+        for regression in required["data-model"]:
+            self.assertEqual(leaf.count("    #[test]\n    fn " + regression.rsplit("::", 1)[1] + "()"), 1)
         self.assertEqual(gate.HARNESS_TARGETS["client"][3], ["-p", "iroha", "--lib"])
         self.assertEqual(gate.HARNESS_TARGETS["data-model"][3], ["-p", "iroha_data_model", "--lib"])
 
@@ -1335,7 +1408,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
                  patch.object(copies, "release") as release, \
-                 patch.object(gate, "run_stages", side_effect=lambda harness, root, env, stages, locks:
+                 patch.object(gate, "run_stages", side_effect=lambda harness, root, env, stages, locks, **_kwargs:
                               executed.extend((harness, test) for _, tests in stages for test in tests)), \
                  patch.object(gate, "run_network_checks", side_effect=lambda *args, **kwargs:
                               executed.extend(("network", test) for _, tests in kwargs["stages"] for test in tests)), \
@@ -1392,7 +1465,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_startup_failures_are_collected_before_cli_other_groups_or_network(self):
         executed = []
-        def fail_startup(harness, root, env, stages, locks):
+        def fail_startup(harness, root, env, stages, locks, **_kwargs):
             executed.append(harness)
             if harness in {"core", "daemon"} and stages != gate.CORE_PENDING_KURA_RECOVERY_STAGES:
                 raise gate.SelectedRegressionFailures([harness + " startup failed"])
@@ -1426,7 +1499,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 def compile_batch(*args, **kwargs):
                     order.append("compiled")
                     return copies
-                def run(harness, root, env, stages, locks):
+                def run(harness, root, env, stages, locks, **_kwargs):
                     order.append(harness)
                     executed.append((harness, stages))
                     if harness == "core":
@@ -1467,7 +1540,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     executed, output, checkpoint = [], io.StringIO(), MagicMock()
                     copies = self.copies()
 
-                    def run(harness, root, env, stages, locks):
+                    def run(harness, root, env, stages, locks, **_kwargs):
                         executed.append((harness, stages))
                         if harness == failed:
                             raise error
@@ -1520,7 +1593,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                         row["stages"][0]["tests"].pop()
                     error = gate.SelectedRegressionFailures(["fresh MV preflight failed"])
 
-                    def run(name, *args):
+                    def run(name, *args, **_kwargs):
                         if name == "mv":
                             raise error
 
@@ -1577,7 +1650,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             with self.subTest(scope=scope), patch.object(sys, "argv", [str(SCRIPT), *arguments]), \
                  patch.object(release, "development_check") as check:
                 self.assertEqual(gate.main(), 0)
-                self.assertEqual(check.call_args.kwargs, {"native_check_scope": scope})
+                self.assertEqual(check.call_args.kwargs, {"native_check_scope": scope, "native_linker": "llvm" if sys.platform == "linux" else "system"})
 
 
 class FocusedPrequalificationTests(unittest.TestCase):
@@ -1691,7 +1764,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
 
     def test_independent_focused_failures_aggregate_and_prevent_network(self):
         copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
-        def execute(harness, *args):
+        def execute(harness, *args, **_kwargs):
             if harness != "/copies/config":
                 raise gate.SelectedRegressionFailures([harness + " failed"])
         with patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
@@ -1705,6 +1778,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                          ["/copies/config", "/copies/core", "/copies/cli"])
         self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "core", "network", "cli"))
         self.assertEqual(failed.exception.failures, ("/copies/core failed", "/copies/cli failed"))
+        self.assertEqual([call.kwargs for call in run.call_args_list], [{}, {}, {"batch": True}])
         network.assert_not_called()
 
     def test_configuration_focus_is_not_duplicated_and_network_receives_exact_focus(self):
@@ -1771,7 +1845,144 @@ class FocusedPrequalificationTests(unittest.TestCase):
              patch.object(release, "development_check") as check:
             self.assertEqual(gate.main(), 0)
         self.assertEqual(check.call_args.kwargs, {
-            "native_check_scope": "basic", "focused_regressions": ("core=" + self.core,)})
+            "native_check_scope": "basic", "native_linker": "llvm" if sys.platform == "linux" else "system", "focused_regressions": ("core=" + self.core,)})
+
+
+class NativeCliBatchTests(unittest.TestCase):
+    stages = (("first group", ("first", "second")), ("last group", ("third",)))
+    success = ("running 3 tests\ntest first ... ok\ntest second ... ok\ntest third ... ok\n\n"
+               "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s\n")
+
+    @staticmethod
+    def harness(root):
+        harness = root / "harness"
+        harness.write_text(f"#!{sys.executable}\n" +
+            "import json,os,sys,time\nfrom pathlib import Path\n"
+            "settings=json.loads(Path('settings.json').read_text())\n"
+            "row={'args':sys.argv[1:],'cwd':os.getcwd(),'marker':os.getenv('CLI_BATCH_TEST_MARKER')}\n"
+            "if os.getenv('CLI_BATCH_TEST_FD'):\n row['fd_size']=os.fstat(int(os.environ['CLI_BATCH_TEST_FD'])).st_size\n"
+            "with Path('calls.jsonl').open('a') as f:f.write(json.dumps(row)+'\\n')\n"
+            "if '--list' in sys.argv:\n print(settings.get('listing','first: test\\nsecond: test\\nthird: test\\nunselected: test'));sys.exit(0)\n"
+            "assert sys.stdin.read()==''\n"
+            "time.sleep(settings.get('delay',0))\n"
+            "sys.stdout.write(settings['stdout']);sys.stderr.write(settings.get('stderr',''))\n"
+            "sys.exit(settings.get('code',0))\n")
+        harness.chmod(0o700)
+        return str(harness)
+
+    def invoke(self, root, settings, *, env=None, locks=(), stages=None):
+        (root / "settings.json").write_text(json.dumps(settings))
+        output, errors = io.StringIO(), io.StringIO()
+        failure = None
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            try:
+                gate.run_stages(self.harness(root), root, dict(os.environ) if env is None else env,
+                                self.stages if stages is None else stages, locks, batch=True)
+            except gate.SelectedRegressionFailures as error:
+                failure = error
+        return failure, output.getvalue(), errors.getvalue()
+
+    def test_exact_batch_preserves_cwd_environment_descriptors_and_closed_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            held = root / "held"
+            held.write_bytes(b"owned lock")
+            with held.open("rb") as lock:
+                env = dict(os.environ, CLI_BATCH_TEST_MARKER="present", CLI_BATCH_TEST_FD=str(lock.fileno()))
+                failure, output, errors = self.invoke(root, {"stdout": self.success}, env=env, locks=(lock.fileno(),))
+            self.assertIsNone(failure)
+            self.assertEqual(errors, "")
+            calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0]["args"], ["--list", "--format", "terse"])
+            self.assertEqual(calls[1]["args"], ["first", "second", "third", "--exact", "--test-threads=1", "--format", "pretty", "--color", "never"])
+            self.assertTrue(all(row["cwd"] == str(root) and row["marker"] == "present" and row["fd_size"] == 10 for row in calls))
+            self.assertIn("passed first group (2 tests in CLI batch)", output)
+            self.assertIn("passed last group (1 tests in CLI batch)", output)
+
+    def test_empty_duplicate_or_missing_selection_cannot_execute_unselected_tests(self):
+        for stages in ((), (("empty", ()),), (("duplicate", ("first", "first")),)):
+            with self.subTest(stages=stages), patch.object(gate.subprocess, "run") as run:
+                with self.assertRaisesRegex(gate.CheckError, "nonempty.*unique"):
+                    gate.run_stages("/unused", Path("/unused"), {}, stages, (), batch=True)
+                run.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "settings.json").write_text(json.dumps({"listing": "first: test", "stdout": self.success}))
+            with self.assertRaisesRegex(gate.CheckError, "missing.*second.*third"):
+                gate.run_stages(self.harness(root), root, dict(os.environ), self.stages, (), batch=True)
+            self.assertEqual(len((root / "calls.jsonl").read_text().splitlines()), 1)
+
+    def test_malformed_missing_ignored_measured_duplicate_unexpected_and_dishonest_results_fail(self):
+        cases = {
+            "missing footer": self.success.split("test result:")[0],
+            "missing running count": self.success.replace("running 3 tests\n", ""),
+            "wrong running count": self.success.replace("running 3", "running 2"),
+            "missing named result": self.success.replace("test second ... ok\n", ""),
+            "duplicate named result": self.success.replace("test second ... ok", "test first ... ok"),
+            "unexpected named result": self.success.replace("test second ... ok", "test unselected ... ok"),
+            "ignored": self.success.replace("test second ... ok", "test second ... ignored, not enabled").replace("3 passed; 0 failed; 0 ignored", "2 passed; 0 failed; 1 ignored"),
+            "measured": self.success.replace("test second ... ok", "test second ... bench: 10 ns/iter").replace("3 passed; 0 failed; 0 ignored; 0 measured", "2 passed; 0 failed; 0 ignored; 1 measured"),
+            "wrong passed count": self.success.replace("3 passed", "2 passed"),
+            "wrong filtered count": self.success.replace("1 filtered out", "0 filtered out"),
+            "contradictory status": self.success.replace("result: ok", "result: FAILED"),
+            "partial result": self.success.replace("test second ... ok", "test second ... "),
+            "unknown terminal": self.success.replace("test second ... ok", "test second ... SKIPPED"),
+            "duplicate footer": self.success + self.success.split("\n\n")[1],
+            "trailing output": self.success + "aborted after footer\n",
+            "unexpected progress": self.success.replace("test second ... ok", "not a libtest result\ntest second ... ok"),
+            "forged failure section": self.success.replace("test second ... ok", "failures:\ntest second ... ok"),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for label, stdout in cases.items():
+                with self.subTest(label=label):
+                    failure, _, errors = self.invoke(root, {"stdout": stdout, "stderr": "fixture diagnostic\n"})
+                    self.assertIsNotNone(failure)
+                    self.assertIn(stdout, errors)
+                    self.assertIn("fixture diagnostic", errors)
+            calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+            self.assertEqual(len(calls), 2 * len(cases), "each failed census executes once, never replays")
+
+    def test_normal_failures_aggregate_without_admitting_captured_result_lookalikes(self):
+        stdout = ("running 3 tests\ntest first ... FAILED\ntest second ... ok\ntest third ... FAILED\n"
+                  "\nfailures:\n\n---- first stdout ----\n"
+                  "test unselected ... ok\ntest first ... ok\n"
+                  "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s\n"
+                  "\nfailures:\n    first\n    third\n\n"
+                  "test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.02s\n")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            failure, output, errors = self.invoke(root, {"stdout": stdout, "code": 101})
+            self.assertEqual(failure.failures, ("regression did not pass: first (FAILED)", "regression did not pass: third (FAILED)"))
+            self.assertEqual(errors, stdout)
+            self.assertNotIn("passed CLI batch", output)
+            self.assertEqual(len((root / "calls.jsonl").read_text().splitlines()), 2)
+            failure, _, _ = self.invoke(root, {"stdout": stdout, "code": 0})
+            self.assertIn("success despite failed", str(failure))
+
+    def test_abnormal_exit_reports_every_unexecuted_name_without_replaying_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for code in (101, 70):
+                with self.subTest(code=code):
+                    failure, _, _ = self.invoke(root, {"stdout": self.success, "code": code})
+                    self.assertIn(f"exit {code}", str(failure))
+            failure, _, errors = self.invoke(root, {"stdout": "running 3 tests\ntest first ... ok\ntest second ... ", "code": 70})
+            self.assertIn("terminal result: second", str(failure))
+            self.assertIn("terminal result: third", str(failure))
+            self.assertNotIn("terminal result: first", str(failure))
+            self.assertIn("test first ... ok", errors)
+            self.assertEqual(len((root / "calls.jsonl").read_text().splitlines()), 6)
+
+    def test_quiet_batch_has_bounded_progress_without_cargo_labels_or_census_changes(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(gate, "NATIVE_TEST_PROGRESS_INTERVAL_SECONDS", 0.01):
+            failure, output, errors = self.invoke(Path(directory), {"stdout": self.success, "delay": 0.06})
+            self.assertIsNone(failure)
+            self.assertIn("CLI batch running (3 tests;", output)
+            self.assertNotIn("taira-cargo", output)
+            self.assertEqual(errors, "")
 
 
 class EarlyReleaseCheckTests(unittest.TestCase):
@@ -2014,7 +2225,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(gate.subprocess, "check_output", side_effect=AssertionError("must not inspect mutable Git")))
             compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")))
-            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]))
+            run = stack.enter_context(patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "running 1 test\ntest fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")]))
             stack.enter_context(patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)))
             stack.enter_context(patch.multiple(gate, MV_OWNERSHIP_STAGES=(),
                                                MV_EBR_STAGES=(), MV_MAP_STAGES=(),
@@ -2043,7 +2254,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_mutable_check_keeps_git_checks_and_inherits_lane_lock_in_every_child(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/routine", "CARGO_INCREMENTAL": "0"}
         results = [subprocess.CompletedProcess([], 0, "fixture: test\n", ""),
-                   subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]
+                   subprocess.CompletedProcess([], 0, "running 1 test\ntest fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")]
         with contextlib.ExitStack() as stack:
             git = stack.enter_context(patch.object(gate.subprocess, "check_output", return_value="a" * 40))
             compile = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies("/fixture/harness")))
@@ -2080,7 +2291,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_torii_contract_failure_prevents_overall_pass_and_keeps_same_custody(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         results = [subprocess.CompletedProcess([], 0, "cli: test\n", ""),
-                   subprocess.CompletedProcess([], 0, "test cli ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", ""),
+                   subprocess.CompletedProcess([], 0, "running 1 test\ntest cli ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", ""),
                    subprocess.CompletedProcess([], 0, "route: test\n", ""),
                    subprocess.CompletedProcess([], 101, "test route ... FAILED\n", "")]
         output = io.StringIO()
@@ -2118,7 +2329,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_cli_contract_infrastructure_failure_stops_after_startup_before_other_groups(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         output = io.StringIO()
-        def fail_cli(harness, root, env, stages, locks):
+        def fail_cli(harness, root, env, stages, locks, **_kwargs):
             if stages == gate.STAGES:
                 raise gate.CheckError("public transaction stalled")
         with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
@@ -2159,6 +2370,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
         self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("mv", "mv-ebr", "mv-map", "core", "core", "torii-unit", "daemon", "cli") + names[4:-2]])
+        self.assertEqual([call.kwargs for call in stages.call_args_list],
+                         [{"batch": True} if call.args[0] == "/warm/cli" else {} for call in stages.call_args_list])
         self.assertEqual([call.args[3] for call in stages.call_args_list],
                          [gate.MV_OWNERSHIP_STAGES, gate.MV_EBR_STAGES, gate.MV_MAP_STAGES, gate.CORE_PENDING_KURA_RECOVERY_STAGES, tuple(stage for stage in gate.CORE_STARTUP_STAGES if stage not in gate.CORE_PENDING_KURA_RECOVERY_STAGES), gate.TORII_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, gate.STAGES, gate.CONFIG_UNIT_STAGES, gate.DATA_MODEL_STAGES, gate.PROOF_STAGES, gate.PROOF_FLOW_STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, tuple(stage for stage in gate.CORE_STAGES if stage not in gate.CORE_STARTUP_STAGES), gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, tuple(stage for stage in gate.TORII_UNIT_STAGES if stage not in gate.TORII_STARTUP_STAGES), gate.TORII_STAGES, gate.TORII_SHARED_STAGES, gate.TORII_LIFECYCLE_STAGES, tuple(stage for stage in gate.DAEMON_STAGES if stage not in gate.DAEMON_STARTUP_STAGES)])
 
@@ -2193,7 +2406,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         names = ("config", "mv", "mv-ebr", "mv-map", "config-unit", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
         for failed in ("client", "torii-unit", "torii", "torii-shared", "torii-lifecycle"):
-            def run(harness, *args):
+            def run(harness, *args, **_kwargs):
                 if harness == "/warm/" + failed:
                     raise gate.CheckError(failed + " failed")
             with self.subTest(failed=failed), \
@@ -2259,7 +2472,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
 
     def test_beacon_fixture_output_requires_private_direct_non_git_root(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir=Path.home().resolve()) as temporary:
             parent = Path(temporary).resolve()
             private = parent / "private"
             with patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private)}):
@@ -2414,6 +2627,101 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(len(failed.exception.failures), len(observations))
 
 
+class FocusedNetworkObservationTests(unittest.TestCase):
+    def test_one_observation_runs_without_shipping_capacity_or_peer_workspace(self):
+        name = gate.NETWORK_OBSERVATION_STAGES[0][1][0]
+        stages = gate.focused_regression_stages("basic", ("network=" + name,))["network"]
+        env = {"CARGO_TARGET_DIR": "/warm"}
+        executed = []
+
+        def native(command, **kwargs):
+            self.assertEqual(kwargs["env"], env)
+            self.assertEqual(kwargs["cwd"], Path("/warm"))
+            self.assertEqual(kwargs["pass_fds"], (77,))
+            if "--list" in command:
+                output = name + ": test\n"
+            else:
+                executed.append(command[1])
+                output = f"test {name} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n"
+            return subprocess.CompletedProcess(command, 0, output, "")
+
+        with patch.object(gate, "compile_network_binaries") as build, \
+             patch.object(gate, "require_network_fixture_capacity") as capacity, \
+             patch.object(gate, "beacon_fixture_root") as custody, \
+             patch.object(gate.tempfile, "mkdtemp") as workspace, \
+             patch.object(gate.subprocess, "run", side_effect=native), \
+             contextlib.redirect_stdout(io.StringIO()):
+            gate.run_network_checks(Path("/source"), Path("/warm"), env, (77,),
+                                    harness="/network", stages=stages)
+        self.assertEqual(executed, [name])
+        for prerequisite in (build, capacity, custody, workspace):
+            prerequisite.assert_not_called()
+
+    def test_partial_observation_groups_aggregate_before_shipping_and_beacon(self):
+        names = (gate.NETWORK_OBSERVATION_STAGES[0][1][0],
+                 gate.NETWORK_OBSERVATION_STAGES[2][1][0])
+        stages = gate.focused_regression_stages("basic", tuple(
+            "network=" + name for name in (*names, gate.BEACON_NETWORK_TEST)))["network"]
+        executed = []
+
+        def native(command, **kwargs):
+            if "--list" in command:
+                return subprocess.CompletedProcess(command, 0,
+                    "".join(name + ": test\n" for name in (*names, gate.BEACON_NETWORK_TEST)), "")
+            executed.append(command[1])
+            return subprocess.CompletedProcess(command, 101, "observation failed\n", "")
+
+        with patch.object(gate, "compile_network_binaries") as build, \
+             patch.object(gate.tempfile, "mkdtemp") as workspace, \
+             patch.object(gate.subprocess, "run", side_effect=native), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(gate.SelectedRegressionFailures) as failed:
+                gate.run_network_checks(Path("/source"), Path("/warm"), {}, (),
+                                        harness="/network", stages=stages)
+        self.assertEqual(executed, list(names))
+        self.assertEqual(len(failed.exception.failures), len(names))
+        build.assert_not_called()
+        workspace.assert_not_called()
+
+    def test_selected_observations_complete_before_shipping_codegen(self):
+        name = gate.NETWORK_OBSERVATION_STAGES[0][1][0]
+        stages = gate.focused_regression_stages("basic", (
+            "network=" + name, "network=" + gate.BEACON_NETWORK_TEST))["network"]
+        order = []
+
+        def observe(harness, directory, env, selected, locks):
+            self.assertEqual([test for _, tests in selected for test in tests], [name])
+            order.append("observation")
+
+        def build(*args, **kwargs):
+            order.append("shipping")
+            raise gate.CheckError("shipping codegen failed")
+
+        with patch.object(gate, "run_stages", side_effect=observe), \
+             patch.object(gate, "compile_network_binaries", side_effect=build):
+            with self.assertRaisesRegex(gate.CheckError, "shipping codegen failed"):
+                gate.run_network_checks(Path("/source"), Path("/warm"), {}, (),
+                                        harness="/network", stages=stages)
+        self.assertEqual(order, ["observation", "shipping"])
+
+    def test_partition_preserves_mixed_group_order_and_unknown_runtime_cases(self):
+        first, second = gate.NETWORK_OBSERVATION_STAGES[0][1]
+        selected = (("mixed", (first, "runtime-control", second)),
+                    ("beacon", (gate.BEACON_NETWORK_TEST,)))
+        observations, runtime = gate.split_network_stages(selected)
+        self.assertEqual(observations, (("mixed", (first, second)),))
+        self.assertEqual(runtime, (("mixed", ("runtime-control",)),
+                                  ("beacon", (gate.BEACON_NETWORK_TEST,))))
+
+    def test_empty_selection_does_not_compile_or_start_a_fixture(self):
+        with patch.object(gate, "compile_network_binaries") as build, \
+             patch.object(gate, "run_stages") as run:
+            gate.run_network_checks(Path("/source"), Path("/warm"), {}, (),
+                                    harness="/network", stages=())
+        build.assert_not_called()
+        run.assert_not_called()
+
+
 class EarlyConfigurationGateTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
@@ -2470,7 +2778,8 @@ class EarlyConfigurationGateTests(unittest.TestCase):
         events = []
         libraries = ("config", "mv", "mv-ebr", "mv-map", "config-unit", "data-model", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "torii-shared", "torii-lifecycle", "daemon", "network", "cli")
 
-        def run_stage(harness, root, env, stages, lock_fds):
+        def run_stage(harness, root, env, stages, lock_fds, **kwargs):
+            self.assertEqual(kwargs, {"batch": True} if harness == "/warm/cli" else {})
             self.assertEqual((root, lock_fds), (Path("/warm"), (77,)))
             events.append("config-pass" if stages == gate.CONFIG_STAGES else harness)
 
@@ -2573,7 +2882,10 @@ class EarlyConfigurationGateTests(unittest.TestCase):
 
 class NetworkFixtureCapacityTests(unittest.TestCase):
     def setUp(self):
-        isolate_shipping_fixture(self)
+        isolate_shipping_fixture(self, keep_network_prerequisites=True)
+        custody = patch.object(gate, "beacon_fixture_root")
+        custody.start()
+        self.addCleanup(custody.stop)
 
     def test_storage_floor_accepts_exact_boundary_and_rejects_one_byte_less(self):
         for available, passes in ((gate.NETWORK_FIXTURE_FREE_BYTES, True),
@@ -2605,7 +2917,8 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
             with self.assertRaisesRegex(gate.CheckError, "four-peer fixtures require"):
                 gate.run_network_checks(Path("/frozen"), Path("/warm"), {"CARGO_TARGET_DIR": "/warm"}, (),
                                         harness="/harness", stages=gate.NETWORK_STAGES)
-        run.assert_not_called()
+        run.assert_called_once_with("/harness", Path("/warm"), {"CARGO_TARGET_DIR": "/warm"},
+                                    gate.NETWORK_OBSERVATION_STAGES, ())
         fixture.assert_not_called()
 
 
@@ -3683,7 +3996,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                      patch.object(owner, function, side_effect=gate.CheckError(failure + " failed")):
                     with self.assertRaisesRegex(gate.CheckError, failure + " failed"):
                         gate.run_network_checks(self.source, self.target, self.env, (),
-                                                harness="unused", stages=())
+                                                harness="unused", stages=(("runtime", ("fixture",)),))
                 run.assert_not_called()
                 self.assertFalse(Path(copies["iroha3d"]).exists())
                 self.assertTrue(Path(copies["iroha"]).exists())
@@ -3714,7 +4027,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 rows = {name: self.artifact(name)[1] for name in ("cli", "client")}
                 copies = self.isolate(rows)
                 copied = Path(copies["cli"])
-                def failed_stage(*args):
+                def failed_stage(*args, **_kwargs):
                     self.assertEqual(args[0], copies["cli"])
                     if replaced:
                         copied.parent.chmod(0o700)
@@ -4199,6 +4512,222 @@ class NativeTestOutputRetirementTests(unittest.TestCase):
         self.closed.assert_called_once()
         self.assertTrue(Path(old["path"]).exists())
         self.assertTrue(Path(other["path"]).exists())
+
+
+class BeaconFixturePrerequisiteTests(unittest.TestCase):
+    env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+
+    def invoke(self, mode, scope, *, test=None, source_commit=None):
+        if mode == "focused":
+            gate.run_prequalification(
+                Path("/unread"), qualification_scope=scope,
+                focused_regressions=(test or "network=" + gate.BEACON_NETWORK_TEST,),
+                environment=self.env, lock_fds=())
+        else:
+            gate.run_checks(Path("/unread"), qualification_scope=scope,
+                            environment=self.env, source_commit=source_commit)
+
+    def test_selected_test_names_control_root_and_capacity_prerequisites(self):
+        observation = gate.NETWORK_OBSERVATION_STAGES[0][1][0]
+        selections = (
+            ((), False, False),
+            ((("renamed observation subset", (observation,)),), False, False),
+            ((("other runtime", ("fixture_runtime_case",)),), False, True),
+            ((("mixed selection", (observation, gate.BEACON_NETWORK_TEST)),), True, True),
+        )
+        for stages, needs_root, needs_capacity in selections:
+            with self.subTest(stages=stages), \
+                 patch.object(gate, "beacon_fixture_root") as root, \
+                 patch.object(gate, "require_network_fixture_capacity") as capacity:
+                gate.require_network_fixture_prerequisites(Path("/warm"), stages)
+            self.assertEqual(root.call_count, int(needs_root))
+            self.assertEqual(capacity.call_count, int(needs_capacity))
+            if needs_capacity:
+                capacity.assert_called_once_with(Path("/warm"))
+
+    def test_beacon_root_admission_precedes_source_and_compilation_in_each_gate(self):
+        for mode in ("qualification", "focused"):
+            for scope in gate.QUALIFICATION_SCOPES:
+                for source_commit in ((None, "a" * 40) if mode == "qualification" else (None,)):
+                    order = []
+                    with self.subTest(mode=mode, scope=scope, source_commit=source_commit), \
+                         patch.object(gate, "require_native_artifact_inspector"), \
+                         patch.object(gate, "beacon_fixture_root", side_effect=lambda: order.append("root")), \
+                         patch.object(gate, "require_network_fixture_capacity", side_effect=lambda path: order.append(("capacity", path))), \
+                         patch.object(gate.subprocess, "check_output", side_effect=lambda *a, **k: order.append("head") or "a" * 40 + "\n"), \
+                         patch.object(gate, "run_pure_fsm_checks", side_effect=RuntimeError("first compile reached")) as compile, \
+                         contextlib.redirect_stdout(io.StringIO()):
+                        with self.assertRaisesRegex(RuntimeError, "first compile reached"):
+                            self.invoke(mode, scope, source_commit=source_commit)
+                        compile.assert_called_once()
+                    directory = Path("/warm") if mode == "focused" or source_commit else Path("/unread")
+                    self.assertEqual(order, ["root", ("capacity", directory)] + ([] if source_commit else ["head"]))
+
+    def test_unselected_beacon_and_observation_only_focus_skip_peer_prerequisites(self):
+        selections = ("cli=" + gate.STAGES[0][1][0],
+                      "network=" + gate.NETWORK_OBSERVATION_STAGES[0][1][0])
+        for scope in gate.QUALIFICATION_SCOPES:
+            for selected in selections:
+                with self.subTest(scope=scope, selected=selected), \
+                     patch.object(gate, "require_native_artifact_inspector"), \
+                     patch.object(gate, "beacon_fixture_root") as root, \
+                     patch.object(gate, "require_network_fixture_capacity") as capacity, \
+                     patch.object(gate.subprocess, "check_output", return_value="a" * 40 + "\n"), \
+                     patch.object(gate, "run_pure_fsm_checks", side_effect=RuntimeError("first compile reached")), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(RuntimeError, "first compile reached"):
+                        self.invoke("focused", scope, test=selected)
+                    root.assert_not_called()
+                    capacity.assert_not_called()
+
+    def test_unsafe_parent_stops_selected_gates_before_source_or_compile(self):
+        with tempfile.TemporaryDirectory(dir=Path.home().resolve()) as directory:
+            parent = Path(directory).resolve()
+            private = parent / "private"
+            parent.chmod(0o770)
+            try:
+                for mode in ("qualification", "focused"):
+                    for scope in gate.QUALIFICATION_SCOPES:
+                        with self.subTest(mode=mode, scope=scope), contextlib.ExitStack() as stack:
+                            stack.enter_context(patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private)}))
+                            stack.enter_context(patch.object(gate, "require_native_artifact_inspector"))
+                            actions = [stack.enter_context(patch.object(gate, name)) for name in (
+                                "require_network_fixture_capacity", "run_pure_fsm_checks", "run_lifecycle_source_checks",
+                                "shipping_harnesses", "check_test_harnesses", "compile_test_harnesses", "compile_network_binaries")]
+                            head = stack.enter_context(patch.object(gate.subprocess, "check_output"))
+                            with self.assertRaisesRegex(gate.CheckError, "ancestor.*group or world write") as failed:
+                                self.invoke(mode, scope)
+                            self.assertIn(str(parent), str(failed.exception))
+                            self.assertFalse(private.exists())
+                            for action in (*actions, head):
+                                action.assert_not_called()
+            finally:
+                parent.chmod(0o700)
+
+    def test_shared_ancestors_fail_before_creating_private_leaf(self):
+        with tempfile.TemporaryDirectory(dir=Path.home().resolve()) as directory:
+            parent = Path(directory).resolve()
+            intermediate = parent / "intermediate"
+            intermediate.mkdir(mode=0o700)
+            private = intermediate / "private"
+            for mode in (0o770, 0o707, 0o1777):
+                parent.chmod(mode)
+                try:
+                    with self.subTest(mode=oct(mode)), \
+                         patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private)}):
+                        with self.assertRaisesRegex(gate.CheckError, "ancestor.*group or world write") as failed:
+                            gate.beacon_fixture_root()
+                        self.assertIn(str(parent), str(failed.exception))
+                        self.assertFalse(private.exists())
+                finally:
+                    parent.chmod(0o700)
+
+    def test_symlinked_ancestor_and_git_marker_fail_before_leaf_creation(self):
+        with tempfile.TemporaryDirectory(dir=Path.home().resolve()) as directory:
+            parent = Path(directory).resolve()
+            actual = parent / "actual"
+            actual.mkdir(mode=0o700)
+            alias = parent / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+            with patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(alias / "private")}):
+                with self.assertRaisesRegex(gate.CheckError, "absolute direct path"):
+                    gate.beacon_fixture_root()
+                self.assertFalse((actual / "private").exists())
+            for marker_kind in ("file", "directory"):
+                marker = parent / ".git"
+                if marker_kind == "file":
+                    marker.write_text("gitdir: fixture-only\n")
+                else:
+                    marker.mkdir(mode=0o700)
+                try:
+                    with self.subTest(marker_kind=marker_kind), \
+                         patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(actual / "private")}), \
+                         patch.object(gate.subprocess, "run") as discovery:
+                        with self.assertRaisesRegex(gate.CheckError, "outside a Git") as failed:
+                            gate.beacon_fixture_root()
+                        self.assertIn(str(parent), str(failed.exception))
+                        self.assertFalse((actual / "private").exists())
+                        discovery.assert_not_called()
+                finally:
+                    marker.unlink() if marker_kind == "file" else marker.rmdir()
+
+
+class NativeArtifactInspectorPrerequisiteTests(unittest.TestCase):
+    env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+
+    def invoke(self, mode, scope):
+        if mode == "focused":
+            gate.run_prequalification(
+                Path("/unread"), qualification_scope=scope,
+                focused_regressions=("cli=" + gate.STAGES[0][1][0],),
+                environment=self.env, lock_fds=())
+        else:
+            gate.run_checks(Path("/unread"), qualification_scope=scope, environment=self.env)
+
+    def test_platform_inspector_path_is_fixed_and_ignores_path_environment(self):
+        for platform, expected in (("darwin", "/usr/sbin/lsof"), ("linux", "/usr/bin/lsof")):
+            with self.subTest(platform=platform), patch.object(gate.sys, "platform", platform), \
+                 patch.dict(os.environ, {"PATH": "/untrusted/bin"}):
+                self.assertEqual(gate.native_artifact_inspector_path(), Path(expected))
+
+    def test_missing_or_nonexecutable_inspector_stops_every_gate_before_source_or_compile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inspector = Path(directory) / "lsof"
+            for state in ("missing", "nonexecutable"):
+                if state == "nonexecutable":
+                    inspector.write_bytes(b"fixture, never executed")
+                    inspector.chmod(0o600)
+                for platform in ("darwin", "linux"):
+                    for mode in ("qualification", "focused"):
+                        for scope in gate.QUALIFICATION_SCOPES:
+                            with self.subTest(state=state, platform=platform, mode=mode, scope=scope), \
+                                 contextlib.ExitStack() as stack:
+                                stack.enter_context(patch.object(gate.sys, "platform", platform))
+                                stack.enter_context(patch.object(gate, "native_artifact_inspector_path",
+                                                                 return_value=inspector))
+                                actions = [stack.enter_context(patch.object(gate, name)) for name in (
+                                    "require_network_fixture_capacity", "run_pure_fsm_checks",
+                                    "run_lifecycle_source_checks", "shipping_harnesses", "check_test_harnesses",
+                                    "compile_test_harnesses", "compile_network_binaries", "run_network_checks")]
+                                git = stack.enter_context(patch.object(gate.subprocess, "check_output"))
+                                with self.assertRaises(gate.CheckError) as failed:
+                                    self.invoke(mode, scope)
+                                self.assertIn(str(inspector), str(failed.exception))
+                                self.assertIn("install lsof", str(failed.exception))
+                                self.assertIn("missing" if state == "missing" else "not executable",
+                                              str(failed.exception))
+                                for action in (*actions, git):
+                                    action.assert_not_called()
+
+    def test_executable_inspector_allows_every_gate_to_reach_first_compile_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inspector = Path(directory) / "lsof"
+            inspector.write_bytes(b"fixture, never executed")
+            inspector.chmod(0o700)
+            for platform in ("darwin", "linux"):
+                for mode in ("qualification", "focused"):
+                    for scope in gate.QUALIFICATION_SCOPES:
+                        with self.subTest(platform=platform, mode=mode, scope=scope), \
+                             patch.object(gate.sys, "platform", platform), \
+                             patch.object(gate, "native_artifact_inspector_path", return_value=inspector), \
+                             patch.object(gate, "require_network_fixture_prerequisites"), \
+                             patch.object(gate.subprocess, "check_output", return_value="a" * 40 + "\n"), \
+                             patch.object(gate, "run_pure_fsm_checks",
+                                          side_effect=RuntimeError("first compile reached")) as first_compile, \
+                             contextlib.redirect_stdout(io.StringIO()):
+                            with self.assertRaisesRegex(RuntimeError, "first compile reached"):
+                                self.invoke(mode, scope)
+                            first_compile.assert_called_once()
+                            self.assertEqual(first_compile.call_args.args[0], Path("/unread"))
+
+    def test_inspector_disappearance_or_execution_failure_still_retains_outputs(self):
+        with patch.object(Path, "is_file", return_value=False), \
+             patch.object(gate.subprocess, "run") as run:
+            self.assertIsNone(gate.native_test_output_confirmed_closed(Path("/exact/test")))
+            run.assert_not_called()
+        with patch.object(Path, "is_file", return_value=True), \
+             patch.object(gate.subprocess, "run", side_effect=PermissionError("inspection denied")):
+            self.assertIsNone(gate.native_test_output_confirmed_closed(Path("/exact/test")))
 
 
 class NativeTestOutputOpenFileTests(unittest.TestCase):

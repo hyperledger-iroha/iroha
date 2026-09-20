@@ -16969,7 +16969,14 @@ impl Kura {
         self.durable_mutation_authorized()?;
         self.ensure_durable_block_at_height(height, block_hash)?;
         let _guard = self.sidecar_lock.lock();
-        self.write_wsv_checkpoint_under_sidecar_guard(height, block_hash, state_hash)?;
+        let carrier_checkpoint::DurableWsvCheckpoint {
+            readback,
+            written,
+            namespace,
+        } = self.write_wsv_checkpoint_under_sidecar_guard(height, block_hash, state_hash)?;
+        // This caller retains no receipt. Release its readback and actual file
+        // custody together while the original sidecar fence is still held.
+        drop((readback, written, namespace));
         Ok(())
     }
     // Caller owns prune and sidecar; the receipt path also owns canonical-chain.

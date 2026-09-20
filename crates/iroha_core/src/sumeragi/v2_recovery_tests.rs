@@ -544,7 +544,7 @@ fn persist_complete_height(
         .expect("persist authenticated v2 finality");
 }
 #[cfg(feature = "bls")]
-pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
+pub(super) fn production_genesis_complete_tip_fixture() -> (
     Arc<Kura>,
     Arc<State>,
     VerifiedHeightContext,
@@ -552,61 +552,10 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
     KeyPair,
     crate::sumeragi::v2_lifecycle_coordinator::RetiredRecoveredCompleteTipActivationAuthorityV1,
 ) {
-    let keys = verified_keys();
-    let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-recovery-test");
-    let nexus = iroha_config::parameters::actual::Nexus::default();
-    let config = iroha_config::parameters::actual::Kura {
-        init_mode: iroha_config::kura::InitMode::Strict,
-        store_dir: iroha_config::base::WithOrigin::inline(PathBuf::new()),
-        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: iroha_config::kura::FsyncMode::Batched,
-        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-    };
-    let kura = Kura::new_temporary_with_configured_lane_catalog(
-        &config,
-        &nexus.lane_config,
-        &nexus.configured_lane_catalog,
-    )
-    .expect("open the authenticated configured Kura catalog");
-    let mut world = world_with_consensus_keys(&keys);
-    crate::sns::try_seed_default_namespace_policies(&mut world, &nexus.fees.fee_asset_id)
-        .expect("seed current namespace policy before pre-genesis configuration");
-    let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
-        world,
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-        ChainId::from("sumeragi-v2-recovery-display-name"),
-        network_id,
-    )
-    .expect("construct exact-network State before physical geometry publication");
-    state.install_pre_genesis_nexus_for_testing(nexus);
-    // Seal the exact configured State policy, not the unrelated convenience
-    // fixture's fee/runtime defaults, before signing its durable genesis context.
-    let mut context = verified_context_for_policy_state(&state, network_id, &keys)
-        .context()
-        .clone();
-    context.nexus_amx_context_hash =
-        committed_nexus_amx_context_hash(&state).expect("authenticated pre-genesis catalog");
-    let proofs = keys
-        .iter()
-        .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("validator PoP"))
-        .collect();
-    let verified_genesis =
-        VerifiedHeightContext::genesis(context.clone(), proofs).expect("exact configured context");
-    let state = Arc::new(state);
-    let block = dummy_block(&keys[0], 1, None);
-    kura.store_block(block.clone())
-        .expect("persist production-shaped signed genesis block");
-    commit_to_state(state.as_ref(), &block, &context);
-    let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
-    persist_complete_height(kura.as_ref(), state.as_ref(), &artifact);
+    // CompleteTip recovery must consume actual executed genesis and the physical
+    // catalog admitted before execution, not a metadata-only synthetic block.
+    let (kura, state, verified_genesis, keys, genesis_key) =
+        crate::sumeragi::v2_apply::canonical_genesis_complete_tip_fixture_for_test();
     let context_store =
         V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
     context_store
@@ -617,7 +566,7 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         kura.as_ref(),
         state.as_ref(),
         None,
-        keys[0].public_key().clone(),
+        genesis_key.public_key().clone(),
     )
     .expect("recover the exact Kura height-one CompleteTip");
     let (
@@ -636,7 +585,7 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         BlockSignaturePolicy::RotatingLeader
     ));
     let Some(RecoveredSuccessorActivationAuthority::CompleteTip(complete_tip)) = activation else {
-        panic!("a complete signed genesis tip must recover CompleteTip authority")
+        panic!("an executed nonempty genesis tip must recover CompleteTip authority")
     };
     let predecessor_frame = complete_tip
         .lifecycle_storage
@@ -645,14 +594,14 @@ pub(super) fn production_empty_genesis_complete_tip_fixture() -> (
         .join("lifecycle-ledger-v1.norito");
     assert!(
         !predecessor_frame.exists(),
-        "the production-shaped predecessor lifecycle must begin genuinely empty"
+        "the executed genesis has no predecessor lifecycle rows"
     );
     let retirement = complete_tip
         .into_kura_bound_canonical_predecessor_storage(kura.as_ref(), &keys[0])
         .and_then(
             crate::sumeragi::v2_lifecycle_coordinator::AuthenticatedCompleteTipPredecessorStorageV1::retire,
         )
-        .expect("retire the empty signed-genesis predecessor");
+        .expect("retire the executed-genesis predecessor with no lifecycle rows");
     (
         kura,
         state,

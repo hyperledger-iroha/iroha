@@ -26535,6 +26535,23 @@ open: false,
         errors,
     )
 
+    push_gate = _require_qualified_rust_item(
+        core_path, core_source, "FairV2Ingress", "try_push_at", errors,
+        "Native production admission gate",
+    )
+    _require_rust_token_sequence(
+        core_path, push_gate,
+        """
+if inbound.message().is_native_lane() {
+    return Err(FairV2IngressPushError::rejected(
+        inbound, FairV2IngressRejectReason::UnsupportedEnvelope,
+    ));
+}
+self.try_push_owned_at(inbound, enqueued_at)
+""",
+        "production Native admission remains closed before bounded physical ownership",
+        errors,
+    )
     push = _require_rust_item(core_path, core_source, "try_push_owned_at", errors)
     _require_rust_token_sequence(
         core_path,

@@ -1389,31 +1389,6 @@ fn rejection_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
     bounded
 }
 
-/// Read-only native entry point for the anchored finality/four-peer verification layer.
-/// The returned request never asserts that those independent verifications succeeded.
-pub(crate) fn verification_request<C: RunContext>(
-    context: &C,
-    journal_dir: &Path,
-    operation_id: &str,
-) -> Result<VerificationRequestV1> {
-    require(
-        context.config().chain.to_string() == "fc56984b-2be7-431d-840e-21514d1883f0"
-            && context.config().account_chain_discriminant == 369,
-        "verification requires the canonical Taira profile",
-    )?;
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    Ok(run_saved(
-        context,
-        SavedArgs {
-            journal_dir: journal_dir.to_owned(),
-            operation_id: operation_id.into(),
-            timeout_ms: DEFAULT_OPERATION_TIMEOUT_MS,
-        },
-        false,
-    )?
-    .verification)
-}
-
 fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result<ReportV1> {
     let deadline = operation_deadline(args.timeout_ms)?;
     require_operation_budget(deadline, "open retained operation")?;
@@ -1595,9 +1570,13 @@ fn run_saved<C: RunContext>(context: &C, args: SavedArgs, apply: bool) -> Result
     let mut report = phase_report(&plan, observations);
     if report.state == "applied_verification_pending" {
         eprintln!("[dataspace-deploy] starting fresh four-validator finality verification");
-        if let Err(error) = complete_until(apply, deadline, &mut report, |report| {
-            finality::complete(context, &plan, &journal, report, deadline)
-        }) {
+        let verification: Result<()> = (|| {
+            let mut completion = finality::Completion::new(&plan, &journal, deadline)?;
+            complete_until(apply, deadline, &mut report, |report| {
+                completion.complete(context, report)
+            })
+        })();
+        if let Err(error) = verification {
             report.state = "applied_verification_pending".into();
             report.deployment_complete = false;
             report.completion_receipt = None;
@@ -1680,7 +1659,8 @@ impl Journal {
             .ok_or_else(|| eyre!("operation directory has no name"))?;
         let parent_path = path
             .parent()
-            .ok_or_else(|| eyre!("operation directory has no parent"))?
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
             .canonicalize()?;
         let parent = File::from(rustix::fs::open(
             &parent_path,
@@ -2115,6 +2095,7 @@ mod tests {
         }
         use iroha_data_model::{
             ValidationFail,
+            block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
             isi::error::InstructionExecutionError,
             query::CommittedTransaction,
             transaction::{
@@ -2130,13 +2111,11 @@ mod tests {
             InstructionExecutionError::Conversion(marker.into()),
         ));
         let make_details = |transaction: SignedTransaction, result: TransactionResult| {
-            let output = iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
-                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
-                    input_index: 0,
-                    result,
-                    completions: Vec::new(),
-                },
-            );
+            let output = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            });
             PipelineTransactionDetailsResponse {
                 hash: transaction.hash_as_entrypoint().to_string(),
                 transaction: CommittedTransaction {
@@ -2836,6 +2815,52 @@ mod tests {
         changed = AliasTransactionPlanV1::new(changed.body);
         assert!(validate_paid_plan(&manifest, &changed).is_err());
     }
+    #[test]
+    fn journal_creates_and_reopens_relative_output_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        const CHILD_ENV: &str = "IROHA_CLI_TEST_RELATIVE_JOURNAL_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let path = Path::new("fresh-output");
+            let journal = Journal::open(path, true).expect("create relative output journal");
+            assert_eq!(journal.path, std::env::current_dir().unwrap().join(path));
+            journal
+                .install_json("intent.json", &"retained intent")
+                .unwrap();
+            drop(journal);
+
+            let reopened = Journal::open(path, false).expect("reopen relative output journal");
+            assert_eq!(
+                reopened.read_json::<String>("intent.json").unwrap(),
+                "retained intent"
+            );
+            reopened.revalidate().unwrap();
+            return;
+        }
+
+        // Run in an isolated private working directory without changing the
+        // process-global cwd used by concurrently executing tests.
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "taira_dataspace_deploy::tests::journal_creates_and_reopens_relative_output_directory",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "relative journal child failed:\n{}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(root.path().join("fresh-output/intent.json").is_file());
+    }
+
     #[test]
     fn journal_dispatch_claim_is_durable_and_exclusive() {
         let root = tempfile::tempdir().unwrap();

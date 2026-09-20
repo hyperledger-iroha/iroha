@@ -545,19 +545,19 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
-fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
+fn production_genesis_complete_tip_adopts_control_repair_and_launches() {
     run_lifecycle_fixture_on_large_stack(
-        "production_empty_genesis_complete_tip_adopts_control_repair_and_launches",
-        production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body,
+        "production_genesis_complete_tip_adopts_control_repair_and_launches",
+        production_genesis_complete_tip_adopts_control_repair_and_launches_body,
     );
 }
 
 #[cfg(feature = "bls")]
-fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body() {
+fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let (kura, state, verified, storage_authority, local_signer, retirement) =
-        super::super::v2_recovery::production_empty_genesis_complete_tip_fixture_for_test();
+        super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let context = verified.context().clone();
     let local_peer = PeerId::new(local_signer.public_key().clone());
     let local_validator = context

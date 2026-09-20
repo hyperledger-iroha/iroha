@@ -19,7 +19,6 @@ use crate::state::{
 use std::convert::Infallible;
 
 /// Exact local acquisition refusal; this never invalidates a consensus decision.
-#[derive(Debug)]
 pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparationError<E> {
     /// Complete installation capacity was refused before any physical acquisition.
     Admission(E),
@@ -57,6 +56,36 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Runtime(RuntimePublicationError<Infallible>),
     /// One of the complete World inventory's original writers refused acquisition.
     World(WorldPublicationError<Infallible>),
+}
+
+impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Admission(error) => f.debug_tuple("Admission").field(error).finish(),
+            Self::ForeignKura => f.write_str("ForeignKura"),
+            Self::Kura(error) => f.debug_tuple("Kura").field(error).finish(),
+            Self::Checkpoint(error) => f.debug_tuple("Checkpoint").field(error).finish(),
+            Self::Source(error) => f.debug_tuple("Source").field(error).finish(),
+            Self::Provider(error) => f.debug_tuple("Provider").field(error).finish(),
+            Self::Reputation(error) => f.debug_tuple("Reputation").field(error).finish(),
+            Self::ExecutionWitness(error) => {
+                f.debug_tuple("ExecutionWitness").field(error).finish()
+            }
+            Self::Archive(error) => f.debug_tuple("Archive").field(error).finish(),
+            Self::Fence { field, wait } => f
+                .debug_struct("Fence")
+                .field("field", field)
+                .field("wait", wait)
+                .finish(),
+            Self::Component { field, cause } => f
+                .debug_struct("Component")
+                .field("field", field)
+                .field("cause", cause)
+                .finish(),
+            Self::Runtime(error) => f.debug_tuple("Runtime").field(error).finish(),
+            Self::World(error) => f.debug_tuple("World").field(error).finish(),
+        }
+    }
 }
 
 /// The whole original decided execution joined to durable sources under its lease.
@@ -537,47 +566,29 @@ impl<Admission, BindingAdmission>
 impl<Admission, BindingAdmission, Installation>
     PhysicallyPreparedCarrier<'_, Admission, BindingAdmission, Installation>
 {
-    /// Private preparation seam for the future source-authorized consumer.
-    /// Merely acquiring the carrier never calls this or grants permission to do so.
-    /// Every local error releases all writers and returns the exact journals,
-    /// archive captures and partially completed raw/tiered operations together.
-    fn try_resume_geometry(
-        mut self,
-    ) -> Result<
-        Self,
-        (
-            DecisionBoundCarrierJournals<
-                Admission,
-                BindingAdmission,
-                DetachedCarrierComponents,
-                KuraWsvCheckpointReceipt,
-            >,
-            crate::state::LaneLifecycleError,
-        ),
-    > {
-        let result = match self.target.tiered_backend.try_lock_or_wait() {
-            Ok(mut backend) => {
-                let journals = &mut self.decision.journals;
-                // Explicit preparation still needs the future pre-vote resource
-                // owner. Resume itself must never create replacement descriptors.
-                journals
-                    .geometry
-                    .prepare_under(&backend, &journals.components._fences._kura)
-                    .and_then(|()| {
-                        journals
-                            .geometry
-                            .resume_under(&mut backend, &journals.components._fences._kura)
-                    })
-            }
-            Err(wait) => Err(crate::state::LaneLifecycleError::PublicationBusy {
+    /// Complete only the original nonretiring storage transition. The terminal
+    /// publisher checks exact source and lifecycle authority before calling this.
+    /// No retry state or replacement descriptor is introduced here; local refusal
+    /// is returned to that publisher, which releases all writers with the owner.
+    fn try_complete_geometry(&mut self) -> Result<bool, crate::state::LaneLifecycleError> {
+        let journals = &mut self.decision.journals;
+        if !journals.geometry.requires_storage_transition() {
+            return Ok(false);
+        }
+        let mut backend = self.target.tiered_backend.try_lock_or_wait().map_err(|wait| {
+            crate::state::LaneLifecycleError::PublicationBusy {
                 field: "tiered_backend",
                 wait,
-            }),
-        };
-        match result {
-            Ok(()) => Ok(self),
-            Err(error) => Err((self.abort(), error)),
-        }
+            }
+        })?;
+        journals.geometry.prepare_under(&backend, &journals.components._fences._kura)?;
+        let completed = journals.geometry.complete_under(
+            self.target,
+            journals.effects.header,
+            &mut backend,
+            &journals.components._fences._kura,
+        )?;
+        Ok(completed.updated_da_mapping().is_some())
     }
 
     /// Release all physical ownership and return the complete original decision.

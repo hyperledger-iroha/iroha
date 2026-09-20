@@ -123,10 +123,12 @@ locks, restart cuts, cross-lane progress and committee reconfiguration.
 The compiled native transport and the existing global candidate assembler now
 share authenticated Decision inputs, exact complete-carrier fitting and current
 State checks. Their [scoped integration evidence](../docs/history/2026-09-20/native-candidate-and-transport.md)
-does not activate the runner. Native ingress remains closed: global-roster reset
-must preserve its original accounting, the canonical prepared execution must
-survive Validate through Apply, and only actual publication may settle the
-original native Apply effect. These remain one production cutover.
+does not activate the runner. The [physical ingress owner](../docs/history/2026-09-20/native-ingress-rollover.md)
+now survives global-roster reset with its original allocation, coalescing entries
+and bounded accounting. Native ingress remains closed until its process-lived
+consumer and global rollover drain are connected, the canonical prepared execution
+survives Validate through Apply, and actual publication settles the original
+native Apply effect. These remain one production cutover.
 
 The [publication completion seam](../docs/history/2026-09-20/native-published-apply.md)
 now binds that original Apply to actual State publication, allowing different
@@ -138,9 +140,12 @@ an explicit consuming handoff preserves that custody through closure. Actual
 publication now authorizes terminal consumption of drained original owners and
 separately transferred closed bodies. Pending and fsynced local Decisions must
 authenticate the published value; held Apply still requires its real reducer
-settlement. Refusal returns the same armed owner.
-These prerequisites do not supply the live retained validator's resource policy
-or activate the Native runner.
+settlement. Refusal returns the same armed owner. Accepted opening now shares
+one immutable context across body jobs and retirement. World preparation retains
+the original wrapper/vector allocations across refusal and abort; capacity
+owners outlive retained payloads during unwind, preserving explicit poisoned
+writer recovery. These prerequisites do not supply the live retained validator's
+resource policy or activate the Native runner.
 
 ### One economic admission and lane execution pipeline
 

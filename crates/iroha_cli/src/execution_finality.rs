@@ -523,7 +523,7 @@ impl VerifySettlementArgs {
         let proofs: BlockProofs = archive(&bundle.proofs)?;
         ensure!(
             proofs.verify(&anchor),
-            "authenticated entry/result proof mismatch"
+            "authenticated input/output proof mismatch"
         );
         // The verified proof joins the exact Network output to the anchored input
         // index. Internal outputs never select a wallet transaction or its result.
@@ -693,7 +693,7 @@ mod tests {
             .enumerate()
             .map(|(index, result)| {
                 ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-                    input_index: u32::try_from(index).expect("fixture input index"),
+                    input_index: u32::try_from(index).expect("fixture input index fits u32"),
                     result: result.into(),
                     completions: Vec::new(),
                 })
@@ -702,7 +702,8 @@ mod tests {
         block
             .set_execution_outputs(
                 outputs,
-                if rejected { 1 } else { 2 },
+                // Attaching synthetic outputs commits no execution fragments.
+                0,
                 Default::default(),
                 Vec::new(),
                 Default::default(),
@@ -716,7 +717,7 @@ mod tests {
                         .expect("fixture block byte bound"),
                 },
             )
-            .expect("fixture block results align");
+            .expect("fixture block outputs align with network inputs");
         let block_proofs = block
             .network_execution_proof(&entry_hash)
             .expect("fixture block proof exists");
@@ -1235,7 +1236,7 @@ mod tests {
             args.verify_carriers(swapped)
                 .expect_err("swapped entry proof")
                 .to_string()
-                .contains("entry/result proof mismatch")
+                .contains("input/output proof mismatch")
         );
         let mut wrong_output = fixture.block_proofs.clone();
         wrong_output.output_proof = fixture.alternate_block_proofs.output_proof.clone();
@@ -1251,7 +1252,7 @@ mod tests {
             args.verify_carriers(swapped_output)
                 .expect_err("output for another network input")
                 .to_string()
-                .contains("entry/result proof mismatch")
+                .contains("input/output proof mismatch")
         );
         let mut modified = bundle(&fixture);
         modified.block.push(0);
@@ -1263,6 +1264,34 @@ mod tests {
                 .expect_err("repeated height")
                 .to_string()
                 .contains("pinned-context")
+        );
+    }
+    #[test]
+    fn authenticated_output_must_belong_to_selected_input() {
+        let fixture = make_fixture(vec![invalid_settlement().into()], true);
+        let mut mismatched_proofs = fixture.block_proofs.clone();
+        mismatched_proofs.output_proof = fixture.alternate_block_proofs.output_proof.clone();
+        let mut mismatched = bundle(&fixture);
+        mismatched.proofs =
+            norito::encode_canonical(&mismatched_proofs).expect("mismatched proofs");
+        assert!(
+            expectations(&fixture)
+                .verify_carriers(mismatched)
+                .expect_err("another input's successful output cannot replace the rejection")
+                .to_string()
+                .contains("input/output proof mismatch")
+        );
+
+        let mut args = expectations(&fixture);
+        args.expected_entry_hash = fixture.alternate_block_proofs.entry_hash.into();
+        let mut alternate = bundle(&fixture);
+        alternate.proofs =
+            norito::encode_canonical(&fixture.alternate_block_proofs).expect("alternate proofs");
+        assert!(
+            args.verify_carriers(alternate)
+                .expect_err("the selected successful input has no settlement")
+                .to_string()
+                .contains("exactly one explicit settlement")
         );
     }
     #[test]

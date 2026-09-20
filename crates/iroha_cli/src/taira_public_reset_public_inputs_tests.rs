@@ -200,6 +200,10 @@ fn execute_fixture_genesis(
     manifest: &iroha_genesis::RawGenesisTransaction,
     key: &KeyPair,
 ) -> (SignedBlock, Hash, Hash) {
+    use iroha_config::{
+        kura::InitMode,
+        parameters::{actual, defaults},
+    };
     use iroha_core::{
         block::ValidBlock,
         kura::Kura,
@@ -236,20 +240,19 @@ fn execute_fixture_genesis(
     if let Some(authority) = nexus.relay_worker.authority_account_id.as_mut() {
         *authority = reprofile(authority);
     }
-    let kura_config = iroha_config::parameters::actual::Kura {
-        init_mode: iroha_config::kura::InitMode::Strict,
-        // The staging constructor replaces this with its owned temporary directory.
+    let kura_config = actual::Kura {
+        init_mode: InitMode::Strict,
+        // The temporary constructor supplies and retains its isolated directory.
         store_dir: iroha_config::base::WithOrigin::inline(PathBuf::new()),
-        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
+        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
         debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: iroha_config::parameters::defaults::kura::FSYNC_MODE,
-        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: defaults::kura::FSYNC_MODE,
+        fsync_interval: defaults::kura::FSYNC_INTERVAL,
     };
     let kura = Kura::new_temporary_with_configured_lane_catalog(
         &kura_config,
@@ -265,13 +268,8 @@ fn execute_fixture_genesis(
         NetworkId::from_genesis_hash(provisional.0.hash()),
     )
     .unwrap();
-    let mut pipeline = iroha_config::parameters::actual::Pipeline::default();
-    pipeline.workers = 1;
-    pipeline.gas.tech_account_id = reprofile(&pipeline.gas.tech_account_id);
-    state.set_pipeline(pipeline);
-    state.set_crypto(iroha_config::parameters::actual::Crypto::default());
-    // Follow Kagami's configured fresh-start boundary: install the validated
-    // policy source before the exact signed-network geometry becomes usable.
+    // Match Kagami's configured startup: install the policy owner before any
+    // runtime projection, then bind physical storage to this exact genesis network.
     let manifests = iroha_core::governance::manifest::LaneManifestRegistry::from_config(
         &nexus.lane_catalog,
         &nexus.governance,
@@ -281,6 +279,10 @@ fn execute_fixture_genesis(
         .validate_active_coverage_for_catalog(&nexus.lane_catalog)
         .unwrap();
     state.install_lane_manifests(&std::sync::Arc::new(manifests));
+    let mut pipeline = actual::Pipeline::default();
+    pipeline.workers = 1;
+    pipeline.gas.tech_account_id = reprofile(&pipeline.gas.tech_account_id);
+    state.set_pipeline(pipeline);
     state
         .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
         .expect("bind signed genesis network and configured primary geometry");
@@ -290,6 +292,7 @@ fn execute_fixture_genesis(
     state
         .set_nexus_from_config(nexus)
         .expect("install the exact configured genesis Nexus baseline");
+    state.set_crypto(actual::Crypto::default());
     let topology =
         Topology::new(iroha_core::sumeragi::signed_genesis_voting_peers(&provisional).unwrap());
     let mut voting = None;
@@ -323,6 +326,18 @@ fn execute_fixture_genesis(
 pub(crate) fn deployment_genesis_fixture() -> (SignedBlock, KeyPair) {
     let fixture = Fixture::new();
     (fixture.block, fixture.genesis)
+}
+
+/// Reuse the exact executed genesis and independently checked native manifest binding.
+pub(crate) fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
+    let fixture = Fixture::new();
+    iroha_genesis::validate_prepared_genesis_bundle(
+        &fixture.block.encode_wire().unwrap(),
+        &fixture.manifest,
+        fixture.genesis.public_key(),
+        fixture.block.hash(),
+    )
+    .unwrap()
 }
 
 /// Execute and sign explicit active lane bindings with authority keys distinct from peer keys.

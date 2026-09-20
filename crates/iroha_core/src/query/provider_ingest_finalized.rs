@@ -1479,19 +1479,6 @@ impl PreparedProviderIngestCapture {
         self.reauthenticate_under_publication_lease(lease, receipt)?;
         self.insertion.try_persist()
     }
-
-    /// Authenticate exact durable finality and persist only the admitted bytes.
-    ///
-    /// Storage or authorization errors retain the reservation for retry; no State is recaptured
-    /// and no successor, transition, or capacity admission is repeated.
-    pub(crate) fn publish(
-        &mut self,
-        receipt: &KuraV2CommitReceipt,
-    ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
-    {
-        authenticate_capture_key(&self.insertion.plan.key, &self.kura, receipt)?;
-        self.insertion.persist()
-    }
 }
 struct PreparedProviderRecord {
     entry: ArchiveRecordEntryV1,
@@ -1516,14 +1503,6 @@ impl PreparedProviderInsertion {
     ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
     {
         let mut index = self.archive.try_write_reserved_index(&self.reservation)?;
-        self.plan.persist(&self.archive, &mut index)
-    }
-
-    fn persist(
-        &mut self,
-    ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
-    {
-        let mut index = self.archive.write_reserved_index(&self.reservation)?;
         self.plan.persist(&self.archive, &mut index)
     }
 }
@@ -2813,18 +2792,6 @@ impl ProviderIngestFinalizedArchiveV1 {
         self.capture_gate
             .ensure_unreserved()
             .map_err(|wait| ProviderIngestFinalizedArchiveErrorV1::CaptureReserved { wait })?;
-        Ok(index)
-    }
-    /// Rejoin the original logical owner without repeating semantic admission.
-    fn write_reserved_index(
-        &self,
-        reservation: &ArchiveCaptureReservation,
-    ) -> Result<ArchiveIndexWriteGuard<'_, ArchiveIndexV1>, ProviderIngestFinalizedArchiveErrorV1>
-    {
-        let index = self.index.write().map_err(Self::index_lock_error)?;
-        if !reservation.authorizes(&self.capture_gate) {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::CaptureOwnerMismatch);
-        }
         Ok(index)
     }
     /// A held Kura lease must never wait on an archive reader that needs Kura.

@@ -19,6 +19,13 @@ For a mutable-source prequalification diagnostic, check accepts repeatable
 --focus-regression HARNESS=EXACT_TEST: check and compile mandatory configuration
 and only explicitly selected harnesses, then run their exact tests. It writes
 no qualification checkpoint and cannot be selected by prepare.
+Development checks default to LLVM 18 on Linux, requiring /usr/bin/clang-18 and
+/usr/bin/ld.lld-18 before compilation; missing tools fail without fallback.
+Install clang-18 and lld-18 with the platform package manager, or explicitly select
+--native-linker system for diagnosis. macOS keeps the system Apple linker. Changing this
+selection invalidates Cargo fingerprints and can rebuild dependencies once in the
+same warm lane; repeating the selection reuses them. Authenticated preparation
+never accepts this option and retains its existing native and release environments.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Successful source refreshes retire their verified previous materialization only
@@ -67,6 +74,10 @@ from taira_cargo_cache import admit_source_fingerprints, local_package_names, so
 TARGET = "aarch64-unknown-linux-gnu"
 BINARIES = (("iroha3d_taira", "irohad"), ("iroha", "iroha_cli"),
             ("sorafs-node", "sorafs_node"), ("kagami", "iroha_kagami"))
+LINUX_NATIVE_LLVM_TOOL_PATHS = (
+    ("compiler", Path("/usr/bin/clang-18"), Path("/usr/lib/llvm-18/bin/clang")),
+    ("linker", Path("/usr/bin/ld.lld-18"), Path("/usr/lib/llvm-18/bin/lld")),
+)
 MAX_BINARY_BYTES = 4 * 1024**3
 BUILD_FREE_FLOOR_BYTES = 8 * 1024**3
 CAPTURE_HEADROOM_BYTES = 256 * 1024**2
@@ -128,6 +139,50 @@ def native_check_environment(environment: dict[str, str], inherited: dict[str, s
     if incremental == "1" and Path(native.get("RUSTC_WRAPPER", "")).name == "sccache":
         native.pop("RUSTC_WRAPPER")
     return native
+
+
+def default_development_linker() -> str:
+    """Use LLVM for Linux development checks and preserve the macOS system linker."""
+    return "llvm" if sys.platform == "linux" else "system"
+
+
+def development_linker_environment(environment: dict[str, str], preference: str) -> dict[str, str]:
+    """Apply the Linux development choice after environment sanitization."""
+    require(preference in {"system", "llvm"}, "native linker must be system or llvm")
+    if preference == "system":
+        return dict(environment)
+    require(sys.platform == "linux", "--native-linker llvm is supported only for Linux development checks")
+    require(not any(name in environment for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"))
+            and not any(name.startswith("CARGO_TARGET_") and name.endswith("_LINKER")
+                        for name in environment),
+            "development linker selection requires the sanitized native environment")
+    tools = {}
+    for role, invocation, expected in LINUX_NATIVE_LLVM_TOOL_PATHS:
+        try:
+            path = real_path(invocation.resolve(strict=True))
+        except OSError as error:
+            raise PrepareError(
+                f"--native-linker llvm requires installed LLVM 18 tools: missing {invocation}; "
+                "install clang-18 and lld-18 or select --native-linker system"
+            ) from error
+        require(path == expected, f"LLVM {role} must resolve to the fixed installed path {expected}")
+        info = stable_hash_path(path)
+        require(bool(info.mode & stat.S_IXUSR) and os.access(path, os.X_OK),
+                f"LLVM {role} is not executable: {invocation}; "
+                "install executable clang-18 and lld-18 or select --native-linker system")
+        require(invocation.resolve(strict=True) == path, f"LLVM {role} changed during inspection")
+        tools[role] = {"invocation": str(invocation), "path": str(path),
+                       "sha256": info.sha256, "size": info.size}
+    # The ld.lld basename selects ELF mode; invoking its canonical target `lld`
+    # directly would select the generic driver instead. Validate and report both.
+    flags = (f"-Clinker={tools['compiler']['path']} "
+             f"-Clink-arg=-fuse-ld={tools['linker']['invocation']}")
+    print("[taira-check] development native linker llvm: "
+          + json.dumps(tools, sort_keys=True), flush=True)
+    print("[taira-check] changing native linker selection invalidates Cargo fingerprints; "
+          "expect a one-time dependency rebuild in this existing warm lane. "
+          "Repeating the same selection reuses its cache; switching back invalidates it again.", flush=True)
+    return environment | {"RUSTFLAGS": flags}
 
 
 def recorded_preparation_environment(output: Path, target_dir: Path,
@@ -937,7 +992,8 @@ def cargo_lane(root: Path, target_dir: Path, role: str):
 
 
 def development_check(root: Path, target: Path | None, inherited: dict[str, str],
-                      *, native_check_scope: str = "basic", focused_regressions=None) -> None:
+                      *, native_check_scope: str = "basic", focused_regressions=None,
+                      native_linker: str | None = None) -> None:
     # Mutable-source diagnostics intentionally use the checkout gate. Preparation
     # never imports this module and authenticates its captured gate separately.
     import taira_release_check as gate
@@ -952,6 +1008,8 @@ def development_check(root: Path, target: Path | None, inherited: dict[str, str]
             env, _ = isolated_cargo_environment(root, root, env)
             print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
             native = native_check_environment(env, inherited)
+            native = development_linker_environment(
+                native, default_development_linker() if native_linker is None else native_linker)
             if focused_regressions is None:
                 gate.run_checks(root, environment=native, lock_fds=(lock_fd,),
                                 qualification_scope=native_check_scope)
@@ -1188,6 +1246,8 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--native-check-scope", choices=("basic", "full"), default="basic",
                              help="basic Taira deployment checks (default), or full regression qualification")
         if name == "check":
+            command.add_argument("--native-linker", choices=("system", "llvm"), default=default_development_linker(),
+                                 help="development only: LLVM 18 by default on Linux (clang-18/lld-18 required), system on macOS; explicit system selects the diagnostic fallback; changing selection rebuilds Cargo dependencies")
             command.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
                                  help="development diagnostic: check and compile configuration plus explicitly selected harnesses; not qualification")
         if name == "prepare":
@@ -1206,7 +1266,7 @@ def main() -> int:
     try:
         require(sys.platform in {"darwin", "linux"}, "Taira preparation requires macOS or Linux")
         if args.command == "check":
-            options = {"native_check_scope": args.native_check_scope}
+            options = {"native_check_scope": args.native_check_scope, "native_linker": args.native_linker}
             if args.focus_regression is not None:
                 options["focused_regressions"] = tuple(args.focus_regression)
             development_check(args.repo_root, args.target_dir, dict(os.environ), **options)

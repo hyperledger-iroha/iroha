@@ -1007,6 +1007,25 @@ impl LaneProcessOwner {
         })
     }
 
+    /// Borrow a real queued opening/body job's retained immutable context.
+    #[cfg(test)]
+    pub(crate) fn queued_context_for_test(
+        &self,
+        id: HeightContextId,
+        class: LaneWorkerClass,
+    ) -> Option<&Arc<VerifiedLaneContext>> {
+        self.entries.get(&id)?.work.values().find_map(|pending| {
+            if pending.issued.kind.class() != class {
+                return None;
+            }
+            match &pending.queued.as_ref()?.job {
+                Job::Opening(job) => Some(job.context_for_test()),
+                Job::Body(job) => Some(job.context_for_test()),
+                _ => None,
+            }
+        })
+    }
+
     /// Exhaust only this fixture instance's descriptor headroom, retaining all owners.
     #[cfg(test)]
     pub(crate) fn restrict_effect_capacity_to_retained_for_test(&mut self, id: HeightContextId) {

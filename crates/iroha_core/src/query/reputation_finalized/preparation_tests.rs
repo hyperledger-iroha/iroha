@@ -296,10 +296,14 @@ fn prepared_reputation_capture_authenticates_under_held_kura_lease_and_retains_r
     assert_eq!(archive.read_index().unwrap().total_bytes, expected_total);
     assert!(!wait.is_released());
     drop(lease);
+    let lease = kura.try_publication_lease().unwrap();
     assert_eq!(
-        capture.publish(&receipt).unwrap(),
+        capture
+            .publish_under_publication_lease(&lease, &receipt)
+            .unwrap(),
         ReputationFinalizedArchiveInsertOutcome::ExactReplay
     );
+    drop(lease);
     drop(capture);
     assert!(wait.is_released());
     assert_eq!(archive.get_exact(&expected.key).unwrap(), Some(expected));
@@ -536,7 +540,7 @@ fn prepared_reputation_capture_retries_after_policy_write_without_double_account
     let policy_bytes = bounded_bytes_len(&state.policies[0].bytes);
     fs::create_dir(&path).unwrap();
     assert!(
-        prepared.persist().is_err(),
+        prepared.try_persist().is_err(),
         "anchor obstruction occurs after the policy write"
     );
     assert!(archive.read_index().unwrap().by_height.is_empty());
@@ -547,7 +551,7 @@ fn prepared_reputation_capture_retries_after_policy_write_without_double_account
     assert_eq!(fs::read_dir(&archive.policies).unwrap().count(), 1);
     fs::remove_dir(&path).unwrap();
     assert_eq!(
-        prepared.persist().unwrap(),
+        prepared.try_persist().unwrap(),
         ReputationFinalizedArchiveInsertOutcome::Inserted
     );
     assert_eq!(fs::read(&path).unwrap(), bytes);
@@ -556,7 +560,7 @@ fn prepared_reputation_capture_retries_after_policy_write_without_double_account
     assert_eq!(archive.read_index().unwrap().anchor_count, 1);
     assert_eq!(archive.read_index().unwrap().generation, 1);
     assert_eq!(
-        prepared.persist().unwrap(),
+        prepared.try_persist().unwrap(),
         ReputationFinalizedArchiveInsertOutcome::ExactReplay
     );
     assert_eq!(archive.read_index().unwrap().total_bytes, expected_total);
@@ -637,10 +641,14 @@ fn detached_reputation_custody_rejects_another_archive_even_with_equal_projectio
         .detach(Arc::clone(&archive))
         .unwrap();
     assert!(matches!(
-        foreign.write_reserved_index(&prepared.reservation),
+        foreign.try_write_reserved_index(&prepared.reservation),
         Err(ReputationFinalizedArchiveError::CaptureOwnerMismatch)
     ));
-    assert!(archive.write_reserved_index(&prepared.reservation).is_ok());
+    assert!(
+        archive
+            .try_write_reserved_index(&prepared.reservation)
+            .is_ok()
+    );
     assert!(archive.is_empty().unwrap());
     assert!(foreign.is_empty().unwrap());
 }

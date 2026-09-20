@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::state::{
-    StateReadOnly, StateReadOnlyWithTransactions, WorldReadOnly,
+    StateReadOnlyWithTransactions, WorldReadOnly,
     lane_decision_batch::NativeExecutionCustody,
     storage_transactions::TransactionsReadOnly,
     tests::{NativePublicationFixture, native_publication_fixture},
@@ -157,7 +157,7 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
         journals.geometry.is_identity_transition(header),
         "this real fixture has no geometry transition to fabricate permission for"
     );
-    assert!(journals.effects.pending_autoscale_lifecycle.is_none());
+    assert!(!journals.geometry.has_pending_lifecycle());
     let checkpoint = journals.checkpoint;
     let decision = journals
         .bind_decision(finality, |_| {
@@ -832,6 +832,14 @@ fn assert_native_terminal_publication(
     let pool = LanePhysicalPool::new(Arc::clone(&state), Arc::clone(&guard), limits).unwrap();
     let now = Instant::now();
     process.reserve_opening(&observed, &lane, key, now).unwrap();
+    // A weak witness prevents allocator address reuse without supplying another
+    // strong owner that could hide loss of original physical context custody.
+    let original_context_custody = Arc::downgrade(
+        process
+            .queued_context_for_test(id, LaneWorkerClass::Opening)
+            .unwrap(),
+    );
+    let original_context = original_context_custody.as_ptr();
     process
         .dispatch_one(&pool, LaneWorkerClass::Opening)
         .unwrap();
@@ -842,7 +850,21 @@ fn assert_native_terminal_publication(
         process.settle_opening(id, &observed).unwrap(),
         LaneProcessProgress::OpeningAdopted
     ));
+    assert_eq!(
+        std::ptr::from_ref(process.instance(id).unwrap().context_for_test()),
+        original_context,
+        "physical opening and adoption move the original immutable context"
+    );
     process.prepare_body(id, &observed).unwrap();
+    assert_eq!(
+        Arc::as_ptr(
+            process
+                .queued_context_for_test(id, LaneWorkerClass::Body)
+                .unwrap()
+        ),
+        original_context,
+        "the actual body job shares its original instance's immutable allocation"
+    );
     let (entered, entered_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
     process
@@ -968,6 +990,11 @@ fn assert_native_terminal_publication(
     let mut closed = process.take_closed(id).unwrap();
     assert!(process.take_closed(id).is_none());
     assert_eq!(std::ptr::from_ref(closed.instance()), original_owner);
+    assert_eq!(
+        std::ptr::from_ref(closed.instance().context_for_test()),
+        original_context,
+        "publication and physical drain do not rebuild the closed instance context"
+    );
     assert_eq!(closed.instance().tag(), original_tag);
     assert_eq!(closed.instance().native_records(), original_records);
     assert_eq!(
@@ -1062,6 +1089,11 @@ fn assert_native_terminal_publication(
         assert_eq!(closed.instance().retirement_count(), 1);
         assert!(!guard.restart_required());
         let retired = closed.take_retirement().unwrap();
+        assert_eq!(
+            std::ptr::from_ref(retired.context_for_test()),
+            original_context,
+            "taking closure custody shares the context without a cleanup allocation"
+        );
         assert_eq!(retired.body_bytes(), Some(expected_body.as_slice()));
         assert_eq!(retired.instance(), id);
         let body_pointer = retired.body_bytes().unwrap().as_ptr();
@@ -1070,6 +1102,10 @@ fn assert_native_terminal_publication(
             Ok(()) => panic!("foreign publication cannot consume the taken original body"),
         };
         assert_eq!(retired.body_bytes().unwrap().as_ptr(), body_pointer);
+        assert_eq!(
+            std::ptr::from_ref(retired.context_for_test()),
+            original_context
+        );
         assert!(retired.requires_recovery());
         assert!(!guard.restart_required());
         closed
@@ -1079,10 +1115,18 @@ fn assert_native_terminal_publication(
             retired.requires_recovery(),
             "closed consumption did not disarm separately transferred custody"
         );
+        assert_eq!(
+            std::ptr::from_ref(retired.context_for_test()),
+            original_context,
+            "taken retirement retains the original context after its instance is consumed"
+        );
+        assert_eq!(retired.context_for_test().frozen(), lane.frozen());
+        assert_eq!(original_context_custody.strong_count(), 1);
         assert!(!guard.restart_required());
         retired
             .retire_published(&proof)
             .unwrap_or_else(|(_, error)| panic!("actual taken body terminal proof: {error}"));
+        assert_eq!(original_context_custody.strong_count(), 0);
         assert!(
             !guard.restart_required(),
             "authorized consuming retirement releases without false fail-stop"

@@ -405,6 +405,12 @@ pub(super) fn deployment_genesis_fixture()
     tests::deployment_genesis_fixture()
 }
 
+/// Exact executed genesis retained with its validated native manifest binding.
+#[cfg(test)]
+pub(super) fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
+    tests::deployment_validated_genesis_fixture()
+}
+
 /// Native signed genesis with explicitly registered and activated validator accounts.
 #[cfg(test)]
 pub(super) fn deployment_lane_genesis_fixture()

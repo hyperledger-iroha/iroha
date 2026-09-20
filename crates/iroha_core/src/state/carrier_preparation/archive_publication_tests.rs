@@ -27,8 +27,34 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Poll, Wake, Waker},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
+
+#[test]
+fn archive_publication_diagnostics_identify_failed_archive_and_cause() {
+    for (error, archive) in [
+        (
+            CarrierArchivePublicationError::Provider(
+                ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
+                    reason: "invalid carrier height",
+                },
+            ),
+            "Provider",
+        ),
+        (
+            CarrierArchivePublicationError::Reputation(
+                ReputationFinalizedArchiveError::InvalidKey {
+                    reason: "invalid carrier height",
+                },
+            ),
+            "Reputation",
+        ),
+    ] {
+        let diagnostic = format!("{error:?}");
+        assert!(diagnostic.contains(archive));
+        assert!(diagnostic.contains("invalid carrier height"));
+    }
+}
 
 struct Reservation {
     released: Arc<AtomicUsize>,
@@ -451,6 +477,98 @@ fn kura_busy_preserves_archive_custody_and_uses_actual_release_before_retry() {
     fixture.decision.publish_archives().unwrap();
     fixture.assert_exact_archives();
     fixture.assert_unpublished();
+}
+
+#[test]
+fn provider_index_contention_returns_release_wait_and_preserves_original_archive_retry() {
+    archive_index_contention_returns_release_wait_and_preserves_original_retry(true);
+}
+
+#[test]
+fn reputation_index_contention_returns_release_wait_and_preserves_original_archive_retry() {
+    archive_index_contention_returns_release_wait_and_preserves_original_retry(false);
+}
+
+fn archive_index_contention_returns_release_wait_and_preserves_original_retry(
+    blocked_provider: bool,
+) {
+    let mut fixture = fixture();
+    let original = OriginalCustody::capture(&fixture.decision);
+    let provider = Arc::clone(&fixture.provider);
+    let reputation = Arc::clone(&fixture.reputation);
+    let kura = Arc::clone(&fixture.state.kura);
+    let wakes = Arc::new(WakeCount::default());
+    let mut wait = std::thread::scope(|scope| {
+        let (completed, completion) = std::sync::mpsc::channel();
+        let decision = &mut fixture.decision;
+        let run_while_reader_held = || {
+            let publisher = scope.spawn(move || {
+                let _ = completed.send(decision.publish_archives());
+            });
+            // Bound a regressed blocking writer, then release the reader before
+            // joining it so a failure cannot leave a worker or Kura fence stuck.
+            let outcome = completion
+                .recv_timeout(Duration::from_secs(10))
+                .map(|outcome| {
+                    let wait = match outcome {
+                        Err(CarrierArchivePublicationError::Provider(
+                            ProviderIngestFinalizedArchiveErrorV1::IndexBusy { wait },
+                        )) if blocked_provider => wait,
+                        Err(CarrierArchivePublicationError::Reputation(
+                            ReputationFinalizedArchiveError::IndexBusy { wait },
+                        )) if !blocked_provider => wait,
+                        other => panic!(
+                            "retained archive reader must return its release wait: {other:?}"
+                        ),
+                    };
+                    // The failed publication has released every original Kura
+                    // fence, even though this exact archive reader is still held.
+                    drop(
+                        kura.try_publication_lease()
+                            .expect("all Kura fences released"),
+                    );
+                    let mut wait = wait.wait_for_release();
+                    let waker = Waker::from(Arc::clone(&wakes));
+                    assert!(
+                        Pin::new(&mut wait)
+                            .poll(&mut Context::from_waker(&waker))
+                            .is_pending()
+                    );
+                    wait
+                });
+            (publisher, outcome)
+        };
+        let (publisher, outcome) = if blocked_provider {
+            provider.with_index_reader_for_test(run_while_reader_held)
+        } else {
+            reputation.with_index_reader_for_test(run_while_reader_held)
+        };
+        publisher.join().unwrap();
+        outcome.expect("archive publication must return without waiting for the index reader")
+    });
+    let waker = Waker::from(Arc::clone(&wakes));
+    assert!(
+        Pin::new(&mut wait)
+            .poll(&mut Context::from_waker(&waker))
+            .is_ready()
+    );
+    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    original.assert_retained(&fixture.decision);
+    fixture.assert_unpublished();
+    assert_eq!(fixture.provider.is_empty().unwrap(), blocked_provider);
+    assert!(fixture.reputation.is_empty().unwrap());
+
+    fixture.decision.publish_archives().unwrap();
+    fixture.assert_exact_archives();
+    let published = tree_image(fixture.directory.path());
+    fixture.decision.publish_archives().unwrap();
+    assert_eq!(tree_image(fixture.directory.path()), published);
+    original.assert_retained(&fixture.decision);
+    fixture.assert_unpublished();
+    // Fixture reservation destructors verify that both captures release before
+    // resource admission, so drop the extra test handles before the fixture.
+    drop(provider);
+    drop(reputation);
 }
 
 #[test]

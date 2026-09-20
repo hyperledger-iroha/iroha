@@ -124,8 +124,9 @@ impl SnapshotNexusRuntime {
             ));
         }
         // This ownership projection is checked against the scoped protected World
-        // catalog before execution. It permits metadata-only readers during a
-        // publication to avoid recursively waiting on their own generation guard.
+        // catalog before execution. Internal lane-geometry readers may also use it
+        // during publication without recursively waiting on their generation guard.
+        // Complete metadata readers must use `nexus_projection_with_catalog`.
         nexus.dataspace_catalog = DataSpaceCatalog::new(
             self.owner_policy
                 .dataspaces
@@ -142,6 +143,22 @@ impl SnapshotNexusRuntime {
                 .collect(),
         )
         .map_err(runtime_catalog_invalid)?;
+        Ok(nexus)
+    }
+
+    pub(super) fn nexus_projection_with_catalog(
+        &self,
+        baseline: &iroha_config::parameters::actual::Nexus,
+        catalog: Option<&iroha_data_model::nexus::NexusRuntimeCatalogV1>,
+    ) -> Result<iroha_config::parameters::actual::Nexus, LaneLifecycleError> {
+        let mut nexus = self.nexus_projection(baseline)?;
+        nexus.dataspace_catalog =
+            runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, catalog)?;
+        if SnapshotNexusOwnerPolicy::from_nexus(&nexus) != self.owner_policy {
+            return Err(runtime_catalog_invalid(
+                "canonical runtime ownership differs from its scoped World catalog",
+            ));
+        }
         Ok(nexus)
     }
 
@@ -303,15 +320,8 @@ impl State {
         record: &SnapshotNexusRuntime,
         world: &impl WorldReadOnly,
     ) -> Result<CanonicalRuntimeProjection, LaneLifecycleError> {
-        let mut nexus = record.nexus_projection(&self.nexus.read())?;
         let catalog = runtime_catalog_from_world(world)?;
-        nexus.dataspace_catalog =
-            runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, catalog.as_ref())?;
-        if SnapshotNexusOwnerPolicy::from_nexus(&nexus) != record.owner_policy {
-            return Err(runtime_catalog_invalid(
-                "canonical runtime ownership differs from its scoped World catalog",
-            ));
-        }
+        let nexus = record.nexus_projection_with_catalog(&self.nexus.read(), catalog.as_ref())?;
         let baseline = self.lane_manifests.read().clone();
         if let Some(catalog) = &catalog
             && catalog.baseline_manifests_hash

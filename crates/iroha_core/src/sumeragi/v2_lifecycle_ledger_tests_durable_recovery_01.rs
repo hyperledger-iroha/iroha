@@ -3366,8 +3366,18 @@ fn complete_tip_post_settlement_reauthentication_refreezes_exact_successor() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)]
 fn complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness() {
+    let result = crate::sumeragi::sumeragi_thread_builder("complete-tip-nonempty-owner-open")
+        .spawn(complete_tip_nonempty_successor_owner_open_fixture)
+        .expect("spawn nonempty owner-open recovery with the Sumeragi stack budget")
+        .join();
+    if let Err(payload) = result {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn complete_tip_nonempty_successor_owner_open_fixture() {
     let fixture = RecoveryFixture::new("complete-tip-nonempty-owner-open", 0x52);
     let (predecessor, projection) = terminal_decision_chain_fixture(&fixture);
     let verified_successor = complete_tip_successor_fixture(&fixture, &projection);

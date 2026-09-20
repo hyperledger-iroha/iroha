@@ -315,8 +315,7 @@ The typed `VerificationRequestV1` carries the original catalog/overlay
 baseline, expected additions and grant, paid alias intent, each retained wire
 SHA256/instruction vector/alias plan, pipeline observations, and committed
 transaction DTO. It appears in the `verification` field of `apply` and `status`
-output; `verification_request` is an internal Rust entry point, not a CLI
-subcommand. The integrated native completion layer verifies independently anchored
+output. The integrated native completion layer verifies independently anchored
 finality, the exact native `ExecutionCommitment` and canonical inclusion,
 and all four validators' final state against the independently selected trust
 profile. Neither a single peer observation nor a caller-supplied commitment is

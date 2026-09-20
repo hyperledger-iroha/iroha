@@ -215,7 +215,7 @@ pub(super) struct BodyCustody {
 pub(crate) struct LaneBodyJob {
     identity: Arc<()>,
     purpose: Purpose,
-    lane: VerifiedLaneContext,
+    lane: Arc<VerifiedLaneContext>,
     source: Option<VerifiedFirstLaneAdmittedInputV1>,
     target: Option<LaneValueRefV1>,
     manifest: Option<LaneManifestV1>,
@@ -271,6 +271,12 @@ impl Drop for LaneBodyCompletion {
 }
 
 impl LaneBodyJob {
+    /// Borrow the same immutable context allocation as the original instance.
+    #[cfg(test)]
+    pub(super) fn context_for_test(&self) -> &Arc<VerifiedLaneContext> {
+        &self.lane
+    }
+
     /// Run on an existing bounded worker, with no caller-held State/MV lease.
     /// Every ordinary result returns the physical store, including errors/waits.
     pub(crate) fn run(mut self, state: &State) -> LaneBodyCompletion {
@@ -744,7 +750,7 @@ impl LaneInstance {
         Ok(LaneBodyLaunch::Job(LaneBodyJob {
             identity,
             purpose,
-            lane: self.verified.clone(),
+            lane: Arc::clone(&self.verified),
             source: self.body.source.clone(),
             target,
             manifest,

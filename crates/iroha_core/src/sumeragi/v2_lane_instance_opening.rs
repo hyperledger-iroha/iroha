@@ -36,7 +36,9 @@ struct IssuedOpening {
 
 struct OpeningResources {
     state_owner: crate::state::NativeLaneStateOwner,
-    verified: VerifiedLaneContext,
+    // One immutable allocation follows this accepted opening into its instance;
+    // body jobs and retirement tokens borrow it through shared ownership.
+    verified: Arc<VerifiedLaneContext>,
     key: KeyPair,
     now: Instant,
     base_timeout: Duration,
@@ -220,6 +222,16 @@ impl LaneOpeningDrain {
     }
 }
 impl LaneOpeningJob {
+    /// Borrow the original accepted context before physical opening/adoption.
+    #[cfg(test)]
+    pub(super) fn context_for_test(&self) -> &Arc<VerifiedLaneContext> {
+        &self
+            .resources
+            .as_ref()
+            .expect("queued opening resources")
+            .verified
+    }
+
     /// Hold the real worker after WAL open but before body open/authenticated replay.
     #[cfg(test)]
     pub(crate) fn after_wal_open_for_test(mut self, hook: impl FnOnce() + Send + 'static) -> Self {
@@ -502,7 +514,7 @@ impl LaneInstance {
             issued,
             resources: Some(OpeningResources {
                 state_owner,
-                verified: verified.clone(),
+                verified: Arc::new(verified.clone()),
                 key,
                 now,
                 base_timeout,

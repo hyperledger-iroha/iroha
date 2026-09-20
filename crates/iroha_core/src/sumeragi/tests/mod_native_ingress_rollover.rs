@@ -59,13 +59,32 @@ fn native_rollover_gate(
 fn native_ingress_rollover_preserves_original_physical_owner_through_both_cuts() {
     let (_handle, ingress, _relay) = test_sumeragi_handle_with_source_geometry(40, Some(2));
     let validators = validator_peers(4);
-    let proposal = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 4);
-    let BlockMessage::V2(envelope) = &proposal else {
+    let mut proposal = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 4);
+    let BlockMessage::V2(envelope) = &mut proposal else {
         unreachable!()
     };
-    let wire::ConsensusMessageV2Payload::Proposal(value) = &envelope.payload else {
+    let wire::ConsensusMessageV2Payload::Proposal(value) = &mut envelope.payload else {
         unreachable!()
     };
+    // This fixture otherwise uses the maximum wire-size height. Rollover needs
+    // a reachable successor, with every embedded round at the same height.
+    let height = 41;
+    value.round.height = height;
+    value.manifest.round.height = height;
+    let wire::ProposalJustification::Timeout(justification) = &mut value.justification else {
+        unreachable!()
+    };
+    justification.timeout_certificate.round.height = height;
+    for certificate in justification
+        .timeout_certificate
+        .groups
+        .iter_mut()
+        .filter_map(|group| group.highest_prepare_qc.as_mut())
+        .chain(justification.highest_prepare_qc.as_mut())
+    {
+        certificate.round.height = height;
+        certificate.proposal_round.height = height;
+    }
     let round = value.round;
     let _first_directory = native_rollover_gate(&ingress, &validators, round);
     let [native, _] = native_wire_classification_fixtures();

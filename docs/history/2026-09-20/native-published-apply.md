@@ -199,3 +199,82 @@ on 11,589 unchanged inputs. Formatting, codec and archive checks passed. The
 aggregate `validation92.json` binds those results; the 11 terminal source-mutation
 checks retain their preceding91 scope. This completes the tested in-memory
 terminal consumer, not production resource admission or Native activation.
+
+## Original context and rollback allocation custody
+
+Accepted Native opening now creates one immutable shared context. The instance,
+actual body jobs and transferred retirement owners retain that same allocation.
+Handoff no longer deep-copies its frozen committee, policy and reducer context.
+The original State and publication authentication remain unchanged. The existing
+five terminal-publication cases check the original context through real workers,
+closed-owner consumption and separately retained retirement.
+
+World publication now retains the original 278 field-wrapper boxes and original
+field-vector allocation across preparation. Each transient prepared wrapper owns
+the emptied original box and the actual prepared journal. Refusal or abort moves
+that journal back into the same box. The original vector remains available with
+its existing capacity, so restoring the failed field, prepared prefix and untouched
+suffix requires no replacement wrapper or vector allocation. Inventory order and
+the original journals are preserved. Existing tests now check every wrapper
+address, vector address and capacity across all 278 held-field refusals, full
+abort, admission refusal and a late changed predecessor, alongside the original
+writer-release and current/undo assertions.
+
+Review also found a panic-unwind ownership defect: destructured capture admission
+could drop before remaining original fields or the restored retry vector. Both
+capacity owners now occupy earlier-declared local slots, outliving all payload
+locals during preparation, abort and publication. A regression uses all 278 real
+captured World fields and injects a panic after an actual prepared field or after
+an actual abort restored its original journal. Nonpanicking Drop witnesses
+check that both refunds follow destruction of the retained payload; exact
+poison/release classification and unchanged current/undo images remain required.
+This does not claim that partially published State can be rolled back after an
+arbitrary publisher panic.
+
+These changes close specific handoff allocation and unwind-accounting gaps. They
+do not fund State acquisition, nested execution payloads, initial journal capture
+or installation. The live validator still requires complete pre-execution
+resource admission and the original retained Validate-to-Apply owner; Native
+activation remains closed.
+
+Build95 failed in 76.80 seconds with unchanged inputs. Five existing journal tests
+still accessed the stored journal directly after its private representation
+became an Option. All five accesses now borrow the populated journal explicitly;
+no assertion was removed. The preflight canonical structural check passed with
+zero diagnostics, but no epoch95 runtime executable was run. This failed build does not qualify the corrected source. Its later results
+belong to their own captured build and executable.
+
+Build96 passed the seven-package combined build in 237.05 seconds on unchanged
+inputs. Its 80-test publication/ownership selection passed 79, including all five
+Native context/terminal cases and all 278 original-wrapper refusal positions.
+The new unwind case passed its preparation-phase refund-order assertions but
+failed its existing blocking writer probe: actual panic unwinding correctly
+poisons MV writers, and that probe assumed ordinary unpoisoned acquisition. Its
+corrected probe captures the same original cut before the panic, then checks
+every actual field nonblockingly. Unwound fields must report `Poisoned`
+while normally released or untouched fields must prepare and abort; `Busy` and
+`Changed` fail. It neither clears poison nor changes production recovery policy.
+All failed receipts remain preserved.
+The 11 enclosing terminal source controls and original pending-membership ledger
+test passed on their separately captured inputs; neither supplies a passing epoch96
+unwind or complete runtime qualification.
+
+Build97 passed the seven-package combined build in 93.27 seconds on unchanged
+inputs, and all 80 publication/ownership tests passed on its immutable captured
+Core executable. This includes the actual-journal unwind regression with exact
+poison classification, every original World wrapper/vector refusal position and
+the five Native context/terminal cases. Fresh source captures also passed all
+11 enclosing terminal publisher controls and the original pending-membership
+ledger test. These source controls cover their bound publisher and ledger
+contracts; the new allocation-identity and unwind claims rely on the Rust
+regressions, not on a new formal proof.
+
+The same unchanged executable additionally passed all 32 original review
+regressions, giving 112 distinct Rust tests. These include the complete-input
+sealed forms, exact two-MiB carrier framing, one-copy 160-KiB certified gossip,
+and restart after the actual synced repair temporary, with rejection of foreign,
+tampered and unowned temporaries. Epoch97 receipts under
+`dist/sumeragi-main-work/` retain build/runtime hashes and the separately captured
+structural, ledger and guard results. Full workspace and unchanged real
+four/seven-validator qualification remain open, as do production resource
+admission, retained Validate-to-Apply execution and the atomic Native cutover.

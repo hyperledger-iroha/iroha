@@ -355,8 +355,8 @@ PREPARATION_OWNER_BINDINGS = (
     )),
     (PREPARED, "method", "PreparedCarrier::prepare", ("execution_prefix::prepare(input)",)),
     (PREFIX, "struct", "ValidatedExecutionPrefix", (
-        "sealed: output_capacity::SealedExecutionOutputs", "inventory: Arc<FastpqSourceInventoryV1>",
-        "witness: ExecWitness", "fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
+        "sealed: output_capacity::SealedExecutionOutputs", "_inventory: Arc<FastpqSourceInventoryV1>",
+        "witness: ExecWitness", "_fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
         "parliament_timed_ovn_casting_bindings:",
     )),
     (PREFIX, "struct", "PrefixPreparation", (
@@ -508,8 +508,9 @@ PREPARATION_OWNER_BINDINGS = (
         "owner.publish_pending_index()?",
     )),
 )
-# Private terminal publication is qualified only for identity geometry and
-# no outstanding participant artifacts. Production Validate/Apply stays closed.
+# Private terminal publication consumes original nonretiring geometry and
+# lifecycle owners. Queue retirement and participant artifacts remain closed;
+# this does not activate production Validate/Apply or fund pre-vote resources.
 PHYSICAL_CARRIER = "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs"
 TERMINAL_CARRIER = "crates/iroha_core/src/state/carrier_preparation/publication.rs"
 ARCHIVE_CARRIER = "crates/iroha_core/src/state/carrier_preparation/archive_publication.rs"
@@ -548,7 +549,8 @@ TERMINAL_OWNER_BINDINGS = (
         "&mut self", "try_publication_lease()", "&self.checkpoint", "self.finality.artifact()",
         "self.journals.checkpoint", "drop(lease)", "self.checkpoint.finality_receipt()",
         "self.journals.provider_capture.as_mut()", "self.journals.reputation_capture.as_mut()",
-        "provider\n                .publish(receipt)", "reputation\n                .publish(receipt)",
+        "provider\n                .publish_under_publication_lease(&lease, receipt)",
+        "reputation\n                .publish_under_publication_lease(&lease, receipt)",
     )),
     (PHYSICAL_CARRIER, "method", "SourceAuthenticatedCarrier::try_new", (
         "let owner = Self { decision, kura };", "let original = &owner.decision;",
@@ -577,25 +579,86 @@ TERMINAL_OWNER_BINDINGS = (
         "self._predecessor.owner_policy == self._successor.owner_policy",
         "self._predecessor.autoscale_last_transition_height\n                == self._successor.autoscale_last_transition_height",
     )),
+    (GEOMETRY_CARRIER, "struct", "PreparedCarrierGeometry", (
+        "_pending: Option<PendingAutoscaleLaneLifecycle>",
+        "raw: Option<crate::kura::RawGeometryAttempt>",
+        "tiered: Option<tiered::TieredGeometryAttempt>",
+        "state_owner: Arc<BlockHashOwner>", "kura: Arc<Kura>",
+    )),
+    (GEOMETRY_CARRIER, "method", "StateBlock::prepare_carrier_geometry", (
+        "self.validate_canonical_runtime_projection()", "self.canonical_runtime.get_before_block()",
+        "self.canonical_runtime.get()", "_header: self._curr_block",
+        "_pending: self.pending_autoscale_lifecycle.clone()", "raw: None", "tiered: None",
+        "state_owner: Arc::clone(&self.state_ref.block_hashes.owner)",
+        "kura: Arc::clone(&self.state_ref.kura)",
+    )),
+    (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::matches_publication_target", (
+        "self._header == header && Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)",
+    )),
+    (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::has_pending_lifecycle", (
+        "self._pending.is_some()",
+    )),
+    (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::requires_storage_transition", (
+        "self._pending", ".as_ref()", ".is_some_and(|pending| pending.transition.requires_geometry())",
+    )),
+    (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::requires_queue_custody", (
+        "self._pending.as_ref().is_some_and(|pending|",
+        "!pending.plan.retire.is_empty() || !pending.catalog_update.replaced_lane_ids.is_empty()",
+    )),
+    (GEOMETRY_CARRIER, "method", "PreparedCarrierGeometry::complete_under", (
+        "target: &State", "header: BlockHeader",
+        "lease: &'geometry crate::kura::KuraPublicationLease<'kura>",
+        "if !self.matches_publication_target(target, header)", "if self.requires_queue_custody()",
+        "return Err(LaneLifecycleError::Storage(", "self.resume_under(backend, lease)?;",
+        "if let Some(raw) = &mut self.raw", "raw.phase() != crate::kura::RawGeometryPhase::CatalogPublished",
+        "raw.publish_catalog_under(lease, None)", "raw.reauthenticate_catalog_under(lease)",
+        "Ok(CompletedCarrierGeometry {\n            geometry: self,\n            _lease: lease,\n        })",
+    )),
+    (GEOMETRY_CARRIER, "struct", "CompletedCarrierGeometry", (
+        "geometry: &'geometry PreparedCarrierGeometry",
+        "_lease: &'geometry crate::kura::KuraPublicationLease<'kura>",
+    )),
+    (GEOMETRY_CARRIER, "method", "CompletedCarrierGeometry::updated_da_mapping", (
+        "self.geometry", "._pending", ".as_ref()",
+        ".filter(|pending| pending.transition.requires_geometry())",
+        ".map(|pending| &pending.catalog_update.updated_lane_config)",
+    )),
+    (PHYSICAL_CARRIER, "method", "PhysicallyPreparedCarrier::try_complete_geometry", (
+        "let journals = &mut self.decision.journals;",
+        "if !journals.geometry.requires_storage_transition() {\n            return Ok(false);\n        }",
+        "self.target.tiered_backend.try_lock_or_wait()",
+        "crate::state::LaneLifecycleError::PublicationBusy", "wait,",
+        "journals.geometry.prepare_under(&backend, &journals.components._fences._kura)?;",
+        "journals.geometry.complete_under(\n            self.target,\n            journals.effects.header,\n            &mut backend,\n            &journals.components._fences._kura,\n        )?",
+        "Ok(completed.updated_da_mapping().is_some())",
+    )),
     (PHYSICAL_CARRIER, "method", "CarrierFences::release_for_completion", (
         "drop(write)", "drop(lifecycle)", "drop(kura)", "commit",
     )),
     (TERMINAL_CARRIER, "method", "PhysicallyPreparedCarrier::publish", (
         "journals.effects.replay_prevalidation", "journals\n            .source_prefix\n            .retains_carrier(journals.valid.as_ref(), &journals.context)",
         "journals.effects.header != journals.valid.as_ref().header()", "journals.staged_legacy_source()",
-        "journals\n            .geometry\n            .is_identity_transition(journals.effects.header)",
-        "journals.effects.pending_autoscale_lifecycle.is_some()", "journals.native_amx_manifest.entries().is_empty()",
-        "return Err((self.abort(), error))", "target.begin_state_view_write()",
+        "journals\n            .geometry\n            .matches_publication_target(self.target, journals.effects.header)",
+        "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()",
+        "journals.geometry.requires_queue_custody()", "Some(CarrierPublicationError::QueueRetirementRequired)",
+        "journals.native_amx_manifest.entries().is_empty()", "return Err((self.abort(), error))",
+        "let update_da_mapping = match self.try_complete_geometry()",
+        "return Err((self.abort(), CarrierPublicationError::GeometryStorage(error)))",
+        "target.begin_state_view_write()",
         "transactions.publish()", "runtime.publish()", "world.publish()", "world_effects.publish(target)",
-        "effects.publish(target, &generation, true)",
+        "if update_da_mapping", "target.da_shard_cursors.write().sync_mapping(&effects.nexus.lane_config)",
+        "let lifecycle_post_publication = effects\n            .lifecycle\n            .take()\n            .map(|effects| effects.publish(target, &generation, true))",
+        "let da_post_publication = effects\n            .da_commitments\n            .take()\n            .map(|effects| effects.publish(target, &generation, true))",
         "target.install_sccp_registry_cache(std::sync::Arc::clone(&effects.sccp_registry))",
         "block_hashes.publish()", "target.update_latest_block_header_cache(effects.header)",
-        "drop(generation)", "fences.release_for_completion()", "effects.publish_observability(target)",
+        "drop(generation)", "if let Some(post) = da_post_publication {\n            post.publish(target);\n        }",
+        "if let Some(post) = lifecycle_post_publication {\n            post.publish(target);\n        }",
+        "fences.release_for_completion()", "effects.publish_observability(target)",
         "target.hydrate_verified_lane_relay_records(effects.verified_lane_relay_records)",
         "tiered_snapshot.publish(target, false)", "target.enforce_nexus_storage_budget(height)",
         "target.persist_query_index_status(height, Some(effects.header.hash()))",
         "publication_events.append(&mut extra_events)", "drop(commit)", "Ok(PublishedCarrier {",
-        "source: source_prefix", "admission,\n            binding,\n            installation",
+        "source: source_prefix", "_admission: admission,\n            _binding: binding,\n            _installation: installation",
     )),
 )
 PREPARATION_OWNER_BINDINGS += TERMINAL_OWNER_BINDINGS
@@ -606,7 +669,7 @@ GEOMETRY_OWNER = "crates/iroha_core/src/kura/lane_geometry.rs"
 RAW_GEOMETRY = "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs"
 # These existing Queue/Kura owners remain distinct from State publication
 # permission. Binding their actual guard transfer does not authorize an arbitrary
-# Queue, nor open the terminal publisher's nonidentity-geometry refusal.
+# Queue, nor open the terminal publisher's retirement/replacement refusal.
 QUEUE_GEOMETRY_OWNER_BINDINGS = (
     (QUEUE_OWNER, "struct", "Queue", (
         "lane_reservation_transition_lock: PublicationMutex,",
@@ -1038,11 +1101,20 @@ def validate_native_preparation_contract(
             "decode_kagemusha_finality_sidecar(&path)", "Kura::validate_kagemusha_finality_sidecar(&sidecar, finality)",
             "regular_sidecar_metadata(&path, &directory)", "Kura::stable_sidecar_metadata_unchanged(&read.metadata, current)", "Ok(())")
     ordered("publish_archives",
-            "try_publication_lease()", "reauthenticate_checkpoint(", "drop(lease)",
-            "provider.publish(receipt)", "reputation.publish(receipt)")
+            "try_publication_lease()", "reauthenticate_checkpoint(",
+            "provider.publish_under_publication_lease(&lease, receipt)",
+            "reputation.publish_under_publication_lease(&lease, receipt)", "drop(lease)")
+    archive_publication = items.get("publish_archives", "")
+    if archive_publication and archive_publication.count(_code("drop(lease)")) != 1:
+        errors.append("Native preparation publish_archives loses its single final lease-release executable relation")
     ordered("SourceAuthenticatedCarrier::try_new", "owner.kura.reauthenticate_checkpoint(",
             "original.journals.source_prefix.authenticate_durable_carrier(",
-            "original.journals.provider_capture.as_ref()", "original.journals.reputation_capture.as_ref()")
+            "original.journals.provider_capture.as_ref()",
+            "capture.reauthenticate_under_publication_lease(&owner.kura, original.checkpoint.finality_receipt(),)",
+            ".map_err(CarrierPhysicalPreparationError::Provider)?;",
+            "original.journals.reputation_capture.as_ref()",
+            "capture.reauthenticate_under_publication_lease(&owner.kura, original.checkpoint.finality_receipt(),)",
+            ".map_err(CarrierPhysicalPreparationError::Reputation)?;")
     ordered("try_prepare_physical",
             "admit(&original, target)", "target.matches_kura_instance(&original.journals.kura)",
             "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)",
@@ -1050,16 +1122,47 @@ def validate_native_preparation_contract(
             "SourceAuthenticatedCarrier::try_new(original, kura)",
             "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
             "StateFences::try_acquire(target)", "journals.try_map_components(")
+    ordered("PreparedCarrierGeometry::complete_under",
+            "if !self.matches_publication_target(target, header)", "return Err(LaneLifecycleError::Storage(",
+            "if self.requires_queue_custody()", "return Err(LaneLifecycleError::Storage(",
+            "self.resume_under(backend, lease)?;", "raw.publish_catalog_under(lease, None)",
+            "raw.reauthenticate_catalog_under(lease)", "Ok(CompletedCarrierGeometry {")
+    ordered("PhysicallyPreparedCarrier::try_complete_geometry",
+            "if !journals.geometry.requires_storage_transition()", "return Ok(false);",
+            "self.target.tiered_backend.try_lock_or_wait()",
+            "journals.geometry.prepare_under(&backend, &journals.components._fences._kura)?;",
+            "journals.geometry.complete_under(self.target, journals.effects.header, &mut backend, &journals.components._fences._kura,)?",
+            "Ok(completed.updated_da_mapping().is_some())")
+    for symbol in ("PreparedCarrierGeometry::complete_under", "PhysicallyPreparedCarrier::try_complete_geometry"):
+        item = items.get(symbol, "")
+        for forbidden in (".try_publication_lease(", ".lock(", ".await", "begin_raw_geometry_attempt(",
+                          "resume_lane_geometry_publication(", "finish_lane_geometry_publication("):
+            if _code(forbidden) in item:
+                errors.append(f"Native preparation geometry completion {symbol} reacquires or reconstructs ownership: {forbidden}")
     ordered("PhysicallyPreparedCarrier::publish",
-            "return Err((self.abort(), error))", "target.begin_state_view_write()",
-            "transactions.publish()", "runtime.publish()", "world.publish()", "world_effects.publish(target)",
+            "journals.effects.replay_prevalidation",
+            "journals.geometry.matches_publication_target(self.target, journals.effects.header)",
+            "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()",
+            "journals.geometry.requires_queue_custody()", "Some(CarrierPublicationError::QueueRetirementRequired)",
+            "journals.native_amx_manifest.entries().is_empty()", "return Err((self.abort(), error))",
+            "let update_da_mapping = match self.try_complete_geometry()",
+            "return Err((self.abort(), CarrierPublicationError::GeometryStorage(error)))",
+            "target.begin_state_view_write()", "transactions.publish()", "runtime.publish()",
+            "if update_da_mapping { target.da_shard_cursors.write().sync_mapping(&effects.nexus.lane_config); }",
+            "let lifecycle_post_publication = effects.lifecycle.take().map(|effects| effects.publish(target, &generation, true));",
+            "world.publish()", "world_effects.publish(target)",
+            "let da_post_publication = effects.da_commitments.take().map(|effects| effects.publish(target, &generation, true));",
             "block_hashes.publish()", "target.update_latest_block_header_cache(effects.header)",
-            "drop(generation)", "fences.release_for_completion()", "effects.publish_observability(target)",
+            "drop(generation)", "if let Some(post) = da_post_publication { post.publish(target); }",
+            "if let Some(post) = lifecycle_post_publication { post.publish(target); }",
+            "fences.release_for_completion()", "effects.publish_observability(target)",
             "tiered_snapshot.publish(target, false)", "drop(commit)", "Ok(PublishedCarrier {")
     terminal = items.get("PhysicallyPreparedCarrier::publish", "")
     if terminal:
         for operation in ("target.begin_state_view_write()", "transactions.publish()", "runtime.publish()",
-                          "world.publish()", "block_hashes.publish()", "drop(generation)"):
+                          "world.publish()", "block_hashes.publish()", "drop(generation)",
+                          "self.try_complete_geometry()", "effects.lifecycle.take()",
+                          "effects.da_commitments.take()", "sync_mapping(&effects.nexus.lane_config)"):
             if terminal.count(_code(operation)) != 1:
                 errors.append(f"Native preparation terminal lifecycle repeats or omits {operation}")
         visible_tail = terminal.split(_code("transactions.publish()"), 1)[-1]
@@ -1212,7 +1315,7 @@ def validate_native_preparation_contract(
             "let commitment = exec::execution_commitment_from_validated_block(witness, &manifest, &lanes, block).map_err(str::to_owned)?;",
             "let inventory = state.fastpq_source_inventory.take().ok_or(",
             "let witness = state.exec_witness.take().ok_or(",
-            "let prefix = ValidatedExecutionPrefix { sealed, authority, inventory, witness, fastpq_witness_context: state.fastpq_witness_context.take(), parliament_timed_ovn_casting_bindings: state.parliament_timed_ovn_casting_bindings.take(), };")
+            "let prefix = ValidatedExecutionPrefix { sealed, authority, _inventory: inventory, witness, _fastpq_witness_context: state.fastpq_witness_context.take(), parliament_timed_ovn_casting_bindings: state.parliament_timed_ovn_casting_bindings.take(), };")
     ordered("PrefixPreparation::capture", "let authority = match native",
             "state.verify_execution_output_seal(block)?;",
             "state.verify_cached_ordinary_witness_content(&verified_inventory)?;",

@@ -162,26 +162,35 @@ impl Future for ReleaseFuture {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let this = self.get_mut();
+        // Raw waker callbacks may reenter this notification. Clone before any
+        // internal lock, and retain replaced wakers until both locks are gone.
+        let replacement = cx.waker().clone();
         let mut state = this
             .observation
             .state
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         if state.sequence != this.observation.sequence || state.sequence == u64::MAX {
+            drop(state);
             this.registration = None;
             return Poll::Ready(());
         }
-        if let Some(registration) = &this.registration {
+        let retired = if let Some(registration) = &this.registration {
             let mut waker = registration.lock().unwrap_or_else(|p| p.into_inner());
             if waker.as_ref().is_none_or(|old| !old.will_wake(cx.waker())) {
-                *waker = Some(cx.waker().clone());
+                waker.replace(replacement)
+            } else {
+                Some(replacement)
             }
         } else {
-            let registration = Arc::new(Mutex::new(Some(cx.waker().clone())));
+            let registration = Arc::new(Mutex::new(Some(replacement)));
             state.waiters.retain(|waiter| waiter.strong_count() != 0);
             state.waiters.push(Arc::downgrade(&registration));
             this.registration = Some(registration);
-        }
+            None
+        };
+        drop(state);
+        drop(retired);
         Poll::Pending
     }
 }

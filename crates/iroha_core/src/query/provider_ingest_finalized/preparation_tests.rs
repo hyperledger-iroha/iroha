@@ -368,10 +368,14 @@ fn prepared_provider_capture_authenticates_under_held_kura_lease_and_retains_ret
     assert_eq!(archive.read_index().unwrap().generation, 1);
     assert!(!wait.is_released());
     drop(lease);
+    let lease = kura.try_publication_lease().unwrap();
     assert_eq!(
-        capture.publish(&receipt).unwrap(),
+        capture
+            .publish_under_publication_lease(&lease, &receipt)
+            .unwrap(),
         ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
     );
+    drop(lease);
     drop(capture);
     assert!(wait.is_released());
     assert_eq!(
@@ -625,21 +629,21 @@ fn prepared_provider_capture_retries_exact_bytes_and_publishes_once() {
     let expected_total = record.total_bytes;
     fs::create_dir(&path).unwrap();
     assert!(
-        prepared.persist().is_err(),
+        prepared.try_persist().is_err(),
         "an obstructed immutable path is a storage failure"
     );
     assert!(archive.read_index().unwrap().by_height.is_empty());
     assert_eq!(archive.read_index().unwrap().total_bytes, 0);
     fs::remove_dir(&path).unwrap();
     assert_eq!(
-        prepared.persist().unwrap(),
+        prepared.try_persist().unwrap(),
         ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
     );
     assert_eq!(fs::read(&path).unwrap(), bytes);
     assert_eq!(archive.read_index().unwrap().total_bytes, expected_total);
     assert_eq!(archive.read_index().unwrap().generation, 1);
     assert_eq!(
-        prepared.persist().unwrap(),
+        prepared.try_persist().unwrap(),
         ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay
     );
     assert_eq!(archive.read_index().unwrap().total_bytes, expected_total);
@@ -673,7 +677,7 @@ fn prepared_provider_owner_moves_to_worker_and_retains_original_archive() {
     std::thread::spawn(move || {
         let mut prepared = prepared;
         assert_eq!(
-            prepared.persist().unwrap(),
+            prepared.try_persist().unwrap(),
             ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
         );
     })
@@ -729,7 +733,7 @@ fn provider_capture_defers_real_insert_and_retention_without_blocking_readers() 
         .unwrap();
     assert!(archive.index.try_write().is_ok());
     assert_eq!(
-        capture.persist().unwrap(),
+        capture.try_persist().unwrap(),
         ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
     );
     assert_eq!(
@@ -766,14 +770,14 @@ fn provider_capture_rejects_foreign_owner_and_directory_substitution_before_publ
             .unwrap();
     let mut prepared = archive.prepare_insert(projection(7)).unwrap();
     assert!(matches!(
-        foreign.write_reserved_index(&prepared.reservation),
+        foreign.try_write_reserved_index(&prepared.reservation),
         Err(ProviderIngestFinalizedArchiveErrorV1::CaptureOwnerMismatch)
     ));
     assert!(foreign.read_index().unwrap().by_height.is_empty());
     let original_records = archive.root.join("retained-records");
     fs::rename(&archive.records, &original_records).unwrap();
     fs::create_dir(&archive.records).unwrap();
-    assert!(prepared.persist().is_err());
+    assert!(prepared.try_persist().is_err());
     assert!(archive.read_index().unwrap().by_height.is_empty());
     assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 0);
     assert_eq!(fs::read_dir(&original_records).unwrap().count(), 0);
@@ -781,7 +785,7 @@ fn provider_capture_rejects_foreign_owner_and_directory_substitution_before_publ
     fs::remove_dir(&archive.records).unwrap();
     fs::rename(&original_records, &archive.records).unwrap();
     assert_eq!(
-        prepared.persist().unwrap(),
+        prepared.try_persist().unwrap(),
         ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
     );
 }

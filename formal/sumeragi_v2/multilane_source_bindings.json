@@ -9185,7 +9185,7 @@
         {
           "path": "crates/iroha_core/src/sumeragi/mod.rs",
           "kind": "method",
-          "symbol": "FairV2Ingress::try_push_at",
+          "symbol": "FairV2Ingress::try_push_owned_at",
           "required_tokens": [
             "LaneHistoricalRecoveryResponse",
             "LaneHistoricalRecoveryPayloadV1::CanonicalBlock",
@@ -11429,9 +11429,9 @@
           "symbol": "ValidatedExecutionPrefix",
           "required_tokens": [
             "sealed: output_capacity::SealedExecutionOutputs",
-            "inventory: Arc<FastpqSourceInventoryV1>",
+            "_inventory: Arc<FastpqSourceInventoryV1>",
             "witness: ExecWitness",
-            "fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
+            "_fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>",
             "parliament_timed_ovn_casting_bindings:"
           ]
         },
@@ -12385,8 +12385,8 @@
             "self.checkpoint.finality_receipt()",
             "self.journals.provider_capture.as_mut()",
             "self.journals.reputation_capture.as_mut()",
-            "provider\n                .publish(receipt)",
-            "reputation\n                .publish(receipt)"
+            "provider\n                .publish_under_publication_lease(&lease, receipt)",
+            "reputation\n                .publish_under_publication_lease(&lease, receipt)"
           ]
         },
         {
@@ -12467,7 +12467,7 @@
             "drop(commit)",
             "Ok(PublishedCarrier {",
             "source: source_prefix",
-            "admission,\n            binding,\n            installation"
+            "_admission: admission,\n            _binding: binding,\n            _installation: installation"
           ]
         },
         {

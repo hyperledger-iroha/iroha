@@ -97,7 +97,7 @@ pub(crate) struct LaneRetiredEffect {
 #[must_use]
 pub(crate) struct LaneRetirement {
     state_owner: crate::state::NativeLaneStateOwner,
-    verified: VerifiedLaneContext,
+    verified: Arc<VerifiedLaneContext>,
     kind: RetirementKind,
 }
 
@@ -113,6 +113,12 @@ struct PublishedTerminalRetirement<'proof, 'published> {
 }
 
 impl LaneRetirement {
+    /// Borrow the immutable context allocation retained from accepted opening.
+    #[cfg(test)]
+    pub(crate) fn context_for_test(&self) -> &VerifiedLaneContext {
+        &self.verified
+    }
+
     /// Consume only a separately transferred closure-body result after genuine
     /// publication of its original instance. Refusal returns the same armed token.
     /// This does not acknowledge an effect, release another owner or delete disk data.
@@ -264,7 +270,7 @@ struct LaneClock {
 /// No global-height adapter or old signer constructs this type today.
 pub(crate) struct LaneInstance {
     state_owner: crate::state::NativeLaneStateOwner,
-    verified: VerifiedLaneContext,
+    verified: Arc<VerifiedLaneContext>,
     reducer: reducer::Reducer,
     wal: Option<LaneSafetyWal>,
     persistence: Option<Arc<persistence::IssuedPersistence>>,
@@ -322,6 +328,12 @@ impl LaneInstance {
         Self::gate_for(&self.verified, state, observed)
     }
 
+    /// Borrow the immutable context allocation retained from accepted opening.
+    #[cfg(test)]
+    pub(crate) fn context_for_test(&self) -> &VerifiedLaneContext {
+        &self.verified
+    }
+
     /// Borrow the actual opening State identity without constructing a replacement.
     #[cfg(test)]
     pub(crate) fn state_owner_for_test(&self) -> &crate::state::NativeLaneStateOwner {
@@ -377,7 +389,7 @@ impl LaneInstance {
     pub(crate) fn take_retirement(&mut self) -> Option<LaneRetirement> {
         self.retired.pop_front().map(|kind| LaneRetirement {
             state_owner: self.state_owner.clone(),
-            verified: self.verified.clone(),
+            verified: Arc::clone(&self.verified),
             kind,
         })
     }

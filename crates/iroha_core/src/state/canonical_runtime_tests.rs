@@ -192,7 +192,16 @@ fn snapshot_capture_test(test: impl FnOnce() + Send + 'static) {
 fn snapshot_capture_refuses_active_publisher_without_waiting() {
     snapshot_capture_test(|| {
         let state = state();
+        let original_nexus = state.nexus_snapshot();
         let publication = state.begin_state_view_write();
+        assert!(state.try_nexus_snapshot_once().unwrap().is_none());
+        assert_eq!(
+            state.nexus_ownership_projection().lane_catalog,
+            original_nexus.lane_catalog
+        );
+        // Cursor persistence also runs inside lane-geometry publication. Its
+        // ownership-only input must not wait on the generation held here.
+        state.persist_da_shard_cursor_journal();
         assert!(state.try_view_once().unwrap().is_none());
         let error = match crate::snapshot::CapturedStateSnapshot::capture(&state) {
             Ok(_) => panic!("odd publication generation cannot yield a snapshot"),
@@ -204,6 +213,19 @@ fn snapshot_capture_refuses_active_publisher_without_waiting() {
             MergeLedgerCommitError::ExecutionObservationChanged
         ));
         drop(publication);
+        assert_eq!(
+            state
+                .try_nexus_snapshot_once()
+                .unwrap()
+                .expect("completed publication must admit a Nexus snapshot")
+                .dataspace_catalog,
+            original_nexus.dataspace_catalog
+        );
+        // Manifest refresh owns another publication guard while checking its
+        // catalog binding, including rejection of an unbound registry.
+        assert!(!state.install_lane_manifests_if_consensus_compatible(&Arc::new(
+            LaneManifestRegistry::default()
+        )));
         assert!(crate::snapshot::CapturedStateSnapshot::capture(&state).is_ok());
     });
 }

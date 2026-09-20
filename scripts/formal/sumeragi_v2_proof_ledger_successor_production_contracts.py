@@ -1064,9 +1064,9 @@ _FIXTURE_DELEGATION_OWNER_RELATIONS = (
         "run_lifecycle_fixture_on_large_stack(",
         "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body, );",
     )),
-    ("complete_tip_root", "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs", "", "production_empty_genesis_complete_tip_adopts_control_repair_and_launches", ("#[cfg(feature = \"bls\")]", "#[test]", "#[allow(clippy::too_many_lines)]"), (
+    ("complete_tip_root", "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs", "", "production_genesis_complete_tip_adopts_control_repair_and_launches", ("#[cfg(feature = \"bls\")]", "#[test]", "#[allow(clippy::too_many_lines)]"), (
         "run_lifecycle_fixture_on_large_stack(",
-        "production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body, );",
+        "production_genesis_complete_tip_adopts_control_repair_and_launches_body, );",
     )),
     ("marker_root", "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs", "", "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies", ("#[cfg(feature = \"bls\")]", "#[test]"), (
         "if std::thread::current().name() != Some(",

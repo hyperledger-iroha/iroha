@@ -52,6 +52,29 @@ def _recovered_fetch_canonical_selector_owner_errors(
     return errors
 
 
+def _require_lifecycle_stack_test_body(
+    path: Path, source: str, name: str, errors: list[str], *,
+    body_attributes: tuple[str, ...] = (),
+) -> RustItem | None:
+    """Bind one executable stack wrapper to its exact, equally gated test body."""
+    wrapper = _require_rust_item(path, source, name, errors)
+    _require_rust_item_context(
+        path, wrapper, (), "lifecycle stack test wrapper", errors,
+        expected_attributes=(*body_attributes, "#[test]"),
+    )
+    _require_exact_rust_tokens(
+        path, wrapper,
+        f'fn {name}() {{ run_lifecycle_fixture_on_large_stack("{name}", {name}_body,); }}',
+        "lifecycle stack wrapper delegates only to its exact body", errors,
+    )
+    body = _require_rust_item(path, source, name + "_body", errors)
+    _require_rust_item_context(
+        path, body, (), "lifecycle stack test body", errors,
+        expected_attributes=body_attributes,
+    )
+    return body
+
+
 def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Pin the queue-owned ordinary/Serve ingress turn prerequisite."""
 
@@ -816,9 +839,54 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             ),
         )
 
-    shutdown_behavior = item(
+    marker_replay_test = item(
         "startup_test",
-        "exercise_production_marker_replay_cases",
+        "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+    )
+    _require_rust_item_context(
+        paths["startup_test"], marker_replay_test, (),
+        "executable production marker-replay case census", errors,
+        expected_attributes=('#[cfg(feature = "bls")]', '#[test]'),
+    )
+    _require_exact_rust_tokens(
+        paths["startup_test"], marker_replay_test,
+        """fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies() {
+    if std::thread::current().name() != Some("production-lifecycle-marker-replay") {
+        return run_marker_replay_test_on_stack();
+    }
+    exercise_production_marker_replay_cases(&[
+        (0xB1_u8, true, false, false, None),
+        (0xB2_u8, false, false, false, None),
+        (0xB3_u8, true, true, false, None),
+        (0xB4_u8, true, false, true, None),
+        (0xB5_u8, true, false, false, Some(false)),
+        (0xB6_u8, true, false, false, Some(true)),
+        (0xB7_u8, true, false, false, Some(true)),
+    ]);
+}""",
+        "production marker-replay test enters its complete retained case census", errors,
+    )
+    marker_replay_stack = item("adapter", "run_marker_replay_test_on_stack")
+    require_order(
+        "adapter", marker_replay_stack, "joined production marker-replay stack owner",
+        (
+            'std::thread::Builder::new().name("production-lifecycle-marker-replay".to_owned())',
+            '.stack_size(32 * 1024 * 1024)',
+            '.spawn(production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies)',
+            'if let Err(payload) = handle.join()',
+            'std::panic::resume_unwind(payload)',
+        ),
+    )
+    shutdown_behavior = item("startup_test", "exercise_production_marker_replay_cases")
+    _require_rust_item_context(
+        paths["startup_test"], shutdown_behavior, (),
+        "actual marker-replay case body", errors,
+        expected_attributes=('#[cfg(feature = "bls")]',),
+    )
+    require_order(
+        "startup_test", shutdown_behavior, "marker-replay body consumes the exact case coordinates",
+        ('cases: &[(u8, bool, bool, bool, Option<bool>)]',
+         'for &(marker, persist_matching_outcome, shutdown_before_activation, shutdown_after_activation, pending_kura_finalize,) in cases'),
     )
     require_tokens(
         "startup_test",
@@ -844,16 +912,42 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "continue",
         ),
     )
+    complete_tip_shutdown_wrapper = item(
+        "startup_test",
+        "production_genesis_complete_tip_adopts_control_repair_and_launches",
+    )
+    _require_rust_item_context(
+        paths["startup_test"], complete_tip_shutdown_wrapper, (),
+        "production CompleteTip stack test wrapper", errors,
+        expected_attributes=(
+            '#[cfg(feature = "bls")]', '#[test]', '#[allow(clippy::too_many_lines)]',
+        ),
+    )
+    _require_exact_rust_tokens(
+        paths["startup_test"], complete_tip_shutdown_wrapper,
+        """fn production_genesis_complete_tip_adopts_control_repair_and_launches() {
+    run_lifecycle_fixture_on_large_stack(
+        "production_genesis_complete_tip_adopts_control_repair_and_launches",
+        production_genesis_complete_tip_adopts_control_repair_and_launches_body,
+    );
+}""",
+        "production CompleteTip stack wrapper delegates to its exact body", errors,
+    )
     complete_tip_shutdown_behavior = item(
         "startup_test",
-        "production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body",
+        "production_genesis_complete_tip_adopts_control_repair_and_launches_body",
+    )
+    _require_rust_item_context(
+        paths["startup_test"], complete_tip_shutdown_behavior, (),
+        "production CompleteTip lifecycle test body", errors,
+        expected_attributes=('#[cfg(feature = "bls")]',),
     )
     require_order(
         "startup_test",
         complete_tip_shutdown_behavior,
         "production CompleteTip lifecycle clean-shutdown behavior",
         (
-            "production_empty_genesis_complete_tip_fixture_for_test()",
+            "production_genesis_complete_tip_fixture_for_test()",
             "adapter.timeout_elapsed(adapter.current_tag())",
             "open_recovered_startup_with_aggregator(",
             "authenticated.has_recovered_control_sign_for_test()",
@@ -871,7 +965,9 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "assert!(!ingress_state.open)",
             "assert!(ingress_state.leader_wire_lifecycle_gate.is_none())",
             "assert!(!output_guard.restart_required())",
-            "assert!(crate::sumeragi::status::v2_status().is_some())",
+            'assert_eq!( crate::sumeragi::status::v2_status()'
+            '.expect("recovered startup publishes status").build_fingerprint,'
+            ' fingerprints().build,',
             "crate::sumeragi::status::clear_v2_status()",
             "assert!(crate::sumeragi::status::v2_status().is_none())",
         ),
@@ -1011,16 +1107,39 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
         ),
     )
+    for variant, retry, waiting, error_action in (
+        ("LocalValidate(retained)", "self.retry_local_lifecycle_validate(retained)",
+         "LifecycleValidateLocalWaiting", "self.services.lifecycle_output_guard().retain_effect_failure(reason)"),
+        ("RegisteredDeferredValidate(registration)",
+         "self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)",
+         "LifecycleValidateSidecarWaiting", "iroha_logger::error!("),
+    ):
+        require_order(
+            "driver", completion_pre_gate,
+            f"retained {waiting} polls its exact owner before one ordinary completion",
+            (
+                f"PendingLifecycleCompletionV1::{variant}",
+                f"let selected = {retry}",
+                "if matches!(", f"ProductionLifecycleCompletionSelectionV1::{waiting}",
+                "self.services.prepare_ordinary_completion_behind_validate_fence()",
+                "Ok(true)", "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+                "Ok(false)", "Err(reason)",
+                error_action,
+                "self.close_output_for_restart()",
+                "ProductionLifecycleCompletionSelectionV1::RestartRequired",
+            ),
+        )
     if completion_pre_gate is not None:
         ordinary_returns = _token_sequence_count(
             rust_code_tokens(completion_pre_gate.source),
             rust_code_tokens("ProductionLifecycleCompletionPreGateV1::Ordinary(runner)"),
         )
-        if ordinary_returns != 4:
+        if ordinary_returns != 6:
             errors.append(
                 f"{paths['driver']}:{completion_pre_gate.line}: lifecycle Completion "
                 "pre-gate must return the exact ordinary cursor for a foreign runner "
-                "rank, the unchanged-Validate-fence bypass, an unpermitted ordinary "
+                "rank, the unchanged-Validate-fence bypass, the retained LocalValidate "
+                "and registered-sidecar waits, an unpermitted ordinary "
                 "head, and an ordinary head whose Ready Proposal Sign is not exact; "
                 f"found {ordinary_returns} sites"
             )
@@ -2189,7 +2308,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "an exact ordinary winner cannot return the unchanged cursor",
         "an ordinary head cannot be poisoned by a later response family",
         "consume_prepared_ordinary_ingress_turn",
-        "invalid-signature response is a drainable ordinary winner",
+        "unrelated malformed response is a drainable ordinary winner",
         "current certified Serve rejection must own ingress",
         "backpressured certified Serve remains lifecycle-owned",
         "released auxiliary capacity must admit exact Serve",
@@ -2461,6 +2580,23 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
     _require_decided_certified_serve_source_contracts(
         paths["runner"], decided_serve, errors,
     )
+    decided_selection = item("runner", "select_decided_lane_recovery_ingress")
+    require_order(
+        "runner", decided_selection,
+        "terminal recovery selection preserves checked fair ownership and finite physical prefix",
+        (
+            "let mut authorization = None", "let mut authorization_error = None",
+            ".try_recv_if_checked(|inbound|", "if authorization_error.is_some()",
+            "return false", "DecidedLaneRecoveryIngressDrainMode::OpenPreflightBatch { physical_cut }",
+            ".physical_admission_ordinal()", "u128::from(ordinal) < physical_cut",
+            "return false", "prepare_decided_lane_recovery_ingress(inbound, active_height)",
+            "authorize_decided_lane_recovery_drain(preparation)",
+            "if authorization.replace(candidate).is_some()", "authorization_error = Some(",
+            "false", "else", "true", "if let Some(reason) = authorization_error",
+            "return Err(V2RunnerError::Service(reason))", "let Some(inbound) = inbound else",
+            "return Ok(None)", "authorization.ok_or_else(", "Ok(Some((inbound, authorization)))",
+        ),
+    )
     decided_drain = item("runner", "drain_decided_lane_recovery_ingress")
     require_order(
         "runner",
@@ -2470,10 +2606,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "let decided_subject = executor",
             ".local_proposal_directive()?",
             ".decided_subject()",
-            "receiver.try_recv_if_checked(",
-            "prepare_decided_lane_recovery_ingress(inbound, executor.context().height)",
-            "authorize_decided_lane_recovery_drain(preparation)",
-            "authorization.replace(candidate)",
+            "select_decided_lane_recovery_ingress(receiver, executor.context().height, mode)?",
+            "return Ok(None)",
             "ProductionDecidedLaneRecoveryDrainCommitter",
             "decided_subject,",
             "commit_decided_lane_recovery_drain(authorization, &mut committer)",
@@ -3467,6 +3601,41 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         "for",
         "SumeragiV2Adapter",
     )
+    # Future-view carriers remain physically owned but consumer-pending until
+    # the adapter's authenticated WAL cut admits their coordinates. They do not
+    # require a second ordinary-Progress escape authorization or scheduler lane.
+    runtime_consumer_authority = qualified_item(
+        "runtime", "leader_wire_consumer_authority", runtime_driver_context,
+        "production WAL consumer authority binding",
+    )
+    require_tokens(
+        "runtime", runtime_consumer_authority,
+        "production consumer authority comes from the adapter WAL owner",
+        ("self.leader_wire_recovery_authority().map(Some)",),
+    )
+    runtime_command_position = qualified_item(
+        "runtime", "leader_wire_consumer_position",
+        rust_code_tokens("impl ExactRuntimeCommandIdentity for AdapterCommand"),
+        "authenticated runtime consumer coordinates",
+    )
+    require_order(
+        "runtime", runtime_command_position,
+        "only authenticated commands project their retained consumer coordinates",
+        (
+            "Self::Authenticated(authenticated) => authenticated.leader_wire_consumer_position()",
+            "_ => None",
+        ),
+    )
+    runtime_authenticated_position = qualified_item(
+        "runtime", "leader_wire_consumer_position",
+        rust_code_tokens("impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage"),
+        "deeply authenticated consumer coordinate source",
+    )
+    require_tokens(
+        "runtime", runtime_authenticated_position,
+        "consumer coordinates derive from the authenticated payload",
+        ("LeaderWireConsumerPosition::from_payload(self.payload())",),
+    )
     runtime_target_binding = qualified_item(
         "runtime",
         "pre_timeout_locked_prepare_qc_target",
@@ -3534,6 +3703,152 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         "<",
         "C",
         ">",
+    )
+    runtime_consumer_refresh = qualified_item(
+        "runtime", "refresh_ingress_consumer_eligibility", runtime_generic_context,
+        "runtime WAL consumer refresh",
+    )
+    require_order(
+        "runtime", runtime_consumer_refresh,
+        "consumer refresh requires production WAL authority and the exact current tag",
+        (
+            "self.driver.leader_wire_consumer_authority()",
+            "#[cfg(not(test))] if authority.is_none()",
+            "return Err(RuntimeError::FailClosed)",
+            "authority.is_some_and(|authority| authority.consumer_tag() != self.driver.current_tag())",
+            "return Err(RuntimeError::FailClosed)",
+            "self.ingress.refresh_consumer_authority(authority)",
+        ),
+    )
+    bounded_consumer_refresh = qualified_item(
+        "runtime", "refresh_consumer_authority", bounded_ingress_context,
+        "bounded-ingress consumer ownership refresh",
+    )
+    require_order(
+        "runtime", bounded_consumer_refresh,
+        "consumer refresh checks every original admission and exact command position before publication",
+        (
+            "self.oldest_lifecycle_ordinal()?",
+            "for queued in &self.commands",
+            "cached_queue_occurrence_owner(&self.selection_source_identity)",
+            "!queued.validate_cached_admission_identity()",
+            "!owner.validate_exact()",
+            "owner.class != queued.class.service_code()",
+            "owner.consumer_position != queued.command.leader_wire_consumer_position()",
+            "return Err(EnqueueError::FailClosed)",
+            "self.consumer_authority = authority",
+        ),
+    )
+    bounded_consumer_wait = qualified_item(
+        "runtime", "consumer_waits", bounded_ingress_context,
+        "bounded-ingress retained consumer wait",
+    )
+    require_order(
+        "runtime", bounded_consumer_wait,
+        "consumer wait uses the same authority and exact physically retained occurrence",
+        (
+            "self.consumer_authority.is_some_and(|authority|",
+            "cached_queue_occurrence_owner(&self.selection_source_identity)",
+            "owner.consumer_position",
+            "authority.consumer_waits_for(position)",
+        ),
+    )
+    bounded_class_stats = qualified_item(
+        "runtime", "class_lifecycle_stats", bounded_ingress_context,
+        "consumer-eligible class minima",
+    )
+    require_tokens(
+        "runtime", bounded_class_stats,
+        "ordinary class minima exclude physically retained consumer waits",
+        ("queued.class == class && !self.consumer_waits(queued)",),
+    )
+    bounded_ordinary_selection = qualified_item(
+        "runtime", "pop_next_with_selection_kind", bounded_ingress_context,
+        "ordinary consumer-eligible FIFO selection",
+    )
+    require_order(
+        "runtime", bounded_ordinary_selection,
+        "ordinary service preserves class selection and oldest eligible ownership",
+        (
+            "self.ownership_snapshot()", "self.class_readiness()",
+            "select_bounded_service_class(",
+            "self.minimum_lifecycle_for_class(class)",
+            "queued.class == class", "!self.consumer_waits(queued)",
+            "queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)",
+        ),
+    )
+    queue_snapshot_identity = qualified_item(
+        "runtime", "validate_identity",
+        rust_code_tokens("impl RuntimeQueueOwnershipSnapshot"),
+        "closed runtime consumer partition identity",
+    )
+    require_order(
+        "runtime", queue_snapshot_identity,
+        "queue partition accounts for every physically owned waiting occurrence",
+        (
+            "owner.validate_exact()",
+            "Arc::ptr_eq(&owner.source_identity, &self.source_identity)",
+            "owner.class == class && !self.consumer_waits_at(*index)",
+            "let pending_count = self.occurrence_owners",
+            "self.consumer_waits_at(*index)",
+            "self.projection_hash == runtime_queue_ownership_snapshot_projection_hash(self)",
+            "u64::try_from(pending_count) == Ok(self.consumer_pending_count)",
+            "eligible_stats(SERVICE_CLASS_COMPLETION)",
+            "eligible_stats(SERVICE_CLASS_PROGRESS)",
+            "eligible_stats(SERVICE_CLASS_NORMAL)",
+            "count.checked_add(self.consumer_pending_count) == Some(self.projection.len)",
+        ),
+    )
+    queue_selection_handoff = qualified_item(
+        "runtime", "matches_scheduler_occurrence",
+        rust_code_tokens("impl RuntimeQueueSelectionSeal"),
+        "consumer partition scheduler handoff",
+    )
+    require_order(
+        "runtime", queue_selection_handoff,
+        "scheduler handoff binds the original partition and unchanged consumer authority",
+        (
+            "self.validate_identity()", "self.scheduler_handoff_is_claimed()",
+            "self.queue_before_snapshot_hash == before.projection_hash",
+            "self.consumer_pending_count == before.consumer_pending_count",
+            "before.consumer_authority == after.consumer_authority",
+            "!before.consumer_waits_at(self.selected_position as usize)",
+        ),
+    )
+    runtime_ordinary_step = qualified_item(
+        "runtime", "step", runtime_generic_context,
+        "ordinary consumer-partitioned step",
+    )
+    require_order(
+        "runtime", runtime_ordinary_step,
+        "ordinary selection refreshes WAL eligibility before consuming exactly the selected FIFO turn",
+        (
+            "self.refresh_ingress_consumer_eligibility()?",
+            "let arbitration = self.scheduler_arbitration_inputs(now, external)",
+            "let (work, next_schedule) = self.schedule.select(",
+            "self.schedule = next_schedule", "ScheduledWork::Fifo =>",
+            "self.dispatch_selected_fifo(", "RuntimeQueueSelectionKind::Ordinary",
+            "RuntimeSelectedOwnerKind::Fifo", "RuntimeSelectedOwnerKind::FifoRetryRetained",
+        ),
+    )
+    bounded_pacemaker_selection = qualified_item(
+        "runtime", "pop_pacemaker_progress_with_ownership", bounded_ingress_context,
+        "pacemaker consumer-eligible selection",
+    )
+    require_order(
+        "runtime", bounded_pacemaker_selection,
+        "pacemaker service also excludes waiting consumers and preserves authenticated Progress roots",
+        (
+            "let eligible = !self.consumer_waits(queued)",
+            "CommandClass::Completion | CommandClass::Progress",
+            "queued.causal_origin.root_class == SERVICE_CLASS_PROGRESS",
+            "is_runnable(queued)", "queued.identity.kind == RuntimeCommandKind::Authenticated",
+            "queued.ingress_ownership.is_some()", "is_certified_fence_escape(&queued.command)",
+            "let Some((index, _, certified_fence_escape)) = selected else",
+            "return Ok(None)", "!selected.identity_deep_validated",
+            "!selected.causal_origin.validate_exact()",
+            "selected.causal_origin.root_class != SERVICE_CLASS_PROGRESS",
+        ),
     )
     freeze_pre_timeout_cut = qualified_item(
         "runtime",
@@ -3612,6 +3927,7 @@ impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
         runtime_pre_timeout_step,
         "pre-timeout dispatch is authenticated Progress, strictly pre-cut, and nonretrying",
         (
+            "self.refresh_ingress_consumer_eligibility()?",
             "self.reconcile_fence_retry_blocked_fifo_owners()",
             "self.pre_timeout_locked_prepare_qc_cut_is_current(cut)",
             "self.scheduler_arbitration_inputs(now, external)",
@@ -3628,6 +3944,8 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
 """,
             "candidate.selection_seal.kind",
             "RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
+            "command_previews_pre_timeout_locked_prepare_qc(&command.command, target)",
+            "return Err(RuntimeError::FailClosed)",
             "command.lifecycle_owner()",
             "owner.causal_origin().root_class == SERVICE_CLASS_PROGRESS",
             "self.driver.dispatch(command)",
@@ -3676,6 +3994,69 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc",
         ),
     )
+    require_order(
+        "runtime", scheduler_evidence,
+        "ordinary consumer-partition evidence validates exact snapshots, FIFO schedule, and fair class debt",
+        (
+            "self.queue_before_snapshot.validate_identity()",
+            "self.queue_after_snapshot.validate_identity()",
+            "let schedule_before = ScheduleState {", "fifo_owed: self.fifo_owed_before",
+            "schedule_before.select(self.timeout_due, self.periodic_timer_due, self.fifo_ready)",
+            "schedule_after.fifo_owed != self.fifo_owed_after",
+            "RuntimeSelectedOwnerKind::Fifo | RuntimeSelectedOwnerKind::FifoRetryRetained",
+            "select_bounded_service_class(",
+            "runtime_fifo_candidate_ingress_is_exact(candidate)",
+            "service.selected == candidate.class",
+            "service.next == self.queue_after.service_cursor",
+            "self.queue_after.max_service_debt <= self.queue_before.max_service_debt.saturating_add(1)",
+            "scheduled == ScheduledWork::Fifo",
+            "candidate.selection_seal.matches_scheduler_occurrence(",
+            "RuntimeQueueSelectionKind::Ordinary",
+        ),
+    )
+
+    ordinary_view_release_regression = item(
+        "runtime",
+        "ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc",
+    )
+    require_order(
+        "runtime",
+        ordinary_view_release_regression,
+        "ordinary-step future-PrepareQC regression must retain the blocker, service only matching TC, accrue fair debt, reject tampering, and resume ordinary service",
+        (
+            "retained.selected, RuntimeSelectedOwnerKind::Idle",
+            "retained.validate_exact(), Ok(())",
+            "runtime.queued_commands(), 1",
+            "wire::ConsensusMessageV2Payload::QuorumCertificate(intervening_certificate.clone(),)",
+            "signed_runtime_proposal(&context, &keys, 0xC2)",
+            "wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate,)",
+            "runtime.schedule.fifo_owed = true",
+            "runtime.ingress.next_class = CommandClass::Progress",
+            "let normal_debt_before",
+            "runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test())",
+            "tc_scheduler.selected, RuntimeSelectedOwnerKind::Fifo",
+            "tc_scheduler.fifo_owed_before",
+            "!tc_scheduler.fifo_owed_after",
+            "!runtime.schedule.fifo_owed",
+            "runtime.ingress.next_class, CommandClass::Normal",
+            "normal_debt_after, normal_debt_before + 1",
+            "RuntimeQueueSelectionKind::Ordinary",
+            "tc_scheduler.validate_exact(), Ok(())",
+            "forged_partition.queue_before_snapshot.consumer_pending_count > 0",
+            "forged_partition.queue_before_snapshot.consumer_pending_count -= 1",
+            "runtime_scheduler_projection_hash(&forged_partition)",
+            "forged_partition.validate_exact().is_err()",
+            "advance_leader_wire_recovery_cut(entered_authority)",
+            "runtime.queued_commands(), 3",
+            "normal_scheduler.selected, RuntimeSelectedOwnerKind::Fifo",
+            "runtime.take_leader_wire_runtime_terminals().is_empty()",
+            "runtime.queued_commands(), 2",
+            "AdapterEffect::FetchBody",
+            "runtime.queued_commands(), 1",
+            "remaining == &intervening_certificate",
+        ),
+    )
+
     effect_runtime_context = (
         "impl",
         "EffectRuntime",
@@ -3879,7 +4260,7 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "EffectExecutorStep::Advanced",
             "reconcile_executor_locked_body(executor, services)",
             "LifecycleV2IngressDrainDispositionV1::retry_before_producer(",
-            "advance_executor(receiver, owner, executor, services, producer_claim.required_ready_ordinal(), 1)",
+            "advance_executor(receiver, owner, executor, services, producer_claim.required_ready_ordinal(), 1,)",
         ),
     )
     executor_advance = item("runner", "advance_executor")
@@ -3959,8 +4340,13 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued",
             "ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal",
             "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
-            "ProductionLifecycleIngressSelectionV1::RestartRequired",
         ),
+    )
+    _require_rust_token_sequence(
+        paths["height_driver"], lifecycle_height_driver,
+        "ProductionLifecycleIngressSelectionV1::RestartRequired",
+        "both recovered-Fetch preparation and selected ingress failures restart",
+        errors, count=2,
     )
     if lifecycle_height_driver is not None:
         height_driver_tokens = rust_code_tokens(lifecycle_height_driver.source)
@@ -3992,11 +4378,32 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
                     "activated lifecycle ordinary batch exposes obsolete or "
                     f"caller-substitutable surface {forbidden!r}"
                 )
-    if sources["lifecycle_run_inner"].count("drain_lifecycle_v2_ingress(") != 1:
-        errors.append(
-            f"{paths['lifecycle_run_inner']}: activated lifecycle loop must route "
-            "exactly its main ordinary batch through the shared lifecycle "
-            "height driver"
+    active_driver_calls = item("lifecycle_run_inner", "run_lifecycle_active_height")
+    if active_driver_calls is not None:
+        _require_rust_token_sequence(
+            paths["lifecycle_run_inner"], active_driver_calls,
+            "drain_lifecycle_v2_ingress(",
+            "main, bounded open-preflight, and closed-prefix batches use the shared lifecycle driver",
+            errors, count=3,
+        )
+        require_order(
+            "lifecycle_run_inner", active_driver_calls,
+            "finite recovery batches retain Completion priority and exact terminal cuts",
+            (
+                "drain_lifecycle_v2_ingress(",
+                "if finalization_ready && !rollover_ready",
+                "drain_open_preflight_recovery_batch(receiver, control_queue_capacity, |mode|",
+                "drain_lifecycle_v2_ingress(", "terminal_finalization_cut.as_ref()",
+                "drain_disposition.requires_yield()", "producer_claim.requires_yield()",
+                "return Ok(false)", "terminal_finalization_cut.as_ref()",
+                "if !finalized_ingress_closed", "finalized_ingress_closed = true",
+                "drain_lifecycle_v2_ingress(", "terminal_finalization_cut.as_ref()",
+                "drain_disposition.requires_yield() || producer_claim.requires_yield()",
+                "continue", "if !executor_ready", "output_guard.close_admission_for_restart()",
+                "return Err(V2RunnerError::RestartRequired)",
+                "!activated.ready_for_finalized_rollover(&mut active_runner)?",
+                "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
+            ),
         )
 
     lifecycle_live_loop = item(
@@ -4083,7 +4490,6 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
         )
         barrier_tokens = rust_code_tokens(barrier_source)
         for required in (
-            "drain_decided_lane_recovery_ingress(",
             "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
             "drain_blocked_ordinary_lane_local_ingress(",
             "drain_lane_relay_ingress(",
@@ -4100,6 +4506,32 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
                     "lane-transport-only barrier must retain exactly "
                     f"one {required!r} seam; found {count}"
                 )
+        for required, expected in (
+            ("drain_decided_lane_recovery_ingress(", 2),
+            ("reconcile_executor_locked_body(", 1),
+            ("executor.step_pacemaker_after_completion_runtime_cut(", 1),
+            ("executor.step_completion_capacity_relief_after_cut(", 1),
+        ):
+            count = _token_sequence_count(barrier_tokens, rust_code_tokens(required))
+            if count != expected:
+                errors.append(
+                    f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
+                    f"typed sidecar/Apply barrier requires {expected} {required!r} seams; found {count}"
+                )
+        structural_barrier = mask_rust_comments_and_literals(barrier_source)
+        permit_header = rust_code_tokens(
+            "if let Some(_permit) = producer_claim.validate_sidecar_pacemaker_escape_permit()"
+        )
+        for guarded in (
+            "reconcile_executor_locked_body", "step_pacemaker_after_completion_runtime_cut",
+            "step_completion_capacity_relief_after_cut",
+        ):
+            for occurrence in re.finditer(r"\b" + guarded + r"\s*\(", structural_barrier):
+                if permit_header not in _rust_brace_context(structural_barrier, occurrence.start()):
+                    errors.append(
+                        f"{paths['lifecycle_run_inner']}:{lifecycle_live_loop.line}: "
+                        f"{guarded} must remain inside the exact Validate-sidecar pacemaker permit"
+                    )
         for required in (
             "producer_claim.blocked_ordinary_lane_local_ingress_permit()",
             "drain_blocked_ordinary_lane_local_ingress(",
@@ -4116,7 +4548,6 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
         forbidden = tuple(
             token
             for token in (
-                "reconcile_executor_locked_body(",
                 "advance_executor(",
                 "retry_exact_output_and_apply_sidecar_admissions(",
                 "replay_buffered_chunks(",
@@ -4307,11 +4738,12 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
                 f"{paths['runner']}: opaque lifecycle local-Proposal state "
                 f"exposes forbidden surface {forbidden!r}"
             )
-    live_proposal_behavior = item(
-        "startup_test", "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout"
+    live_proposal_behavior = _require_lifecycle_stack_test_body(
+        paths["startup_test"], sources["startup_test"],
+        "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout", errors,
     )
     require_order(
-        "launch_tests",
+        "startup_test",
         live_proposal_behavior,
         "activated lifecycle retains the exact runner local-Proposal owner",
         (
@@ -4478,7 +4910,9 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
         "sealed non-Pending lifecycle startup and activation",
         (
             "V2BodyStoreCapacity::new(",
-            "V2BodyStore::open_with_policy_and_capacity(",
+            ".mint_v2_body_store_directory_authority()",
+            "V2BodyStore::open_with_kura_authority_and_capacity(",
+            "kura.as_ref(), body_store_authority, context.clone(), signature_policy.clone(), body_store_capacity,",
             ".into_quarantined_recovered_startup()",
             "SumeragiV2Adapter::open_recovered_startup_with_capacity_geometry(",
             ".authenticate_final_wal_startup_authority()",
@@ -4514,7 +4948,7 @@ executor.acknowledge_runner_decision_cleanup(
 """,
         "each ordinary reconciliation point must retire the local proposal and losing lane sidecars before acknowledging runner Decision cleanup",
         errors,
-        count=2,
+        count=3,
     )
     require_order(
         "lifecycle_run_inner",
@@ -4545,9 +4979,9 @@ executor.acknowledge_runner_decision_cleanup(
             "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix",
             "drain_finalized_lane_relay_prefix(",
             "dispatch_lane_work_effects(",
-            "let terminal_exact_output_pending =",
             "reconcile_terminal_lane_output_handoffs(",
-            "if terminal_exact_output_pending",
+            "if block_sync_server.has_pending_historical_body_serve()",
+            "continue",
             "if drained_terminal_ingress || drained_terminal_relay",
             "continue",
             "receiver.ensure_closed_drained_cut()",
@@ -4889,9 +5323,7 @@ pub(in crate::sumeragi) fn close_runner_ingress_for_finalized_drain(
             "self.runtime.pending_kura_activation_status_snapshot()",
         ),
     )
-    proposal_behavior = item(
-        "startup_test", "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout"
-    )
+    proposal_behavior = live_proposal_behavior
     require_order(
         "startup_test",
         proposal_behavior,

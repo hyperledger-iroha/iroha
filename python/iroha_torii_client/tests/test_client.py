@@ -8837,6 +8837,87 @@ def test_iterate_connect_apps_consumes_all_pages_when_unbounded() -> None:
     assert len(session.calls) == 2
     assert session.calls[0]["params"]["limit"] == 1
     assert session.calls[1]["params"]["cursor"] == "c2"
+
+
+def test_iterate_connect_apps_zero_limit_does_not_request_a_page() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    assert list(client.iterate_connect_apps(limit=0)) == []
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    ("argument", "value", "error"),
+    [
+        ("limit", -1, ValueError),
+        ("limit", True, TypeError),
+        ("limit", 1.5, TypeError),
+        ("limit", "2", TypeError),
+        ("page_size", 0, ValueError),
+        ("page_size", -1, ValueError),
+        ("page_size", False, TypeError),
+        ("page_size", 1.5, TypeError),
+        ("page_size", "2", TypeError),
+        ("cursor", [], TypeError),
+        ("cursor", 1, TypeError),
+    ],
+)
+def test_iterate_connect_apps_rejects_invalid_arguments_before_dispatch(
+    argument: str, value: Any, error: type[Exception]
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(error, match=argument):
+        list(client.iterate_connect_apps(**{argument: value}))
+    assert session.calls == []
+
+
+def test_iterate_connect_apps_caps_each_page_to_remaining_limit() -> None:
+    session = RecordingSession()
+    for index, cursor in enumerate(("c2", "c3", None)):
+        session.queue(
+            StubResponse(
+                payload={
+                    "items": [{"app_id": f"app-{index}"}],
+                    "next_cursor": cursor,
+                }
+            )
+        )
+    client = ToriiClient("http://node.test", session=session)
+
+    assert len(list(client.iterate_connect_apps(limit=3, page_size=2))) == 3
+    assert [call["params"]["limit"] for call in session.calls] == [2, 2, 1]
+
+
+@pytest.mark.parametrize(
+    ("initial_cursor", "returned_cursors"),
+    [("start", ["start"]), (None, ["c1", "c1"]), (None, ["c1", "c2", "c1"])],
+)
+def test_iterate_connect_apps_rejects_cursor_cycles(
+    initial_cursor: Optional[str], returned_cursors: List[str]
+) -> None:
+    session = RecordingSession()
+    for cursor in returned_cursors:
+        session.queue(StubResponse(payload={"items": [], "next_cursor": cursor}))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="duplicate cursor"):
+        list(client.iterate_connect_apps(cursor=initial_cursor))
+    assert len(session.calls) == len(returned_cursors)
+
+
+def test_iterate_connect_apps_continues_after_empty_page_with_new_cursor() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"items": [], "next_cursor": "c1"}))
+    session.queue(StubResponse(payload={"items": [{"app_id": "app-1"}]}))
+    client = ToriiClient("http://node.test", session=session)
+
+    assert [app.app_id for app in client.iterate_connect_apps()] == ["app-1"]
+    assert len(session.calls) == 2
+
+
 def test_connect_admission_manifest_helpers() -> None:
     session = RecordingSession()
     manifest_payload = {

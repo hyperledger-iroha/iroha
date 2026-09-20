@@ -24,7 +24,6 @@ impl From<Error> for KuraArchiveCaptureAuthenticationError {
 }
 
 /// A local physical refusal, independent of the decided block's validity.
-#[derive(Debug)]
 pub(crate) enum KuraPublicationPreparationError {
     /// An actual storage owner must release before another acquisition attempt.
     Busy {
@@ -35,6 +34,19 @@ pub(crate) enum KuraPublicationPreparationError {
     },
     /// The actual Kura requires storage repair, not a lock-release retry.
     Storage(Error),
+}
+
+impl std::fmt::Debug for KuraPublicationPreparationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy { field, wait } => f
+                .debug_struct("Busy")
+                .field("field", field)
+                .field("wait", wait)
+                .finish(),
+            Self::Storage(error) => f.debug_tuple("Storage").field(error).finish(),
+        }
+    }
 }
 
 impl From<Error> for KuraPublicationPreparationError {

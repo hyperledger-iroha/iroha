@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Qualify basic Taira connectivity, or the full regression census, before a build.
 
-Requires Python 3.11+ and the repository Rust toolchain. Compile focused native
-harnesses and run a four-peer network with isolated Cargo and fixture-only inputs.
+Requires Python 3.11+, the repository Rust toolchain, and executable lsof at
+/usr/sbin/lsof on macOS or /usr/bin/lsof on Linux. Both qualification and focused
+checks validate this artifact-inspection prerequisite before compilation. Install
+lsof with the platform package manager if absent; runtime inspection failures still
+retain artifacts. Compile focused native harnesses and run a four-peer network
+with isolated Cargo and fixture-only inputs. Selected beacon workloads validate
+an owner-only external runtime root and its ancestors before source checks or
+compilation; observation-only selections require neither that root nor peer capacity.
 The existing sibling .taira-testnet-build-targets/routine lane is the default;
 --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR may select another development
 lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
@@ -38,6 +44,12 @@ then execute configuration and those exact tests. Unselected harnesses wait for
 immutable preparation. The metadata pass catches type/import errors early; the
 selected build still detects codegen-only errors. This diagnostic writes no qualification checkpoint and
 does not replace immutable preparation or its complete gate.
+Linux development checks default to LLVM 18, requiring executable /usr/bin/clang-18
+and /usr/bin/ld.lld-18 before compilation. Missing tools fail without fallback;
+install clang-18 and lld-18 with the platform package manager, or explicitly select
+--native-linker system for diagnosis. macOS keeps Apple ld. Switching linkers
+invalidates Cargo fingerprints and can rebuild dependencies once; authenticated
+preparation does not accept this option and keeps its existing environments.
 """
 
 from __future__ import annotations
@@ -110,6 +122,8 @@ STAGES = (
     )),
     ("public doctor producer and deployment contract", (
         "taira::tests::doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes",
+        "taira::tests::doctor_faucet_policy_checks_both_scopes_without_authentication",
+        "taira::tests::doctor_faucet_policy_requires_exact_canonical_v1_fields",
         "taira::tests::doctor_tools_list_consumes_pages_and_rejects_invalid_cursors",
         "taira::tests::doctor_reports_bounded_mcp_application_error_codes",
         "taira::tests::doctor_mock_healthy_flow_reports_ok",
@@ -722,7 +736,7 @@ TORII_STAGES += (("public contract HTTP preparation and strict admission", (
 CORE_STAGES += (("authenticated admission and coherent State publication", (
     "state::tests::ordinary_lane_frontier_publishes_once_and_rejects_invalid_successors_atomically",
     "state::tests::ordinary_lane_frontier_extends_autonomous_application_and_unblocks_next_merge",
-    "sumeragi::v2_apply::tests::ordinary_lane_frontier_unblocks_third_autonomous_source_after_timeout_views",
+    "sumeragi::v2_apply::tests::ordinary_lane_frontier_preserves_third_certified_source_after_merge_execution_rejection",
     "state::tests::sparse_merge_execution_frontier_rejects_replay_conflict_and_malformed_predecessor",
     "kura::tests::carrier_lookup_requires_finality_even_while_body_is_present",
     "kura::tests::finality_store_rejects_missing_or_wrong_merge_carrier_projection",
@@ -952,8 +966,8 @@ CORE_ADMISSION_STARTUP_STAGES += (("authenticated replay geometry and deferred s
     "sumeragi::startup_recovery::tests::maintenance_retains_success_for_delayed_readonly_snapshot_subscriber",
     "sumeragi::startup_recovery::tests::snapshot_loop_stops_on_worker_failure_without_final_shutdown_write",
     "sumeragi::v2_runner::tests::authenticated_terminal_startup_idles_without_constructing_a_successor",
-    "block::tests::parallel_account_profile_preserves_delegated_metadata_results",
-    "block::tests::parallel_account_profile_rejects_foreign_permission_payloads",
+    "block::valid::tests::account_profile_validation_preserves_delegated_metadata_results",
+    "block::valid::tests::account_profile_validation_rejects_foreign_permission_payloads",
 )),)
 
 CORE_ADMISSION_STARTUP_STAGES += (("unconditional alias registry admission and replay", (
@@ -1115,11 +1129,11 @@ DATA_MODEL_STAGES += (("required nullable lifecycle runtime root codecs", (
 )),)
 
 DATA_MODEL_STAGES += (("authenticated executed transaction inclusion", (
-    "query::certified_merge_inclusion_tests::certified_merge_inclusion_verifies_exact_reference_and_parallel_proofs",
-    "query::certified_merge_inclusion_tests::ordinary_committed_transaction_verifies_against_exact_carrier_block",
-    "query::certified_merge_inclusion_tests::authenticated_execution_inclusion_binds_ordinary_and_merge_carriers",
-    "query::certified_merge_inclusion_tests::authenticated_execution_inclusion_rejects_unbound_wire_and_header_material",
-    "query::certified_merge_inclusion_tests::authenticated_execution_inclusion_binds_time_and_exact_indices",
+    "query::canonical_output_inclusion_tests::ordinary_committed_transaction_verifies_against_exact_carrier_block",
+    "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_binds_complete_carrier_and_rejects_merge_authority",
+    "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_rejects_unbound_wire_and_header_material",
+    "query::canonical_output_inclusion_tests::authenticated_execution_inclusion_joins_network_indices_without_time_inputs",
+    "query::canonical_output_inclusion_tests::committed_query_rejects_retired_parallel_result_and_merge_wire",
 )),)
 
 TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
@@ -1762,6 +1776,15 @@ STAGES += (('independently verified finality certificate witnesses', (
     'taira_dataspace_deploy::finality::authenticated_height::tests::authenticated_height_requires_authenticated_predecessor_for_alternate_witnesses',
 )), )
 
+STAGES += (('invocation-owned authenticated finality prefix', (
+    'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_batches_and_pending_retries_authenticate_each_height_once',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_rejects_changed_or_deleted_authenticated_disk_proof',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_fresh_owner_reauthenticates_corrupted_disk_prefix',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_invalid_successor_does_not_advance_retained_verifier',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_publication_or_deadline_failure_does_not_commit_trial',
+    'taira_dataspace_deploy::finality::authenticated_height::tests::deployment_prefix::deployment_prefix_lower_tip_keeps_frontier_and_rejects_conflicting_decision',
+)), )
+
 KAGAMI_STAGES += (('read-only bounded native finality inspection', (
     'kura::tests::finality_inspection_rejects_invalid_height_before_store_access',
     'kura::tests::finality_inspection_failure_preserves_output_and_store',
@@ -2342,9 +2365,30 @@ def native_test_output_identity(info: os.stat_result) -> list[int]:
             info.st_nlink, info.st_mtime_ns, info.st_ctime_ns]
 
 
+def native_artifact_inspector_path() -> Path:
+    """Use the platform inspector without consulting the caller's PATH."""
+    return Path("/usr/sbin/lsof" if sys.platform == "darwin" else "/usr/bin/lsof")
+
+
+def require_native_artifact_inspector() -> None:
+    """Reject missing artifact-inspection prerequisites before compilation."""
+    executable = native_artifact_inspector_path()
+    if not executable.is_file():
+        reason = "missing or not a regular file"
+    elif not os.access(executable, os.X_OK):
+        reason = "not executable"
+    else:
+        return
+    raise CheckError(
+        f"native artifact inspector {executable} is {reason}; install lsof with "
+        "the platform package manager and ensure that path is executable before "
+        "running qualification or focused checks"
+    )
+
+
 def native_test_output_confirmed_closed(path: Path) -> bool | None:
     """True means closed, false means busy, and None means inspection failed."""
-    executable = Path("/usr/sbin/lsof" if sys.platform == "darwin" else "/usr/bin/lsof")
+    executable = native_artifact_inspector_path()
     if not executable.is_file():
         return None
     try:
@@ -2783,13 +2827,128 @@ def require_one_pass(name: str, result: subprocess.CompletedProcess[str]) -> Non
         raise CheckError(f"regression did not execute and pass: {name} (exit {result.returncode})")
 
 
+NATIVE_TEST_PROGRESS_INTERVAL_SECONDS = 30
+
+
+@contextlib.contextmanager
+def native_test_batch_progress(count: int):
+    """Keep a quiet captured CLI batch visible without changing its result stream."""
+    stopped = threading.Event()
+    started = time.monotonic()
+
+    def report_while_running():
+        while not stopped.wait(NATIVE_TEST_PROGRESS_INTERVAL_SECONDS):
+            print(f"[taira-check] CLI batch running ({count} tests; "
+                  f"{time.monotonic() - started:.1f}s elapsed)", flush=True)
+
+    reporter = threading.Thread(target=report_while_running, name="taira-test-progress", daemon=True)
+    reporter.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        reporter.join()
+
+
+def native_test_batch_failures(names: tuple[str, ...], filtered_out: int,
+                               result: subprocess.CompletedProcess[str]) -> list[str]:
+    """Admit a closed libtest census; captured failure diagnostics are never results."""
+    lines = result.stdout.splitlines()
+    nonempty = [index for index, line in enumerate(lines) if line.strip()]
+    failures = []
+    summary = None
+    last = nonempty[-1] if nonempty else len(lines)
+    if nonempty:
+        summary = re.fullmatch(
+            r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; "
+            r"(\d+) measured; (\d+) filtered out; finished in \d+(?:\.\d+)?s", lines[last])
+    if summary is None:
+        failures.append("CLI batch has no canonical final libtest summary")
+        last = len(lines)
+    first = nonempty[0] if nonempty else len(lines)
+    expected_header = f"running {len(names)} {'test' if len(names) == 1 else 'tests'}"
+    if first == len(lines) or lines[first] != expected_header:
+        failures.append(f"CLI batch did not declare its exact selected census ({len(names)} tests)")
+    observed = {}
+    totals = {"ok": 0, "FAILED": 0, "ignored": 0, "measured": 0}
+    diagnostics = False
+    selected = set(names)
+    for line in lines[first + 1:last]:
+        if not line.strip():
+            continue
+        if line == "failures:":
+            diagnostics = True
+        if diagnostics:
+            continue
+        match = re.fullmatch(r"test (\S+) \.\.\. (ok|FAILED|ignored(?:, .*)?|bench: .*)", line)
+        if match is None:
+            failures.append(f"CLI batch has malformed result output: {line}")
+            continue
+        name, status = match.groups()
+        status = ("ignored" if status.startswith("ignored") else
+                  "measured" if status.startswith("bench:") else status)
+        totals[status] += 1
+        if name not in selected:
+            failures.append(f"CLI batch executed an unexpected test: {name}")
+        if name in observed:
+            failures.append(f"CLI batch has duplicate result: {name}")
+        observed[name] = status
+    for name in names:
+        status = observed.get(name)
+        if status is None:
+            failures.append(f"regression did not execute to a terminal result: {name}")
+        elif status != "ok":
+            failures.append(f"regression did not pass: {name} ({status})")
+    if summary is not None:
+        status, *counts = summary.groups()
+        expected = (totals["ok"], totals["FAILED"], totals["ignored"], totals["measured"], filtered_out)
+        if tuple(map(int, counts)) != expected or sum(expected[:4]) != len(names):
+            failures.append("CLI batch summary counts differ from the exact named result census")
+        if status != ("FAILED" if totals["FAILED"] else "ok"):
+            failures.append("CLI batch summary status contradicts its named results")
+    if diagnostics and not totals["FAILED"]:
+        failures.append("CLI batch has a failure diagnostic section without a failed result")
+    if result.returncode != 0 and not (result.returncode == 101 and totals["FAILED"]):
+        failures.append(f"CLI batch exited abnormally (exit {result.returncode})")
+    elif result.returncode == 0 and totals["FAILED"]:
+        failures.append("CLI batch returned success despite failed named results")
+    return failures
+
+
+def run_native_test_batch(harness: str, fixture_root: Path, env: dict[str, str], stages,
+                          lock_fds: tuple[int, ...], names: tuple[str, ...], listing: str) -> None:
+    available = {line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")}
+    started = time.monotonic()
+    print(f"[taira-check] start CLI batch ({len(names)} exact tests; one serial process)", flush=True)
+    command = [harness, *names, "--exact", "--test-threads=1", "--format", "pretty", "--color", "never"]
+    with native_test_batch_progress(len(names)):
+        result = subprocess.run(command, cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
+                                text=True, capture_output=True, check=False, pass_fds=lock_fds)
+    failures = native_test_batch_failures(names, len(available) - len(names), result)
+    if failures:
+        # Preserve every fixture diagnostic once; never replay successful tests after a partial batch.
+        sys.stderr.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        print(f"[taira-check] failed CLI batch ({time.monotonic() - started:.1f}s)", flush=True)
+        raise SelectedRegressionFailures(failures)
+    for label, selected in stages:
+        print(f"[taira-check] passed {label} ({len(selected)} tests in CLI batch)", flush=True)
+    print(f"[taira-check] passed CLI batch ({len(names)} tests; {time.monotonic() - started:.1f}s)", flush=True)
+
+
 def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
-               lock_fds: tuple[int, ...]) -> None:
+               lock_fds: tuple[int, ...], *, batch: bool = False) -> None:
+    names = tuple(name for _, selected in stages for name in selected) if batch else ()
+    if batch and (not names or len(set(names)) != len(names)):
+        raise CheckError("CLI batch selection must be nonempty and contain unique exact test names")
     listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=fixture_root,
                              env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, pass_fds=lock_fds)
     if listing.returncode:
         raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
     require_tests(listing.stdout, stages)
+    if batch:
+        run_native_test_batch(harness, fixture_root, env, stages, lock_fds, names, listing.stdout)
+        return
     failures = []
     for label, names in stages:
         failed_before = len(failures)
@@ -2881,8 +3040,30 @@ def run_config_checks(harnesses: NativeArtifactCopies, fixture_root: Path, env: 
         harnesses.release("config")
 
 
+def split_network_stages(stages: tuple) -> tuple[tuple, tuple]:
+    """Keep exact focused observation subsets independent of shipping binaries."""
+    observation_names = {name for _, names in NETWORK_OBSERVATION_STAGES for name in names}
+    observations, runtime = [], []
+    for label, names in stages:
+        selected_observations = tuple(name for name in names if name in observation_names)
+        selected_runtime = tuple(name for name in names if name not in observation_names)
+        if selected_observations:
+            observations.append((label, selected_observations))
+        if selected_runtime:
+            runtime.append((label, selected_runtime))
+    return tuple(observations), tuple(runtime)
+
+
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
                        *, harness: str, stages: tuple) -> None:
+    observations, runtime = split_network_stages(stages)
+    # These contracts use the completed test harness alone. Run every selected
+    # observation, including a focused subset of a group, before compiling any
+    # shipping executable or creating a four-peer workspace.
+    if observations:
+        run_stages(harness, fixture_root, env, observations, lock_fds)
+    if not runtime:
+        return
     with compile_network_binaries(root, env, lock_fds) as binaries:
         require_network_fixture_capacity(fixture_root)
         # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
@@ -2900,28 +3081,20 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
             "IROHA_TEST_SERIALIZE_NETWORKS": "1",
         }
         print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
-        # Keep independent observation failures aggregated. Expensive consensus
-        # stage depends on that boundary; a failure must stop peer startup
-        # without changing the
-        # independent library/CLI aggregation or its exact-pass checkpoint.
-        observations = tuple(stage for stage in stages if stage in NETWORK_OBSERVATION_STAGES)
-        if observations:
-            run_stages(harness, fixture_root, network_env, observations, lock_fds)
-        for stage in stages:
-            if stage not in NETWORK_OBSERVATION_STAGES:
-                if stage in BEACON_NETWORK_STAGES:
-                    if "kagami" not in binaries:
-                        raise CheckError("beacon fixture requires the isolated shipping Kagami artifact")
-                    private_fixture_root = beacon_fixture_root()
-                    with compile_network_binaries(root, env, lock_fds, message_control=True) as control:
-                        beacon_env = network_env | {
-                            "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": control["iroha3d-message-control"],
-                            "TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private_fixture_root),
-                            "KAGAMI_BIN": binaries["kagami"],
-                        }
-                        run_stages(harness, fixture_root, beacon_env, (stage,), lock_fds)
-                else:
-                    run_stages(harness, fixture_root, network_env, (stage,), lock_fds)
+        for stage in runtime:
+            if BEACON_NETWORK_TEST in stage[1]:
+                if "kagami" not in binaries:
+                    raise CheckError("beacon fixture requires the isolated shipping Kagami artifact")
+                private_fixture_root = beacon_fixture_root()
+                with compile_network_binaries(root, env, lock_fds, message_control=True) as control:
+                    beacon_env = network_env | {
+                        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": control["iroha3d-message-control"],
+                        "TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private_fixture_root),
+                        "KAGAMI_BIN": binaries["kagami"],
+                    }
+                    run_stages(harness, fixture_root, beacon_env, (stage,), lock_fds)
+            else:
+                run_stages(harness, fixture_root, network_env, (stage,), lock_fds)
 
 
 def beacon_fixture_root() -> Path:
@@ -2930,15 +3103,34 @@ def beacon_fixture_root() -> Path:
     root = Path(configured) if configured else Path.home() / ".taira-native-beacon-fixtures"
     if not root.is_absolute() or root.resolve() != root:
         raise CheckError("beacon fixture root must be an absolute direct path outside Git")
+    # Match the native fixture's ancestor custody before creating any leaf.
+    # A private directory below shared /tmp still fails native admission.
+    for ancestor in root.parents:
+        info = ancestor.lstat()
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_mode & 0o022:
+            raise CheckError(f"beacon fixture root ancestor must be a direct directory without group or world write permission: {ancestor}")
+        if (ancestor / ".git").exists():
+            raise CheckError(f"beacon fixture root must be outside a Git repository: {ancestor}")
     root.mkdir(mode=0o700, exist_ok=True)
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
         raise CheckError("beacon fixture root must be an owner-only 0700 directory")
+    if (root / ".git").exists():
+        raise CheckError(f"beacon fixture root must be outside a Git repository: {root}")
     result = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
                             stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False)
     if result.returncode == 0 or (result.returncode != 128 or "not a git repository" not in result.stderr):
         raise CheckError("beacon fixture root must be outside a Git repository")
     return root
+
+
+def require_network_fixture_prerequisites(directory: Path, stages: tuple) -> None:
+    """Admit only selected peer workloads before source checks and compilation."""
+    _, runtime = split_network_stages(stages)
+    if any(BEACON_NETWORK_TEST in names for _, names in runtime):
+        beacon_fixture_root()
+    if runtime:
+        require_network_fixture_capacity(directory)
 
 
 def require_network_fixture_capacity(directory: Path) -> None:
@@ -3151,15 +3343,15 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
         raise CheckError("native prequalification requires macOS or Linux")
     if not all(environment.get(name) for name in ("CARGO", "CARGO_HOME", "CARGO_TARGET_DIR")):
         raise CheckError("prequalification requires the coordinated development Cargo environment")
+    require_native_artifact_inspector()
+    fixture_root = Path(environment["CARGO_TARGET_DIR"])
+    require_network_fixture_prerequisites(fixture_root, focused.get("network", ()))
     env = dict(environment)
     head = subprocess.check_output(
         ["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
         stdin=subprocess.DEVNULL, text=True).strip()
     env.pop("CARGO_BUILD_TARGET", None)
     env.update(VERGEN_GIT_SHA=head, IROHA_GIT_COMMIT_HASH=head)
-    fixture_root = Path(env["CARGO_TARGET_DIR"])
-    if "network" in focused:
-        require_network_fixture_capacity(fixture_root)
     print(f"[taira-prequalify] mutable source {head}; {root}; diagnostic only", flush=True)
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
@@ -3187,7 +3379,10 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
             if name in {"config", "network"} or name not in focused:
                 continue
             try:
-                run_stages(harnesses[name], fixture_root, env, focused[name], lock_fds)
+                if name == "cli":
+                    run_stages(harnesses[name], fixture_root, env, focused[name], lock_fds, batch=True)
+                else:
+                    run_stages(harnesses[name], fixture_root, env, focused[name], lock_fds)
             except SelectedRegressionFailures as error:
                 failures.extend(error.failures)
             harnesses.release(name)
@@ -3223,6 +3418,9 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     started = time.monotonic()
     if environment is None or not all(environment.get(name) for name in ("CARGO", "CARGO_HOME", "CARGO_TARGET_DIR")):
         raise CheckError("checks require the coordinated isolated Cargo environment; use either check CLI")
+    require_native_artifact_inspector()
+    fixture_root = Path(environment["CARGO_TARGET_DIR"]) if source_commit is not None else root
+    require_network_fixture_prerequisites(fixture_root, scoped_stages["network"])
     env = dict(environment)
     head = source_commit if source_commit is not None else subprocess.check_output(
         ["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
@@ -3233,9 +3431,6 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     print(f"[taira-check] source {head}; {root}", flush=True)
     print(f"[taira-check] qualification scope {qualification_scope}; "
           f"{selected_regression_count(qualification_scope)} selected native regressions", flush=True)
-    fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
-    if scoped_stages["network"]:
-        require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
     shipping = shipping_harnesses(root)
@@ -3315,7 +3510,7 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
             if STAGES:
                 if not reuse_independent:
                     try:
-                        run_stages(harnesses["cli"], fixture_root, env, STAGES, lock_fds)
+                        run_stages(harnesses["cli"], fixture_root, env, STAGES, lock_fds, batch=True)
                     except SelectedRegressionFailures as error:
                         failures.extend(error.failures)
                 harnesses.release("cli")
@@ -3346,19 +3541,22 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
 
 
 def main() -> int:
+    # Lazy import keeps the low-level gate loadable from an authenticated source capture.
+    import taira_release as release
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1],
                         help="repository root (default: this maintained script's parent repository)")
     parser.add_argument("--target-dir", type=Path, help="existing development Cargo lane (default: sibling routine lane)")
     parser.add_argument("--native-check-scope", choices=QUALIFICATION_SCOPES, default="basic",
                         help="basic application/startup checks (default), or full advanced regressions")
+    parser.add_argument("--native-linker", choices=("system", "llvm"), default=release.default_development_linker(),
+                        help="development only: LLVM 18 by default on Linux (clang-18/lld-18 required), system on macOS; explicit system selects the diagnostic fallback; changing selection rebuilds Cargo dependencies")
     parser.add_argument("--focus-regression", action="append", metavar="HARNESS=EXACT_TEST",
                         help="development diagnostic: metadata-check and compile configuration plus explicitly selected test harnesses; not qualification")
     args = parser.parse_args()
-    # Lazy import keeps the low-level gate loadable from an authenticated source capture.
-    import taira_release as release
     try:
-        options = {"native_check_scope": args.native_check_scope}
+        options = {"native_check_scope": args.native_check_scope, "native_linker": args.native_linker}
         if args.focus_regression is not None:
             options["focused_regressions"] = tuple(args.focus_regression)
         release.development_check(args.repo_root, args.target_dir, dict(os.environ), **options)

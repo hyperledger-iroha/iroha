@@ -1035,8 +1035,8 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     core_path = geometry_root / "crates/iroha_core/src/sumeragi/mod.rs"
     core_source = core_path.read_text(encoding="utf-8")
     core_source = core_source.replace(
-        "    Authenticated(PeerId),\n}",
-        "    Authenticated,\n}",
+        "    Authenticated(PeerId),\n    Native(PeerId),\n}",
+        "    Authenticated,\n    Native(PeerId),\n}",
         1,
     )
     core_path.write_text(core_source, encoding="utf-8")
@@ -1154,7 +1154,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         geometry_root
     )
     for expected_error in (
-        "two-way authenticated fair-ingress source ownership inventory",
+        "global and process-lived authenticated fair-ingress source ownership inventory",
         "semantic duplicate coalescing must precede new-lane admission",
         "authenticated non-validator lane cap excludes validator lanes",
         "empty authenticated non-validator lanes release their bounded churn slot",
@@ -1433,9 +1433,9 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
         ),
         (
             "try_push_owned_at",
-            "&& !authenticated_historical_recovery_response",
+            "&& !authenticated_request_bound_response",
             "&& false",
-            "current-roster or proof-carrying historical authority premise",
+            "current-roster or exact request-bound historical/certified authority premise",
         ),
         (
             "dequeue_selected_locked",
@@ -1445,8 +1445,10 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
         ),
         (
             "try_recv_if_at_checked",
-            "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
-            "self.try_recv_if_at_checked_classified(service_attempt_at, true, predicate)",
+            "service_attempt_at,\n            false,\n"
+            "            FairV2IngressCheckedSelectionScope::Ordinary,",
+            "service_attempt_at,\n            true,\n"
+            "            FairV2IngressCheckedSelectionScope::Ordinary,",
             "ordinary timestamped ingress must delegate to the single classifier",
         ),
     ),
@@ -1521,7 +1523,7 @@ def test_transport_geometry_reviewed_ingress_items_survive_digest_refresh(
         ), leader_errors
         assert any(
             "ordinary timestamped ingress must use the same classifier "
-            "without a bypass policy" in error
+            "with the closed ordinary scope" in error
             and "exact reviewed token digest" not in error
             for error in timeout_errors
         ), timeout_errors

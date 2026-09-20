@@ -1,9 +1,9 @@
 //! Consume the actual decided component owners within one State visibility cut.
 //!
-//! Namespace transitions and old participant evidence still require their real
-//! storage owner; refusal returns the original detached decision before any write.
-//! TODO: join pending geometry/retirement and aggregate production capacity to
-//! this consumer before changing the production Validate/Apply handoff.
+//! Namespace transitions consume their original retryable storage owners before
+//! State visibility. Retirement/replacement and old participant evidence still
+//! need their real Queue/storage owners. TODO: join these and complete production
+//! capacity before changing the live Validate/Apply handoff.
 
 use super::super::super::{PreparedCarrierJournals, RetainedCarrierEffects};
 use super::*;
@@ -14,8 +14,12 @@ use crate::{block::CommittedBlock, state::EventBox};
 pub(in crate::state::carrier_preparation::journals) enum CarrierPublicationError {
     /// The original prepared execution no longer matches its immutable carrier.
     Source,
-    /// The retained transition still needs its real geometry/Queue storage owner.
+    /// The retained transition differs from its original State, header or effects.
     Geometry,
+    /// Retirement/replacement still needs the original service Queue custody.
+    QueueRetirementRequired,
+    /// The retained geometry storage attempt must retry or recover before visibility.
+    GeometryStorage(crate::state::LaneLifecycleError),
     /// Old participant evidence has not supplied complete durable application custody.
     ParticipantDurability,
     /// A prevalidation scratch owner cannot publish State.
@@ -33,9 +37,9 @@ pub(in crate::state::carrier_preparation::journals) struct PublishedCarrier<A, B
     state_owner: std::sync::Arc<crate::state::BlockHashOwner>,
     source: super::super::super::super::execution_prefix::ValidatedExecutionPrefix,
     // These outlive all values retained for completion delivery.
-    admission: A,
-    binding: B,
-    installation: I,
+    _admission: A,
+    _binding: B,
+    _installation: I,
 }
 
 /// Borrowed proof of completed global publication of the original Native source.
@@ -182,7 +186,7 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
     /// outside their physical fences while retaining Apply serialization.
     /// No fallible/refusal branch exists after the first component is visible.
     pub(in crate::state::carrier_preparation::journals) fn publish(
-        self,
+        mut self,
     ) -> Result<
         PublishedCarrier<A, B, I>,
         (
@@ -202,10 +206,12 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             Some(CarrierPublicationError::Source)
         } else if !journals
             .geometry
-            .is_identity_transition(journals.effects.header)
-            || journals.effects.pending_autoscale_lifecycle.is_some()
+            .matches_publication_target(self.target, journals.effects.header)
+            || journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()
         {
             Some(CarrierPublicationError::Geometry)
+        } else if journals.geometry.requires_queue_custody() {
+            Some(CarrierPublicationError::QueueRetirementRequired)
         } else if !journals.native_amx_manifest.entries().is_empty() {
             Some(CarrierPublicationError::ParticipantDurability)
         } else {
@@ -214,6 +220,17 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         if let Some(error) = error {
             return Err((self.abort(), error));
         }
+
+        // Only this terminal consumer may advance the exact storage operation,
+        // after every source/retirement/participant refusal above. The held Kura
+        // lease continues through State publication; a failed attempt returns
+        // the same raw/tiered descriptors with all physical writers released.
+        let update_da_mapping = match self.try_complete_geometry() {
+            Ok(update) => update,
+            Err(error) => {
+                return Err((self.abort(), CarrierPublicationError::GeometryStorage(error)));
+            }
+        };
 
         // Reservations are declared before decomposition so even unwind drops
         // component writers/fences before returning their retained capacity.
@@ -265,6 +282,14 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         let generation = target.begin_state_view_write();
         transactions.publish();
         runtime.publish();
+        if update_da_mapping {
+            target.da_shard_cursors.write().sync_mapping(&effects.nexus.lane_config);
+        }
+        // Canonical resets precede this same carrier's DA observations.
+        let lifecycle_post_publication = effects
+            .lifecycle
+            .take()
+            .map(|effects| effects.publish(target, &generation, true));
         let (_, mut extra_events, (), ()) = world.publish();
         world_effects.publish(target);
         let da_post_publication = effects
@@ -278,6 +303,9 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
         // Capture the final cursor projection under these same physical fences,
         // with the applying carrier's retained lane configuration.
         if let Some(post) = da_post_publication {
+            post.publish(target);
+        }
+        if let Some(post) = lifecycle_post_publication {
             post.publish(target);
         }
         let commit = fences.release_for_completion();
@@ -305,9 +333,9 @@ impl<A, B, I> PhysicallyPreparedCarrier<'_, A, B, I> {
             checkpoint,
             state_owner,
             source: source_prefix,
-            admission,
-            binding,
-            installation,
+            _admission: admission,
+            _binding: binding,
+            _installation: installation,
         })
     }
 }

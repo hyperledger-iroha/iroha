@@ -24,6 +24,13 @@ fn stage_structural_manual_addition(block: &mut StateBlock<'_>) {
         }],
         retire: Vec::new(),
     };
+    stage_structural_manual_plan(block, plan);
+}
+
+fn stage_structural_manual_plan(
+    block: &mut StateBlock<'_>,
+    plan: iroha_data_model::nexus::LaneLifecyclePlan,
+) {
     let update = prepare_lane_lifecycle_update(
         &block.nexus,
         &block.lane_incarnations,
@@ -77,6 +84,10 @@ fn carrier_geometry_captures_original_predecessor_and_drop_does_not_publish() {
         assert_eq!(&prepared._successor, block.canonical_runtime.get());
         assert_eq!(prepared._header, header());
         assert!(prepared._pending.is_some());
+        assert!(prepared.has_pending_lifecycle());
+        assert!(prepared.requires_storage_transition());
+        assert!(!prepared.requires_queue_custody());
+        assert!(prepared.matches_publication_target(&state, header()));
         assert!(!prepared.is_identity_transition(header()));
         prepared
     };
@@ -92,9 +103,14 @@ fn carrier_geometry_identity_requires_its_exact_captured_header() {
     let block = state.merge_preexecution_block(header());
     let prepared = block.prepare_carrier_geometry().unwrap();
     assert!(prepared.is_identity_transition(header()));
+    assert!(prepared.matches_publication_target(&state, header()));
+    assert!(!prepared.has_pending_lifecycle());
+    assert!(!prepared.requires_storage_transition());
+    assert!(!prepared.requires_queue_custody());
     let mut foreign_header = header();
     foreign_header.set_view_change_index(1);
     assert!(!prepared.is_identity_transition(foreign_header));
+    assert!(!prepared.matches_publication_target(&state, foreign_header));
 }
 
 #[test]
@@ -188,6 +204,122 @@ fn storage_fixture() -> (tempfile::TempDir, Box<State>, PreparedCarrierGeometry)
         block.prepare_carrier_geometry().unwrap()
     };
     (temporary, state, geometry)
+}
+
+#[test]
+fn carrier_geometry_completion_requires_original_state_and_exact_header_before_effects() {
+    let (temporary, state, mut geometry) = storage_fixture();
+    let foreign = State::new_for_testing(
+        World::default(),
+        Arc::clone(&state.kura),
+        LiveQueryStore::start_test(),
+    );
+    assert!(Arc::ptr_eq(&state.kura, &foreign.kura));
+    assert!(!geometry.matches_publication_target(&foreign, header()));
+    let mut foreign_header = header();
+    foreign_header.set_view_change_index(1);
+    let lease = state.kura.try_publication_lease().unwrap();
+    geometry
+        .prepare_under(&state.tiered_backend.lock(), &lease)
+        .unwrap();
+    let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
+    for (target, attempted_header) in [(&foreign, header()), (state.as_ref(), foreign_header)] {
+        let result = geometry.complete_under(
+            target,
+            attempted_header,
+            &mut state.tiered_backend.lock(),
+            &lease,
+        );
+        assert!(matches!(result, Err(LaneLifecycleError::Storage(detail))
+            if detail.contains("original State or carrier header")));
+        assert_eq!(
+            geometry.raw.as_ref().unwrap().phase(),
+            crate::kura::RawGeometryPhase::Captured
+        );
+        assert!(!geometry.tiered.as_ref().unwrap().is_applied());
+        assert!(!temporary.path().join("cold").exists());
+        assert_eq!(
+            std::fs::read(state.kura.lane_geometry_journal_path()).unwrap(),
+            before
+        );
+    }
+    assert!(
+        geometry
+            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
+            .unwrap()
+            .updated_da_mapping()
+            .is_some()
+    );
+    assert_eq!(state.committed_height(), 0);
+    assert_eq!(foreign.committed_height(), 0);
+}
+
+#[test]
+fn carrier_geometry_retirement_and_replacement_require_original_queue_custody() {
+    let secondary = iroha_data_model::nexus::LaneConfig {
+        id: LaneId::new(1),
+        alias: "retiring-geometry".to_owned(),
+        ..iroha_data_model::nexus::LaneConfig::default()
+    };
+    for replace in [false, true] {
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).unwrap(),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                secondary.clone(),
+            ],
+        )
+        .unwrap();
+        let state = Box::new(State::new_with_pre_genesis_nexus_for_testing(
+            World::default(),
+            nexus,
+            LiveQueryStore::start_test(),
+        ));
+        let runtime = state.canonical_runtime.view().get().clone();
+        let mut geometry = {
+            let mut block = state.merge_preexecution_block(header());
+            stage_structural_manual_plan(
+                &mut block,
+                iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: if replace {
+                        vec![secondary.clone()]
+                    } else {
+                        Vec::new()
+                    },
+                    retire: vec![secondary.id],
+                },
+            );
+            block.prepare_carrier_geometry().unwrap()
+        };
+        assert!(geometry.has_pending_lifecycle());
+        assert!(geometry.requires_storage_transition());
+        assert!(geometry.requires_queue_custody());
+        assert_eq!(
+            geometry
+                ._pending
+                .as_ref()
+                .unwrap()
+                .catalog_update
+                .replaced_lane_ids
+                .contains(&secondary.id),
+            replace
+        );
+        let lease = state.kura.try_publication_lease().unwrap();
+        let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
+        let result =
+            geometry.complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease);
+        assert!(matches!(result, Err(LaneLifecycleError::Storage(detail))
+            if detail.contains("no retained original Queue cut")));
+        assert!(geometry.raw.is_none());
+        assert!(geometry.tiered.is_none());
+        assert_eq!(
+            std::fs::read(state.kura.lane_geometry_journal_path()).unwrap(),
+            before
+        );
+        assert_eq!(state.canonical_runtime.view().get(), &runtime);
+        assert_eq!(state.committed_height(), 0);
+    }
 }
 
 #[test]
@@ -339,7 +471,7 @@ fn carrier_geometry_completion_requires_original_prepared_descriptors() {
     );
     assert!(
         geometry
-            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert!(geometry.raw.is_none());
@@ -378,7 +510,7 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
     assert!(
         geometry
-            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert_eq!(
@@ -396,7 +528,12 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     let foreign_lease = foreign.try_publication_lease().unwrap();
     assert!(
         geometry
-            .complete_under(&mut state.tiered_backend.lock(), &foreign_lease)
+            .complete_under(
+                &state,
+                header(),
+                &mut state.tiered_backend.lock(),
+                &foreign_lease
+            )
             .is_err()
     );
     assert!(geometry.raw.as_ref().unwrap().has_pending_journal_write());
@@ -406,7 +543,7 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     let lease = state.kura.try_publication_lease().unwrap();
     {
         let completed = geometry
-            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
             .unwrap();
         assert!(std::ptr::eq(
             completed.updated_da_mapping().unwrap(),
@@ -428,7 +565,7 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
     // they cannot replace the journal or reconstruct the mapping from live State.
     {
         let completed = geometry
-            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
             .unwrap();
         assert!(std::ptr::eq(
             completed.updated_da_mapping().unwrap(),
@@ -461,7 +598,7 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
         .prepare_under(&state.tiered_backend.lock(), &lease)
         .unwrap();
     geometry
-        .complete_under(&mut state.tiered_backend.lock(), &lease)
+        .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
         .unwrap();
     let journal_path = state.kura.lane_geometry_journal_path();
     let original_bytes = std::fs::read(&journal_path).unwrap();
@@ -475,7 +612,7 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
     );
     assert!(
         geometry
-            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert_eq!(
@@ -494,7 +631,7 @@ fn carrier_geometry_completed_catalog_refuses_identical_replacement_journal() {
     );
     assert!(
         geometry
-            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
 }
@@ -509,7 +646,7 @@ fn carrier_geometry_no_change_completion_has_no_mapping_or_storage_owner() {
     let lease = state.kura.try_publication_lease().unwrap();
     assert!(
         geometry
-            .complete_under(&mut state.tiered_backend.lock(), &lease)
+            .complete_under(&state, header(), &mut state.tiered_backend.lock(), &lease)
             .unwrap()
             .updated_da_mapping()
             .is_none()

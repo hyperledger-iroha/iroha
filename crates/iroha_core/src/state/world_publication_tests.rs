@@ -1,6 +1,8 @@
 //! Complete World acquisition, exact retry and current/undo publication controls.
 
-use super::super::publication::{PreparedWorld, WorldPublicationError};
+use super::super::publication::{
+    FieldRefusal, PreparedWorld, PreparedWorldField, WorldPublicationError,
+};
 use super::*;
 use mv::PublicationPreparationError;
 
@@ -63,6 +65,18 @@ fn prepare<'a, A>(journal: DetachedWorld<A>, target: &'a World) -> PreparedWorld
     journal
         .try_prepare_publication(target, |_, _| Ok::<_, ()>(()))
         .unwrap_or_else(|(_, error)| panic!("World preparation refused: {error:?}"))
+}
+
+fn physical_custody<A>(journal: &DetachedWorld<A>) -> (usize, usize, Vec<usize>) {
+    (
+        journal.fields.as_ptr() as usize,
+        journal.fields.capacity(),
+        journal
+            .fields
+            .iter()
+            .map(|field| std::ptr::from_ref(field.as_ref()).cast::<()>() as usize)
+            .collect(),
+    )
 }
 
 fn mutate(original: &mut WorldBlock<'_>, value: u8, trigger: &str) {
@@ -165,7 +179,9 @@ fn complete_world_abort_and_drop_keep_original_events_and_current_undo_cut() {
     let events = original.external_event_buf.as_ptr();
     let journal = capture(original);
     let expected = journal.fields().collect::<Vec<_>>();
+    let custody = physical_custody(&journal);
     let journal = prepare(journal, &world).abort();
+    assert_eq!(physical_custody(&journal), custody);
     assert_eq!(journal.external_events().as_ptr(), events);
     assert_eq!(journal.dataspace_catalog(), &catalog());
     assert_eq!(journal.fields().collect::<Vec<_>>(), expected);
@@ -199,6 +215,7 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
     mutate(&mut original, 4, "retry_world");
     let mut journal = capture(original);
     let expected = journal.fields().collect::<Vec<_>>();
+    let custody = physical_custody(&journal);
     for (name, hold) in holders {
         let held = hold(&world);
         let (retained, error) = journal
@@ -215,6 +232,7 @@ fn every_busy_world_field_releases_all_earlier_writers_and_retains_complete_retr
         ));
         assert_eq!(refusal.trigger_component.is_some(), name == "triggers");
         journal = retained;
+        assert_eq!(physical_custody(&journal), custody, "{name}");
         assert_eq!(journal.fields().collect::<Vec<_>>(), expected);
         drop(held);
         assert_all_writers_released(&world);
@@ -247,6 +265,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
     let world = fixture();
     let journal = capture(world.block());
     let expected = journal.fields().collect::<Vec<_>>();
+    let custody = physical_custody(&journal);
     let (journal, error) = journal
         .try_prepare_publication(&world, |_, _| Err::<(), _>("capacity"))
         .err()
@@ -256,6 +275,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
         WorldPublicationError::Admission("capacity")
     ));
     assert_eq!(journal.fields().collect::<Vec<_>>(), expected);
+    assert_eq!(physical_custody(&journal), custody);
     let last = *expected.last().unwrap();
     // Acquire/commit through the actual inventory-generated accessor, including
     // an untouched last field; equal values still rotate the exact undo owner.
@@ -289,6 +309,7 @@ fn late_world_identity_change_and_capacity_refusal_preserve_journals_and_guard_o
     assert_eq!(refusal.cause, PublicationPreparationError::Changed);
     assert!(dropped.load(Ordering::SeqCst));
     assert_eq!(journal.fields().collect::<Vec<_>>(), expected);
+    assert_eq!(physical_custody(&journal), custody);
     assert!(!journal.matches_current(&world));
 }
 
@@ -343,5 +364,218 @@ fn world_publication_hands_original_extras_and_both_resource_guards_to_aggregate
         }
         assert!(captured.load(Ordering::SeqCst));
         assert!(installed.load(Ordering::SeqCst));
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum UnwindBoundary {
+    Prepare,
+    Abort,
+}
+
+// The witness follows a real original field through preparation and rollback.
+// Field order drops that original owner before observing its destruction.
+struct OriginalFieldDrop(Option<Arc<AtomicBool>>);
+impl Drop for OriginalFieldDrop {
+    fn drop(&mut self) {
+        if let Some(dropped) = &self.0 {
+            dropped.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+struct UnwindField {
+    original: Box<dyn RetainedWorldField>,
+    boundary: Option<UnwindBoundary>,
+    dropped: OriginalFieldDrop,
+}
+
+struct UnwindPreparedField<'target> {
+    original: Box<dyn PreparedWorldField + 'target>,
+    boundary: Option<UnwindBoundary>,
+    dropped: OriginalFieldDrop,
+}
+
+impl RetainedWorldField for UnwindField {
+    fn summary(&self) -> FieldSummary {
+        self.original.summary()
+    }
+
+    fn matches_current(&self, target: &World) -> bool {
+        self.original.matches_current(target)
+    }
+
+    fn try_prepare<'target>(
+        self: Box<Self>,
+        target: &'target World,
+    ) -> Result<Box<dyn PreparedWorldField + 'target>, (Box<dyn RetainedWorldField>, FieldRefusal)>
+    {
+        if matches!(self.boundary, Some(UnwindBoundary::Prepare)) {
+            panic!("injected failure after the preceding real field acquired its writers");
+        }
+        let Self {
+            original,
+            boundary,
+            dropped,
+        } = *self;
+        match original.try_prepare(target) {
+            Ok(original) => Ok(Box::new(UnwindPreparedField {
+                original,
+                boundary,
+                dropped,
+            })),
+            Err((original, error)) => Err((
+                Box::new(Self {
+                    original,
+                    boundary,
+                    dropped,
+                }),
+                error,
+            )),
+        }
+    }
+}
+
+impl PreparedWorldField for UnwindPreparedField<'_> {
+    fn abort(self: Box<Self>) -> Box<dyn RetainedWorldField> {
+        if matches!(self.boundary, Some(UnwindBoundary::Abort)) {
+            panic!("injected failure after the preceding real field returned to retry custody");
+        }
+        let Self {
+            original,
+            boundary,
+            dropped,
+        } = *self;
+        Box::new(UnwindField {
+            original: original.abort(),
+            boundary,
+            dropped,
+        })
+    }
+
+    fn publish(self: Box<Self>) {
+        self.original.publish();
+    }
+}
+
+struct UnwindAdmission {
+    field_dropped: Arc<AtomicBool>,
+    // Zero means live, one means an early refund, and two means payload first.
+    refund_order: Arc<AtomicUsize>,
+}
+impl Drop for UnwindAdmission {
+    fn drop(&mut self) {
+        self.refund_order.store(
+            1 + usize::from(self.field_dropped.load(Ordering::SeqCst)),
+            Ordering::SeqCst,
+        );
+    }
+}
+
+#[test]
+fn world_publication_unwind_retains_both_admissions_until_original_fields_drop() {
+    for boundary in [UnwindBoundary::Prepare, UnwindBoundary::Abort] {
+        let world = fixture();
+        let before = all_images(&world);
+        let field_dropped = Arc::new(AtomicBool::new(false));
+        let capture_refund = Arc::new(AtomicUsize::new(0));
+        let installation_refund = Arc::new(AtomicUsize::new(0));
+        let mut journal = world
+            .block()
+            .try_detach_journals(|_| {
+                Ok::<_, ()>(UnwindAdmission {
+                    field_dropped: Arc::clone(&field_dropped),
+                    refund_order: Arc::clone(&capture_refund),
+                })
+            })
+            .unwrap();
+        assert_eq!(journal.field_count(), 278);
+        // A separate read-only capture holds exact original-cut probes for every
+        // real field before any unwind can poison its physical writer.
+        let probe = capture(world.block());
+        // Preparation retains an untouched tail; abort already restored the first
+        // original field into its retry vector when the second field panics.
+        let observed = match boundary {
+            UnwindBoundary::Prepare => journal.fields.len() - 1,
+            UnwindBoundary::Abort => 0,
+        };
+        let original = journal.fields.remove(observed);
+        journal.fields.insert(
+            observed,
+            Box::new(UnwindField {
+                original,
+                boundary: None,
+                dropped: OriginalFieldDrop(Some(Arc::clone(&field_dropped))),
+            }),
+        );
+        let original = journal.fields.remove(1);
+        journal.fields.insert(
+            1,
+            Box::new(UnwindField {
+                original,
+                boundary: Some(boundary),
+                dropped: OriginalFieldDrop(None),
+            }),
+        );
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let prepared = journal
+                .try_prepare_publication(&world, |_, _| {
+                    Ok::<_, ()>(UnwindAdmission {
+                        field_dropped: Arc::clone(&field_dropped),
+                        refund_order: Arc::clone(&installation_refund),
+                    })
+                })
+                .unwrap_or_else(|_| panic!("actual World should prepare before injected failure"));
+            drop(prepared.abort());
+        }));
+        let message = unwind.expect_err("the real field boundary must exercise unwind");
+        assert!(
+            message
+                .downcast_ref::<&str>()
+                .is_some_and(|message| message.starts_with("injected failure"))
+        );
+        assert!(field_dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            capture_refund.load(Ordering::SeqCst),
+            2,
+            "{boundary:?}: capture admission refunded before its original field"
+        );
+        assert_eq!(
+            installation_refund.load(Ordering::SeqCst),
+            2,
+            "{boundary:?}: installation admission refunded before its original field"
+        );
+        // Unwound std mutex writers deliberately remain poisoned. Check the
+        // actual nonblocking publication result rather than trying to reopen a
+        // blocking World writer that requires local recovery after that panic.
+        for (index, field) in probe.fields.into_iter().enumerate() {
+            let name = field.summary().name;
+            let poisoned = match boundary {
+                UnwindBoundary::Prepare => index == 0,
+                UnwindBoundary::Abort => index != 0,
+            };
+            match field.try_prepare(&world) {
+                Ok(prepared) => {
+                    assert!(
+                        !poisoned,
+                        "{boundary:?}: unwound {name} must require recovery"
+                    );
+                    drop(prepared.abort());
+                }
+                Err((original, error)) => {
+                    assert!(
+                        poisoned,
+                        "{boundary:?}: untouched/released {name} must remain usable"
+                    );
+                    assert_eq!(
+                        error.cause,
+                        PublicationPreparationError::Poisoned,
+                        "{boundary:?}: {name} must be poisoned, not busy or changed"
+                    );
+                    drop(original);
+                }
+            }
+        }
+        assert_eq!(all_images(&world), before);
     }
 }

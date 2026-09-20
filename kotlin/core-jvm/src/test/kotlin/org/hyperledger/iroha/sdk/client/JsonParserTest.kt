@@ -103,6 +103,19 @@ class JsonParserTest {
     }
 
     @Test
+    fun unicodeEscapesRequireFourAsciiHexDigits() {
+        assertEquals("A\u00af\u00af", JsonParser.parse("\"\\u0041\\u00af\\u00AF\""))
+        for (digits in listOf("+041", "-001", "00\u0664\u0661", "00\uff24\uff21", "00g1", "041")) {
+            assertFailsWith<IllegalStateException>("Accepted invalid unicode escape: $digits") {
+                JsonParser.parse("\"\\u$digits\"")
+            }
+        }
+        assertFailsWith<IllegalStateException> {
+            JsonParser.parse("\"\\uD83D\\u\uff24\uff25\uff10\uff10\"")
+        }
+    }
+
+    @Test
     fun nestingIsBoundedBeforeTheRuntimeStack() {
         val accepted = "[".repeat(128) + "0" + "]".repeat(128)
         JsonParser.parse(accepted)

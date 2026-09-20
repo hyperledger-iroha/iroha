@@ -1330,6 +1330,223 @@ class TairaPrepareTests(unittest.TestCase):
         routine.mkdir(parents=True)
         return repo, routine
 
+    def llvm_tools(self):
+        directory = self.root / "llvm-tools"
+        directory.mkdir()
+        tools = []
+        for role, name, alias in (("compiler", "clang", "clang-18"), ("linker", "lld", "ld.lld-18")):
+            real = directory / name
+            real.write_bytes(("disposable " + role).encode())
+            real.chmod(0o755)
+            invocation = directory / alias
+            invocation.symlink_to(real)
+            tools.append((role, invocation, real))
+        return tuple(tools)
+
+    def test_system_linker_preserves_native_environment_without_resolving_tools(self):
+        environment = {"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": "/warm", "CARGO_INCREMENTAL": "0"}
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform=platform), patch.object(release.sys, "platform", platform), \
+                 patch.object(release, "stable_hash_path") as tool_hash, \
+                 patch.object(Path, "resolve") as resolve:
+                selected = release.development_linker_environment(environment, "system")
+                self.assertEqual(selected, environment)
+                self.assertIsNot(selected, environment)
+                tool_hash.assert_not_called()
+                resolve.assert_not_called()
+
+    def test_explicit_llvm_rejects_darwin_before_tool_inspection(self):
+        with patch.object(release.sys, "platform", "darwin"), \
+             patch.object(release, "stable_hash_path") as tool_hash:
+            with self.assertRaisesRegex(release.PrepareError, "only for Linux development checks"):
+                release.development_linker_environment({}, "llvm")
+            tool_hash.assert_not_called()
+
+    def test_llvm_selection_has_fixed_paths_exact_flags_and_reported_stable_identities(self):
+        self.assertEqual(release.LINUX_NATIVE_LLVM_TOOL_PATHS, (
+            ("compiler", Path("/usr/bin/clang-18"), Path("/usr/lib/llvm-18/bin/clang")),
+            ("linker", Path("/usr/bin/ld.lld-18"), Path("/usr/lib/llvm-18/bin/lld")),
+        ))
+        tools = self.llvm_tools()
+        environment = {"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": "/warm"}
+        output = io.StringIO()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+             contextlib.redirect_stdout(output):
+            selected = release.development_linker_environment(environment, "llvm")
+        self.assertEqual(selected, environment | {
+            "RUSTFLAGS": f"-Clinker={tools[0][2]} -Clink-arg=-fuse-ld={tools[1][1]}"})
+        self.assertNotIn("RUSTFLAGS", environment)
+        identity = json.loads(output.getvalue().splitlines()[0].split("llvm: ", 1)[1])
+        for role, invocation, path in tools:
+            self.assertEqual(identity[role], {"invocation": str(invocation), "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size})
+        self.assertIn("one-time dependency rebuild", output.getvalue())
+        self.assertIn("switching back invalidates it again", output.getvalue())
+
+    def test_default_and_explicit_llvm_missing_tools_stop_before_native_build_or_tests(self):
+        repo, routine = self.development_paths()
+        tools = self.llvm_tools()
+        for broken_index in (0, 1):
+            for state in ("missing", "nonexecutable"):
+                broken = tools[broken_index][2]
+                if state == "missing":
+                    saved = broken.with_suffix(".saved")
+                    broken.rename(saved)
+                else:
+                    broken.chmod(0o600)
+                try:
+                    for preference in (None, "llvm"):
+                        for focused in (None, ("cli=" + development_gate.STAGES[0][1][0],)):
+                            with self.subTest(tool=broken_index, state=state, preference=preference, focused=bool(focused)), \
+                                 patch.object(release.sys, "platform", "linux"), \
+                                 patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+                                 patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+                                 patch.object(development_gate, "run_checks") as check, \
+                                 patch.object(development_gate, "run_prequalification") as prequalify, \
+                                 contextlib.redirect_stdout(io.StringIO()):
+                                with self.assertRaisesRegex(release.PrepareError, "missing" if state == "missing" else "not executable") as failed:
+                                    release.development_check(repo, routine, {}, native_linker=preference, focused_regressions=focused)
+                                self.assertIn(str(tools[broken_index][1]), str(failed.exception))
+                                self.assertIn("clang-18 and lld-18", str(failed.exception))
+                                self.assertIn("--native-linker system", str(failed.exception))
+                                check.assert_not_called()
+                                prequalify.assert_not_called()
+                finally:
+                    if state == "missing":
+                        saved.rename(broken)
+                    broken.chmod(0o755)
+
+    def test_llvm_rejects_retargeted_or_unsafe_installed_tools(self):
+        tools = self.llvm_tools()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools):
+            tools[1][1].unlink()
+            tools[1][1].symlink_to(tools[0][2])
+            with self.assertRaisesRegex(release.PrepareError, "fixed installed path"):
+                release.development_linker_environment({}, "llvm")
+            tools[1][1].unlink()
+            tools[1][1].symlink_to(tools[1][2])
+            tools[1][2].chmod(0o777)
+            with self.assertRaisesRegex(release.ReleaseArtifactError, "group- or world-writable"):
+                release.development_linker_environment({}, "llvm")
+
+    def test_explicit_llvm_reaches_only_development_gate_after_sanitization_with_same_lane(self):
+        repo, routine = self.development_paths()
+        tools = self.llvm_tools()
+        for focused in (None, ("cli=" + development_gate.STAGES[0][1][0],)):
+            held = []
+            def check(root, *, environment, lock_fds, **options):
+                self.assertEqual(root, repo)
+                self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
+                self.assertEqual(environment["RUSTFLAGS"],
+                    f"-Clinker={tools[0][2]} -Clink-arg=-fuse-ld={tools[1][1]}")
+                self.assertNotIn("PRIVATE_KEY", environment)
+                self.assertNotIn("CARGO_ENCODED_RUSTFLAGS", environment)
+                self.assertNotIn("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", environment)
+                self.assertEqual(options["qualification_scope"], "full")
+                if focused:
+                    self.assertEqual(options["focused_regressions"], focused)
+                held.extend(lock_fds)
+                self.assertEqual(len(lock_fds), 1)
+                with self.assertRaisesRegex(release.PrepareError, "still running"):
+                    with release.cargo_lane(repo, routine, "development"):
+                        self.fail("LLVM selection must preserve the lane lock")
+            with self.subTest(focused=bool(focused)), patch.object(release.sys, "platform", "linux"), \
+                 patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+                 patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+                 patch.object(development_gate, "run_checks", side_effect=check) as full, \
+                 patch.object(development_gate, "run_prequalification", side_effect=check) as selected, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                release.development_check(repo, routine, {"PRIVATE_KEY": "never forward", "RUSTFLAGS": "bad",
+                    "CARGO_ENCODED_RUSTFLAGS": "bad", "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "bad"},
+                    native_linker="llvm", focused_regressions=focused, native_check_scope="full")
+                self.assertEqual((full.call_count, selected.call_count), (0, 1) if focused else (1, 0))
+            with self.assertRaises(OSError):
+                os.fstat(held[0])
+
+    def test_development_default_routes_linux_to_llvm_and_darwin_to_system(self):
+        repo, routine = self.development_paths()
+        tools = self.llvm_tools()
+        for platform in ("linux", "darwin"):
+            for focused in (None, ("cli=" + development_gate.STAGES[0][1][0],)):
+                with self.subTest(platform=platform, focused=bool(focused)), \
+                     patch.object(release.sys, "platform", platform), \
+                     patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+                     patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+                     patch.object(development_gate, "run_checks") as check, \
+                     patch.object(development_gate, "run_prequalification") as prequalify, \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    release.development_check(repo, routine, {}, focused_regressions=focused)
+                selected = prequalify if focused else check
+                selected.assert_called_once()
+                (check if focused else prequalify).assert_not_called()
+                environment = selected.call_args.kwargs["environment"]
+                self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
+                if platform == "linux":
+                    self.assertEqual(environment["RUSTFLAGS"],
+                        f"-Clinker={tools[0][2]} -Clink-arg=-fuse-ld={tools[1][1]}")
+                else:
+                    self.assertNotIn("RUSTFLAGS", environment)
+
+    def test_linux_explicit_system_runs_when_llvm_tools_are_absent(self):
+        repo, routine = self.development_paths()
+        tools = self.llvm_tools()
+        for _, _, path in tools:
+            path.unlink()
+        with patch.object(release.sys, "platform", "linux"), \
+             patch.object(release, "LINUX_NATIVE_LLVM_TOOL_PATHS", tools), \
+             patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
+             patch.object(development_gate, "run_checks") as check, \
+             contextlib.redirect_stdout(io.StringIO()):
+            release.development_check(repo, routine, {}, native_linker="system")
+        check.assert_called_once()
+        self.assertNotIn("RUSTFLAGS", check.call_args.kwargs["environment"])
+
+    def test_both_check_clis_forward_platform_default_and_explicit_native_linker_with_focus(self):
+        focus = "cli=" + development_gate.STAGES[0][1][0]
+        for platform, default in (("linux", "llvm"), ("darwin", "system")):
+            for entrypoint in ("release", "gate"):
+                for preference in (None, "system", "llvm"):
+                    for focused in (False, True):
+                        argv = (["taira_release.py", "check"] if entrypoint == "release" else ["taira_release_check.py"])
+                        if preference:
+                            argv.extend(("--native-linker", preference))
+                        if focused:
+                            argv.extend(("--focus-regression", focus))
+                        with self.subTest(platform=platform, entrypoint=entrypoint, preference=preference, focused=focused), \
+                             patch.dict(sys.modules, {"taira_release": release}), \
+                             patch.object(release.sys, "platform", platform), \
+                             patch.object(release.sys, "argv", argv), \
+                             patch.object(release, "development_check") as check:
+                            self.assertEqual((release.main if entrypoint == "release" else development_gate.main)(), 0)
+                        expected = {"native_check_scope": "basic", "native_linker": preference or default}
+                        if focused:
+                            expected["focused_regressions"] = (focus,)
+                        self.assertEqual(check.call_args.kwargs, expected)
+
+    def test_prepare_rejects_native_linker_option_and_never_selects_development_linker(self):
+        arguments = ["prepare", "--expected-commit", "a" * 40, "--expected-signer", "A" * 40,
+                     "--output-dir", str(self.out), "--zig", str(self.zig), "--zig-sha256", "a" * 64,
+                     "--cargo-zigbuild", str(self.zigbuild), "--cargo-zigbuild-sha256", "b" * 64]
+        for preference in ("system", "llvm"):
+            with self.subTest(preference=preference), contextlib.redirect_stderr(io.StringIO()), \
+                 self.assertRaises(SystemExit) as failed:
+                release.parser().parse_args(arguments + ["--native-linker", preference])
+            self.assertEqual(failed.exception.code, 2)
+        def check(_root, *, environment, **_kwargs):
+            self.assertFalse(any(name in environment for name in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", "NATIVE_LINKER")))
+        def build(_root, _command, environment, log):
+            check(_root, environment=environment)
+            self.binaries()
+            log.write_bytes(b"fixture compiler output\n")
+        with patch.object(release, "development_linker_environment", side_effect=AssertionError("prepare reached development linker")) as select, \
+             patch.dict(os.environ, {"NATIVE_LINKER": "llvm", "RUSTFLAGS": "bad", "CARGO_ENCODED_RUSTFLAGS": "bad",
+                                    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "bad"}):
+            self.prepare(check=check, build=build)
+        select.assert_not_called()
+
     def test_development_target_defaults_and_explicit_selectors_must_agree(self):
         repo, routine = self.development_paths()
         self.assertEqual(release.development_target(repo, None, {"CARGO_TARGET_DIR": str(repo / "target")}), routine)
@@ -1397,7 +1614,7 @@ class TairaPrepareTests(unittest.TestCase):
                     self.fail("must not admit competing check")
         with patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
              patch.object(development_gate, "run_checks", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
-            release.development_check(repo, None, {"PRIVATE_KEY": "fixture must not cross", "RUSTFLAGS": "bad", "CARGO_BUILD_TARGET": "bad", "CARGO_INCREMENTAL": "0"})
+            release.development_check(repo, None, {"PRIVATE_KEY": "fixture must not cross", "RUSTFLAGS": "bad", "CARGO_BUILD_TARGET": "bad", "CARGO_INCREMENTAL": "0"}, native_linker="system")
         with self.assertRaises(OSError):
             os.fstat(descriptors[0])
         self.assertEqual(stat.S_IMODE(routine.stat().st_mode), target_mode)
@@ -1435,7 +1652,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(development_gate, "run_prequalification", side_effect=diagnostic) as prequalify, \
              patch.object(development_gate, "run_checks") as qualify, contextlib.redirect_stdout(io.StringIO()):
             release.development_check(repo, None, {"PRIVATE_KEY": "never forward", "RUSTFLAGS": "bad"},
-                                      focused_regressions=focused)
+                                      focused_regressions=focused, native_linker="system")
         prequalify.assert_called_once()
         qualify.assert_not_called()
         with self.assertRaises(OSError):
@@ -1459,7 +1676,7 @@ class TairaPrepareTests(unittest.TestCase):
         for focused, entrypoint in ((False, "release"), (True, "release"),
                                     (False, "gate"), (True, "gate")):
             argv = (["taira_release.py", "check"] if entrypoint == "release" else ["taira_release_check.py"])
-            argv.extend(["--repo-root", str(repo), "--target-dir", str(routine)])
+            argv.extend(["--repo-root", str(repo), "--target-dir", str(routine), "--native-linker", "system"])
             if focused:
                 argv.extend(["--focus-regression", focus])
             output = io.StringIO()
@@ -1492,7 +1709,7 @@ class TairaPrepareTests(unittest.TestCase):
         with patch.object(release.sys, "argv", ["taira_release.py", "check", "--focus-regression", focus]), \
              patch.object(release, "development_check") as check:
             self.assertEqual(release.main(), 0)
-        self.assertEqual(check.call_args.kwargs, {"native_check_scope": "basic", "focused_regressions": (focus,)})
+        self.assertEqual(check.call_args.kwargs, {"native_check_scope": "basic", "native_linker": "llvm" if sys.platform == "linux" else "system", "focused_regressions": (focus,)})
         arguments = ["prepare", "--expected-commit", "a" * 40, "--expected-signer", "A" * 40,
                      "--output-dir", str(self.out), "--zig", str(self.zig), "--zig-sha256", "a" * 64,
                      "--cargo-zigbuild", str(self.zigbuild), "--cargo-zigbuild-sha256", "b" * 64,

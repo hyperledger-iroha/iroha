@@ -4304,7 +4304,7 @@ def test_recovered_chunk_signing_owner_mutations_fail_closed(
 
 _FIXTURE_DELEGATION_OWNER_MUTATIONS = (
     ("factory_root", "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body,", "unrelated_fixture_body,"),
-    ("complete_tip_root", "production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body,", "unrelated_fixture_body,"),
+    ("complete_tip_root", "production_genesis_complete_tip_adopts_control_repair_and_launches_body,", "unrelated_fixture_body,"),
     ("marker_root", "return run_marker_replay_test_on_stack();", "return;"),
     ("marker_root", "(0xB7_u8, true, false, false, Some(true)),", ""),
     ("marker_thread", ".spawn(production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies)", ".spawn(unrelated_fixture_body)"),
@@ -4407,3 +4407,100 @@ def test_consumer_eligibility_owner_mutations_fail_closed(
     path.write_text(source[:start] + changed + source[start + len(item.source):], encoding="utf-8")
     errors = module._consumer_eligibility_owner_errors(tmp_path)
     assert any(f"consumer eligibility owner {key}" in error for error in errors), errors
+
+
+def test_runtime_consumer_partition_contract_rejects_owner_and_cut_mutations() -> None:
+    """Exercise the actual runtime contract without unrelated source-contract scans."""
+    import ast
+    import functools
+
+    module = load_checker()
+    contract_path = (
+        ROOT_DIR
+        / "scripts/formal/sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py"
+    )
+    contract_source = contract_path.read_text(encoding="utf-8")
+    tree = ast.parse(contract_source)
+    owners = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors"
+    ]
+    assert len(owners) == 1
+    owner = owners[0]
+    helpers = [
+        node for node in owner.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"item", "qualified_item", "require_tokens", "require_order"}
+    ]
+    assert {node.name for node in helpers} == {
+        "item", "qualified_item", "require_tokens", "require_order"
+    }
+
+    def assignment_index(name: str) -> int:
+        positions = [
+            index for index, node in enumerate(owner.body)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+        ]
+        assert len(positions) == 1, name
+        return positions[0]
+
+    start = assignment_index("runtime_driver_context")
+    end = assignment_index("effect_runtime_context")
+    assert start < end
+    # Reuse the maintained lexical contract and exact owner/context parser;
+    # mutation fixtures neither reproduce its invariants nor copy Rust files.
+    probe = ast.parse(
+        "def _runtime_consumer_partition_probe(path, source):\n"
+        "    errors = []\n"
+        "    paths = {'runtime': path}\n"
+        "    sources = {'runtime': source}\n"
+        "    return errors\n"
+    ).body[0]
+    probe.body[-1:-1] = helpers + owner.body[start:end]
+    ast.fix_missing_locations(probe)
+    probe_module = ast.Module(body=[probe], type_ignores=[])
+    exec(compile(probe_module, str(contract_path), "exec"), module.__dict__)
+    read_errors: list[str] = []
+    path, source = module._read_reviewed_rust_source(
+        ROOT_DIR,
+        "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+        read_errors,
+        "runtime consumer partition mutation source",
+    )
+    assert not read_errors, read_errors
+    module.rust_items = functools.lru_cache(maxsize=256)(module.rust_items)
+    baseline = module._runtime_consumer_partition_probe(path, source)
+    assert not baseline, baseline
+    mutations=(
+    ('adapter_wal_authority','leader_wire_consumer_authority','impl RuntimeDriver for SumeragiV2Adapter','self.leader_wire_recovery_authority().map(Some)','Ok(None)','production consumer authority comes'),
+    ('runtime_consumer_tag','refresh_ingress_consumer_eligibility','impl<D: RuntimeDriver> SerializedV2Runtime<D>','authority.consumer_tag() != self.driver.current_tag()','authority.consumer_tag() == self.driver.current_tag()','consumer refresh requires'),
+    ('cached_admission_identity','refresh_consumer_authority','impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C>','!queued.validate_cached_admission_identity()','false','consumer refresh checks'),
+    ('ordinary_class_wait','class_lifecycle_stats','impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C>','queued.class == class && !self.consumer_waits(queued)','queued.class == class','ordinary class minima exclude'),
+    ('ordinary_selection_wait','pop_next_with_selection_kind','impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C>','queued.class == class\n                && !self.consumer_waits(queued)\n                && queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)','queued.class == class\n                && true\n                && queued.lifecycle_ordinal == Some(oldest_class_lifecycle_ordinal)','ordinary service preserves'),
+    ('partition_count','validate_identity','impl RuntimeQueueOwnershipSnapshot','u64::try_from(pending_count) == Ok(self.consumer_pending_count)','true','queue partition accounts'),
+    ('consumer_handoff_authority','matches_scheduler_occurrence','impl RuntimeQueueSelectionSeal','before.consumer_authority == after.consumer_authority','true','scheduler handoff binds'),
+    ('pacemaker_consumer_wait','pop_pacemaker_progress_with_ownership','impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C>','let eligible = !self.consumer_waits(queued)','let eligible = true','pacemaker service also excludes'),
+    ('pre_timeout_physical_cut','try_step_pre_timeout_locked_prepare_qc','impl<D: RuntimeDriver> SerializedV2Runtime<D>','u128::from(physical.source_ordinal) < physical_cut','u128::from(physical.source_ordinal) <= physical_cut','pre-timeout dispatch is authenticated'),
+    ('pre_timeout_post_transfer_preview','try_step_pre_timeout_locked_prepare_qc','impl<D: RuntimeDriver> SerializedV2Runtime<D>','|| !self\n                .driver\n                .command_previews_pre_timeout_locked_prepare_qc(&command.command, target)','|| false','pre-timeout dispatch is authenticated'),
+    ('ordinary_scheduler_debt','validate_exact','impl RuntimeSchedulerOwnershipEvidence','&& self.queue_after.max_service_debt\n                    <= self.queue_before.max_service_debt.saturating_add(1)\n                && if retry_retained','&& true\n                && if retry_retained','ordinary consumer-partition evidence'),
+    ('regression_tamper_rejection','ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc',None,'forged_partition.validate_exact().is_err()','forged_partition.validate_exact().is_ok()','ordinary-step future-PrepareQC regression'),
+    )
+    for name, item_name, context, old, new, diagnostic in mutations:
+        items = [
+            item for item in module.rust_items(source, item_name)
+            if context is None or item.brace_context == (module.rust_code_tokens(context),)
+        ]
+        assert len(items) == 1, name
+        item = items[0]
+        assert item.source.count(old) == 1, (name, old)
+        assert source.count(item.source) == 1, name
+        # The baseline authenticated the complete runtime. Each negative case
+        # reparses its genuine method in the same lexical owner, avoiding twelve
+        # full-file scans while requiring that method's specific guard diagnostic.
+        mutated = item.source.replace(old, new, 1)
+        for owner_tokens in reversed(item.brace_context):
+            mutated = " ".join(owner_tokens) + " {\n" + mutated + "\n}"
+        errors = module._runtime_consumer_partition_probe(path, mutated)
+        assert any(diagnostic in error for error in errors), (name, errors)

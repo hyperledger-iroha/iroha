@@ -646,15 +646,170 @@ fn verify_peer_state(
     })))
 }
 
+#[derive(Default)]
+struct ProofPrefix {
+    proofs: BTreeMap<u64, BridgeFinalityProof>,
+    verifier: Option<BridgeFinalityVerifier>,
+    #[cfg(test)]
+    authenticated_rows: usize,
+}
+
+impl ProofPrefix {
+    /// Recheck immutable disk custody, then authenticate and durably publish only
+    /// previously unseen contiguous successors. Lower tips never rewind this owner.
+    #[allow(clippy::too_many_arguments)]
+    fn synchronize(
+        &mut self,
+        authority: &Authority,
+        journal: &Journal,
+        source_tip: &BridgeFinalityProof,
+        source_genesis: &BridgeFinalityProof,
+        deadline: std::time::Instant,
+        new_proof_budget: usize,
+        mut fetch: impl FnMut(NonZeroU64, &mut BridgeFinalityVerifier) -> Result<BridgeFinalityProof>,
+    ) -> Result<bool> {
+        require(
+            (1..=MAX_NEW_PROOFS).contains(&new_proof_budget),
+            "finality proof batch budget must remain within the native bound",
+        )?;
+        let mut new_proofs = 0_usize;
+        for next in 1..=source_tip.block_header.height().get() {
+            require_operation_budget(deadline, "synchronizing authenticated finality proofs")?;
+            let name = format!("proof-{next:020}.json");
+            let cached: Option<BridgeFinalityProof> = journal.optional_json(&name)?;
+            if let Some(retained) = self.proofs.get(&next) {
+                // Re-read through Journal custody and canonical-JSON checks on every attempt.
+                // Only exact immutable evidence may reuse this invocation's authentication.
+                require(
+                    cached.as_ref() == Some(retained),
+                    "retained proof cache changed after authentication",
+                )?;
+                require_operation_budget(deadline, "revalidated authenticated proof custody")?;
+                continue;
+            }
+            let fresh = cached.is_none();
+            let mut verified_successor = None;
+            let proof = if let Some(proof) = cached {
+                proof
+            } else {
+                if new_proofs == new_proof_budget {
+                    return Ok(false);
+                }
+                new_proofs += 1;
+                if next == 1 {
+                    source_genesis.clone()
+                } else {
+                    let mut trial = self
+                        .verifier
+                        .clone()
+                        .ok_or_else(|| eyre!("missing genesis verifier"))?;
+                    let proof = fetch(NonZeroU64::new(next).unwrap(), &mut trial)?;
+                    verified_successor = Some(trial);
+                    proof
+                }
+            };
+            require(
+                proof.block_header.height().get() == next,
+                "retained proof cache has a missing or reordered height",
+            )?;
+            authority.roster(&proof)?;
+            let advanced = if next == 1 {
+                authority.anchor(&proof)?
+            } else if let Some(advanced) = verified_successor {
+                // The native reader already verified this exact successor. Admit its advanced
+                // verifier only after the same requested-height and independent-roster checks.
+                advanced
+            } else {
+                let mut trial = self
+                    .verifier
+                    .clone()
+                    .ok_or_else(|| eyre!("missing genesis verifier"))?;
+                trial.verify(&proof)?;
+                trial
+            };
+            self.publish_verified(journal, proof, advanced, fresh, deadline)?;
+        }
+        require_operation_budget(deadline, "verified authenticated finality chain")?;
+        Ok(true)
+    }
+
+    /// Commit an already authenticated trial only after durable publication and budget checks.
+    fn publish_verified(
+        &mut self,
+        journal: &Journal,
+        proof: BridgeFinalityProof,
+        advanced: BridgeFinalityVerifier,
+        fresh: bool,
+        deadline: std::time::Instant,
+    ) -> Result<()> {
+        #[cfg(test)]
+        {
+            self.authenticated_rows += 1;
+        }
+        require_operation_budget(deadline, "verified authenticated finality proof")?;
+        let height = proof.block_header.height().get();
+        if fresh {
+            journal.install_json(&format!("proof-{height:020}.json"), &proof)?;
+        }
+        require_operation_budget(deadline, "published authenticated finality proof")?;
+        // Failed verification, publication or deadline checks never advance retained state.
+        self.proofs.insert(height, proof);
+        self.verifier = Some(advanced);
+        Ok(())
+    }
+}
+
+/// Invocation-owned finality prefix under one immutable plan and held Journal lock.
+/// A fresh invocation starts empty and independently authenticates every disk proof.
+pub(super) struct Completion<'a> {
+    plan: &'a PlanV1,
+    journal: &'a Journal,
+    authority: Authority,
+    prefix: ProofPrefix,
+    deadline: std::time::Instant,
+}
+
+impl<'a> Completion<'a> {
+    pub(super) fn new(
+        plan: &'a PlanV1,
+        journal: &'a Journal,
+        deadline: std::time::Instant,
+    ) -> Result<Self> {
+        require_operation_budget(deadline, "starting finality verification")?;
+        let authority = plan.manifest.finality.authority(plan.manifest.network_id)?;
+        require_operation_budget(deadline, "authenticated deployment trust")?;
+        journal.revalidate()?;
+        Ok(Self {
+            plan,
+            journal,
+            authority,
+            prefix: ProofPrefix::default(),
+            deadline,
+        })
+    }
+
+    /// Read fresh peer state and challenge attestations on every attempt; only the
+    /// unchanged contiguous proof prefix can reuse authentication within this invocation.
+    pub(super) fn complete<C: RunContext>(
+        &mut self,
+        context: &C,
+        report: &mut ReportV1,
+    ) -> Result<()> {
+        complete(context, self, report)
+    }
+}
+
 /// Read-only finality synchronization and fresh observations from all four validators.
 /// The caller alone advances the authenticated proof chain and publishes journal evidence.
-pub(super) fn complete<C: RunContext>(
+fn complete<C: RunContext>(
     context: &C,
-    plan: &PlanV1,
-    journal: &Journal,
+    completion: &mut Completion<'_>,
     report: &mut ReportV1,
-    deadline: std::time::Instant,
 ) -> Result<()> {
+    let plan = completion.plan;
+    let journal = completion.journal;
+    let authority = &completion.authority;
+    let deadline = completion.deadline;
     require_operation_budget(deadline, "starting finality verification")?;
     require(
         report.verification.transactions.len() == PHASES.len()
@@ -666,7 +821,6 @@ pub(super) fn complete<C: RunContext>(
         "completion requires all three retained phases to be applied",
     )?;
     let trust = &plan.manifest.finality;
-    let authority = trust.authority(plan.manifest.network_id)?;
     let challenge: [u8; 32] = rand::random();
     require(challenge != [0; 32], "random finality challenge is zero")?;
     let clients = peer_clients(context, trust)?
@@ -690,7 +844,7 @@ pub(super) fn complete<C: RunContext>(
                 return Ok(PeerRead::Pending);
             }
         };
-        validate_attestation(&authority, peer, challenge, &before)?;
+        validate_attestation(authority, peer, challenge, &before)?;
         require_operation_budget(deadline, "verified validator finality tip")?;
         Ok(PeerRead::Verified(before))
     })?;
@@ -712,59 +866,22 @@ pub(super) fn complete<C: RunContext>(
         .max_by_key(|(_, tip)| tip.body.finality_proof.block_header.height())
         .ok_or_else(|| eyre!("missing validator tips"))?;
     let source = &clients[source_index];
-    let mut proofs = BTreeMap::<u64, BridgeFinalityProof>::new();
-    let mut verifier = None::<BridgeFinalityVerifier>;
-    let mut new_proofs = 0_usize;
-    for next in 1..=source_tip.body.finality_proof.block_header.height().get() {
-        require_operation_budget(deadline, "synchronizing authenticated finality proofs")?;
-        let name = format!("proof-{next:020}.json");
-        let cached: Option<BridgeFinalityProof> = journal.optional_json(&name)?;
-        let fresh = cached.is_none();
-        let mut verified_successor = None;
-        let proof = if let Some(proof) = cached {
-            proof
-        } else {
-            if new_proofs == MAX_NEW_PROOFS {
-                report.state = "verification_sync_pending".into();
-                return Ok(());
-            }
-            new_proofs += 1;
-            if next == 1 {
-                source_tip.body.genesis_finality_proof.clone()
-            } else {
-                let mut trial = verifier
-                    .clone()
-                    .ok_or_else(|| eyre!("missing genesis verifier"))?;
-                let proof = source
-                    .get_next_bridge_finality_proof(NonZeroU64::new(next).unwrap(), &mut trial)?;
-                verified_successor = Some(trial);
-                proof
-            }
-        };
-        require(
-            proof.block_header.height().get() == next,
-            "retained proof cache has a missing or reordered height",
-        )?;
-        authority.roster(&proof)?;
-        if next == 1 {
-            verifier = Some(authority.anchor(&proof)?);
-        } else if let Some(advanced) = verified_successor {
-            // The native reader already verified this exact successor. Admit its advanced
-            // verifier only after the same requested-height and independent-roster checks.
-            verifier = Some(advanced);
-        } else {
-            verifier
-                .as_mut()
-                .ok_or_else(|| eyre!("missing genesis verifier"))?
-                .verify(&proof)?;
-        }
-        require_operation_budget(deadline, "verified authenticated finality proof")?;
-        if fresh {
-            journal.install_json(&name, &proof)?;
-        }
-        proofs.insert(next, proof);
+    if !completion.prefix.synchronize(
+        authority,
+        journal,
+        &source_tip.body.finality_proof,
+        &source_tip.body.genesis_finality_proof,
+        deadline,
+        MAX_NEW_PROOFS,
+        |height, trial| {
+            source
+                .get_next_bridge_finality_proof(height, trial)
+                .map_err(Into::into)
+        },
+    )? {
+        report.state = "verification_sync_pending".into();
+        return Ok(());
     }
-    require_operation_budget(deadline, "verified authenticated finality chain")?;
     let prepared = PHASES
         .iter()
         .map(|phase| {
@@ -776,10 +893,10 @@ pub(super) fn complete<C: RunContext>(
         .collect::<Result<Vec<_>>>()?;
     // A previous completion receipt never replaces fresh peer state or the new challenge.
     let verification = PeerVerification {
-        authority: &authority,
+        authority,
         plan,
         prepared: &prepared,
-        proofs: &proofs,
+        proofs: &completion.prefix.proofs,
         challenge,
         deadline,
     };

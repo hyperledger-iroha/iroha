@@ -1860,10 +1860,6 @@ pub(crate) struct PreparedReputationCapture {
     insertion: OwnedReputationInsertion,
     kura: Arc<Kura>,
 }
-#[expect(
-    dead_code,
-    reason = "TODO: connect retained archive reservations to the production carrier publisher"
-)]
 impl PreparedReputationCapture {
     /// Rejoin the original capture to durable evidence without reacquiring Kura fences.
     /// The immutable insertion and its reservation remain owned on every refusal.
@@ -1893,22 +1889,6 @@ impl PreparedReputationCapture {
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         self.reauthenticate_under_publication_lease(lease, receipt)?;
         self.insertion.try_persist()
-    }
-
-    /// Authenticate exact durable finality, then persist the retained bytes with retry progress.
-    ///
-    /// No State projection, transition, or capacity admission is recomputed on this path.
-    pub(crate) fn publish(
-        &mut self,
-        receipt: &KuraV2CommitReceipt,
-    ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
-        authenticate_capture_key(
-            &self.insertion.key,
-            self.insertion.finalized_at_unix_ms,
-            &self.kura,
-            receipt,
-        )?;
-        self.insertion.persist()
     }
 }
 struct PreparedReputationPolicy {
@@ -1952,13 +1932,6 @@ impl OwnedReputationInsertion {
         &mut self,
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         let mut index = self.archive.try_write_reserved_index(&self.reservation)?;
-        persist_admitted_reputation(&self.archive, &mut index, &self.key, &mut self.state)
-    }
-
-    fn persist(
-        &mut self,
-    ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
-        let mut index = self.archive.write_reserved_index(&self.reservation)?;
         persist_admitted_reputation(&self.archive, &mut index, &self.key, &mut self.state)
     }
 }
@@ -6241,24 +6214,6 @@ impl ReputationFinalizedArchive {
         self.capture_gate
             .ensure_unreserved()
             .map_err(|wait| ReputationFinalizedArchiveError::CaptureReserved { wait })?;
-        Ok(index)
-    }
-    fn write_reserved_index(
-        &self,
-        reservation: &ArchiveCaptureReservation,
-    ) -> Result<ArchiveIndexWriteGuard<'_, ArchiveIndex>, ReputationFinalizedArchiveError> {
-        let index = self
-            .index
-            .write()
-            .map_err(|error| self.index_lock_error(error))?;
-        if index.requires_reopen {
-            return Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
-                reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
-            });
-        }
-        if !reservation.authorizes(&self.capture_gate) {
-            return Err(ReputationFinalizedArchiveError::CaptureOwnerMismatch);
-        }
         Ok(index)
     }
     /// A held Kura lease must never wait on an archive reader that needs Kura.

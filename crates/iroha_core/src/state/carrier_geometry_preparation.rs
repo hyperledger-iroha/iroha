@@ -1,9 +1,10 @@
 //! Exact replicated geometry inputs retained before State journals are consumed.
 //!
 //! This owner binds the actual MV predecessor and accepted successor. It grants
-//! no storage publication authority. The private consuming carrier can retain
-//! exact raw/tiered progress under an already-held Kura lease. TODO: join source,
-//! retirement and complete pre-vote resource owners before exposing that consumer;
+//! no storage publication authority. The private consuming carrier retains exact
+//! raw/tiered progress under an already-held Kura lease and binds completion to
+//! its original State and header. TODO: join original Queue retirement custody
+//! and complete pre-vote resources before activating the production handoff;
 //! physical custody alone cannot authorize geometry or State publication.
 
 use super::*;
@@ -21,6 +22,8 @@ pub(super) struct PreparedCarrierGeometry {
     network_id: NetworkId,
     raw: Option<crate::kura::RawGeometryAttempt>,
     tiered: Option<tiered::TieredGeometryAttempt>,
+    // Retain the original State allocation, even if an identical State shares Kura.
+    state_owner: Arc<BlockHashOwner>,
     // Keep the original Kura alive behind all captured physical custody.
     kura: Arc<Kura>,
 }
@@ -194,9 +197,23 @@ impl PreparedCarrierGeometry {
     /// it grants no source, resource, retirement or State publication authority.
     pub(super) fn complete_under<'geometry, 'kura>(
         &'geometry mut self,
+        target: &State,
+        header: BlockHeader,
         backend: &mut tiered::TieredStateBackend,
         lease: &'geometry crate::kura::KuraPublicationLease<'kura>,
     ) -> Result<CompletedCarrierGeometry<'geometry, 'kura>, LaneLifecycleError> {
+        if !self.matches_publication_target(target, header) {
+            return Err(LaneLifecycleError::Storage(
+                "carrier geometry differs from its original State or carrier header".to_owned(),
+            ));
+        }
+        if self.requires_queue_custody() {
+            // TODO: retain the original service Queue cut across retirement and
+            // State publication; a certified frontier is not Queue completion.
+            return Err(LaneLifecycleError::Storage(
+                "carrier geometry retirement has no retained original Queue cut".to_owned(),
+            ));
+        }
         self.resume_under(backend, lease)?;
         if let Some(raw) = &mut self.raw {
             if raw.phase() != crate::kura::RawGeometryPhase::CatalogPublished {
@@ -214,10 +231,34 @@ impl PreparedCarrierGeometry {
 }
 
 impl PreparedCarrierGeometry {
-    /// Identity-only geometry has no namespace transition to persist. A pending
-    /// lifecycle must retain its real geometry/Queue owner before publication.
-    /// TODO: consume the captured pending transition through the guarded Kura
-    /// geometry publisher; never treat its absence of permission as completion.
+    /// Authenticate this captured geometry against the original publication target.
+    /// Header bytes and shared Kura custody alone cannot identify a State family.
+    pub(super) fn matches_publication_target(&self, target: &State, header: BlockHeader) -> bool {
+        self._header == header && Arc::ptr_eq(&self.state_owner, &target.block_hashes.owner)
+    }
+
+    /// Whether the enclosing publisher must consume its prepared lifecycle effects.
+    pub(super) fn has_pending_lifecycle(&self) -> bool {
+        self._pending.is_some()
+    }
+
+    /// Whether this exact pending lifecycle changes raw or tiered namespaces.
+    pub(super) fn requires_storage_transition(&self) -> bool {
+        self._pending
+            .as_ref()
+            .is_some_and(|pending| pending.transition.requires_geometry())
+    }
+
+    /// Retiring or replacing any original route requires its original Queue cut.
+    /// This only identifies the required owner; it never establishes readiness.
+    pub(super) fn requires_queue_custody(&self) -> bool {
+        self._pending.as_ref().is_some_and(|pending| {
+            !pending.plan.retire.is_empty() || !pending.catalog_update.replaced_lane_ids.is_empty()
+        })
+    }
+
+    /// Identity-only geometry has no lifecycle or namespace transition to publish.
+    /// A pending lifecycle remains a distinct owner even without a storage change.
     pub(super) fn is_identity_transition(&self, header: BlockHeader) -> bool {
         self._header == header
             && self._pending.is_none()
@@ -445,6 +486,7 @@ impl StateBlock<'_> {
             network_id: self.network_id,
             raw: None,
             tiered: None,
+            state_owner: Arc::clone(&self.state_ref.block_hashes.owner),
             kura: Arc::clone(&self.state_ref.kura),
         })
     }

@@ -650,13 +650,6 @@ mod block {
             }
         }
     }
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "TODO: connect retained journals to the consuming State publisher"
-        )
-    )]
     impl<Installation> PreparedDetachedTransactionsBlock<'_, Installation> {
         /// Release the physical writer and recover the same admitted journal.
         pub(crate) fn abort(self) -> DetachedTransactionsBlock {

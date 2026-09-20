@@ -112,6 +112,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/block.rs': (
         'block/carrier_preparation.rs',
         'block/post_execution_tail.rs',
+        'block/parallel_account_profile_tests.rs',
         'block/post_execution_tail_tests.rs',
         'block/autonomous_merge_carrier_content_tests.rs',
         'block/exact_quorum_cardinality_tests.rs',
@@ -128,7 +129,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/native_amx_receipt_regression_tests.rs',
         'block/native_amx_exact_quorum_cardinality_tests.rs',
         'block/native_amx_and_dag_tests.rs',
-        'block/parallel_account_profile_tests.rs',
         'block/sequential_rejected_pipeline_trigger_tests.rs',
         'block/tx_order_validation_revalidation_test.rs',
         'block/rejected_live_batch_fee_tests.rs',

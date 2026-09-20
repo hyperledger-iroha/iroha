@@ -1955,13 +1955,6 @@ pub(crate) struct DetachedBlockHashes {
     visible: Vec<HashOf<BlockHeader>>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: connect retained journals to the consuming State publisher"
-    )
-)]
 #[path = "state/block_hashes_publication.rs"]
 mod block_hashes_publication;
 
@@ -27760,6 +27753,36 @@ impl State {
     /// without holding the internal lock across heavy work.
     #[must_use]
     pub fn nexus_snapshot(&self) -> iroha_config::parameters::actual::Nexus {
+        loop {
+            if let Some(nexus) = self
+                .try_nexus_snapshot_once()
+                .expect("persisted canonical runtime and catalog must be valid")
+            {
+                return nexus;
+            }
+            std::thread::yield_now();
+        }
+    }
+    fn try_nexus_snapshot_once(
+        &self,
+    ) -> Result<Option<iroha_config::parameters::actual::Nexus>, LaneLifecycleError> {
+        let generation_before = self.state_view_generation();
+        if generation_before % 2 != 0 {
+            return Ok(None);
+        }
+        let runtime = self.canonical_runtime.view();
+        let parameters = self.world.parameters.view();
+        let projection = runtime_catalog_from_parameters(parameters.get()).and_then(|catalog| {
+            runtime.nexus_projection_with_catalog(&self.nexus.read(), catalog.as_ref())
+        });
+        if !is_stable_state_view_generation(generation_before, self.state_view_generation()) {
+            return Ok(None);
+        }
+        projection.map(Some)
+    }
+    /// Read lane ownership without acquiring the protected catalog during publication.
+    /// This projection does not supply complete runtime dataspace descriptions.
+    fn nexus_ownership_projection(&self) -> iroha_config::parameters::actual::Nexus {
         self.canonical_runtime
             .view()
             .nexus_projection(&self.nexus.read())
@@ -28247,7 +28270,9 @@ impl State {
         DaShardCursorJournal::journal_path(&root)
     }
     fn persist_da_shard_cursor_journal(&self) {
-        self.persist_da_shard_cursor_journal_with_config(&self.nexus_snapshot().lane_config);
+        self.persist_da_shard_cursor_journal_with_config(
+            &self.nexus_ownership_projection().lane_config,
+        );
     }
     fn persist_da_shard_cursor_journal_with_config(
         &self,
@@ -46962,7 +46987,7 @@ impl State {
                 let state_write_lock_hold_start = Instant::now();
                 let _view_generation = self.begin_state_view_write();
                 {
-                    let mut nexus = self.nexus_snapshot();
+                    let mut nexus = self.nexus_ownership_projection();
                     nexus.lane_catalog = lifecycle_update.updated_catalog;
                     nexus.lane_config = lifecycle_update.updated_lane_config;
                     Self::install_canonical_runtime_projection_with_owner(

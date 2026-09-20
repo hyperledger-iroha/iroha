@@ -175,20 +175,25 @@ trait CaptureWorldField: Sized {
 
 struct RetainedStorage<K: Key, V: Value> {
     name: &'static str,
-    journal: mv::storage::Detached<K, V, ()>,
+    // Empty only while the same box is held by its private prepared owner.
+    journal: Option<mv::storage::Detached<K, V, ()>>,
     target: fn(&World) -> &Storage<K, V>,
 }
 
 impl<K: Key, V: Value> RetainedWorldField for RetainedStorage<K, V> {
     fn summary(&self) -> FieldSummary {
+        let journal = self.journal.as_ref().expect("retained original journal");
         FieldSummary {
             name: self.name,
-            mode: self.journal.mode(),
-            touched_values: self.journal.touched_entries().len(),
+            mode: journal.mode(),
+            touched_values: journal.touched_entries().len(),
         }
     }
     fn matches_current(&self, target: &World) -> bool {
-        self.journal.matches_current((self.target)(target))
+        self.journal
+            .as_ref()
+            .expect("retained original journal")
+            .matches_current((self.target)(target))
     }
     fn try_prepare<'target>(
         self: Box<Self>,
@@ -218,7 +223,7 @@ impl<K: Key, V: Value> CaptureWorldField for StorageBlock<'_, K, V> {
         };
         Ok(RetainedStorage {
             name,
-            journal,
+            journal: Some(journal),
             target,
         })
     }
@@ -226,20 +231,25 @@ impl<K: Key, V: Value> CaptureWorldField for StorageBlock<'_, K, V> {
 
 struct RetainedCell<V: Value> {
     name: &'static str,
-    journal: mv::cell::Detached<V, ()>,
+    // Empty only while the same box is held by its private prepared owner.
+    journal: Option<mv::cell::Detached<V, ()>>,
     target: fn(&World) -> &Cell<V>,
 }
 
 impl<V: Value> RetainedWorldField for RetainedCell<V> {
     fn summary(&self) -> FieldSummary {
+        let journal = self.journal.as_ref().expect("retained original journal");
         FieldSummary {
             name: self.name,
-            mode: self.journal.mode(),
-            touched_values: usize::from(self.journal.touched_value().is_some()),
+            mode: journal.mode(),
+            touched_values: usize::from(journal.touched_value().is_some()),
         }
     }
     fn matches_current(&self, target: &World) -> bool {
-        self.journal.matches_current((self.target)(target))
+        self.journal
+            .as_ref()
+            .expect("retained original journal")
+            .matches_current((self.target)(target))
     }
     fn try_prepare<'target>(
         self: Box<Self>,
@@ -269,7 +279,7 @@ impl<V: Value> CaptureWorldField for CellBlock<'_, V> {
         };
         Ok(RetainedCell {
             name,
-            journal,
+            journal: Some(journal),
             target,
         })
     }
@@ -277,48 +287,40 @@ impl<V: Value> CaptureWorldField for CellBlock<'_, V> {
 
 struct RetainedTriggers {
     name: &'static str,
-    journal: DetachedSet<()>,
+    // Empty only while the same box is held by its private prepared owner.
+    journal: Option<DetachedSet<()>>,
     target: fn(&World) -> &TriggerSet,
 }
 
 impl RetainedWorldField for RetainedTriggers {
     fn summary(&self) -> FieldSummary {
+        let journal = self.journal.as_ref().expect("retained original journal");
         // The trigger owner exposes these ten immutable typed journals. Its
         // own exhaustive SetBlock destructuring remains the completeness gate.
-        let touched_values = self.journal.data_triggers().touched_entries().len()
-            + self.journal.pipeline_triggers().touched_entries().len()
-            + self.journal.time_triggers().touched_entries().len()
-            + self.journal.by_call_triggers().touched_entries().len()
-            + self.journal.ids().touched_entries().len()
-            + self
-                .journal
-                .active_data_trigger_ids()
-                .touched_entries()
-                .len()
-            + self
-                .journal
+        let touched_values = journal.data_triggers().touched_entries().len()
+            + journal.pipeline_triggers().touched_entries().len()
+            + journal.time_triggers().touched_entries().len()
+            + journal.by_call_triggers().touched_entries().len()
+            + journal.ids().touched_entries().len()
+            + journal.active_data_trigger_ids().touched_entries().len()
+            + journal
                 .active_pipeline_trigger_ids()
                 .touched_entries()
                 .len()
-            + self
-                .journal
-                .active_time_trigger_ids()
-                .touched_entries()
-                .len()
-            + self
-                .journal
-                .active_by_call_trigger_ids()
-                .touched_entries()
-                .len()
-            + self.journal.contracts().touched_entries().len();
+            + journal.active_time_trigger_ids().touched_entries().len()
+            + journal.active_by_call_trigger_ids().touched_entries().len()
+            + journal.contracts().touched_entries().len();
         FieldSummary {
             name: self.name,
-            mode: self.journal.mode(),
+            mode: journal.mode(),
             touched_values,
         }
     }
     fn matches_current(&self, target: &World) -> bool {
-        self.journal.matches_current((self.target)(target))
+        self.journal
+            .as_ref()
+            .expect("retained original journal")
+            .matches_current((self.target)(target))
     }
     fn try_prepare<'target>(
         self: Box<Self>,
@@ -347,7 +349,7 @@ impl CaptureWorldField for TriggerSetBlock<'_> {
             .map_err(trigger_error)?;
         Ok(RetainedTriggers {
             name,
-            journal,
+            journal: Some(journal),
             target,
         })
     }
