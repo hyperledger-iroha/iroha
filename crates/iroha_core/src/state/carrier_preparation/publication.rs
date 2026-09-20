@@ -10,19 +10,25 @@ use super::*;
 use crate::{block::CommittedBlock, state::EventBox};
 
 /// An unmet publication obligation, never invalidity of a decided proposal.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(in crate::state::carrier_preparation::journals) enum CarrierPublicationError {
     /// The original prepared execution no longer matches its immutable carrier.
+    #[error("prepared execution no longer matches its immutable carrier")]
     Source,
     /// The retained transition differs from its original State, header or effects.
+    #[error("retained geometry differs from its original State, header or effects")]
     Geometry,
     /// Retirement/replacement still needs the original service Queue custody.
+    #[error("lane retirement requires the original service Queue custody")]
     QueueRetirementRequired,
     /// The retained geometry storage attempt must retry or recover before visibility.
-    GeometryStorage(crate::state::LaneLifecycleError),
+    #[error("retained geometry storage must complete before publication: {0}")]
+    GeometryStorage(#[source] crate::state::LaneLifecycleError),
     /// Old participant evidence has not supplied complete durable application custody.
+    #[error("participant evidence requires complete durable application custody")]
     ParticipantDurability,
     /// A prevalidation scratch owner cannot publish State.
+    #[error("prevalidation cannot publish State")]
     Prevalidation,
 }
 
@@ -123,14 +129,15 @@ impl PublishedNativeApply<'_> {
     /// Every actual fsynced or retained issued Decision must authenticate the published
     /// value, even before its reducer acknowledgement or body manifest exists.
     /// Earlier proposal, lock/vote and timeout intents need not name that value.
-    pub(crate) fn authorizes_terminal<'qc>(
+    pub(crate) fn authorizes_terminal<'qc, Decisions>(
         &self,
         owner: &crate::state::NativeLaneStateOwner,
         instance: &crate::state::VerifiedLaneContext,
-        local_decisions: impl IntoIterator<
-            Item = &'qc iroha_data_model::block::lane_consensus::LaneQcV1,
-        >,
-    ) -> Result<(), String> {
+        local_decisions: Decisions,
+    ) -> Result<(), String>
+    where
+        Decisions: IntoIterator<Item = &'qc iroha_data_model::block::lane_consensus::LaneQcV1>,
+    {
         let (published, published_subject) = self.published_instance(owner, instance)?;
         let auth = crate::sumeragi::v2_lane_wire::LaneAuthenticator::new(instance);
         for original in local_decisions {

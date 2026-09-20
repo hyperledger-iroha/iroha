@@ -424,10 +424,11 @@ fn prepared_provider_capture_index_busy_releases_kura_and_retries_original_owner
             let index = reader_archive.read_index().unwrap();
             held.send(()).unwrap();
             // This is the real index -> Kura edge in archive qualification.
-            reader_kura
+            let (_, receipt) = reader_kura
                 .v2_finality_artifact_with_receipt(height)
                 .unwrap()
                 .unwrap();
+            assert_eq!(receipt.height(), height);
             progress.send(()).unwrap();
             released.recv().unwrap();
             drop(index);

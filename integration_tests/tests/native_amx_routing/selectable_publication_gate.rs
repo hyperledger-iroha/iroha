@@ -228,7 +228,7 @@ async fn run_selectable_musubi_publication_phase_cut(
                             })
                             && !blocks.iter().any(|block| {
                                 block
-                                    .entrypoint_hashes()
+                                    .network_input_hashes()
                                     .any(|hash| hash == publish_entrypoint)
                             }),
                         "{context}: live peer {index} advanced without proposal work before author restart"
@@ -299,7 +299,7 @@ async fn run_selectable_musubi_publication_phase_cut(
         // publication block, rather than executing a second copy locally.
         ensure!(
             live_block
-                .entrypoint_hashes()
+                .network_input_hashes()
                 .any(|hash| hash == publish_entrypoint),
             "{context}: selected publication block lost the exact entrypoint"
         );
@@ -334,7 +334,7 @@ async fn run_selectable_musubi_publication_phase_cut(
             let occurrences = blocks
                 .iter()
                 .flat_map(|block| {
-                    block.entrypoint_hashes().enumerate().filter_map(
+                    block.network_input_hashes().enumerate().filter_map(
                         move |(entrypoint_index, hash)| {
                             (hash == publish_entrypoint).then_some((block, entrypoint_index))
                         },
@@ -348,7 +348,9 @@ async fn run_selectable_musubi_publication_phase_cut(
             );
             let (publication_block, entrypoint_index) = occurrences[0];
             ensure!(
-                publication_block.error(entrypoint_index).is_none(),
+                publication_block
+                    .network_output_at(u32::try_from(entrypoint_index)?)
+                    .is_some_and(|(_, output)| output.result.0.is_ok()),
                 "{context}: post-replay peer {index} retained a rejected publication occurrence"
             );
             if let Some(expected) = canonical_publication_block {

@@ -103,6 +103,8 @@ pub(crate) struct DecisionBoundCarrierJournals<
 /// Checkpoint attachment still grants no publication or retirement authority.
 #[must_use = "retain the current carrier phase until authorized publication or drop"]
 pub(crate) enum RetainedCarrier<Admission, BindingAdmission> {
+    /// Original detached execution awaiting its original archive capture owners.
+    Capturing(super::StagedCarrierCapture<Admission>),
     /// Actual detached execution, before an exact verified decision is joined.
     Validated(PreparedCarrierJournals<Admission>),
     /// The same journals after consuming their ValidBlock under verified finality.
@@ -126,6 +128,7 @@ impl<Admission, BindingAdmission> RetainedCarrier<Admission, BindingAdmission> {
         proposal: &SignedBlock,
     ) -> bool {
         match self {
+            Self::Capturing(carrier) => carrier.matches_candidate(context, proposal),
             Self::Validated(journals) => journals.matches_validation_candidate(context, proposal),
             Self::Decided(carrier) => carrier
                 .journals
@@ -136,12 +139,26 @@ impl<Admission, BindingAdmission> RetainedCarrier<Admission, BindingAdmission> {
         }
     }
 
-    /// Read the original execution prefix without a cached identity projection.
-    pub(crate) fn execution_prefix_commitment(&self) -> ExecutionCommitment {
+    /// Expose the original prefix only after all original captures are complete.
+    pub(crate) fn ready_commitment(&self) -> Option<ExecutionCommitment> {
         match self {
-            Self::Validated(journals) => journals.execution_prefix_commitment(),
-            Self::Decided(carrier) => carrier.journals.execution_prefix_commitment(),
-            Self::Checkpointed(carrier) => carrier.journals.execution_prefix_commitment(),
+            Self::Capturing(_) => None,
+            Self::Validated(journals) => Some(journals.execution_prefix_commitment()),
+            Self::Decided(carrier) => Some(carrier.journals.execution_prefix_commitment()),
+            Self::Checkpointed(carrier) => Some(carrier.journals.execution_prefix_commitment()),
+        }
+    }
+
+    /// Resume only the original capture; every refusal retains the current phase.
+    pub(crate) fn resume_capture(
+        self,
+    ) -> Result<Self, (Self, super::CarrierArchivePreparationError)> {
+        match self {
+            Self::Capturing(carrier) => carrier
+                .try_complete()
+                .map(Self::Validated)
+                .map_err(|(carrier, error)| (Self::Capturing(carrier), error)),
+            ready => Ok(ready),
         }
     }
 }

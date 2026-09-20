@@ -31,7 +31,6 @@ use iroha::{
         transaction::{Executable, SignedTransaction},
     },
 };
-use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -550,12 +549,7 @@ fn read_kura_block_at_height(
     store_dir: &Path,
     expected_height: u64,
 ) -> Result<Option<SignedBlock>> {
-    let candidate_blocks_dir = LaneConfig::default().primary().blocks_dir(store_dir);
-    let blocks_dir = if candidate_blocks_dir.join("blocks.index").exists() {
-        candidate_blocks_dir
-    } else {
-        store_dir.to_path_buf()
-    };
+    let (blocks_dir, _) = iroha_core::kura::Kura::canonical_storage_paths(store_dir);
     let index_path = blocks_dir.join("blocks.index");
     let data_path = blocks_dir.join("blocks.data");
     if !index_path.exists() || !data_path.exists() {

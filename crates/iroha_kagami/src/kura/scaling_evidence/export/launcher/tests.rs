@@ -1,10 +1,8 @@
 //! Real signed launch requests, exact first-release frames and admission failures.
 
 use super::*;
+use crate::kura::scaling_evidence::fixture;
 use norito::codec::Encode as _;
-
-#[path = "../../fixture.rs"]
-mod fixture;
 
 fn bindings(f: &fixture::Fixture) -> Vec<HeightInputBinding> {
     f.heights

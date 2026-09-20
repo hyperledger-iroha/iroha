@@ -1200,11 +1200,15 @@ mod tests {
             V2BodyStore::open(directory.path(), context.clone()).expect("cold reopen");
         assert!(reopened.pending_revalidation.is_empty());
         let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-        reopened
+        let outcome = reopened
             .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
                 Ok::<_, String>(commitment)
             })
             .expect("Strict restart retries the exact body after repair");
+        assert_eq!(
+            outcome.validated_receipt().unwrap().execution_commitment(),
+            commitment
+        );
         drop(reopened);
         let mut quarantined =
             V2BodyStore::open(directory.path(), context).expect("reopen success marker");
@@ -1512,7 +1516,7 @@ mod tests {
             let mut store = V2BodyStore::open(directory.path(), context.clone()).unwrap();
             let receipt = store.store(manifest, body).unwrap();
             let commitment = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
-            store
+            let outcome = store
                 .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
                     if rejected {
                         Err(FixtureValidationError::Invalid("deterministic rejection"))
@@ -1521,6 +1525,8 @@ mod tests {
                     }
                 })
                 .unwrap();
+            assert_eq!(outcome.rejection_reason().is_some(), rejected);
+            assert_eq!(outcome.validated_receipt().is_some(), !rejected);
             drop(store);
             let mut reopened = V2BodyStore::open(directory.path(), context).unwrap();
             let files = durable_files_snapshot(directory.path());

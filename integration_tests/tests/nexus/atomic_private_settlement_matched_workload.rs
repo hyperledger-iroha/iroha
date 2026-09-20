@@ -1022,7 +1022,7 @@ mod tests {
     fn matched_business_receipt_requires_complete_intent_and_canonical_carrier() {
         let workload = MatchedBenchmarkWorkloadV1::new(3, 8, 9, false).unwrap();
         let settlement = workload.settlement(network_id(), 1000).unwrap();
-        let carrier = BlockHeader::new(NonZeroU64::new(500).unwrap(), None, None, None, 1234, 0);
+        let carrier = BlockHeader::new(NonZeroU64::new(500).unwrap(), None, None, 1234, 0);
         let receipt = SettlementReceipt {
             authority: ALICE_ID.clone(),
             metadata: Metadata::default(),

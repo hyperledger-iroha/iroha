@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::sumeragi::v2_apply::validation_custody::{
-    CarrierValidator, RetainedBodyValidationService,
+    CarrierMarkerPreparation, CarrierValidator, RetainedBodyValidationService,
 };
 
 impl V2BodyStore {
@@ -58,7 +58,7 @@ impl V2BodyStore {
             &durable,
             already_validated.is_some() || reused.is_some(),
         )? {
-            Ok(commitment) => {
+            CarrierMarkerPreparation::Ready(commitment) => {
                 if already_validated
                     .as_ref()
                     .is_some_and(|receipt| receipt.execution_commitment() != commitment)
@@ -72,7 +72,10 @@ impl V2BodyStore {
                     DurableBodyValidationOutcomeBody::Validated(validated),
                 ))
             }
-            Err(error) => {
+            CarrierMarkerPreparation::Deferred(refusal) => {
+                Err(V2BodyStoreError::LocalValidation(refusal))
+            }
+            CarrierMarkerPreparation::ValidationError(error) => {
                 if let Some(refusal) = error.local_refusal() {
                     return Err(V2BodyStoreError::LocalValidation(refusal));
                 }

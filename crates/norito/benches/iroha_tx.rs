@@ -4,7 +4,7 @@ use criterion::Criterion;
 #[cfg(feature = "bench-internal")]
 use norito::codec as ncodec;
 #[cfg(feature = "bench-internal")]
-use norito::{self, CompressionConfig, NoritoDeserialize, NoritoSerialize, SerializePayload};
+use norito::{self, CompressionConfig, NoritoDeserialize, NoritoSchema, NoritoSerialize};
 #[cfg(feature = "bench-internal")]
 #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -81,7 +81,8 @@ struct MetadataEntry {
     value: String,
 }
 #[cfg(feature = "bench-internal")]
-#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, NoritoSchema)]
+#[norito_schema(name = "norito.bench.iroha_tx.SignedTransaction")]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct SignedTransaction {
     creator: AccountId,

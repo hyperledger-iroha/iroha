@@ -1497,20 +1497,6 @@ impl Kura {
         )?;
         Ok(expected)
     }
-    fn require_exact_autonomous_lifecycle_terminal_application_receipt_locked(
-        &self,
-        expected: &LaneBlockApplicationReceiptArtifact,
-        receipt_data_path: &Path,
-        receipt_index_path: &Path,
-    ) -> Result<()> {
-        self.require_exact_autonomous_lifecycle_terminal_application_receipt_with_read_mode_locked(
-            expected,
-            receipt_data_path,
-            receipt_index_path,
-            AutonomousTerminalReceiptReadMode::Attest,
-        )
-    }
-
     fn require_exact_autonomous_lifecycle_terminal_application_receipt_with_read_mode_locked(
         &self,
         expected: &LaneBlockApplicationReceiptArtifact,
@@ -1554,10 +1540,11 @@ impl Kura {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
-        self.require_exact_autonomous_lifecycle_terminal_application_receipt_locked(
+        self.require_exact_autonomous_lifecycle_terminal_application_receipt_with_read_mode_locked(
             expected,
             receipt_data_path,
             receipt_index_path,
+            AutonomousTerminalReceiptReadMode::Attest,
         )
     }
     fn autonomous_lifecycle_terminal_source_matches_release_locked(

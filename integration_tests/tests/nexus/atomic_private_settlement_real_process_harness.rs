@@ -2620,7 +2620,7 @@ fn leakage_carrier_block(
         .query(FindBlocks)
         .execute_all()?
         .into_iter()
-        .filter(|block| block.entrypoint_hashes().any(|hash| hash == entrypoint))
+        .filter(|block| block.network_input_hashes().any(|hash| hash == entrypoint))
         .collect::<Vec<_>>();
     ensure!(
         matching.len() == 1,
@@ -3318,12 +3318,15 @@ fn smoke_inventory_final_health_check_remains_single_poll() {
     ] {
         let mut polls = 0;
         let mut status_error = Some(status_error);
-        let error = smoke_inventory_health_v1(8, SmokeInventoryReadinessV1::Immediate, |remaining| {
-            assert!(remaining.is_none());
-            polls += 1;
-            Ok(Err(status_error.take().expect("final health must not retry")))
-        })
-        .unwrap_err();
+        let error =
+            smoke_inventory_health_v1(8, SmokeInventoryReadinessV1::Immediate, |remaining| {
+                assert!(remaining.is_none());
+                polls += 1;
+                Ok(Err(status_error
+                    .take()
+                    .expect("final health must not retry")))
+            })
+            .unwrap_err();
         assert_eq!(polls, 1);
         assert!(format!("{error:?}").contains("smoke peer 8 final inventory health check failed"));
     }
@@ -8475,7 +8478,7 @@ fn canonical_carrier_header(
         .into_iter()
         .filter(|block| {
             block
-                .entrypoint_hashes()
+                .network_input_hashes()
                 .any(|observed| observed == entrypoint_hash)
         })
         .map(|block| block.header())

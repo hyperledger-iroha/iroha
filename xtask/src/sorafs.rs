@@ -3857,7 +3857,6 @@ fn pin_fixture_block_header(height: u64) -> iroha_data_model::block::BlockHeader
         NonZeroU64::new(height).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     )
@@ -3865,7 +3864,6 @@ fn pin_fixture_block_header(height: u64) -> iroha_data_model::block::BlockHeader
 fn pin_fixture_completion_anchor_header() -> iroha_data_model::block::BlockHeader {
     iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
-        None,
         None,
         None,
         42,

@@ -15,6 +15,7 @@ fn header() -> BlockHeader {
     BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0)
 }
 
+/// Stage a storage addition for geometry ownership tests without publishing State.
 fn stage_structural_manual_addition(block: &mut StateBlock<'_>) {
     let plan = iroha_data_model::nexus::LaneLifecyclePlan {
         additions: vec![iroha_data_model::nexus::LaneConfig {

@@ -49,12 +49,18 @@ pub(crate) struct StartupReplayNamespaceCreation {
     inventory: Option<super::StableSidecarDirectoryInventory>,
 }
 struct StartupReplayMissingNamespace {
+    #[cfg(test)]
     blocks: PathBuf,
+    #[cfg(test)]
     merge: PathBuf,
     blocks_identity: GeometryFileIdentity,
+    #[cfg(test)]
     binding: LaneGeometryBinding,
+    #[cfg(test)]
     original_marker: LaneIncarnationMarker,
+    #[cfg(test)]
     original_block_digest: Hash,
+    #[cfg(test)]
     original_merge_digest: Hash,
     final_path: PathBuf,
 }
@@ -291,13 +297,23 @@ impl Kura {
             }
             let original_block_digest = self.geometry_block_store_digest(&blocks)?;
             let original_merge_digest = self.geometry_merge_log_digest(&merge)?;
+            // Authenticate these fallible reads in every build. Only the standalone
+            // rollback tests retain their values for exact restoration checks.
+            #[cfg(not(test))]
+            let _ = (marker, original_block_digest, original_merge_digest);
             missing_namespaces.push(StartupReplayMissingNamespace {
+                #[cfg(test)]
                 blocks,
+                #[cfg(test)]
                 merge,
                 blocks_identity: identity,
+                #[cfg(test)]
                 binding: native_binding,
+                #[cfg(test)]
                 original_marker: marker,
+                #[cfg(test)]
                 original_block_digest,
+                #[cfg(test)]
                 original_merge_digest,
                 final_path: path,
             });
@@ -439,6 +455,7 @@ impl Kura {
 
     /// Geometry rollback restores each original archive first. Remove only the exact
     /// native-created empty inode, then restore the original already-authenticated seal.
+    #[cfg(test)]
     pub(crate) fn rollback_startup_replay_geometry_preparation(
         &self,
         transition: &StartupReplayGeometryTransition,
@@ -492,21 +509,6 @@ impl Kura {
         Ok(())
     }
 
-    /// Acquire the joint boundary for standalone startup geometry publication.
-    #[cfg(test)]
-    pub(crate) fn finish_startup_replay_geometry_transition(
-        &self,
-        transition: &StartupReplayGeometryTransition,
-    ) -> Result<super::V2StartupReplayStorageBinding> {
-        let lease = self.try_publication_lease().map_err(|error| match error {
-            super::KuraPublicationPreparationError::Storage(error) => error,
-            super::KuraPublicationPreparationError::Busy { .. } => self.geometry_error(
-                ErrorKind::WouldBlock,
-                "startup geometry publication fence is busy",
-            ),
-        })?;
-        lease.finish_startup_replay_geometry_transition(transition)
-    }
     fn finish_startup_replay_geometry_transition_under_lease(
         &self,
         transition: &StartupReplayGeometryTransition,

@@ -39,7 +39,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     core_state.zk.verify_timeout = Duration::ZERO;
     let state = Arc::new(core_state);
     // Seed one finalized election via ISIs
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let eid = "election-alpha".to_string();

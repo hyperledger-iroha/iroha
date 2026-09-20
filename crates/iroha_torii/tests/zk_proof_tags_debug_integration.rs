@@ -24,7 +24,7 @@ async fn proof_tags_returns_ascii_tags() {
         backend: backend.into(),
         proof_hash,
     };
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     {
         let mut block = state.block(header);
         let mut stx = block.transaction();

@@ -130,7 +130,7 @@ fn rename_sync_retry_retains_exact_archive_and_original_directory() {
     }
     attempt.cursor = rename_index;
     attempt.faults.remaining = Some(0);
-    attempt
+    let _ = attempt
         .resume(&mut backend)
         .expect_err("fail sync after successful rename");
     assert_eq!(
@@ -187,7 +187,7 @@ fn retry_refuses_foreign_same_name_source_after_rename() {
         .prepare_lane_geometry_attempt(&old, &new, &[], &[(old_entry, new_entry)])
         .expect("capture relabel");
     attempt.faults.remaining = Some(0);
-    attempt
+    let _ = attempt
         .resume(&mut backend)
         .expect_err("fail sync after rename");
     fs::create_dir(lane_path(root, &old)).expect("insert foreign replacement");
@@ -196,7 +196,7 @@ fn retry_refuses_foreign_same_name_source_after_rename() {
         .resume(&mut backend)
         .expect_err("must not adopt replacement");
     assert!(error.to_string().contains("occupied"), "{error:?}");
-    attempt
+    let _ = attempt
         .rollback(&mut backend)
         .expect_err("must not overwrite foreign replacement");
     assert_eq!(
@@ -220,7 +220,7 @@ fn retry_refuses_replaced_archive_even_when_contents_match() {
         .prepare_lane_geometry_attempt(&old, &new, &[], &[(old_entry, new_entry)])
         .expect("capture relabel");
     attempt.faults.remaining = Some(0);
-    attempt
+    let _ = attempt
         .resume(&mut backend)
         .expect_err("fail sync after rename");
     let target = lane_path(root, &new);
@@ -253,7 +253,7 @@ fn applied_authentication_preserves_completion_across_identity_refusal_and_resto
             )],
         )
         .expect("capture relabel");
-    attempt
+    let _ = attempt
         .authenticate_applied(&backend)
         .expect_err("capture alone is not completed geometry");
     attempt.resume(&mut backend).expect("complete relabel");
@@ -332,14 +332,14 @@ fn rollback_sync_retry_uses_original_reverse_progress() {
         .expect("capture relabel");
     attempt.resume(&mut backend).expect("forward rename");
     attempt.faults.remaining = Some(0);
-    attempt
+    let _ = attempt
         .rollback(&mut backend)
         .expect_err("reverse rename succeeded, sync failed");
     original
         .authenticate(&lane_path(root, &old))
         .expect("original already restored");
     assert!(!lane_path(root, &new).exists());
-    attempt
+    let _ = attempt
         .resume(&mut backend)
         .expect_err("cannot restart forward after rollback");
     attempt.rollback(&mut backend).expect("retry reverse sync");
@@ -363,7 +363,7 @@ fn retained_attempt_rejects_changed_backend_roots_and_root_identity() {
         .expect("capture geometry");
     let mut foreign =
         TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().join("other")), None, 0, 0);
-    attempt
+    let _ = attempt
         .resume(&mut foreign)
         .expect_err("foreign backend roots");
     fs::rename(&root, temp.path().join("original-root")).expect("displace original root");

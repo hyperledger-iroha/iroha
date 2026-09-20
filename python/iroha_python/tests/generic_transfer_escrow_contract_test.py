@@ -12,8 +12,8 @@ import pytest
 import requests
 from blake3 import blake3
 
-# These tests exercise the pure Python SDK layer independently of a previously
-# built local extension. CI still builds and tests the Rust extension itself.
+# These source-level request tests use a separate package name to isolate Python
+# helpers. Native SDK imports still require the installed iroha-native wheel.
 PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src" / "iroha_python"
 PURE_PACKAGE = "_iroha_python_source_test"
 TX_PURE_PACKAGE = "_iroha_python_tx_network_id_test"
@@ -286,8 +286,11 @@ def test_contract_wait_rejects_noncanonical_embedded_transaction_hash(
     }
 
     with pytest.raises(
-        (TypeError, ValueError),
-        match="(must be a string|exact lowercase marked)",
+        ValueError,
+        match=(
+            r"^contract response\.tx_hash_hex must match \[0-9a-f\]\{63\}\[13579bdf\] "
+            r"with the canonical Iroha HashOf marker$"
+        ),
     ):
         client._wait_for_contract_response(
             response,
@@ -560,7 +563,7 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
 ) -> None:
     transaction_hash = "11" * 32
     block_hash = "22" * 32
-    result_hash = "33" * 32
+    output_hash = "33" * 32
     crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
     _install_network_id_contract(crypto)
     query_network_ids: list[FakeNetworkId] = []
@@ -593,8 +596,7 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
             "transaction_hash": transaction_hash,
             "block_hash": block_hash,
             "block_height": 7,
-            "result_hash": result_hash,
-            "proof_kind": "ordinary",
+            "output_hash": output_hash,
             "entrypoint_kind": "External",
             "authority": "authority@payments",
             "signer_public_key_hex": "44" * 32,
@@ -630,8 +632,7 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
     assert verified.transaction_hash == transaction_hash
     assert verified.block_hash == block_hash
     assert verified.block_height == 7
-    assert verified.result_hash == result_hash
-    assert verified.proof_kind == "ordinary"
+    assert verified.output_hash == output_hash
     assert verified.entrypoint_kind == "External"
     assert verified.authority == "authority@payments"
     assert verified.signer_public_key_hex == "44" * 32
@@ -656,8 +657,7 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
         "transaction_hash": "11" * 32,
         "block_hash": "22" * 32,
         "block_height": 7,
-        "result_hash": "33" * 32,
-        "proof_kind": "ordinary",
+        "output_hash": "33" * 32,
         "entrypoint_kind": "External",
         "authority": "authority@payments",
         "signer_public_key_hex": "44" * 32,
@@ -689,6 +689,16 @@ def test_verified_contract_rejection_is_manifest_typed_and_fail_closed() -> None
     unknown_field = {**payload, "unverified_hint": "ignored"}
     with pytest.raises(ValueError, match="must contain exactly"):
         VerifiedCommittedTransaction.from_payload(unknown_field)
+
+    for retired in (
+        {**payload, "result_hash": payload["output_hash"]},
+        {**payload, "proof_kind": "ordinary"},
+        {**payload, "proof_kind": "certified_merge"},
+    ):
+        with pytest.raises(ValueError, match="must contain exactly"):
+            VerifiedCommittedTransaction.from_payload(retired)
+    with pytest.raises(ValueError, match="entrypoint_kind is not recognized"):
+        VerifiedCommittedTransaction.from_payload({**payload, "entrypoint_kind": "Time"})
 
     missing_field = dict(payload)
     del missing_field["committed_transaction"]

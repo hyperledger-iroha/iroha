@@ -3677,11 +3677,12 @@ if ((corridor_enabled)); then
     exit 1
   fi
 fi
-# These are the real-network four-peer acceptance gates. Keep their exact
-# harness/name inventory source-bound and non-ignored even though ordinary
-# developer runs may opt out inside the test body.
-readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
-readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
+# TODO: implement the native recreation/recovery qualifications before opening
+# G-4P. The earlier source inventory check refuses their current absence.
+# Keep all four required identities source-bound and non-ignored; executable
+# MergeQC evidence cannot satisfy the native recreation/recovery requirements.
+readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::nexus_autoscale_native_four_peer_recreates_lane_and_rejects_stale_artifacts"
+readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_native_recovers_missing_execution_evidence_after_restart"
 readonly multilane_autoscale_drain_release_test="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly multilane_native_amx_rotating_release_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly bpng_native_bootstrap_release_test="alias_registry_bootstrap_network::bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion"

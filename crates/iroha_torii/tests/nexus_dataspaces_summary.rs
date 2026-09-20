@@ -973,7 +973,6 @@ fn block_header(height: u64) -> BlockHeader {
         NonZeroU64::new(height).expect("height must be non-zero"),
         None,
         None,
-        None,
         height,
         0,
     )

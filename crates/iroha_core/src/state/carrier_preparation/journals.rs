@@ -107,6 +107,16 @@ pub(crate) struct StagedCarrierCapture<Admission> {
 }
 
 impl<Admission> StagedCarrierCapture<Admission> {
+    /// Match the original executed proposal while archive capture remains incomplete.
+    pub(crate) fn matches_candidate(
+        &self,
+        context: &iroha_data_model::block::consensus_v2::HeightContext,
+        proposal: &iroha_data_model::block::SignedBlock,
+    ) -> bool {
+        self.journals
+            .matches_validation_candidate(context, proposal)
+    }
+
     /// Resume only archive insertion preparation on the exact detached execution.
     /// Local refusal returns this complete original owner unchanged for release-driven retry.
     pub(crate) fn try_complete(

@@ -14181,11 +14181,6 @@ impl Kura {
         }
         Ok(inventories)
     }
-    fn capture_v2_startup_replay_auxiliary_sidecars(
-        &self,
-    ) -> Result<BTreeMap<PathBuf, StableSidecarDirectoryInventory>> {
-        self.capture_v2_startup_replay_auxiliary_sidecars_with_lease(None)
-    }
     fn capture_v2_startup_replay_auxiliary_sidecars_with_lease(
         &self,
         lease: Option<&KuraPublicationLease<'_>>,

@@ -194,14 +194,17 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         ..Default::default()
     })?;
     for entry in lane_config.entries() {
-        let blocks_dir = entry.blocks_dir(temp.path());
+        let identity = state
+            .lane_storage_identity(entry.lane_id)
+            .expect("configured lane has an authenticated storage identity");
+        let blocks_dir = identity.blocks_dir(temp.path());
         assert!(
             blocks_dir.is_dir(),
             "expected blocks dir for lane {} at {}",
             entry.alias,
             blocks_dir.display()
         );
-        let merge_log = entry.merge_log_path(temp.path());
+        let merge_log = identity.merge_log_path(temp.path());
         assert!(
             merge_log.is_file(),
             "expected merge log for lane {} at {}",

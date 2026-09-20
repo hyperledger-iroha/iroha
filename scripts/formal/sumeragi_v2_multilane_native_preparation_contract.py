@@ -569,6 +569,7 @@ TERMINAL_OWNER_BINDINGS = (
     )),
     (PHYSICAL_CARRIER, "fn", "try_prepare_physical", (
         "admit: impl FnOnce(&Self, &State)", "admit(&original, target)",
+        "if !original\n            .journals\n            .geometry\n            .matches_publication_target(target, original.block().header())\n        {\n            drop(installation);\n            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));\n        }",
         "target.matches_kura_instance(&original.journals.kura)", "original.publish_execution_witness()", "original.publish_archives()",
         "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)",
         "reauthenticate_execution_witness(authenticated.decision.finality.artifact())",
@@ -918,19 +919,29 @@ PREPARATION_OWNER_BINDINGS += QUEUE_GEOMETRY_OWNER_BINDINGS
 # the existing descriptor while its block type advances irreversibly.
 RETAINED_CARRIER_BINDINGS = (
     (DECISION_CARRIER, "enum", "RetainedCarrier", (
+        "Capturing(super::StagedCarrierCapture<Admission>)",
         "Validated(PreparedCarrierJournals<Admission>)",
         "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)",
         "super::DetachedCarrierComponents", "crate::kura::KuraWsvCheckpointReceipt",
     )),
     (DECISION_CARRIER, "method", "RetainedCarrier::matches_validation_candidate", (
+        "Self::Capturing(carrier) => carrier.matches_candidate(context, proposal)",
         "Self::Validated(journals) => journals.matches_validation_candidate(context, proposal)",
         "Self::Decided(carrier) => carrier\n                .journals\n                .matches_validation_candidate(context, proposal)",
         "Self::Checkpointed(carrier) => carrier\n                .journals\n                .matches_validation_candidate(context, proposal)",
     )),
-    (DECISION_CARRIER, "method", "RetainedCarrier::execution_prefix_commitment", (
-        "Self::Validated(journals) => journals.execution_prefix_commitment()",
-        "Self::Decided(carrier) => carrier.journals.execution_prefix_commitment()",
-        "Self::Checkpointed(carrier) => carrier.journals.execution_prefix_commitment()",
+    (DECISION_CARRIER, "method", "RetainedCarrier::ready_commitment", (
+        "Self::Capturing(_) => None",
+        "Self::Validated(journals) => Some(journals.execution_prefix_commitment())",
+        "Self::Decided(carrier) => Some(carrier.journals.execution_prefix_commitment())",
+        "Self::Checkpointed(carrier) => Some(carrier.journals.execution_prefix_commitment())",
+    )),
+    (DECISION_CARRIER, "method", "RetainedCarrier::resume_capture", (
+        "Self::Capturing(carrier) => carrier\n                .try_complete()\n                .map(Self::Validated)",
+        ".map_err(|(carrier, error)| (Self::Capturing(carrier), error))", "ready => Ok(ready)",
+    )),
+    (JOURNALS, "method", "StagedCarrierCapture::matches_candidate", (
+        "self.journals\n            .matches_validation_candidate(context, proposal)",
     )),
     (JOURNALS, "fn", "matches_validation_candidate", (
         "if self.context.as_ref() != context", "return false;",
@@ -941,6 +952,9 @@ RETAINED_CARRIER_BINDINGS = (
     (JOURNALS, "fn", "execution_prefix_commitment", ("self.execution_prefix",)),
     (VALIDATION_CUSTODY, "struct", "Candidate", (
         "subject: wire::BlockSubject", "owner: Option<O>",
+    )),
+    (VALIDATION_CUSTODY, "enum", "CarrierMarkerPreparation", (
+        "Ready(wire::ExecutionCommitment)", "Deferred(LocalValidationRefusal)", "ValidationError(E)",
     )),
     (VALIDATION_CUSTODY, "struct", "RetainedBodyValidationService", (
         "validator: P", "identity: V2BodyStoreInstanceIdentity",
@@ -956,8 +970,15 @@ RETAINED_CARRIER_BINDINGS = (
         "if self.candidates.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
         "let owner = match self.validator.prepare(context, body)",
         "owner: Some(owner)", "if !owner.matches_candidate(context, body)",
-        "return Err(CarrierCustodyError::Identity)", "let commitment = owner.commitment()",
-        "confirmed: None", "Ok(Ok(commitment))",
+        "return Err(CarrierCustodyError::Identity)", "match self.validator.resume(owner)",
+        "Err((owner, refusal)) => {\n                self.candidates[index].owner = Some(owner);\n                Some(refusal)\n            }",
+        "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
+        ".ready_commitment()\n            .ok_or(CarrierCustodyError::IncompleteCapture)?",
+        "confirmed: None", "Ok(CarrierMarkerPreparation::Ready(commitment))",
+    )),
+    (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::confirm", (
+        "if owner.ready_commitment() != Some(receipt.execution_commitment())",
+        "return Err(CarrierCustodyError::Identity)", "marker.confirmed = Some(receipt.clone())",
     )),
     (VALIDATION_CUSTODY, "struct", "SelectedValidationCarrier", (
         "service: &'a mut RetainedBodyValidationService<P>", "index: usize", "owner: Option<P::Owner>",
@@ -981,6 +1002,8 @@ RETAINED_CARRIER_BINDINGS = (
         "already_validated.is_some() || reused.is_some()",
         "let validated = self.persist_validated_receipt(&durable, commitment)?",
         "service.confirm(&validated)?",
+        "CarrierMarkerPreparation::Deferred(refusal) => {\n                Err(V2BodyStoreError::LocalValidation(refusal))\n            }",
+        "CarrierMarkerPreparation::ValidationError(error) =>",
     )),
 )
 PREPARATION_OWNER_BINDINGS += RETAINED_CARRIER_BINDINGS
@@ -1047,12 +1070,16 @@ def validate_native_preparation_contract(
     # method bodies delegate in every phase rather than caching a scalar result.
     retained_bodies = {
         "RetainedCarrier": """{
+            Capturing(super::StagedCarrierCapture<Admission>),
             Validated(PreparedCarrierJournals<Admission>),
             Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>),
             Checkpointed(DecisionBoundCarrierJournals<Admission, BindingAdmission,
                 super::DetachedCarrierComponents, crate::kura::KuraWsvCheckpointReceipt>),
         }""",
         "Candidate": "{ subject: wire::BlockSubject, owner: Option<O> }",
+        "CarrierMarkerPreparation": """{
+            Ready(wire::ExecutionCommitment), Deferred(LocalValidationRefusal), ValidationError(E),
+        }""",
         "RetainedBodyValidationService": """{
             validator: P, identity: V2BodyStoreInstanceIdentity,
             candidates: Vec<Candidate<P::Owner>>, markers: Vec<Marker>, limit: usize,
@@ -1061,15 +1088,23 @@ def validate_native_preparation_contract(
             service: &'a mut RetainedBodyValidationService<P>, index: usize, owner: Option<P::Owner>,
         }""",
         "RetainedCarrier::matches_validation_candidate": """{ match self {
+            Self::Capturing(carrier) => carrier.matches_candidate(context, proposal),
             Self::Validated(journals) => journals.matches_validation_candidate(context, proposal),
             Self::Decided(carrier) => carrier.journals.matches_validation_candidate(context, proposal),
             Self::Checkpointed(carrier) => carrier.journals.matches_validation_candidate(context, proposal),
         } }""",
-        "RetainedCarrier::execution_prefix_commitment": """{ match self {
-            Self::Validated(journals) => journals.execution_prefix_commitment(),
-            Self::Decided(carrier) => carrier.journals.execution_prefix_commitment(),
-            Self::Checkpointed(carrier) => carrier.journals.execution_prefix_commitment(),
+        "RetainedCarrier::ready_commitment": """{ match self {
+            Self::Capturing(_) => None,
+            Self::Validated(journals) => Some(journals.execution_prefix_commitment()),
+            Self::Decided(carrier) => Some(carrier.journals.execution_prefix_commitment()),
+            Self::Checkpointed(carrier) => Some(carrier.journals.execution_prefix_commitment()),
         } }""",
+        "RetainedCarrier::resume_capture": """{ match self {
+            Self::Capturing(carrier) => carrier.try_complete().map(Self::Validated)
+                .map_err(|(carrier, error)| (Self::Capturing(carrier), error)),
+            ready => Ok(ready),
+        } }""",
+        "StagedCarrierCapture::matches_candidate": "{ self.journals.matches_validation_candidate(context, proposal) }",
         "execution_prefix_commitment": "{ self.execution_prefix }",
     }
     for symbol, body in retained_bodies.items():
@@ -1082,11 +1117,22 @@ def validate_native_preparation_contract(
             "if requires_existing_owner", "return Err(CarrierCustodyError::MissingOwner)",
             "if self.candidates.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
             "self.validator.prepare(context, body)", "owner: Some(owner)",
-            "if !owner.matches_candidate(context, body)", "let commitment = owner.commitment()",
-            "self.markers.push(Marker {", "Ok(Ok(commitment))")
+            "if !owner.matches_candidate(context, body)", "self.candidates[index].owner.take()",
+            "match self.validator.resume(owner)",
+            "Ok(owner) => { self.candidates[index].owner = Some(owner); None }",
+            "Err((owner, refusal)) => { self.candidates[index].owner = Some(owner); Some(refusal) }",
+            "if !owner.matches_candidate(context, body)",
+            "if let Some(refusal) = refusal", "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
+            ".ready_commitment().ok_or(CarrierCustodyError::IncompleteCapture)?",
+            "self.markers.push(Marker {", "Ok(CarrierMarkerPreparation::Ready(commitment))")
     prepare = items.get("RetainedBodyValidationService::prepare_marker", "")
     if prepare.count(_code("self.validator.prepare(")) != 1:
         errors.append("Native preparation retained carrier repeats execution before or after descriptor admission")
+    if prepare.count(_code("self.validator.resume(")) != 1:
+        errors.append("Native preparation retained carrier does not resume exactly its installed owner")
+    ordered("RetainedBodyValidationService::confirm",
+            "owner.ready_commitment() != Some(receipt.execution_commitment())",
+            "return Err(CarrierCustodyError::Identity)", "marker.confirmed = Some(receipt.clone())")
     ordered("SelectedValidationCarrier::try_consume", "self.owner.take()", "match publish(owner)",
             "Err((owner, error)) =>", "self.owner = Some(owner)", "Err(error)")
     ordered("SelectedValidationCarrier::drop", "self.owner.take()",
@@ -1112,11 +1158,15 @@ def validate_native_preparation_contract(
                 fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool {
                     self.matches_validation_candidate(context, body)
                 }
-                fn commitment(&self) -> wire::ExecutionCommitment { self.execution_prefix_commitment() }
+                fn ready_commitment(&self) -> Option<wire::ExecutionCommitment> { self.ready_commitment() }
             }
         """)
         if phase_impl not in custody or _code("RetainedValidationOwner: sealed::Owner + Send + 'static") not in custody:
             errors.append("Native preparation retained carrier loses its sealed phase delegation")
+        resume_api = _code("""fn resume(&mut self, owner: Self::Owner,)
+            -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)>;""")
+        if resume_api not in custody:
+            errors.append("Native preparation retained carrier loses its original-owner local capture refusal")
         fixture_start = custody.find(_code("#[cfg(test)] pub(in crate::sumeragi) mod test_support {"))
         fixture_end = fixture_start
         if fixture_start >= 0:
@@ -1288,6 +1338,8 @@ def validate_native_preparation_contract(
             ".map_err(CarrierPhysicalPreparationError::Reputation)?;")
     ordered("try_prepare_physical",
             "admit(&original, target)", "target.matches_kura_instance(&original.journals.kura)",
+            "if !original.journals.geometry.matches_publication_target(target, original.block().header())",
+            "drop(installation);", "return Err((original, CarrierPhysicalPreparationError::ForeignTarget));",
             "target.kura.try_publication_lease()", "SourceAuthenticatedCarrier::try_new(original, kura)",
             "original.publish_execution_witness()", "original.publish_archives()", "target.kura.try_publication_lease()",
             "SourceAuthenticatedCarrier::try_new(original, kura)",

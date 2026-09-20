@@ -73,10 +73,13 @@ pub(super) fn generate(alias: &str, trust: &finality::TrustV1) -> Result<Json> {
     Ok(manifest)
 }
 
-fn validator_bindings<'a>(
-    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+fn validator_bindings<'a, I>(
+    instructions: I,
     selected: &[finality::PeerV1],
-) -> Result<Vec<NativeLaneValidatorBindingV1>> {
+) -> Result<Vec<NativeLaneValidatorBindingV1>>
+where
+    I: IntoIterator<Item = &'a InstructionBox>,
+{
     let selected_by_peer = selected
         .iter()
         .map(|peer| (&peer.peer_id, &peer.torii_origin))

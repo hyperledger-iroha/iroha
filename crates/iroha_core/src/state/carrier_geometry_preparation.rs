@@ -259,6 +259,7 @@ impl PreparedCarrierGeometry {
 
     /// Identity-only geometry has no lifecycle or namespace transition to publish.
     /// A pending lifecycle remains a distinct owner even without a storage change.
+    #[cfg(test)]
     pub(super) fn is_identity_transition(&self, header: BlockHeader) -> bool {
         self._header == header
             && self._pending.is_none()

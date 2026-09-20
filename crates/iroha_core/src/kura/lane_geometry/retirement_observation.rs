@@ -1,8 +1,8 @@
 //! Complete retirement census with explicit storage effects.
 //!
-//! The same semantic scan serves a pure read and the existing lock-scoped
-//! maintenance path. A census owns the exact decoded evidence, not publication
-//! authority, directory pins, or a reservation across consensus. Directory and
+//! The production maintenance path and its read-only test controls share the
+//! same semantic scan. Tests retain selected decoded evidence for assertions;
+//! production consumes the complete evidence during admission. Directory and
 //! progress-file handles remain bounded to one route at a time.
 
 use super::autonomous_observation::ObservedAutonomousAttemptNamespace;
@@ -10,35 +10,34 @@ use super::historical_evidence::ObservedHistoricalRecoveryEvidence;
 use super::native_evidence::ObservedNativeAmxEvidence;
 use super::*;
 
-/// Exact authenticated inputs consumed by the complete cross-route policy check.
-/// These read-only values cannot publish, retire, or attest any storage object.
+/// Successful complete cross-route policy check, with test-only evidence snapshots.
+/// This result cannot publish, retire, or attest any storage object.
 #[derive(Default)]
 pub(in crate::kura) struct LaneRetirementCensus {
+    #[cfg(test)]
     pub(super) routes: BTreeMap<LaneId, LaneStorageIdentity>,
+    #[cfg(test)]
     pub(super) retiring: BTreeSet<LaneRetirementIdentity>,
+    #[cfg(test)]
     pub(super) certified_retirements: BTreeSet<LaneRetirementIdentity>,
+    #[cfg(test)]
     pub(super) autonomous:
         BTreeMap<(LaneId, u64), (AutonomousLaneBlockArtifact, LaneBlockProposalV1, bool)>,
+    #[cfg(test)]
     pub(super) inputs: BTreeMap<(LaneId, u64), LaneBlockExecutionInputArtifact>,
-    pub(super) preflights: BTreeMap<(LaneId, u64), LaneBlockExecutionPreflightArtifact>,
+    #[cfg(test)]
     pub(super) certified: BTreeMap<(LaneId, u64), crate::kura::CertifiedLaneBlockArtifact>,
-    pub(super) merge_bundles: BTreeMap<(LaneId, u64), AutonomousLaneMergeBundleV1>,
+    #[cfg(test)]
     pub(super) receipts: BTreeMap<(LaneId, u64), LaneBlockApplicationReceiptArtifact>,
-    pub(super) native_manifests:
-        BTreeMap<(LaneId, u64), NativeAmxParticipantApplicationManifestArtifactV1>,
-    pub(super) native_receipts:
-        BTreeMap<(LaneId, u64), NativeAmxParticipantApplicationReceiptArtifact>,
-    pub(super) historical_recoveries:
-        BTreeMap<(LaneId, u64), HistoricalAutonomousLaneRecoveryRecordV1>,
-    pub(super) artifact_files_seen: usize,
+    #[cfg(test)]
     pub(super) work_items_seen: usize,
-    pub(super) historical_recovery_bytes_seen: u64,
 }
 
 /// Internal storage-effect choice; it conveys no source or finality authority.
 #[derive(Clone, Copy)]
 pub(super) enum RetirementScanEffects {
     /// Read authenticated current evidence, refusing any unfinished repair.
+    #[cfg(test)]
     Observe,
     /// Preserve the existing explicit maintenance and durability barriers.
     MaintainAndAttest { pending_canonical_bytes: u64 },
@@ -51,6 +50,7 @@ impl RetirementScanEffects {
         receipt: &LaneBlockApplicationReceiptArtifact,
     ) -> bool {
         match self {
+            #[cfg(test)]
             Self::Observe => kura.lane_block_application_receipt_matches_merge_log_without_sidecar_repair_under_prune_and_canonical_guards(receipt),
             Self::MaintainAndAttest { .. } => kura.lane_block_application_receipt_matches_merge_log_under_prune_and_canonical_guards(receipt),
         }
@@ -87,6 +87,7 @@ impl RetirementScanEffects {
                 retiring,
                 pairs,
             ),
+            #[cfg(test)]
             Self::Observe => kura.observe_lane_retirement_route_locked(entry),
         }
     }
@@ -99,6 +100,7 @@ impl RetirementScanEffects {
     ) -> bool {
         match self {
             Self::MaintainAndAttest { .. } => kura.sync_bound_progress_sidecar(bound, kind),
+            #[cfg(test)]
             Self::Observe => {
                 !kura.emergency_fast_startup_enabled()
                     && kura.bound_progress_sidecar_unchanged(bound)
@@ -147,6 +149,7 @@ impl RetirementScanEffects {
         observation: ObservedHistoricalRecoveryEvidence<'_>,
     ) -> Result<(Vec<HistoricalAutonomousLaneRecoveryRecordV1>, u64)> {
         match self {
+            #[cfg(test)]
             Self::Observe => observation.into_observed(),
             Self::MaintainAndAttest { .. } => observation.attest(),
         }
@@ -160,6 +163,7 @@ impl RetirementScanEffects {
         BTreeMap<u64, NativeAmxParticipantApplicationReceiptArtifact>,
     )> {
         match self {
+            #[cfg(test)]
             Self::Observe => observation.into_observed(),
             Self::MaintainAndAttest { .. } => observation.attest(),
         }
@@ -170,6 +174,7 @@ impl RetirementScanEffects {
         observation: ObservedAutonomousAttemptNamespace<'_>,
     ) -> Result<BTreeMap<u64, (AutonomousLaneBlockArtifact, LaneBlockProposalV1, bool)>> {
         match self {
+            #[cfg(test)]
             Self::Observe => observation.into_observed(),
             Self::MaintainAndAttest { .. } => observation.attest(),
         }
@@ -179,6 +184,7 @@ impl RetirementScanEffects {
 impl Kura {
     /// Authenticate the same frontier inputs as maintenance, without repairing them.
     /// Missing or incomplete progress remains a local maintenance condition.
+    #[cfg(test)]
     fn observe_lane_retirement_route_locked(
         &self,
         entry: &LaneStorageEntry,

@@ -24,6 +24,8 @@ pub(in crate::state::carrier_preparation::journals) enum CarrierPhysicalPreparat
     Admission(E),
     /// Equal bytes or paths cannot replace the captured original Kura owner.
     ForeignKura,
+    /// The target State or block header differs from the captured original geometry.
+    ForeignTarget,
     /// The original Kura is busy or requires storage repair before acquisition.
     Kura(KuraPublicationPreparationError),
     /// The retained durable checkpoint/finality no longer matches its original owner.
@@ -63,6 +65,7 @@ impl<E: std::fmt::Debug> std::fmt::Debug for CarrierPhysicalPreparationError<E> 
         match self {
             Self::Admission(error) => f.debug_tuple("Admission").field(error).finish(),
             Self::ForeignKura => f.write_str("ForeignKura"),
+            Self::ForeignTarget => f.write_str("ForeignTarget"),
             Self::Kura(error) => f.debug_tuple("Kura").field(error).finish(),
             Self::Checkpoint(error) => f.debug_tuple("Checkpoint").field(error).finish(),
             Self::Source(error) => f.debug_tuple("Source").field(error).finish(),
@@ -342,6 +345,17 @@ impl<Admission, BindingAdmission>
         if !target.matches_kura_instance(&original.journals.kura) {
             drop(installation);
             return Err((original, CarrierPhysicalPreparationError::ForeignKura));
+        }
+        // The original geometry pins the State identity as well as its header.
+        // Reject another State sharing this Kura before any durable side effect;
+        // physical predecessor and terminal geometry checks still follow below.
+        if !original
+            .journals
+            .geometry
+            .matches_publication_target(target, original.block().header())
+        {
+            drop(installation);
+            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));
         }
         // Reject substituted execution or archive custody before any derived
         // persistence can modify its durable namespace. Release the temporary

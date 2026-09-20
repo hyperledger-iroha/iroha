@@ -2,9 +2,10 @@
 #[cfg(feature = "bench-internal")]
 use criterion::Criterion;
 #[cfg(feature = "bench-internal")]
-use norito::{self, CompressionConfig, NoritoDeserialize, NoritoSerialize, SerializePayload};
+use norito::{self, CompressionConfig, NoritoDeserialize, NoritoSchema, NoritoSerialize};
 #[cfg(feature = "bench-internal")]
-#[derive(Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, NoritoSerialize, NoritoDeserialize, NoritoSchema)]
+#[norito_schema(name = "norito.bench.codec.Sample")]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct Sample {
     id: u64,

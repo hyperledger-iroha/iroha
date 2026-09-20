@@ -392,17 +392,20 @@ _G12_SOAK_TEST = (
     "nexus::cross_dataspace_localnet::"
     "cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
 )
+# TODO: implement the first two native qualifications before opening G-4P.
+# The source inventory/launcher refuses their current absence. Retired
+# executable MergeQC logs must not satisfy these required evidence identities.
 _G4P_RELEASE_TESTS = (
     (
         "nexus_and_streaming",
         "nexus::autoscale_localnet::"
-        "nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+        "nexus_autoscale_native_four_peer_recreates_lane_and_"
         "rejects_stale_artifacts",
     ),
     (
         "nexus_and_streaming",
         "nexus::autoscale_localnet::"
-        "nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart",
+        "nexus_autoscale_native_recovers_missing_execution_evidence_after_restart",
     ),
     (
         "nexus_and_streaming",

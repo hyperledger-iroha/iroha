@@ -113,9 +113,6 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
                 TransactionEntrypoint::SealedReveal(_) => {
                     panic!("unexpected sealed reveal entrypoint");
                 }
-                TransactionEntrypoint::Time(_) => {
-                    panic!("unexpected time-triggered entrypoint");
-                }
             }
         });
     Ok(())

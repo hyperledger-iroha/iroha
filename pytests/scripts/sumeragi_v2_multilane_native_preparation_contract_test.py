@@ -49,6 +49,7 @@ def test_native_preparation_accepts_actual_owners(fixture):
 
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
+    ("DECISION_CARRIER", "enum RetainedCarrier", "Capturing(super::StagedCarrierCapture<Admission>)", "Capturing(Box<super::StagedCarrierCapture<Admission>>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "Validated(PreparedCarrierJournals<Admission>)", "Validated(Box<PreparedCarrierJournals<Admission>>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "Decided(DecisionBoundCarrierJournals<Admission, BindingAdmission>)", "Decided(PreparedCarrierJournals<Admission>)"),
     ("DECISION_CARRIER", "enum RetainedCarrier", "crate::kura::KuraWsvCheckpointReceipt", "()"),
@@ -62,6 +63,17 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("VALIDATION_CUSTODY", "fn new", "markers.try_reserve_exact(limit)?;", "// marker admission removed"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "if self.candidates.len() == self.limit", "if false"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "if requires_existing_owner", "if false"),
+    ("JOURNALS", "fn matches_candidate", "self.journals\n            .matches_validation_candidate(context, proposal)", "true"),
+    ("DECISION_CARRIER", "fn resume_capture", ".map(Self::Validated)", ".map(|_| unreachable!())"),
+    ("DECISION_CARRIER", "fn resume_capture", "(Self::Capturing(carrier), error)", "(Self::Capturing(other), error)"),
+    ("DECISION_CARRIER", "fn resume_capture", "ready => Ok(ready)", "ready => Ok(ready.clone())"),
+    ("VALIDATION_CUSTODY", "fn resume(", "(Self::Owner, LocalValidationRefusal)", "(Self::Owner, Self::Error)"),
+    ("VALIDATION_CUSTODY", "let refusal = match self.validator.resume(owner)", "self.candidates[index].owner = Some(owner);", "drop(owner);"),
+    ("VALIDATION_CUSTODY", "Err((owner, refusal))", "self.candidates[index].owner = Some(owner);", "drop(owner);"),
+    ("VALIDATION_CUSTODY", "let refusal = match self.validator.resume(owner)", "if !owner.matches_candidate(context, body)", "if false"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", ".ok_or(CarrierCustodyError::IncompleteCapture)?", ".unwrap_or_default()"),
+    ("VALIDATION_CUSTODY", "fn confirm(", "owner.ready_commitment() != Some(receipt.execution_commitment())", "false"),
+    ("RETAINED_VALIDATION", "CarrierMarkerPreparation::Deferred(refusal)", "Err(V2BodyStoreError::LocalValidation(refusal))", "Ok(self.persist_rejected_outcome(&durable, 0, refusal.to_string())?)"),
     ("VALIDATION_CUSTODY", "fn try_consume", "self.owner = Some(owner);", "drop(owner);"),
     ("VALIDATION_CUSTODY", "fn try_consume", "Ok(value) => {", "Ok(value) => { self.service.candidates.remove(self.index);"),
     ("VALIDATION_CUSTODY", "fn drop(&mut self)", "self.service.candidates[self.index].owner = Some(owner);", "self.service.candidates[0].owner = Some(owner);"),
@@ -76,11 +88,13 @@ def test_retained_carrier_rejects_owner_or_refusal_substitution(fixture, owner, 
     assert not any("digest" in e or "must have one" in e for e in errors), errors
 
 
-@pytest.mark.parametrize("phase", ["Validated", "Decided", "Checkpointed"])
-@pytest.mark.parametrize("method", ["matches_validation_candidate", "execution_prefix_commitment"])
+@pytest.mark.parametrize("phase", ["Capturing", "Validated", "Decided", "Checkpointed"])
+@pytest.mark.parametrize("method", ["matches_validation_candidate", "ready_commitment"])
 def test_retained_carrier_requires_original_delegation_in_every_phase(fixture, phase, method):
     root, helper, checker, _ = fixture
     argument = "journals" if phase == "Validated" else "carrier"
+    if phase == "Capturing" and method == "ready_commitment":
+        argument = "_"
     helper.replace_once_after(root / checker.native_preparation_contract.DECISION_CARRIER,
                               f"fn {method}", f"Self::{phase}({argument}) =>",
                               f"Self::{phase}({argument}) => return Default::default(), _ =>")
@@ -106,17 +120,29 @@ def test_retained_carrier_requires_sealed_phase_owner(fixture, mutation):
         assert source.count(declaration) == 1
         path.write_text(source.replace(declaration, "", 1) + "\n" + declaration + "\n")
     else:
-        helper.replace_once_after(path, "impl<A: Send", "self.execution_prefix_commitment()", "Default::default()")
+        helper.replace_once_after(path, "impl<A: Send", "self.ready_commitment()", "Default::default()")
     assert any("retained carrier" in e for e in validate(fixture))
 
 
-@pytest.mark.parametrize("mutation", ["execute-before-capacity", "persist-before-install", "confirm-before-persist"])
+@pytest.mark.parametrize("mutation", ["execute-before-capacity", "resume-before-install", "marker-before-resume", "persist-before-install", "confirm-before-persist"])
 def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation):
     root, helper, checker, _ = fixture
     c = checker.native_preparation_contract
     if mutation == "execute-before-capacity":
         helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
                                   "let existing = self", "self.validator.prepare(context, body); let existing = self")
+    elif mutation == "resume-before-install":
+        helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
+                                  "self.candidates.push(Candidate {", "self.validator.resume(owner); self.candidates.push(Candidate {")
+    elif mutation == "marker-before-resume":
+        path = root / c.VALIDATION_CUSTODY
+        source = path.read_text()
+        start = source.index("        if marker.is_none() {", source.index("fn prepare_marker"))
+        end = source.index("        Ok(CarrierMarkerPreparation::Ready(commitment))", start)
+        marker = source[start:end]
+        source = source[:start] + source[end:]
+        at = source.index("        let refusal = match self.validator.resume(owner)")
+        path.write_text(source[:at] + marker + source[at:])
     else:
         path = root / c.RETAINED_VALIDATION
         anchor = "fn execute_retained_durable_validation"
@@ -128,7 +154,42 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
             helper.replace_once_after(path, anchor, "service.confirm(&validated)?;", "")
             helper.replace_once_after(path, anchor, persistence, "service.confirm(&validated)?;\n" + persistence)
     errors = validate(fixture)
-    assert any("reorders executable relation" in e or "repeats execution" in e for e in errors), errors
+    assert any("reorders executable relation" in e or "repeats execution" in e or "installed owner" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("mutation", ["missing", "wrong-state", "wrong-header", "lost-refund", "after-witness"])
+def test_retained_carrier_rejects_late_or_substituted_physical_target(fixture, mutation):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.PHYSICAL_CARRIER
+    anchor = "fn try_prepare_physical"
+    guard = """        if !original
+            .journals
+            .geometry
+            .matches_publication_target(target, original.block().header())
+        {
+            drop(installation);
+            return Err((original, CarrierPhysicalPreparationError::ForeignTarget));
+        }
+"""
+    source = path.read_text()
+    assert source.count(guard) == 1
+    if mutation == "missing":
+        path.write_text(source.replace(guard, "", 1))
+    elif mutation == "wrong-state":
+        helper.replace_once_after(path, anchor, ".matches_publication_target(target, original.block().header())",
+                                  ".matches_publication_target(other, original.block().header())")
+    elif mutation == "wrong-header":
+        helper.replace_once_after(path, anchor, ".matches_publication_target(target, original.block().header())",
+                                  ".matches_publication_target(target, other.block().header())")
+    elif mutation == "lost-refund":
+        path.write_text(source.replace(guard, guard.replace("drop(installation);", "std::mem::forget(installation);"), 1))
+    else:
+        source = source.replace(guard, "", 1)
+        start = source.index("        if let Err(error) = original.publish_archives()", source.index(anchor))
+        path.write_text(source[:start] + guard + source[start:])
+    errors = validate(fixture)
+    assert any("executable relation" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
 
 

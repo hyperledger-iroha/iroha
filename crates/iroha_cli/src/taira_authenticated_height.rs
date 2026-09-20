@@ -29,10 +29,6 @@ impl VerifiedCommittedHeightV1 {
         self.committed_height
     }
 
-    pub(crate) fn block_hash(&self) -> HashOf<BlockHeader> {
-        self.block_hash
-    }
-
     /// Retrieve only a proof admitted into this observation's contiguous prefix.
     pub(crate) fn proof_at(&self, height: NonZeroU64) -> Option<&BridgeFinalityProof> {
         self.proofs.get(usize::try_from(height.get() - 1).ok()?)

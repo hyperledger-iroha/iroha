@@ -1874,10 +1874,21 @@ sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
         )
         .expect("execute and sign generation fixture against its node config");
         assert!(block.has_results());
-        assert_eq!(block.results().len(), block.entrypoint_hashes().len());
-        assert!(block.results().all(|result| result.as_ref().is_ok()));
+        assert_eq!(block.output_results().len(), block.output_hashes().len());
+        assert_eq!(
+            block
+                .execution_outputs()
+                .iter()
+                .filter(|output| matches!(
+                    output,
+                    iroha_data_model::block::execution_output::ExecutionOutputV1::Network(_)
+                ))
+                .count(),
+            block.network_entrypoint_count()
+        );
+        assert!(block.output_results().all(|result| result.as_ref().is_ok()));
         let result_count =
-            u64::try_from(block.results().len()).expect("fixture result count fits u64");
+            u64::try_from(block.output_results().len()).expect("fixture result count fits u64");
         assert!(
             block
                 .committed_fragment_count()
@@ -1885,16 +1896,17 @@ sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
             "genesis may commit internal fragments in addition to its transaction results"
         );
         block
-            .validate_entrypoint_merkle_cache()
-            .expect("generation fixture entrypoint Merkle cache");
+            .validate_proposal_commitments()
+            .expect("generation fixture proposal commitments");
         block
-            .validate_result_merkle_cache()
-            .expect("generation fixture result Merkle cache");
+            .validate_output_merkle_cache()
+            .expect("generation fixture output Merkle cache");
         assert_eq!(
-            block.header().result_merkle_root(),
+            block.output_merkle_commitment(),
             block
-                .result_merkle_commitment()
-                .map(|commitment| *commitment.root())
+                .output_hashes()
+                .collect::<iroha_crypto::MerkleTree<_>>()
+                .commitment()
         );
         let mut signatures = block.signatures();
         let signature = signatures

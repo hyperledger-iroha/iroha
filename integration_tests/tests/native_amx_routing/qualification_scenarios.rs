@@ -400,7 +400,7 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
             let occurrences = blocks
                 .iter()
                 .flat_map(|block| {
-                    block.entrypoint_hashes().enumerate().filter_map(
+                    block.network_input_hashes().enumerate().filter_map(
                         move |(entrypoint_index, hash)| {
                             (hash == publish_entrypoint).then_some((block, entrypoint_index))
                         },
@@ -413,7 +413,10 @@ pub(super) async fn run_musubi_publication_below_quorum_queue_crash_replay_keeps
                 occurrences.len()
             );
             let (rejection_block, entrypoint_index) = occurrences[0];
-            let rejection = rejection_block.error(entrypoint_index).ok_or_else(|| {
+            let (_, output) = rejection_block
+                .network_output_at(u32::try_from(entrypoint_index)?)
+                .ok_or_else(|| eyre!("post-recovery peer {index} omitted publication output"))?;
+            let rejection = output.result.0.as_ref().err().ok_or_else(|| {
                 eyre!("post-recovery peer {index} applied the replayed publication")
             })?;
             ensure!(
@@ -656,26 +659,29 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
             "pruning peer observed a different eviction-tail barrier identity"
         );
         pruning_peer.shutdown().await;
-        let evidence_artifacts = native_amx_evidence_artifact_snapshot(&pruning_peer)?;
+        let evidence_artifacts = native_amx_evidence_artifact_snapshot(&pruning_peer, &pruning_evidence)?;
         let receipt_artifacts = native_amx_artifact_snapshot(
             &pruning_peer,
+            &pruning_evidence,
             NativeAmxArtifactSelection::Receipts,
         )?;
         let manifest_artifacts = native_amx_artifact_snapshot(
             &pruning_peer,
+            &pruning_evidence,
             NativeAmxArtifactSelection::Manifests,
         )?;
         let eviction_height = pruning_evidence.block.header().height().get();
         let evicted_payload_len =
             evict_native_amx_carrier_body_offline(&pruning_peer, eviction_height)?;
         ensure!(
-            native_amx_evidence_artifact_snapshot(&pruning_peer)? == evidence_artifacts,
+            native_amx_evidence_artifact_snapshot(&pruning_peer, &pruning_evidence)? == evidence_artifacts,
             "Native AMX body eviction changed durable receipt/manifest/index evidence"
         );
         remove_latest_native_amx_manifest_offline(&pruning_peer, &pruning_evidence)?;
         ensure!(
             native_amx_artifact_snapshot(
                 &pruning_peer,
+                &pruning_evidence,
                 NativeAmxArtifactSelection::Receipts,
             )? == receipt_artifacts,
             "Native AMX remote-recovery fixture changed receipt/latest-index evidence"
@@ -683,6 +689,7 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
         ensure!(
             native_amx_artifact_snapshot(
                 &pruning_peer,
+                &pruning_evidence,
                 NativeAmxArtifactSelection::Manifests,
             )? != manifest_artifacts,
             "Native AMX remote-recovery fixture failed to create an exact manifest gap"
@@ -707,7 +714,7 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
             "authenticated recovery returned a different Native AMX carrier identity"
         );
         ensure!(
-            native_amx_primary_blocks_dir(&pruning_peer)
+            native_amx_canonical_blocks_dir(&pruning_peer)
                 .join("da_blocks")
                 .join(format!("{eviction_height:020}.norito"))
                 .is_file(),
@@ -722,7 +729,7 @@ pub(super) async fn run_native_amx_rotating_validator_fault_soak_preserves_indep
             "authenticated recovery changed the exact Native AMX manifest-backed group evidence"
         );
         ensure!(
-            native_amx_evidence_artifact_snapshot(&pruning_peer)? == evidence_artifacts,
+            native_amx_evidence_artifact_snapshot(&pruning_peer, &pruning_evidence)? == evidence_artifacts,
             "Native AMX startup recovery changed exact durable manifest/receipt/index artifacts"
         );
         for (peer_index, peer) in network.peers().iter().enumerate() {

@@ -455,7 +455,7 @@ fn assert_native_durable_source_authentication_in_fixture(fixture: NativeControl
     );
     finality.verify().unwrap();
     state.kura.store_block(Arc::new(block.clone())).unwrap();
-    state.kura.store_v2_finality_artifact(&finality).unwrap();
+    let _ = state.kura.store_v2_finality_artifact(&finality).unwrap();
     let authenticate = || {
         let lease = state.kura.try_publication_lease().unwrap();
         prefix.authenticate_durable_carrier(&block, context, &commitment, &lease)

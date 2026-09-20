@@ -1396,7 +1396,7 @@ strict_replay_test!(
         let mut replay_state = fixture.replay_state(Arc::clone(&fixture.kura));
         let before = StateFingerprint::capture(&replay_state);
         let foreign_kura = fixture.exact_kura_copy();
-        super::replay_blocks_from_kura_range(&foreign_kura, &mut replay_state, 1, 1)
+        let _ = super::replay_blocks_from_kura_range(&foreign_kura, &mut replay_state, 1, 1)
             .expect_err("fresh replay requires the original State storage instance");
         assert!(replay_state.pending_replay_publication.is_none());
         before.assert_unchanged(&replay_state);
@@ -1416,12 +1416,12 @@ strict_replay_test!(
                 .final_state
                 .as_ref(),
         ) as usize;
-        super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 2)
+        let _ = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 2)
             .expect_err("changed range cannot replace retained execution");
-        super::replay_blocks_from_kura_range(&foreign_kura, &mut replay_state, 1, 1)
+        let _ = super::replay_blocks_from_kura_range(&foreign_kura, &mut replay_state, 1, 1)
             .expect_err("equal durable bytes on another Kura cannot replace original owner");
         super::REPLAY_PUBLICATION_PAUSE_BEFORE_INSTALL.with(|pause| pause.set(true));
-        super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
+        let _ = super::replay_blocks_from_kura_range(&fixture.kura, &mut replay_state, 1, 1)
             .expect_err("second refusal retains same executed image");
         assert_eq!(
             std::ptr::from_ref(
