@@ -2372,7 +2372,6 @@ mod tests {
                 NonZeroU64::new(self.context.height).expect("fixture height is non-zero"),
                 None,
                 None,
-                None,
                 5_000 + u64::from(marker),
                 self.round.view,
             );
@@ -3379,7 +3378,7 @@ mod tests {
             owner
                 .registry
                 .registry_for_test_mut()
-                .install(address, digest, work)
+                .install(address, digest, Box::new(work))
                 .unwrap_or_else(|(error, _)| {
                     panic!("install exact terminal-address carrier: {error:?}")
                 });
@@ -3958,7 +3957,7 @@ mod tests {
             LifecycleWorkRegistryHolder::empty();
         registry
             .registry
-            .install(address, digest, incumbent)
+            .install(address, digest, Box::new(incumbent))
             .expect("install simulated incumbent");
         let mut coordinator = fixture.coordinator(64);
         let records_before = coordinator.records.clone();
@@ -4178,7 +4177,7 @@ mod tests {
         let mut registry = LifecycleWorkRegistryHolder::empty();
         let error = registry
             .registry
-            .install_before_publication(wrong_owner_address, work.digest(), work, || {
+            .install_before_publication(wrong_owner_address, work.digest(), Box::new(work), || {
                 published.set(true);
                 Ok::<_, ()>(())
             })
@@ -4198,10 +4197,15 @@ mod tests {
             ConcreteWorkAddress::new(owner, 1, consensus_slot()).expect("valid exact address");
         let error = registry
             .registry
-            .install_before_publication(address, LifecycleDigest::new([0xD4; 32]), work, || {
-                published.set(true);
-                Ok::<_, ()>(())
-            })
+            .install_before_publication(
+                address,
+                LifecycleDigest::new([0xD4; 32]),
+                Box::new(work),
+                || {
+                    published.set(true);
+                    Ok::<_, ()>(())
+                },
+            )
             .expect_err("foreign digest must fail before publication");
         let RegistryPublicationError::Install(RegistryError::DigestMismatch, work) = error else {
             panic!("digest mismatch must return the exact work")

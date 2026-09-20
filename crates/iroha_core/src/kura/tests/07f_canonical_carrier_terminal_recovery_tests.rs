@@ -136,13 +136,13 @@ fn release_terminal_projection_for_test(
         .after
 }
 fn canonical_terminal_payload_for_test(
-    lane: &LaneConfigEntry,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
     height_context_id: HeightContextId,
     signer: &KeyPair,
     salt: u8,
 ) -> LaneExecutablePayloadV1 {
-    let (_, epoch, template) =
-        autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, signer);
+    let (_, epoch, template) = autonomous_lane_payload_for_kura(lane_id, dataspace_id, 1, signer);
     let mut builder = TransactionBuilder::new(
         test_network_id(b"kura-autonomous-view-checkpoint"),
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
@@ -161,6 +161,11 @@ fn canonical_terminal_payload_for_test(
     let entrypoint = TransactionEntrypoint::External(transaction);
 
     let mut proposal = template.origin_proposal;
+    proposal.descriptor.lane_incarnation = Hash::new_from_chunks(&[
+        b"kura:canonical-terminal:incarnation:v1\0",
+        &lane_id.as_u32().to_le_bytes(),
+        &dataspace_id.as_u64().to_le_bytes(),
+    ]);
     proposal.descriptor.subject_hash =
         Hash::new_from_chunks(&[b"kura:canonical-terminal:subject:v1\0", &[salt]]);
     proposal.descriptor.payload_ownership_hash =
@@ -170,10 +175,8 @@ fn canonical_terminal_payload_for_test(
     proposal.descriptor.accepted_transaction_hashes = vec![Hash::from(entrypoint.hash())];
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
-    let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
-        lane.lane_id,
-        lane.dataspace_id,
-    ));
+    let routing_plan =
+        RoutingPlan::single(crate::queue::RoutingDecision::new(lane_id, dataspace_id));
     let local_peer = PeerId::new(signer.public_key().clone());
     let (reservation_owner_hash, proposal_identity_hash) =
         autonomous_lane_reservation_identity_hashes_for_proposal(
@@ -193,8 +196,8 @@ fn canonical_terminal_payload_for_test(
         ]),
         routing_plan_digest: routing_plan.digest(),
         coordinator_leg: routing_plan.coordinator_leg(),
-        lane_id: lane.lane_id,
-        dataspace_id: lane.dataspace_id,
+        lane_id,
+        dataspace_id,
         lane_incarnation: proposal.descriptor.lane_incarnation,
         proposal_height: proposal.descriptor.proposal_height,
         lane_block_height: proposal.descriptor.lane_block_height,
@@ -338,15 +341,25 @@ fn canonical_terminal_merge_execution_from_durable_source_for_test(
     }
 }
 fn canonical_terminal_merge_carrier_for_test(
-    execution: MergeLaneExecution,
+    executions: Vec<MergeLaneExecution>,
     merge_epoch: u64,
 ) -> (Arc<SignedBlock>, Arc<SignedBlock>, MergeLedgerEntry) {
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
-    let raw_carrier = blocks.next();
-    let entrypoint_count =
-        u64::try_from(execution.entrypoints.len()).expect("terminal entrypoint count fits u64");
-    let executions = vec![execution];
+    // Certified source bytes and results belong solely to the merge batch.
+    // DummyBlocks includes an ordinary transaction, so borrow only its round
+    // context and build the canonical reference-only carrier explicitly.
+    let header = crate::merge::merge_application_header_from_carrier(&blocks.next().header());
+    let raw_carrier = Arc::new(
+        iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key()),
+    );
+    let entrypoint_count = executions
+        .iter()
+        .try_fold(0_u64, |count, execution| {
+            count.checked_add(u64::try_from(execution.entrypoints.len()).ok()?)
+        })
+        .expect("terminal entrypoint count fits u64");
     let base_state_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"canonical terminal single-lane base state"));
     let write_set_root = Hash::new(b"canonical terminal single-lane write set");
@@ -380,6 +393,20 @@ fn canonical_terminal_merge_carrier_for_test(
     let bound_carrier = bind_merge_entry_to_carrier(raw_carrier, &mut merge_entry);
     let mut executed_carrier = bound_carrier.as_ref().clone();
     attach_ok_results_to_block(&mut executed_carrier);
+    assert_eq!(executed_carrier.external_entrypoints_cloned().count(), 0);
+    assert!(
+        executed_carrier
+            .execution_context()
+            .expect("canonical terminal carrier context")
+            .external
+            .is_empty(),
+        "certified merge sources must not be duplicated as ordinary contexts",
+    );
+    crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &executed_carrier,
+        Some(&merge_entry),
+    )
+    .expect("terminal carrier must satisfy the real canonical source join");
     (parent, Arc::new(executed_carrier), merge_entry)
 }
 fn canonical_terminal_projection_for_test(
@@ -466,8 +493,13 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         .enumerate()
         .map(|(index, lane)| {
             let salt = u8::try_from(index + 1).expect("terminal-outcome lane salt fits u8");
-            let template =
-                canonical_terminal_payload_for_test(lane, height_context_id, &signer, salt);
+            let template = canonical_terminal_payload_for_test(
+                lane.lane_id,
+                lane.dataspace_id,
+                height_context_id,
+                &signer,
+                salt,
+            );
             let incarnation_tag = [0xA0_u8
                 .checked_add(u8::try_from(index).expect("terminal-outcome lane index fits u8"))
                 .expect("terminal-outcome incarnation tag remains bounded")];
@@ -508,6 +540,7 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
     let (kura, _) =
         Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
             .expect("terminal-outcome Kura");
+    kura.bind_lane_storage_network(network_id).unwrap();
     kura.establish_or_verify_configured_primary_geometry_anchor(
         initial_lane_config.primary(),
         initial_incarnations[&LaneId::SINGLE],
@@ -596,7 +629,9 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
             assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
         }
         let path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
-            lane,
+            &kura
+                .lane_storage_entry(lane.lane_id)
+                .expect("capture the exact terminal storage identity"),
             temp_dir.path(),
             payload.origin_proposal.descriptor.lane_block_height,
             payload.origin_proposal.descriptor.proposal_height,
@@ -921,10 +956,13 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
             .expect("terminal inventory after completion")
             .is_empty()
     );
+    assert_eq!(kura.bound_lane_storage_network().unwrap(), network_id);
     drop(kura);
     let (reopened, _) =
         Kura::new_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
             .expect("reopen completed outcomes");
+    assert!(reopened.lane_storage_entries.lock().is_empty());
+    reopened.bind_lane_storage_network(network_id).unwrap();
     reopened
         .recover_lane_geometry_journal(
             &lane_config,
@@ -994,7 +1032,8 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         .enumerate()
         .map(|(index, lane)| {
             canonical_terminal_payload_for_test(
-                lane,
+                lane.lane_id,
+                lane.dataspace_id,
                 height_context_id,
                 &signer,
                 u8::try_from(index + 1).expect("fixture lane salt fits u8"),
@@ -1009,6 +1048,15 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
     let network_id = payloads[0].network_id;
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("canonical terminal Kura");
+    kura.bind_lane_storage_network(network_id).unwrap();
+    let incarnations = payloads
+        .iter()
+        .map(|payload| {
+            let descriptor = &payload.origin_proposal.descriptor;
+            (descriptor.lane_id, descriptor.lane_incarnation)
+        })
+        .collect();
+    publish_initial_configured_lane_geometry_for_test(&kura, &lane_config, &incarnations);
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind canonical terminal local peer");
     let generation = kura
@@ -1027,7 +1075,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         .try_reserve_exact(payloads.len())
         .expect("reserve canonical terminal paths");
     for (lane, payload) in lanes.iter().zip(&payloads) {
-        install_autonomous_lane_marker_for_kura(&kura, &lane_config, payload);
         executions.push(canonical_terminal_merge_execution_for_test(
             &kura, payload, &signer,
         ));
@@ -1040,54 +1087,15 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         );
         groups.push(group);
         outcome_paths.push(Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
-            lane,
+            &kura
+                .lane_storage_entry(lane.lane_id)
+                .expect("capture the exact terminal storage identity"),
             temp_dir.path(),
             payload.origin_proposal.descriptor.lane_block_height,
             payload.origin_proposal.descriptor.proposal_height,
         ));
     }
-    let mut blocks = DummyBlocks::new();
-    let parent = blocks.next();
-    let raw_carrier = blocks.next();
-    let entrypoint_count = executions
-        .iter()
-        .try_fold(0_u64, |count, execution| {
-            count.checked_add(u64::try_from(execution.entrypoints.len()).ok()?)
-        })
-        .expect("canonical terminal entrypoint count fits u64");
-    let base_state_hash =
-        HashOf::from_untyped_unchecked(Hash::new(b"canonical terminal base state"));
-    let write_set_root = Hash::new(b"canonical terminal write set");
-    let mut batch = MergeExecutionBatch {
-        version: 1,
-        base_state_height: 1,
-        base_state_hash,
-        application_block_header: crate::merge::merge_application_header_from_carrier(
-            &raw_carrier.header(),
-        ),
-        execution_root: crate::merge::merge_execution_root(&executions),
-        entrypoint_count,
-        entrypoint_merkle_root: crate::merge::merge_execution_entrypoint_merkle_root(&executions)
-            .expect("canonical terminal carrier has entrypoints"),
-        result_merkle_root: crate::merge::merge_execution_result_merkle_root(&executions)
-            .expect("canonical terminal carrier has results"),
-        lanes: executions,
-        application_write_set_root: Hash::new(b"canonical terminal application writes"),
-        write_set_root,
-        expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
-            1,
-            base_state_hash,
-            write_set_root,
-        ),
-        batch_hash: Hash::prehashed([0; Hash::LENGTH]),
-    };
-    batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-    let mut merge_entry = sample_merge_entry(1);
-    merge_entry.execution_batch = Some(batch);
-    let bound_carrier = bind_merge_entry_to_carrier(raw_carrier, &mut merge_entry);
-    let mut executed_carrier = bound_carrier.as_ref().clone();
-    attach_ok_results_to_block(&mut executed_carrier);
-    let carrier = Arc::new(executed_carrier);
+    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(executions, 1);
     assert_eq!(
         merge_entry
             .execution_batch

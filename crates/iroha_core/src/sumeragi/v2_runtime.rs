@@ -1410,6 +1410,83 @@ impl RuntimeLifecycleOwner {
             .ok_or(RuntimeIngressMergeError::Conflict)
     }
 }
+/// Exact executor-owned lifecycle identities borrowed for one runtime operation.
+///
+/// Equal fanout aliases share one entry. The source owners cannot be changed
+/// while this census remains in use, and the runtime never retains the census.
+#[derive(Debug)]
+pub(crate) struct RuntimeExternalLifecycleCensus<'a> {
+    owners: BTreeMap<u128, &'a RuntimeLifecycleOwner>,
+}
+
+impl<'a> RuntimeExternalLifecycleCensus<'a> {
+    /// Compute the existing pending-work plus two retained-batch owner limit.
+    pub(crate) fn capacity_for_pending_work(max_pending_work: usize) -> Result<usize, String> {
+        if max_pending_work == 0 {
+            return Err("external lifecycle-owner pending capacity was zero".to_owned());
+        }
+        MAX_EFFECTS_PER_STEP
+            .checked_mul(2)
+            .and_then(|retained| max_pending_work.checked_add(retained))
+            .ok_or_else(|| "external lifecycle-owner capacity overflowed".to_owned())
+    }
+
+    /// Validate and index immutable owner references from the executor's sources.
+    pub(crate) fn new(
+        source: impl IntoIterator<Item = &'a RuntimeLifecycleOwner>,
+        max_pending_work: usize,
+    ) -> Result<Self, String> {
+        let capacity = Self::capacity_for_pending_work(max_pending_work)?;
+        let mut owners = BTreeMap::<u128, &'a RuntimeLifecycleOwner>::new();
+        for owner in source {
+            if !owner.validate_exact() {
+                return Err("external lifecycle ownership was invalid".to_owned());
+            }
+            match owners.get(&owner.lifecycle_ordinal()) {
+                Some(existing) if *existing != owner => {
+                    return Err(
+                        "two external lifecycle owners claimed one admission ordinal".to_owned(),
+                    );
+                }
+                Some(_) => {}
+                None => {
+                    if owners.len() >= capacity {
+                        return Err("external lifecycle ownership exceeded its bound".to_owned());
+                    }
+                    owners.insert(owner.lifecycle_ordinal(), owner);
+                }
+            }
+        }
+        Ok(Self { owners })
+    }
+
+    /// Read the borrowed exact owners in immutable ordinal order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &RuntimeLifecycleOwner> + '_ {
+        self.owners.values().copied()
+    }
+
+    /// Whether this exact logical owner is retained by the executor.
+    fn contains(&self, owner: &RuntimeLifecycleOwner) -> bool {
+        self.owners
+            .get(&owner.lifecycle_ordinal())
+            .is_some_and(|existing| *existing == owner)
+    }
+
+    /// Represent a test runtime whose fixture owns no external effect work.
+    #[cfg(test)]
+    pub(crate) fn empty_for_test() -> Self {
+        Self {
+            owners: BTreeMap::new(),
+        }
+    }
+
+    /// Count distinct externally retained owners in an inspected test census.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.owners.len()
+    }
+}
+
 fn runtime_lifecycle_owner_projection_hash(owner: &RuntimeLifecycleOwner) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
     projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-lifecycle-owner:v1");
@@ -2512,6 +2589,23 @@ pub(in crate::sumeragi) fn project_recovered_wal_decision_fetch(
         RecoveredWalDecisionFetchPendingMintPermit::new(),
         RecoveredWalCandidateProjectionPermit::new(),
         verified,
+    )
+}
+/// Borrow the native PendingKura replay solely for passive lifecycle comparison.
+///
+/// The ephemeral Fetch/Apply bindings cannot escape this closed join. The
+/// original authenticated Fetch remains solely owned by interrupted-tip replay.
+pub(in crate::sumeragi) fn project_pending_kura_passive_apply(
+    verified: &VerifiedHeightContext,
+    replay: &super::v2::RecoveredPendingKuraApplyReplayV1,
+    manifest: &wire::PayloadManifest,
+    validated: &super::v2_body_store::ValidatedBodyReceipt,
+) -> Option<super::v2_lifecycle_coordinator::PendingKuraApplyComparisonV1> {
+    replay.project_passive_lifecycle_apply(
+        RecoveredWalDecisionFetchPendingMintPermit::new(),
+        verified,
+        manifest,
+        validated,
     )
 }
 /// Ownership-preserving failure from the consuming recovered-WAL projection.
@@ -12033,8 +12127,6 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     pending_effect_ownership: Option<Vec<RuntimeEffectOwnership>>,
     #[cfg(test)]
     recovered_validated_body_bindings: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
-    external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
-    external_lifecycle_owner_capacity: usize,
     schedule: ScheduleState,
     last_scheduler_ownership: Option<RuntimeSchedulerOwnershipEvidence>,
     fail_closed: bool,
@@ -12124,10 +12216,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             pending_effect_ownership: None,
             #[cfg(test)]
             recovered_validated_body_bindings: BTreeSet::new(),
-            external_lifecycle_owners: Vec::new(),
-            // Before the effect executor installs its configured pending-work
-            // bound, only the one bounded startup batch can exist externally.
-            external_lifecycle_owner_capacity: MAX_EFFECTS_PER_STEP,
             schedule: ScheduleState::default(),
             last_scheduler_ownership: None,
             fail_closed: false,
@@ -12495,6 +12583,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) fn freeze_pre_timeout_locked_prepare_qc_cut(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<PreTimeoutLockedPrepareQcCutV1>, String> {
         if self.fail_closed {
             return Err("Sumeragi v2 runtime is fail-closed".to_owned());
@@ -12509,14 +12598,19 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if !self.clocks_armed {
             return Ok(None);
         }
-        self.freeze_due_clock_owners(now).map_err(|error| {
-            self.latch_fail_closed("pre-timeout PrepareQC cut could not freeze clock ownership");
-            error.to_string()
-        })?;
-        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|error| {
-            self.latch_fail_closed("pre-timeout PrepareQC cut arbitration was invalid");
-            error.to_string()
-        })?;
+        self.freeze_due_clock_owners(now, external)
+            .map_err(|error| {
+                self.latch_fail_closed(
+                    "pre-timeout PrepareQC cut could not freeze clock ownership",
+                );
+                error.to_string()
+            })?;
+        let arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|error| {
+                self.latch_fail_closed("pre-timeout PrepareQC cut arbitration was invalid");
+                error.to_string()
+            })?;
         if !arbitration.timeout_due {
             return Ok(None);
         }
@@ -12824,58 +12918,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 .enqueue_classified_command_with_capacity(command, Some(clock)),
             None => self.ingress.enqueue(command),
         }
-    }
-    /// Replace the bounded set of exact owners currently held by retained
-    /// executor effects or asynchronous Sign/Store/Validate/Apply tasks.
-    ///
-    /// The executor derives this set from its existing bounded maps before
-    /// each runtime step. Supplying a forged carrier or exceeding the existing
-    /// pending-work plus the ordinary and typed-control retained-batch bound
-    /// fails closed.
-    /// A network-waiting Fetch remains executor-owned but is intentionally
-    /// passive here; its exact owner returns with `BodyAvailable` so the wait
-    /// itself cannot block the control traffic needed to finish or supersede it.
-    pub(crate) fn set_external_lifecycle_owners(
-        &mut self,
-        owners: Vec<RuntimeLifecycleOwner>,
-    ) -> Result<(), String> {
-        if owners.len() > self.external_lifecycle_owner_capacity
-            || owners.iter().any(|owner| !owner.validate_exact())
-        {
-            self.latch_fail_closed("external lifecycle ownership was invalid or unbounded");
-            return Err("Sumeragi v2 external lifecycle ownership was invalid".to_owned());
-        }
-        self.external_lifecycle_owners = owners;
-        Ok(())
-    }
-    /// Return the number of external owners published to the runtime.
-    #[cfg(test)]
-    pub(crate) fn external_lifecycle_owner_count(&self) -> usize {
-        self.external_lifecycle_owners.len()
-    }
-    /// Bind external lifecycle capacity to the effect executor's existing
-    /// pending-work limit plus one ordinary and one typed-control retained
-    /// reducer-effect batch.
-    ///
-    /// Runtime ingress and asynchronous effect work have independent bounded
-    /// configurations.  Keeping this relation explicit avoids rejecting a
-    /// legitimate executor with a small ingress FIFO and a larger task bound.
-    pub(crate) fn configure_external_lifecycle_owner_capacity(
-        &mut self,
-        max_pending_work: usize,
-    ) -> Result<(), String> {
-        let retained_capacity = MAX_EFFECTS_PER_STEP
-            .checked_mul(2)
-            .ok_or_else(|| "external lifecycle-owner capacity overflowed".to_owned())?;
-        let capacity = max_pending_work
-            .checked_add(retained_capacity)
-            .ok_or_else(|| "external lifecycle-owner capacity overflowed".to_owned())?;
-        if max_pending_work == 0 || self.external_lifecycle_owners.len() > capacity {
-            self.latch_fail_closed("external lifecycle-owner capacity was invalid");
-            return Err("Sumeragi v2 external lifecycle-owner capacity was invalid".to_owned());
-        }
-        self.external_lifecycle_owner_capacity = capacity;
-        Ok(())
     }
     /// Mint the `AssembleBody` root when a deterministic local proposal is
     /// accepted into the bounded asynchronous Store -> Validate pipeline.
@@ -13349,6 +13391,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn reconcile_deferred_ingress_ownership(
         &mut self,
         handoff: Option<(u128, RuntimeIngressOwnershipEvidence)>,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<(), RuntimeIngressMergeError> {
         let active = self.driver.authenticated_deferred_admission_ordinals();
         let all_active = self.driver.all_deferred_admission_ordinals();
@@ -13376,7 +13419,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     ) {
                         let merged_lifecycle = merged_lifecycle.expect("matched tagged lifecycle");
                         if self
-                            .active_lifecycle_uses_ordinal(merged_lifecycle)
+                            .active_lifecycle_uses_ordinal(merged_lifecycle, external)
                             .map_err(|_| RuntimeIngressMergeError::Conflict)?
                         {
                             return Err(RuntimeIngressMergeError::Conflict);
@@ -13640,6 +13683,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         parent: &RuntimeLifecycleOwner,
         parent_statement: Option<RuntimeCandidateSemanticStatement>,
         current_ingress: RuntimeDispatchIngress,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<
         (
             Vec<D::Effect>,
@@ -13681,7 +13725,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err(RuntimeError::FailClosed);
         }
         if self
-            .reconcile_deferred_ingress_ownership(deferred_ingress)
+            .reconcile_deferred_ingress_ownership(deferred_ingress, external)
             .is_err()
         {
             self.latch_fail_closed("driver dispatch lost deferred ingress ownership");
@@ -13871,9 +13915,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             retained_deferred_ingress,
         ))
     }
-    fn freeze_due_clock_owners(&mut self, now: Instant) -> Result<(), EnqueueError> {
+    fn freeze_due_clock_owners(
+        &mut self,
+        now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<(), EnqueueError> {
         // Validate every active owner before a clock can bypass it.
-        let _ = self.minimum_active_lifecycle_ordinal()?;
+        let _ = self.minimum_active_lifecycle_ordinal(external)?;
         self.validate_clock_owner_physical_cuts()?;
         if !self.clocks_armed {
             return Ok(());
@@ -13988,7 +14036,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 // producer episode and must take a fresh actor-global
                 // position. Reinstalling `prior_episode` would resurrect its
                 // old ordinal ahead of work admitted after the last tick.
-                if self.active_lifecycle_uses_ordinal(prior_episode.lifecycle_ordinal())? {
+                if self
+                    .active_lifecycle_uses_ordinal(prior_episode.lifecycle_ordinal(), external)?
+                {
                     return Ok(());
                 }
                 self.dormant_fresh_lifecycle_owners
@@ -14005,7 +14055,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             // second runtime alias would make the same immutable owner compete
             // with itself and keep the nondeferred alias at the global
             // minimum while its signing dependency waits.
-            if self.active_lifecycle_uses_ordinal(owner.lifecycle_ordinal())? {
+            if self.active_lifecycle_uses_ordinal(owner.lifecycle_ordinal(), external)? {
                 return Ok(());
             }
             self.retransmit_owner_physical_cut = Some(self.ingress_physical_cut);
@@ -14013,14 +14063,18 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(())
     }
-    fn minimum_active_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
-        self.minimum_active_lifecycle_ordinal_excluding(&[])
+    fn minimum_active_lifecycle_ordinal(
+        &self,
+        external: &RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<Option<u128>, EnqueueError> {
+        self.minimum_active_lifecycle_ordinal_excluding(&[], external)
     }
     /// Return the oldest exact active owner after removing only aliases of the
     /// supplied blocked adapter-deferred set.
     fn minimum_active_lifecycle_ordinal_excluding(
         &self,
         excluded: &[RuntimeLifecycleOwner],
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<u128>, EnqueueError> {
         // Deeply validate every physical FIFO owner and every restart-dormant
         // local producer reservation before an exclusion can affect rank.
@@ -14071,7 +14125,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
             observe(&reservation.owner)?;
         }
-        for owner in &self.external_lifecycle_owners {
+        for owner in external.iter() {
             observe(owner)?;
         }
         if let Some(ownership) = &self.pending_effect_ownership {
@@ -14254,7 +14308,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         Ok(eligible)
     }
-    fn active_lifecycle_uses_ordinal(&self, lifecycle_ordinal: u128) -> Result<bool, EnqueueError> {
+    fn active_lifecycle_uses_ordinal(
+        &self,
+        lifecycle_ordinal: u128,
+        external: &RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<bool, EnqueueError> {
         if self.ingress.uses_lifecycle_ordinal(lifecycle_ordinal)? {
             return Ok(true);
         }
@@ -14286,10 +14344,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 .active_view_producer
                 .as_ref()
                 .is_some_and(|reservation| owner_matches(&reservation.owner))
-            || self
-                .external_lifecycle_owners
-                .iter()
-                .any(|owner| owner_matches(owner))
+            || external.iter().any(|owner| owner_matches(owner))
             || self
                 .pending_effect_ownership
                 .iter()
@@ -14408,7 +14463,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.fence_retry_blocked_fifo_owners.push(owner);
         Ok(())
     }
-    fn periodic_timer_owns_runnable_turn(&self) -> Result<bool, EnqueueError> {
+    fn periodic_timer_owns_runnable_turn(
+        &self,
+        external: &RuntimeExternalLifecycleCensus<'_>,
+    ) -> Result<bool, EnqueueError> {
         let (Some(owner), Some(physical_cut)) = (
             self.retransmit_owner.as_ref(),
             self.retransmit_owner_physical_cut,
@@ -14426,8 +14484,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 && !queued_owner.is_post_physical_cut(physical_cut)
                 && queued_owner.lifecycle_ordinal() < owner_ordinal
                 && (!first_prompt
-                    || (queued.class != CommandClass::Normal
-                        && !self.external_lifecycle_owners.contains(&queued_owner)))
+                    || (queued.class != CommandClass::Normal && !external.contains(&queued_owner)))
             {
                 return Ok(false);
             }
@@ -14445,7 +14502,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Ok(false);
         }
         Ok(!self.driver.signature_fence_is_active()
-            || !self.external_lifecycle_owners.iter().any(|candidate| {
+            || !external.iter().any(|candidate| {
                 !candidate.is_post_physical_cut(physical_cut)
                     && candidate.lifecycle_ordinal() < owner_ordinal
             }))
@@ -14475,6 +14532,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn scheduler_arbitration_inputs(
         &self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeSchedulerArbitrationInputs, EnqueueError> {
         self.validate_clock_owner_physical_cuts()?;
         // Validate every retained capability before making a scheduling
@@ -14482,7 +14540,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // The old global-minimum comparison made a stalled proposal build or
         // asynchronous I/O task a permanent barrier for the pacemaker and for
         // already-authenticated certificates.
-        let _ = self.minimum_active_lifecycle_ordinal()?;
+        let _ = self.minimum_active_lifecycle_ordinal(external)?;
         let fifo_minimum = self.ingress.oldest_lifecycle_ordinal()?;
         let classes = self.ingress.class_readiness();
         let mut fifo_ready = fifo_minimum.is_some() && (classes.0 || classes.1 || classes.2);
@@ -14524,7 +14582,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 .as_ref()
                 .is_some_and(|(candidate, _, _)| {
                     self.driver.signature_fence_is_active()
-                        && self.external_lifecycle_owners.iter().any(|owner| {
+                        && external.iter().any(|owner| {
                             owner.lifecycle_ordinal() < candidate.lifecycle_ordinal()
                                 || owner
                                     .causal_origin()
@@ -14562,7 +14620,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             && !timeout_due
             && self.retransmit_owner.is_some()
             && self.retransmit_owner_physical_cut.is_some()
-            && self.periodic_timer_owns_runnable_turn()?;
+            && self.periodic_timer_owns_runnable_turn(external)?;
         Ok(RuntimeSchedulerArbitrationInputs {
             clocks_armed: timers_enabled,
             timeout_due,
@@ -14699,6 +14757,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &mut self,
         now: Instant,
         prepared: PreparedCompletionCapacityReliefV1,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
@@ -14722,10 +14781,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         }
         let selected_round_tag = self.round_tag;
         let schedule = self.schedule;
-        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("Completion capacity relief arbitration was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|_| {
+                self.latch_fail_closed("Completion capacity relief arbitration was invalid");
+                RuntimeError::FailClosed
+            })?;
         let (command, candidate, queue_before) = self
             .ingress
             .pop_prepared_completion_capacity_relief_with_ownership(prepared)
@@ -14763,15 +14824,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         let parent_statement = command.candidate_semantic_statement;
         let retry_command = command.clone();
-        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
-            .driver
-            .dispatch(command)
-        {
-            Ok(dispatch) => {
-                self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?
-            }
-            Err(error) => return Err(self.close(error)),
-        };
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+            match self.driver.dispatch(command) {
+                Ok(dispatch) => self.accept_driver_dispatch(
+                    dispatch,
+                    &owner,
+                    parent_statement,
+                    current_ingress,
+                    external,
+                )?,
+                Err(error) => return Err(self.close(error)),
+            };
         if retry_unadmitted {
             if self
                 .ingress
@@ -14832,6 +14895,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &mut self,
         now: Instant,
         apply_ordinal: u128,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
@@ -14890,10 +14954,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let selected_round_tag = self.round_tag;
         let schedule_before = self.schedule;
         let queue_before = self.ingress.ownership_snapshot();
-        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("owed-FIFO predecessor arbitration was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|_| {
+                self.latch_fail_closed("owed-FIFO predecessor arbitration was invalid");
+                RuntimeError::FailClosed
+            })?;
         if arbitration.timeout_due {
             self.latch_fail_closed(
                 "pre-Apply FIFO corridor observed timeout due without a frozen owner",
@@ -14925,6 +14991,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             RuntimeSelectedOwnerKind::LifecycleApplyPredecessor,
             RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained,
             Some(apply_ordinal),
+            external,
         )
         .map(Some)
     }
@@ -14942,6 +15009,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         selected_kind: RuntimeSelectedOwnerKind,
         retry_selected_kind: RuntimeSelectedOwnerKind,
         lifecycle_upper_bound: Option<u128>,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
         let (command, candidate) = match self
             .ingress
@@ -14972,15 +15040,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         let parent_statement = command.candidate_semantic_statement;
         let retry_command = command.clone();
-        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
-            .driver
-            .dispatch(command)
-        {
-            Ok(dispatch) => {
-                self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?
-            }
-            Err(error) => return Err(self.close(error)),
-        };
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+            match self.driver.dispatch(command) {
+                Ok(dispatch) => self.accept_driver_dispatch(
+                    dispatch,
+                    &owner,
+                    parent_statement,
+                    current_ingress,
+                    external,
+                )?,
+                Err(error) => return Err(self.close(error)),
+            };
         if queue_selection_kind == RuntimeQueueSelectionKind::LifecycleApplyPredecessor
             && (retained_deferred_ingress
                 || !self.deferred_lifecycle_ownership.is_empty()
@@ -15059,6 +15129,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) fn step(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
@@ -15085,7 +15156,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.latch_fail_closed("fence-predecessor retry ownership was invalid");
             return Err(RuntimeError::FailClosed);
         }
-        if self.freeze_due_clock_owners(now).is_err() {
+        if self.freeze_due_clock_owners(now, external).is_err() {
             self.latch_fail_closed("clock lifecycle ownership could not be frozen");
             return Err(RuntimeError::FailClosed);
         }
@@ -15097,14 +15168,14 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // publication race without giving a newly-created or stalled signer
         // recurring grace.
         let timeout_preempts = self
-            .scheduler_arbitration_inputs(now)
+            .scheduler_arbitration_inputs(now, external)
             .map_err(|_| {
                 self.latch_fail_closed("timeout-preemption ownership was invalid");
                 RuntimeError::FailClosed
             })?
             .timeout_due;
         if timeout_preempts
-            && let Some(step) = self.dispatch_one_pre_timeout_local_proposal_ready(now)?
+            && let Some(step) = self.dispatch_one_pre_timeout_local_proposal_ready(now, external)?
         {
             return Ok(step);
         }
@@ -15115,7 +15186,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // Busy again, and starve its dependency. Give only the exact causally
         // owned fence completion one bounded turn; every frozen timer and
         // scheduler debt remains intact for the immediately following call.
-        if !timeout_preempts && let Some(step) = self.dispatch_one_fence_dependency(now, None)? {
+        if !timeout_preempts
+            && let Some(step) = self.dispatch_one_fence_dependency(now, None, external)?
+        {
             return Ok(step);
         }
         // Work which already crossed runtime ingress and acquired the
@@ -15124,16 +15197,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // Once its WAL/signing fence opens, give exactly one eligible
         // transition a serialized turn. Each returned effect batch still
         // represents only one reducer macro-step.
-        if !timeout_preempts && let Some(step) = self.dispatch_one_adapter_deferred(now, None)? {
+        if !timeout_preempts
+            && let Some(step) = self.dispatch_one_adapter_deferred(now, None, external)?
+        {
             return Ok(step);
         }
         let selected_round_tag = self.round_tag;
         let schedule_before = self.schedule;
         let queue_before = self.ingress.ownership_snapshot();
-        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("scheduler lifecycle ownership was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|_| {
+                self.latch_fail_closed("scheduler lifecycle ownership was invalid");
+                RuntimeError::FailClosed
+            })?;
         let (work, next_schedule) = self.schedule.select(
             arbitration.timeout_due,
             arbitration.periodic_timer_due,
@@ -15177,6 +15254,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                             &owner,
                             None,
                             RuntimeDispatchIngress::LocalOrCausal,
+                            external,
                         )?,
                         Err(error) => return Err(self.close(error)),
                     };
@@ -15239,6 +15317,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                             &owner,
                             None,
                             RuntimeDispatchIngress::LocalOrCausal,
+                            external,
                         )?,
                         Err(error) => return Err(self.close(error)),
                     };
@@ -15287,6 +15366,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     RuntimeSelectedOwnerKind::Fifo,
                     RuntimeSelectedOwnerKind::FifoRetryRetained,
                     None,
+                    external,
                 );
             }
             ScheduledWork::Idle => {
@@ -15407,11 +15487,14 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn dispatch_one_pre_timeout_local_proposal_ready(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
-        let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("pre-timeout local proposal arbitration was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let mut arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|_| {
+                self.latch_fail_closed("pre-timeout local proposal arbitration was invalid");
+                RuntimeError::FailClosed
+            })?;
         if !arbitration.timeout_due {
             return Ok(None);
         }
@@ -15485,6 +15568,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     &owner,
                     parent_statement,
                     RuntimeDispatchIngress::LocalOrCausal,
+                    external,
                 )?,
                 Err(error) => return Err(self.close(error)),
             };
@@ -15539,6 +15623,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &mut self,
         now: Instant,
         cut: &PreTimeoutLockedPrepareQcCutV1,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
@@ -15561,7 +15646,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Ok(None);
         }
         let timeout_due = self
-            .scheduler_arbitration_inputs(now)
+            .scheduler_arbitration_inputs(now, external)
             .map_err(|_| {
                 self.latch_fail_closed("pre-timeout PrepareQC arbitration was invalid");
                 RuntimeError::FailClosed
@@ -15631,6 +15716,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     &owner,
                     parent_statement,
                     RuntimeDispatchIngress::DirectAuthenticated,
+                    external,
                 )?,
                 Err(error) => return Err(self.close(error)),
             };
@@ -15640,10 +15726,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             );
             return Err(RuntimeError::FailClosed);
         }
-        let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("pre-timeout PrepareQC scheduler ownership was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let mut arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|_| {
+                self.latch_fail_closed("pre-timeout PrepareQC scheduler ownership was invalid");
+                RuntimeError::FailClosed
+            })?;
         if !arbitration.timeout_due {
             self.latch_fail_closed("pre-timeout PrepareQC dispatch lost the due timeout owner");
             return Err(RuntimeError::FailClosed);
@@ -15688,6 +15776,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) fn try_step_pacemaker_escape(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
@@ -15710,31 +15799,36 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.driver.pacemaker_escape_is_parked() {
             return Ok(None);
         }
-        if self.freeze_due_clock_owners(now).is_err() {
+        if self.freeze_due_clock_owners(now, external).is_err() {
             self.latch_fail_closed("pacemaker escape could not freeze clock ownership");
             return Err(RuntimeError::FailClosed);
         }
         let timeout_due = self
-            .scheduler_arbitration_inputs(now)
+            .scheduler_arbitration_inputs(now, external)
             .map_err(|_| {
                 self.latch_fail_closed("pacemaker escape ownership was invalid");
                 RuntimeError::FailClosed
             })?
             .timeout_due;
         if timeout_due {
-            return self.step(now).map(Some);
+            return self.step(now, external).map(Some);
         }
-        if let Some(step) = self.dispatch_one_fence_dependency(now, Some(SERVICE_CLASS_PROGRESS))? {
+        if let Some(step) =
+            self.dispatch_one_fence_dependency(now, Some(SERVICE_CLASS_PROGRESS), external)?
+        {
             return Ok(Some(step));
         }
-        if let Some(step) = self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS))? {
+        if let Some(step) =
+            self.dispatch_one_adapter_deferred(now, Some(SERVICE_CLASS_PROGRESS), external)?
+        {
             return Ok(Some(step));
         }
-        self.dispatch_one_pacemaker_progress(now)
+        self.dispatch_one_pacemaker_progress(now, external)
     }
     fn dispatch_one_pacemaker_progress(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
         if self.driver.pacemaker_escape_is_parked() {
             return Ok(None);
@@ -15819,15 +15913,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         let parent_statement = command.candidate_semantic_statement;
         let retry_command = command.clone();
-        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
-            .driver
-            .dispatch(command)
-        {
-            Ok(dispatch) => {
-                self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?
-            }
-            Err(error) => return Err(self.close(error)),
-        };
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+            match self.driver.dispatch(command) {
+                Ok(dispatch) => self.accept_driver_dispatch(
+                    dispatch,
+                    &owner,
+                    parent_statement,
+                    current_ingress,
+                    external,
+                )?,
+                Err(error) => return Err(self.close(error)),
+            };
         if certified_fence_escape && (retry_unadmitted || retained_deferred_ingress) {
             self.latch_fail_closed(
                 "certified pacemaker escape became retryable or adapter-deferred",
@@ -15840,10 +15936,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         // reconciliation compares the stored signer identity and retires the
         // exclusions only if certified progress really consumed or replaced
         // that fence.
-        let mut arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("pacemaker Progress scheduler ownership was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let mut arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|_| {
+                self.latch_fail_closed("pacemaker Progress scheduler ownership was invalid");
+                RuntimeError::FailClosed
+            })?;
         arbitration.timeout_due = false;
         arbitration.periodic_timer_due = false;
         arbitration.fifo_ready = false;
@@ -15933,6 +16031,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &mut self,
         now: Instant,
         required_predecessor_root_class: Option<u8>,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
         if self.driver.deferred_work_is_serviceable() || !self.driver.signature_fence_is_active() {
             return Ok(None);
@@ -16053,7 +16152,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let round_tag = self.round_tag;
         let queue_before = self.ingress.ownership_snapshot();
         let schedule = self.schedule;
-        let mut arbitration = match self.scheduler_arbitration_inputs(now) {
+        let mut arbitration = match self.scheduler_arbitration_inputs(now, external) {
             Ok(arbitration) => arbitration,
             Err(_) => {
                 self.latch_fail_closed("fence-completion scheduler ownership was invalid");
@@ -16135,6 +16234,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         &owner,
                         parent_statement,
                         current_ingress,
+                        external,
                     )?,
                     Err(error) => return Err(self.close(error)),
                 };
@@ -16223,6 +16323,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 &owner,
                 parent_statement,
                 RuntimeDispatchIngress::LocalOrCausal,
+                external,
             )?;
         if retry_unadmitted {
             self.latch_fail_closed("matching fence completion retained retry state");
@@ -16312,6 +16413,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) fn step_recovery(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
         if self.fail_closed {
             return Err(RuntimeError::FailClosed);
@@ -16343,16 +16445,18 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.latch_fail_closed("recovery retained an unserviceable deferred signing fence");
             return Err(RuntimeError::FailClosed);
         }
-        if let Some(step) = self.dispatch_one_adapter_deferred(now, None)? {
+        if let Some(step) = self.dispatch_one_adapter_deferred(now, None, external)? {
             return Ok(step);
         }
         let round_tag = self.round_tag;
         let queue_before = self.ingress.ownership_snapshot();
         let schedule_before = self.schedule;
-        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("recovery scheduler lifecycle ownership was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|_| {
+                self.latch_fail_closed("recovery scheduler lifecycle ownership was invalid");
+                RuntimeError::FailClosed
+            })?;
         let (scheduled, schedule_after) = schedule_before.select(
             arbitration.timeout_due,
             arbitration.periodic_timer_due,
@@ -16407,15 +16511,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         let parent_statement = command.candidate_semantic_statement;
         let retry_command = command.clone();
-        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
-            .driver
-            .dispatch(command)
-        {
-            Ok(dispatch) => {
-                self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?
-            }
-            Err(error) => return Err(self.close(error)),
-        };
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+            match self.driver.dispatch(command) {
+                Ok(dispatch) => self.accept_driver_dispatch(
+                    dispatch,
+                    &owner,
+                    parent_statement,
+                    current_ingress,
+                    external,
+                )?,
+                Err(error) => return Err(self.close(error)),
+            };
         if retry_unadmitted {
             if self
                 .ingress
@@ -16519,6 +16625,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         &mut self,
         now: Instant,
         required_root_class: Option<u8>,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
         if !self.driver.deferred_work_is_serviceable() {
             return Ok(None);
@@ -16559,10 +16666,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let round_tag = self.round_tag;
         let queue_before = self.ingress.ownership_snapshot();
         let schedule = self.schedule;
-        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
-            self.latch_fail_closed("deferred scheduler lifecycle ownership was invalid");
-            RuntimeError::FailClosed
-        })?;
+        let arbitration = self
+            .scheduler_arbitration_inputs(now, external)
+            .map_err(|_| {
+                self.latch_fail_closed("deferred scheduler lifecycle ownership was invalid");
+                RuntimeError::FailClosed
+            })?;
         let queue_after = self.ingress.ownership_snapshot();
         let dispatch = match self.driver.dispatch_deferred(&eligible) {
             Ok(dispatch) => dispatch,
@@ -16654,7 +16763,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             .deferred_remote_proposal_replay
             .remove(&evidence.admission_ordinal);
         if evidence.is_authenticated_ingress() != ingress_ownership.is_some()
-            || self.reconcile_deferred_ingress_ownership(None).is_err()
+            || self
+                .reconcile_deferred_ingress_ownership(None, external)
+                .is_err()
         {
             self.latch_fail_closed("deferred service lost authenticated ingress ownership");
             return Err(RuntimeError::FailClosed);
@@ -16809,8 +16920,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn step_and_take_scheduler_ownership_for_test(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
-        let result = self.step(now);
+        let result = self.step(now, external);
         if let Ok(step) = &result {
             self.take_last_scheduler_ownership()
                 .expect("every successful live scheduler turn retains exact ownership");
@@ -16954,8 +17066,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) fn frozen_timeout_owner_for_test(
         &mut self,
         now: Instant,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<RuntimeLifecycleOwner, String> {
-        self.freeze_due_clock_owners(now)
+        self.freeze_due_clock_owners(now, external)
             .map_err(|error| error.to_string())?;
         self.timeout_owner
             .clone()
@@ -18281,6 +18394,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         &mut self,
         message: wire::ConsensusMessageV2,
         ingress_ownership: FairV2IngressOwnershipEvidence,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<EventTag, NetworkIngressError> {
         if !ingress_ownership.validate_exact() {
             self.latch_fail_closed(
@@ -18467,9 +18581,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             return Err(NetworkIngressError::FailClosed);
         }
         if let Some((owner_tag, admission_ordinal)) = authenticated_deferred_owner {
-            match self
-                .reconcile_deferred_ingress_ownership(Some((admission_ordinal, ingress_ownership)))
-            {
+            match self.reconcile_deferred_ingress_ownership(
+                Some((admission_ordinal, ingress_ownership)),
+                external,
+            ) {
                 Ok(()) => {}
                 Err(RuntimeIngressMergeError::Capacity) => {
                     return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
@@ -18701,6 +18816,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     pub(crate) fn enqueue_network(
         &mut self,
         message: wire::ConsensusMessageV2,
+        external: &RuntimeExternalLifecycleCensus<'_>,
     ) -> Result<EventTag, NetworkIngressError> {
         let mut admitted = super::fair_v2_ingress_admit_for_test(
             super::InboundBlockMessage::from_authenticated_peer(
@@ -18711,7 +18827,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let ingress_ownership = admitted
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");
-        self.enqueue_network_with_ingress_ownership(message, ingress_ownership)
+        self.enqueue_network_with_ingress_ownership(message, ingress_ownership, external)
     }
     /// Return whether the fair-ingress head can reach authentication and then
     /// either claim its exact runtime prefix or coalesce with an exact queued
@@ -20047,7 +20163,10 @@ pub(in crate::sumeragi) mod tests {
         );
 
         let error = runtime
-            .step_recovery(started_at)
+            .step_recovery(
+                started_at,
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect_err("live scheduling must exclude interrupted-tip recovery");
 
         assert!(matches!(&error, RuntimeError::RecoveryAfterClocksArmed));

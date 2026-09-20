@@ -38,14 +38,7 @@ fn transaction_entrypoint_json_roundtrip() {
     let decoded: TransactionEntrypoint =
         norito::json::from_str(&json).expect("deserialize external entrypoint");
     assert_eq!(entry, decoded);
-    let time_entry = TimeTriggerEntrypoint {
-        id: "trigger".parse().unwrap(),
-        instructions: ExecutionStep(Vec::new().into()),
-        authority,
-    };
-    let entry = TransactionEntrypoint::Time(time_entry);
-    let json = norito::json::to_json(&entry).expect("serialize time entrypoint");
-    let decoded: TransactionEntrypoint =
-        norito::json::from_str(&json).expect("deserialize time entrypoint");
-    assert_eq!(entry, decoded);
+    let retired =
+        norito::json!({"Time": {"id":"trigger", "instructions":[], "authority":authority}});
+    assert!(norito::json::from_value::<TransactionEntrypoint>(retired).is_err());
 }

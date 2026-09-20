@@ -163,12 +163,7 @@ fn durable_store_attestation_accepts_only_an_exact_reducer_fence_wake() {
 #[cfg(feature = "bls")]
 #[test]
 fn durable_commit_store_attestation_accepts_a_future_certified_view() {
-    let fixture = durable_store_fixture_with_views_and_phase(
-        0x45,
-        0,
-        1,
-        wire::GlobalPhase::Commit,
-    );
+    let fixture = durable_store_fixture_with_views_and_phase(0x45, 0, 1, wire::GlobalPhase::Commit);
     let mut coordinator = ready_durable_store_coordinator(&fixture);
     let ordinal = fixture.lease.ordinal();
     fixture
@@ -214,13 +209,11 @@ fn durable_store_attestation_rejects_a_replay_source_tag_substitution() {
     };
     assert!(store.replay_evidence.replace_with_foreign_origin_for_test());
     assert_eq!(
-        fixture
-            .registry
-            .attest_schedulable_certified_body_pipeline(
-                &coordinator,
-                fixture.lease.ordinal(),
-                None,
-            ),
+        fixture.registry.attest_schedulable_certified_body_pipeline(
+            &coordinator,
+            fixture.lease.ordinal(),
+            None,
+        ),
         Err(ReadyCertifiedBodyPipelineAttestationErrorV1::Registry(
             RegistryError::CorruptWork,
         )),
@@ -449,7 +442,7 @@ fn durable_store_prepare_rejects_wrong_row_kind() {
     let ConcreteLifecycleWork {
         digest,
         kind: ConcreteLifecycleWorkKind::DurableStoreBody(store),
-    } = closed
+    } = *closed
     else {
         unreachable!("fixture retains one closed Store row")
     };
@@ -460,7 +453,12 @@ fn durable_store_prepare_rejects_wrong_row_kind() {
         .expect("construct inert pending Store fixture");
     assert_eq!(pending_work.digest, digest);
     assert!(pending_work.validate_exact());
-    assert!(registry.entries.insert(address, pending_work).is_none());
+    assert!(
+        registry
+            .entries
+            .insert(address, Box::new(pending_work))
+            .is_none()
+    );
     assert!(matches!(
         registry.prepare_durable_store_execution(&lease, slot, &verified),
         Err(DurableStoreExecutionError::WrongWorkKind)
@@ -852,7 +850,7 @@ fn durable_validate_prepare_rejects_an_executable_adapter_at_the_exact_address()
     let ConcreteLifecycleWork {
         digest,
         kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
-    } = closed
+    } = *closed
     else {
         unreachable!("fixture retains one closed Validate row")
     };
@@ -863,7 +861,12 @@ fn durable_validate_prepare_rejects_an_executable_adapter_at_the_exact_address()
         .expect("construct inert pending Validate fixture");
     assert_eq!(pending_work.digest, digest);
     assert!(pending_work.validate_exact());
-    assert!(registry.entries.insert(address, pending_work).is_none());
+    assert!(
+        registry
+            .entries
+            .insert(address, Box::new(pending_work))
+            .is_none()
+    );
     assert!(matches!(
         registry.prepare_durable_validate_execution(&lease, slot, &verified),
         Err(DurableValidateExecutionError::WrongWorkKind)
@@ -1054,7 +1057,7 @@ fn durable_validate_reattach_rejects_foreign_registry_address_and_carrier() {
     let ConcreteLifecycleWork {
         digest,
         kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
-    } = closed
+    } = *closed
     else {
         unreachable!("fixture retains one closed Validate carrier")
     };
@@ -1069,7 +1072,7 @@ fn durable_validate_reattach_rejects_foreign_registry_address_and_carrier() {
         fixture
             .registry
             .entries
-            .insert(fixture.address, pending)
+            .insert(fixture.address, Box::new(pending))
             .is_none()
     );
     let foreign_carrier = format!("{:?}", fixture.registry);

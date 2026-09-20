@@ -870,7 +870,6 @@ async fn soracloud_status_routing_for_test(
             NonZeroU64::new(1).expect("nonzero height"),
             None,
             None,
-            None,
             0,
             0,
         ));

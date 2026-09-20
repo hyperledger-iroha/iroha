@@ -17,14 +17,7 @@ fn multi_account_mint_returns_only_positive_holders() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");

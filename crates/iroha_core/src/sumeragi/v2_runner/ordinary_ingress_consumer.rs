@@ -335,6 +335,11 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     }
 
     match inbound.message() {
+        BlockMessage::NativeLane(_) | BlockMessage::NativeLaneDecision(_) => {
+            return Err(V2RunnerError::Service(
+                "native lane ingress reached the inactive legacy consumer".to_owned(),
+            ));
+        }
         BlockMessage::KuraReplicaAdvert(_) => {
             admit_kura_replica_advert_ingress(receiver, kura, inbound)?;
             finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
@@ -409,7 +414,9 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     }
     let message = match message {
         BlockMessage::V2(message) => message,
-        BlockMessage::KuraReplicaAdvert(_)
+        BlockMessage::NativeLane(_)
+        | BlockMessage::NativeLaneDecision(_)
+        | BlockMessage::KuraReplicaAdvert(_)
         | BlockMessage::LaneBlockProposal(_)
         | BlockMessage::LaneExecutablePayload(_)
         | BlockMessage::LaneBlockNewViewVote(_)

@@ -11,6 +11,7 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempts_ref = attempts.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(first_peer_id.clone()),
             ToriiProxyCandidate::P2p(second_peer_id.clone()),
@@ -81,6 +82,7 @@ async fn run_route_unavailable_proxy_case(case: RouteUnavailableProxyCase) {
     let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let completed_ref = completed.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         candidates,
         route,
         request,
@@ -125,6 +127,7 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
     let request =
         signed_query_proxy_request_for_test(Hash::new(b"torii-proxy-last-retryable"), route);
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
@@ -185,6 +188,7 @@ async fn generic_proxy_retries_exact_capacity_429_on_next_candidate() {
     let attempts_ref = attempts.clone();
     let first_peer_id_for_attempt = first_peer_id.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(first_peer_id),
             ToriiProxyCandidate::P2p(second_peer_id),
@@ -235,6 +239,7 @@ async fn generic_proxy_does_not_retry_an_unstructured_429() {
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempts_ref = attempts.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(first_peer_id),
             ToriiProxyCandidate::P2p(second_peer_id),
@@ -446,6 +451,7 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
     )
     .await;
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
@@ -515,7 +521,7 @@ async fn queue_plan_outcome_unknown_validates_distinct_sealed_reveal_identities(
         .queue
         .plan_admission_context_with_state(app.state.as_ref(), &routing_plan)
         .expect("sealed-reveal QueuePlan admission context");
-    let admission_binding = QueuePlanAdmissionBindingV1::new(
+    let admission_binding = iroha_core::torii_proxy::new_queue_plan_admission_binding(
         &network_id,
         &entrypoint,
         &routing_plan,
@@ -613,6 +619,7 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
         exact_queue_plan_synced_quorum_snapshot(&app, &request, &second_signer).await;
     let forwarding_authority_for_closure = forwarding_authority.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(forwarding_authority.clone()),
             ToriiProxyCandidate::P2p(final_authority.clone()),
@@ -794,6 +801,7 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         exact_queue_plan_synced_quorum_snapshot(&app, &request, &second_signer).await;
     let response =
             super::execute_torii_proxy_request_across_candidates(
+                tokio::time::Instant::now(),
                 vec![ToriiProxyCandidate::P2p(peer_id.clone())],
                 route,
                 request.clone(),
@@ -894,6 +902,7 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         ("self-asserted outsider receipt", outsider_receipt),
     ] {
         let response = super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             vec![ToriiProxyCandidate::P2p(peer_id.clone())],
             route,
             request.clone(),
@@ -966,6 +975,7 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
         ("malformed 500", malformed_failure),
     ] {
         let response = super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             vec![ToriiProxyCandidate::P2p(peer_id.clone())],
             route,
             request.clone(),
@@ -1031,6 +1041,7 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
         let expected_hash = accepted_queue_hash_for_proxy_submit(&_app, &request);
         let expected_hash_literal = expected_hash.to_string();
         let response = super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             vec![candidate],
             route,
             request,
@@ -1410,6 +1421,7 @@ async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailabl
     let (_app, request) =
         incoming_proxy_submit_fixture(0xb6, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
@@ -2633,6 +2645,30 @@ async fn push_unregister_removes_device() {
     let bridge = app.push.as_ref().expect("push bridge configured");
     assert_eq!(bridge.device_count(), 0);
 }
+fn store_finalized_history_fixture(
+    app: &SharedAppState,
+    block: SignedBlock,
+) -> HashOf<BlockHeader> {
+    let parent = block
+        .header()
+        .height()
+        .get()
+        .checked_sub(1)
+        .filter(|height| *height > 0)
+        .map(|height| {
+            app.kura
+                .v2_finality_artifact(height)
+                .unwrap()
+                .expect("complete fixture finality prefix")
+        });
+    let artifact =
+        crate::test_utils::torii_proof_finality_for_block(&block, *app.state.network_id_ref(), parent.as_ref());
+    let hash = store_block(app, block);
+    let receipt = app.kura.store_v2_finality_artifact(&artifact).unwrap();
+    assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
+    assert_eq!(receipt.context_id(), artifact.context_id());
+    hash
+}
 fn make_signed_block(
     height: u64,
     prev_hash: Option<HashOf<BlockHeader>>,
@@ -2649,29 +2685,22 @@ fn make_signed_block(
         "sign Torii block-header fixture transaction",
     );
     let entry_hash = tx.hash_as_entrypoint();
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("nonzero height"),
-        prev_hash,
-        None,
-        None,
-        0,
-        0,
+    let header = BlockHeader::new(NonZeroU64::new(height).unwrap(), prev_hash, None, 0, 0);
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+    builder.push_transaction(tx);
+    let mut block = builder.build_with_signature(0, keypair.private_key());
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut block,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
     );
-    let signature = checked_torii_test_block_signature(
-        0,
-        &keypair,
-        &header,
-        "sign Torii block-header fixture block",
-    );
-    let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-    let entry_hashes = [entry_hash];
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
-        .expect("test block entrypoint hash should match payload");
     (block, entry_hash)
 }
 struct PersistedDataTriggerCompletionBlock {
@@ -2685,60 +2714,32 @@ fn make_persisted_data_trigger_completion_block(
     height: u64,
     prev_hash: Option<HashOf<BlockHeader>>,
 ) -> PersistedDataTriggerCompletionBlock {
-    let keypair =
-        checked_torii_test_ed25519_keypair(0x25, "derive Torii trigger-completion fixture key");
-    let authority = AccountId::new(keypair.public_key().clone());
-    let tx = checked_torii_test_transaction(
-        TransactionBuilder::new(
-            signed_query_test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ),
-        &keypair,
-        "sign Torii trigger-completion fixture transaction",
-    );
-    let tx_hash = tx.hash();
-    let entrypoint_hash = tx.hash_as_entrypoint();
-    let trigger_id: TriggerId = "persisted_data_trigger".parse().expect("trigger id");
+    use iroha_data_model::block::execution_output::{
+        ExecutionOutputV1, InvocationCompletionV1, NetworkExecutionOutputV1,
+    };
+    let (mut block, entrypoint_hash) = make_signed_block(height, prev_hash);
+    let tx_hash = block.external_transactions().next().unwrap().hash();
+    let trigger_execution_hash = block
+        .network_entrypoint_at(0)
+        .unwrap()
+        .execution_call_hash();
+    let trigger_id: TriggerId = "persisted_data_trigger".parse().unwrap();
     let step = DataTriggerStep {
         id: trigger_id.clone(),
         instructions: ExecutionStep(ConstVec::new_empty()),
     };
-    let trigger_execution_hash = TimeTriggerEntrypoint {
-        id: trigger_id.clone(),
-        instructions: step.instructions.clone(),
-        authority,
-    }
-    .hash_as_entrypoint();
-    assert_ne!(trigger_execution_hash, entrypoint_hash);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("nonzero height"),
-        prev_hash,
-        None,
-        None,
-        0,
-        0,
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut block,
+        vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![step])),
+            completions: vec![InvocationCompletionV1 {
+                trigger_id: trigger_id.clone(),
+                callback_index: 0,
+                outcome: TriggerCompletedOutcome::Success,
+            }],
+        })],
     );
-    let signature = checked_torii_test_block_signature(
-        0,
-        &keypair,
-        &header,
-        "sign Torii trigger-completion fixture block",
-    );
-    let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &[entrypoint_hash],
-            vec![TransactionResultInner::Ok(vec![step])],
-        )
-        .expect("test block entrypoint hash should match payload");
-    block.set_trigger_completions(vec![TriggerCompletedEvent::new(
-        trigger_id.clone(),
-        trigger_execution_hash,
-        0,
-        TriggerCompletedOutcome::Success,
-    )]);
     PersistedDataTriggerCompletionBlock {
         block,
         tx_hash,
@@ -2747,6 +2748,7 @@ fn make_persisted_data_trigger_completion_block(
         trigger_id,
     }
 }
+
 fn make_sealed_reveal_block(
     height: u64,
     prev_hash: Option<HashOf<BlockHeader>>,
@@ -2769,30 +2771,25 @@ fn make_sealed_reveal_block(
     let reveal = SealedTransactionReveal::new(commitment, tx.clone(), salt);
     let entrypoint = TransactionEntrypoint::SealedReveal(reveal);
     let entry_hash = entrypoint.hash();
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("nonzero height"),
-        prev_hash,
-        None,
-        None,
-        0,
-        0,
+    let header = BlockHeader::new(NonZeroU64::new(height).unwrap(), prev_hash, None, 0, 0);
+    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+    let TransactionEntrypoint::SealedReveal(reveal) = entrypoint else {
+        unreachable!()
+    };
+    builder.push_sealed_transaction_reveal(reveal);
+    let mut block = builder.build_with_signature(0, keypair.private_key());
+    crate::test_utils::attach_fixture_execution_outputs(
+        &mut block,
+        vec![
+            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                    input_index: 0,
+                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                    completions: vec![],
+                },
+            ),
+        ],
     );
-    let signature = checked_torii_test_block_signature(
-        0,
-        &keypair,
-        &header,
-        "sign Torii sealed-reveal fixture block",
-    );
-    let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-    block.set_external_entrypoints(vec![entrypoint]);
-    let entry_hashes = [entry_hash];
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
-        .expect("test block entrypoint hash should match payload");
     (block, entry_hash)
 }
 fn store_block(app: &SharedAppState, block: SignedBlock) -> HashOf<BlockHeader> {
@@ -2817,25 +2814,18 @@ fn make_empty_signed_block(
 ) -> SignedBlock {
     let keypair = checked_torii_test_ed25519_keypair(0x27, "derive Torii empty-header fixture key");
     let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("nonzero height"),
+        NonZeroU64::new(height).unwrap(),
         prev_hash,
-        None,
         None,
         creation_time_ms,
         0,
     );
-    let signature = checked_torii_test_block_signature(
-        0,
-        &keypair,
-        &header,
-        "sign Torii empty committed-header fixture block",
-    );
-    let mut block = SignedBlock::presigned(signature, header, Vec::new());
-    block
-        .set_transaction_results(Vec::new(), &[], Vec::new())
-        .expect("empty committed-header fixture has a matching empty result set");
+    let mut block = iroha_data_model::block::builder::BlockBuilder::new(header)
+        .build_with_signature(0, keypair.private_key());
+    crate::test_utils::attach_fixture_execution_outputs(&mut block, vec![]);
     block
 }
+
 pub(crate) fn record_latest_committed_header_for_test(
     app: &SharedAppState,
     height: u64,

@@ -650,7 +650,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "76c512b2a7e345a9613b154a36dcbf88560ef0b03ade9e1de42b24d968f2d422"
+        "42902589fe5175f22f13a0881684f721c0cfd72fa0cb3048f1b413f3aa6433d2"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (
@@ -1399,6 +1399,7 @@ def make_prebuilt_binary_bundle(
         ("irohad_message_control", "message-control/release/iroha3d"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
+        ("irohad_taira", "release/iroha3d_taira"),
     )
     binaries: list[Path] = []
     fields = {
@@ -1454,13 +1455,13 @@ def make_g4p_evidence(
         (
             "nexus_and_streaming",
             "nexus::autoscale_localnet::"
-            "nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+            "nexus_autoscale_native_four_peer_recreates_lane_and_"
             "rejects_stale_artifacts",
         ),
         (
             "nexus_and_streaming",
             "nexus::autoscale_localnet::"
-            "nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart",
+            "nexus_autoscale_native_recovers_missing_execution_evidence_after_restart",
         ),
         (
             "nexus_and_streaming",
@@ -3047,6 +3048,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     f"{seed_program_target / 'message-control' / 'release' / 'iroha3d'} "
                     f"TEST_NETWORK_BIN_IROHA={seed_program_target / 'release' / 'iroha'} "
                     f"KAGAMI_BIN={seed_program_target / 'release' / 'kagami'} "
+                    f"TEST_NETWORK_BIN_IROHAD_TAIRA={seed_program_target / 'release' / 'iroha3d_taira'} "
                     "CARGO_NET_OFFLINE=true "
                     "IROHA_TEST_REQUIRE_NETWORK=1 "
                     "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
@@ -4354,6 +4356,73 @@ def test_receipt_rejects_tampered_g4p_summary_or_log(
 
     assert result.returncode == 1
     assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("row_index", "replacement", "expected"),
+    (
+        (
+            0,
+            "nexus::autoscale_localnet::"
+            "nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+            "rejects_stale_artifacts",
+            "G-4P run summary row 0 is not canonical",
+        ),
+        (
+            1,
+            "nexus::autoscale_localnet::"
+            "nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart",
+            "G-4P run summary row 1 is not canonical",
+        ),
+        (0, None, "G-4P run summary must contain exactly four runs"),
+    ),
+)
+def test_g4p_evidence_rejects_retired_or_missing_qualification(
+    tmp_path: Path, row_index: int, replacement: str | None, expected: str
+) -> None:
+    """Synthetic logs test receipt parsing, not unavailable live qualification."""
+    module = load_writer_module()
+    sealed = {
+        "head_commit": "a" * 40,
+        "head_tree": "b" * 40,
+        "workspace_source_manifest_sha256": "c" * 64,
+        "cargo_lock_sha256": "d" * 64,
+    }
+    evidence = make_g4p_evidence(
+        tmp_path,
+        head=sealed["head_commit"],
+        tree=sealed["head_tree"],
+        sealed_manifest=sealed["workspace_source_manifest_sha256"],
+        lock=sealed["cargo_lock_sha256"],
+        prebuilt_manifest_sha256="e" * 64,
+    )
+    completion = evidence["g4p_completion"]
+    summary = evidence["g4p_summary"]
+    assert isinstance(completion, Path)
+    assert isinstance(summary, Path)
+
+    def validate() -> dict[str, object]:
+        return module._validate_g4p_evidence(
+            completion_path=completion,
+            sealed=sealed,
+            prebuilt_manifest_sha256="e" * 64,
+        )
+
+    assert len(validate()["run_logs"]) == 4
+    rows = summary.read_text(encoding="utf-8").splitlines()
+    if replacement is None:
+        del rows[row_index + 1]
+    else:
+        fields = rows[row_index + 1].split("\t")
+        fields[1] = replacement
+        rows[row_index + 1] = "\t".join(fields)
+    summary.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    completion_fields = read_tsv_fields(completion)
+    completion_fields["runs_sha256"] = sha256(summary)
+    write_tsv(completion, completion_fields)
+
+    with pytest.raises(module.ReceiptError, match=re.escape(expected)):
+        validate()
 
 
 def test_receipt_rejects_rehashed_g4p_run_identity_mismatch(

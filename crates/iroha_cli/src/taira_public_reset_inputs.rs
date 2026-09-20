@@ -5,6 +5,20 @@ use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use norito::codec::Encode as _;
 use zeroize::Zeroizing;
 
+#[path = "taira_public_reset_context_release.rs"]
+mod context_release;
+#[path = "taira_public_reset_context.rs"]
+mod reset_context;
+pub(super) use reset_context::{
+    DerivedResetContext, ResetContextInputs, ResetTopologyIntentV1, decode_reset_topology_intent,
+    derive_reset_context,
+};
+
+pub(super) fn topology_canary_request(bytes: &[u8]) -> Result<AccountOnboardingPlanRequestV1> {
+    let (intent, _guard) = decode_reset_topology_intent(bytes)?;
+    Ok(intent.canary_onboarding_request)
+}
+
 /// Actual local inputs whose derived identities are written into the inventory.
 #[derive(clap::Args, Debug)]
 pub(super) struct LocalInputs {
@@ -13,6 +27,15 @@ pub(super) struct LocalInputs {
     public_inputs: PathBuf,
     #[arg(long, value_name = "PATH")]
     runtime_client_config: PathBuf,
+    /// Separate native maintenance owner; authenticated genesis must register and grant it.
+    #[arg(long, value_name = "PATH")]
+    maintenance_admin_config: PathBuf,
+    /// Original held seed files, in the exact signed sorted validator mapping.
+    #[arg(long, value_name = "PATH", num_args = 4)]
+    epoch_seed_sources: Vec<PathBuf>,
+    /// Closed public single-service plan including explicit until-stopped policy and exact bytes.
+    #[arg(long, value_name = "PATH")]
+    epoch_supervisor_plan: PathBuf,
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_client_config: Vec<PathBuf>,
     #[arg(long, value_name = "PATH")]
@@ -25,6 +48,12 @@ pub(super) struct LocalInputs {
     /// Four exact local systemd units in validator order.
     #[arg(long, value_name = "PATH", num_args = 4)]
     validator_unit: Vec<PathBuf>,
+    /// Native public request and seat map produced by prepare-beacon-inputs.
+    #[arg(long, value_name = "PATH")]
+    beacon_inputs: PathBuf,
+    /// Four pre-rendered FD200 units using --config-file beacon.toml, in validator order.
+    #[arg(long, value_name = "PATH", num_args = 4)]
+    beacon_validator_unit: Vec<PathBuf>,
     /// Exact local edge systemd unit.
     #[arg(long, value_name = "PATH")]
     edge_unit: PathBuf,
@@ -35,10 +64,9 @@ pub(super) struct LocalInputs {
 
 #[derive(clap::Args, Debug)]
 pub(super) struct Assemble {
-    /// Existing InventoryV1 layout with explicit approved topology, occupancy and intent.
-    /// Derived hashes, sizes, modes, source/stage identity and fingerprints are replaced.
+    /// Closed topology and authority intent; native-derived pins and generated plans are forbidden.
     #[arg(long, value_name = "PATH")]
-    inventory_draft: PathBuf,
+    intent: PathBuf,
     #[command(flatten)]
     local: LocalInputs,
     /// Fresh file in an existing owner-only directory; never overwritten.
@@ -65,12 +93,71 @@ pub(super) struct Authorize {
     output: PathBuf,
 }
 
+/// Derive public beacon request and renderer seat paths from authenticated genesis.
+#[derive(clap::Args, Debug)]
+pub(super) struct PrepareBeaconInputs {
+    #[arg(long, value_name = "PATH")]
+    intent: PathBuf,
+    #[arg(long, value_name = "DIR")]
+    public_inputs: PathBuf,
+    /// New owner-private public result; never replaced.
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+}
+
+pub(super) fn prepare_beacon_inputs(args: &PrepareBeaconInputs) -> Result<()> {
+    let input = pin_owner_private_file(&args.intent, "reset topology intent")?;
+    let (intent, _guard) = decode_reset_topology_intent(&pinned_bytes(&input, MAX_JSON_BYTES)?)?;
+    let public = public_inputs::load(&args.public_inputs)?;
+    let read = |path: &Path, label| -> Result<Vec<u8>> {
+        let (file, snapshot) = open_pinned_regular(path, label)?;
+        read_pinned_bytes(path, label, file, &snapshot, MAX_JSON_BYTES)
+    };
+    let wire = read(
+        &args.public_inputs.join("genesis.signed.nrt"),
+        "prepared signed genesis",
+    )?;
+    if sha256_hex(&wire) != public.signed_genesis_sha256 {
+        return Err(eyre!(
+            "prepared beacon genesis changed after native public-input validation"
+        ));
+    }
+    let manifest = read(
+        &args.public_inputs.join("genesis.json"),
+        "public raw genesis manifest",
+    )?;
+    if sha256_hex(&manifest) != public.raw_manifest_sha256 {
+        return Err(eyre!(
+            "public raw genesis manifest changed after bundle validation"
+        ));
+    }
+    if public.canary_onboarding_request != intent.canary_onboarding_request {
+        return Err(eyre!("topology canary differs from native public bundle"));
+    }
+    let slots = intent
+        .validators
+        .iter()
+        .map(|v| host::beacon::BeaconValidatorSlot { slug: &v.slug })
+        .collect::<Vec<_>>();
+    let prepared = host::beacon::prepare_public_beacon_inputs_from_slots(
+        &wire,
+        &manifest,
+        &public.genesis_public_key,
+        public.genesis_hash.parse()?,
+        &intent.authorization_nonce,
+        &slots,
+        &intent.validator_clients,
+    )?;
+    revalidate_pinned(&input, "reset topology intent")?;
+    write_new_private(&args.output, &canonical_bytes(&prepared)?)
+}
+
 pub(super) fn assemble(args: &Assemble) -> Result<()> {
-    let input = pin_owner_private_file(&args.inventory_draft, "inventory draft")?;
-    let bytes = pinned_bytes(&input, MAX_JSON_BYTES)?;
-    let (mut inventory, _guard) = decode_inventory(&bytes, "inventory draft")?;
-    derive_inventory(&mut inventory, &args.local)?;
-    revalidate_pinned(&input, "inventory draft")?;
+    let input = pin_owner_private_file(&args.intent, "reset topology intent")?;
+    let (intent, _guard) = decode_reset_topology_intent(&pinned_bytes(&input, MAX_JSON_BYTES)?)?;
+    let (inventory, context) = derive_inventory_from_intent(&intent, &args.local)?;
+    context.revalidate()?;
+    revalidate_pinned(&input, "reset topology intent")?;
     write_new_private(&args.output, &assembled_inventory_bytes(&inventory)?)
 }
 
@@ -79,8 +166,8 @@ pub(super) fn authorize(args: &Authorize) -> Result<()> {
     let bytes = pinned_bytes(&input, MAX_JSON_BYTES)?;
     let (inventory, _guard) = decode_inventory(&bytes, "retained inventory")?;
     validate_inventory(&inventory)?;
-    let mut derived = inventory.clone();
-    derive_inventory(&mut derived, &args.local)?;
+    let intent = ResetTopologyIntentV1::from(&inventory);
+    let (derived, context) = derive_inventory_from_intent(&intent, &args.local)?;
     if canonical_inventory_bytes(&derived)? != canonical_inventory_bytes(&inventory)? {
         return Err(eyre!(
             "retained inventory differs from actual local release inputs"
@@ -92,12 +179,14 @@ pub(super) fn authorize(args: &Authorize) -> Result<()> {
         .map_err(|_| eyre!("trusted owner public key is not exact V1 JSON"))?;
     let public_key = trusted_key(&trusted)?;
     // Load the authority key only after the complete explicit release input validation.
+    context.revalidate()?;
     let key = inherited_signing_key(args.signing_key_fd, &public_key)?;
     revalidate_pinned(&input, "retained inventory")?;
     revalidate_pinned(&trusted_input, "trusted owner public key")?;
     let envelope = sign_inventory(&inventory, &bytes, &trusted, &key, now_unix_ms()?)?;
     revalidate_pinned(&input, "retained inventory")?;
     revalidate_pinned(&trusted_input, "trusted owner public key")?;
+    context.revalidate()?;
     write_new_private(&args.output, &canonical_bytes(&envelope)?)
 }
 
@@ -125,99 +214,61 @@ fn pinned_bytes(input: &PinnedInput, maximum: u64) -> Result<Zeroizing<Vec<u8>>>
     )?))
 }
 
+#[cfg(test)]
 fn derive_inventory(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result<()> {
-    if inventory.validators.len() != 4
-        || inventory.validator_clients.len() != 4
-        || inputs.validator_client_config.len() != 4
-        || inputs.validator_unit.len() != 4
-    {
-        return Err(eyre!(
-            "assembly requires exactly four ordered validator inputs"
-        ));
-    }
-    if inventory.schema != INVENTORY_SCHEMA_V1 {
-        return Err(eyre!(
-            "inventory draft must use the existing executor inventory V1 schema"
-        ));
-    }
-    // Reject an impossible signed execution plan before source/artifact scans or custody reads.
     validate_timeout_policy(inventory)?;
-    let public = public_inputs::load(&inputs.public_inputs)?;
-    inventory.next_genesis_hash = public.genesis_hash;
-    inventory.canary_onboarding_request = public.canary_onboarding_request;
-    let (source, source_bytes) = read_json::<SourceManifestV1>(
-        Path::new(&inventory.revision.source_manifest_path),
-        "source manifest",
+    let intent = ResetTopologyIntentV1::from(&*inventory);
+    let (derived, context) = derive_inventory_from_intent(&intent, inputs)?;
+    context.revalidate()?;
+    *inventory = derived;
+    Ok(())
+}
+
+fn derive_inventory_from_intent(
+    intent: &ResetTopologyIntentV1,
+    inputs: &LocalInputs,
+) -> Result<(InventoryV1, DerivedResetContext)> {
+    if inputs.beacon_validator_unit.len() != 4 {
+        return Err(eyre!("assembly requires four ordered beacon units"));
+    }
+    let context = derive_reset_context(intent, &ResetContextInputs::from(inputs))?;
+    let beacon = host::beacon::load_plan(
+        &context.validators,
+        &inputs.beacon_inputs,
+        &inputs.public_inputs.join("genesis.json"),
+        &inputs.beacon_validator_unit,
+        &context.public_inputs.genesis_public_key,
     )?;
-    inventory.revision.branch = source.branch;
-    inventory.revision.commit = source.head_commit_sha1;
-    inventory.revision.tree = source.head_tree_sha1;
-    inventory.revision.cargo_lock_sha256 = source.cargo_lock_sha256;
-    inventory.revision.source_closure_sha256 = source.closure_sha256;
-    inventory.revision.source_manifest_sha256 = sha256_hex(&source_bytes);
-    inventory.revision.build_id = inventory.revision.commit.clone();
-    inventory.revision.target = BUILD_TARGET.to_owned();
-    inventory.revision.profile = BUILD_PROFILE.to_owned();
-    validate_revision(&inventory.revision)?;
-    validate_source_closure(&inventory.revision)?;
-    let build_identity = crate::compiled_build_identity()?;
-    if build_identity.release_source_commit()? != inventory.revision.commit {
-        return Err(eyre!(
-            "compiled executable source differs from the release revision"
-        ));
-    }
-    for artifact in inventory
-        .validators
-        .iter_mut()
-        .flat_map(|v| v.artifacts.iter_mut())
-        .chain(inventory.edge.artifacts.iter_mut())
-    {
-        let path = Path::new(&artifact.local_path);
-        let (mut file, snapshot) = open_pinned_regular(path, "release artifact")?;
-        let (mode, maximum) = artifact_role_policy(&artifact.role)?;
-        if snapshot.len == 0 || snapshot.len > maximum {
-            return Err(eyre!("release artifact is empty or exceeds its role bound"));
-        }
-        #[cfg(unix)]
-        if snapshot.uid != rustix::process::geteuid().as_raw()
-            || snapshot.mode & 0o7777 != u32::from(mode)
-        {
-            return Err(eyre!(
-                "release artifact does not have its required owner and role mode"
-            ));
-        }
-        artifact.sha256 = sha256_reader(&mut file, path)?;
-        ensure_pinned_unchanged(path, "release artifact", &file, &snapshot)?;
-        artifact.size = snapshot.len;
-        artifact.mode = mode;
-        artifact.source_commit = inventory.revision.commit.clone();
-        artifact.target = BUILD_TARGET.to_owned();
-    }
-    for (validator, path) in inventory.validators.iter_mut().zip(&inputs.validator_unit) {
-        let unit = artifact(&validator.artifacts, "validator_unit")?;
-        if Path::new(&unit.local_path) != path || unit.sha256 != unit_hash(path)? {
-            return Err(eyre!(
-                "validator unit input is not its exact candidate artifact"
-            ));
-        }
-        validator.systemd_unit_sha256 = unit.sha256.clone();
-    }
-    inventory.edge.systemd_unit_sha256 = unit_hash(&inputs.edge_unit)?;
-    derive_validator_identities(inventory, build_identity)?;
-    derive_runtime_stage(inventory, inputs)?;
-    let operator_key = host::pin_validator_operator_key(&inputs.validator_operator_key, inventory)?;
-    inventory.artifact_closure_sha256 = artifact_closure_sha256(inventory);
-    validate_inventory(inventory)?;
-    validate_shared_validator_closure(inventory)?;
-    let pinned = validate_artifact_files(inventory)?;
-    validate_genesis_hash_files(inventory, &pinned)?;
-    validate_known_hosts(inventory, &inputs.known_hosts)?;
+    let (supervisor, _) = read_json::<host::epoch_supervisor::EpochSupervisorPlanV1>(
+        &inputs.epoch_supervisor_plan,
+        "epoch supervisor plan",
+    )?;
+    let mut inventory = context.build_inventory(beacon, supervisor)?;
+    // Retain the existing signed-genesis/nonce/seat rederivation gate, not merely plan decoding.
+    host::beacon::derive_plan(
+        &mut inventory,
+        &inputs.beacon_inputs,
+        &inputs.public_inputs.join("genesis.json"),
+        &inputs.beacon_validator_unit,
+        &context.public_inputs.genesis_public_key,
+    )?;
+    host::epoch_supervisor::validate_plan(&inventory)?;
+    validate_original_epoch_seed_sources(&inventory, inputs)?;
+    let operator_key =
+        host::pin_validator_operator_key(&inputs.validator_operator_key, &inventory)?;
+    validate_inventory(&inventory)?;
+    validate_shared_validator_closure(&inventory)?;
+    let pinned = validate_artifact_files(&inventory)?;
+    validate_genesis_hash_files(&inventory, &pinned)?;
+    let known_hosts = validate_known_hosts(&inventory, &inputs.known_hosts)?;
     validate_source_closure(&inventory.revision)?;
     for entry in &pinned {
         revalidate_pinned(&entry.input, "release artifact")?;
     }
     revalidate_pinned(&operator_key, "validator operator key")?;
-    Ok(())
+    revalidate_pinned(&known_hosts, "OpenSSH known-hosts")?;
+    context.revalidate()?;
+    Ok((inventory, context))
 }
 
 fn unit_hash(path: &Path) -> Result<String> {
@@ -244,100 +295,6 @@ fn validate_candidate_inrou_scope(
     }
 }
 
-#[cfg(unix)]
-fn derive_validator_identities(
-    inventory: &mut InventoryV1,
-    build_identity: iroha_core::release_identity::BuildIdentity,
-) -> Result<()> {
-    use iroha_config::{
-        base::toml::{MAX_TOML_SOURCE_BYTES, TomlSource},
-        parameters::actual,
-    };
-    let genesis_path = &artifact(&inventory.validators[0].artifacts, "genesis")?.local_path;
-    let (file, snapshot) = open_pinned_regular(Path::new(genesis_path), "signed genesis")?;
-    let genesis = PinnedInput {
-        path: PathBuf::from(genesis_path),
-        file,
-        snapshot,
-    };
-    let genesis_bytes = pinned_bytes(&genesis, 64 * 1024 * 1024)?;
-    for (validator, client) in inventory
-        .validators
-        .iter_mut()
-        .zip(&inventory.validator_clients)
-    {
-        let path = PathBuf::from(&artifact(&validator.artifacts, "config")?.local_path);
-        let (file, snapshot) = open_pinned_regular(&path, "validator config")?;
-        let input = PinnedInput {
-            path: path.clone(),
-            file,
-            snapshot,
-        };
-        let bytes = Zeroizing::new(pinned_bytes(&input, MAX_TOML_SOURCE_BYTES as u64)?);
-        validate_validator_genesis_config(
-            &bytes,
-            Path::new(&artifact(&validator.artifacts, "genesis")?.remote_path),
-            &inventory.next_genesis_hash,
-        )?;
-        validate_validator_operator_config(&bytes, &inventory.operator_public_key)?;
-        let text =
-            std::str::from_utf8(&bytes).map_err(|_| eyre!("validator config is not UTF-8"))?;
-        let table: toml::Table =
-            toml::from_str(text).map_err(|_| eyre!("validator config is not TOML"))?;
-        let config = actual::Root::from_toml_source(TomlSource::new_sensitive(
-            path,
-            table,
-            crate::soracloud::zeroize_taira_toml_table,
-        ))
-        .map_err(|_| eyre!("validator config failed current typed admission"))?;
-        validate_validator_pin_fee_asset(
-            &config.gov.sorafs_pin_fee_asset_id,
-            &inventory.faucet_policy.asset_definition_id,
-        )?;
-        revalidate_pinned(&input, "validator config")?;
-        validate_candidate_inrou_scope(
-            inventory.qualification_scope,
-            &validator.slug,
-            &config.soracloud_runtime.inrou,
-        )?;
-        validate_candidate_probe_bind(&client.probe_origin, config.torii.address.value())?;
-        if config.common.chain.to_string() != inventory.chain_id
-            || config.common.peer.id.to_string() != client.peer_id
-        {
-            return Err(eyre!(
-                "validator config differs from the explicit chain/peer identity"
-            ));
-        }
-        let (hash, metadata) = iroha_core::release_identity::genesis_identity(
-            &genesis_bytes,
-            &config.genesis.public_key,
-        )?;
-        if hash.to_string() != inventory.next_genesis_hash
-            || Hash::from(config.genesis.expected_hash) != hash
-        {
-            return Err(eyre!(
-                "actual signed genesis differs from the explicit next genesis hash"
-            ));
-        }
-        validate_taira_genesis_mode(metadata.mode)?;
-        let shared = config
-            .sumeragi
-            .v2_config(
-                std::time::Duration::from_millis(metadata.block_cadence_ms.get()),
-                metadata.mode.into(),
-            )
-            .map_err(|_| eyre!("validator signed consensus configuration is invalid"))?;
-        shared
-            .validate_ingress_roster_capacity(4)
-            .map_err(|_| eyre!("validator cannot admit the four-member roster"))?;
-        validator.node_fingerprint = Hash::new(config.common.peer.id.encode()).to_string();
-        validator.build_fingerprint = build_identity.build_fingerprint().to_string();
-        validator.config_fingerprint = shared.fingerprint().to_string();
-    }
-    revalidate_pinned(&genesis, "signed genesis")?;
-    Ok(())
-}
-
 fn validate_validator_pin_fee_asset(
     configured: &iroha::data_model::asset::AssetDefinitionId,
     faucet_asset: &str,
@@ -353,96 +310,105 @@ fn validate_validator_pin_fee_asset(
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn derive_validator_identities(
-    _: &mut InventoryV1,
-    _: iroha_core::release_identity::BuildIdentity,
+/// Admit separate administrator material only through native pinned config custody.
+/// Public genesis permission evidence is a prerequisite, not a substitute for the
+/// supervisor worker's fresh effective-permission check before every dispatch.
+/// Pin original seeds by custody and identity only. Public artifacts never contain seed digests.
+fn validate_original_epoch_seed_sources(
+    inventory: &InventoryV1,
+    inputs: &LocalInputs,
 ) -> Result<()> {
-    Err(eyre!("public reset input assembly requires Unix"))
-}
-
-fn derive_runtime_stage(inventory: &mut InventoryV1, inputs: &LocalInputs) -> Result<()> {
-    inventory
-        .qualification_scope
-        .validate_stage_argument(inputs.inrou_stage_dir.as_deref())?;
-    inventory.validate_inrou_scope()?;
-    let runtime = pin_owner_private_file(&inputs.runtime_client_config, "runtime client config")?;
-    let token = pin_owner_private_file(&inputs.onboarding_token, "onboarding token")?;
-    let clients = inputs
-        .validator_client_config
-        .iter()
-        .map(|p| pin_owner_private_file(p, "validator client config"))
-        .collect::<Result<Vec<_>>>()?;
-    host::validate_validator_client_inputs(&clients, inventory)?;
-    let config =
-        host::load_client_config_for_inventory(&runtime, "runtime client config", inventory)?;
-    if config.torii_api_url.as_str() != format!("{PUBLIC_ROOT}/")
-        || config.account.to_string() != inventory.canary_onboarding_request.account_id
-    {
+    let sources = &inventory.epoch_supervisor.original_seed_sources;
+    if inputs.epoch_seed_sources.len() != 4 || sources.len() != 4 {
         return Err(eyre!(
-            "runtime client config does not bind the explicit public Taira canary"
+            "epoch supervisor requires four explicitly mapped original seed files"
         ));
     }
-    inventory.runtime_client_config_sha256 =
-        host::hash_pinned_input(&runtime, "runtime config", None)?;
-    inventory.onboarding_token_sha256 = host::hash_pinned_input(&token, "onboarding token", None)?;
-    inventory.validator_client_configs_sha256 =
-        host::validator_config_closure_sha256(&clients, None)?;
-    let Some(stage_dir) = inputs.inrou_stage_dir.as_deref() else {
-        return Ok(());
-    };
-    let (stage_hash, stage_bytes, files, fixed) = host::pin_stage_tree(stage_dir, None)?;
-    let identity = crate::soracloud::load_taira_inrou_stage_identity(
-        &config,
-        stage_dir,
-        crate::taira::InrouCanaryMode::Deploy,
-    )?;
-    if host::revalidate_stage_files(stage_dir, &files, None)? != (stage_hash.clone(), stage_bytes) {
-        return Err(eyre!("Inrou stage changed during inventory assembly"));
+    let mut paths = BTreeSet::new();
+    #[cfg(unix)]
+    let mut inodes = BTreeSet::new();
+    for (path, source) in inputs.epoch_seed_sources.iter().zip(sources) {
+        if path != Path::new(&source.path) || !paths.insert(path) {
+            return Err(eyre!(
+                "original epoch seed path differs from the signed public mapping"
+            ));
+        }
+        let input = pin_owner_private_file(path, "original epoch seed")?;
+        if input.snapshot.len != 32 || path.canonicalize()? != *path {
+            return Err(eyre!(
+                "original epoch seed must be a canonical direct 32-byte private file"
+            ));
+        }
+        #[cfg(unix)]
+        if input.snapshot.mode & 0o7777 != 0o600
+            || !inodes.insert((input.snapshot.dev, input.snapshot.ino))
+        {
+            return Err(eyre!(
+                "original epoch seeds require distinct owner0600 files"
+            ));
+        }
+        revalidate_pinned(&input, "original epoch seed")?;
     }
+    Ok(())
+}
 
-    inventory.inrou_stage_tree_sha256 = Some(stage_hash.clone());
-    let file_hash = |path: &str| {
-        fixed
-            .get(path)
-            .cloned()
-            .ok_or_else(|| eyre!("Inrou stage omits a mandatory fixed file"))
+fn validate_genesis_maintenance_grant(
+    manifest: &iroha_genesis::RawGenesisTransaction,
+    account: &AccountId,
+) -> Result<()> {
+    validate_maintenance_grant_instructions(manifest.instructions(), account)
+}
+
+pub(super) fn validate_maintenance_grant_instructions<'a, I>(
+    instructions: I,
+    account: &AccountId,
+) -> Result<()>
+where
+    I: IntoIterator<Item = &'a iroha_data_model::isi::InstructionBox>,
+{
+    use iroha_data_model::{
+        Identifiable as _,
+        isi::{GrantBox, RegisterBox, RevokeBox, UnregisterBox},
     };
-    inventory.inrou_canary = Some(InrouCanaryV1 {
-        public_root: PUBLIC_ROOT.to_owned(),
-        replicas: 4,
-        service_name: identity.service_name,
-        service_version: identity.service_version,
-        route_host: identity.route_host,
-        route_path_prefix: identity.route_path_prefix,
-        healthcheck_path: identity.healthcheck_path,
-        bundle_hash: identity.bundle_hash,
-        bundle_content_cid: identity.bundle_content_cid,
-        bundle_manifest_digest_hex: identity.bundle_manifest_digest_hex,
-        guest_content_cid: identity.guest_content_cid,
-        guest_manifest_digest_hex: identity.guest_manifest_digest_hex,
-        discovery_payload_dir: identity.discovery_payload_dir,
-        discovery_manifest_file: "manifests/discovery.to".to_owned(),
-        discovery_document_hash: identity.discovery_document_hash,
-        discovery_content_cid: identity.discovery_content_cid,
-        discovery_manifest_digest_hex: identity.discovery_manifest_digest_hex,
-        public_discovery_url: identity.public_discovery_url,
-        public_discovery_cid_host_url: identity.public_discovery_cid_host_url,
-        deployment_bundle_hash: identity.deployment_bundle_hash,
-        container_manifest_hash: identity.container_manifest_hash,
-        service_manifest_hash: identity.service_manifest_hash,
-        placement_targets: identity.placement_targets,
-        stage_tree_sha256: stage_hash,
-        stage_bytes,
-        receipt_sha256: file_hash("receipt.json")?,
-        container_sha256: file_hash("container.json")?,
-        service_sha256: file_hash("service.json")?,
-        bundle_payload_sha256: file_hash("payloads/bundle.bin")?,
-        bundle_manifest_sha256: file_hash("manifests/bundle.to")?,
-        guest_manifest_sha256: file_hash("manifests/aarch64.to")?,
-        discovery_document_sha256: file_hash("payloads/discovery/index.json")?,
-        discovery_manifest_sha256: file_hash("manifests/discovery.to")?,
-    });
+    let mut registered = false;
+    let mut granted = false;
+    for instruction in instructions {
+        if let Some(RegisterBox::Account(register)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+        {
+            if register.object().id() == account {
+                registered = true;
+            }
+        }
+        if let Some(UnregisterBox::Account(unregister)) =
+            instruction.as_any().downcast_ref::<UnregisterBox>()
+        {
+            if unregister.object() == account {
+                registered = false;
+                granted = false;
+            }
+        }
+        if let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>() {
+            if grant.destination() == account
+                && grant.object().name() == "CanSetParameters"
+                && grant.object().payload().get() == "null"
+            {
+                granted = registered;
+            }
+        }
+        if let Some(RevokeBox::Permission(revoke)) =
+            instruction.as_any().downcast_ref::<RevokeBox>()
+        {
+            if revoke.destination() == account && revoke.object().name() == "CanSetParameters" {
+                granted = false;
+            }
+        }
+    }
+    if !registered || !granted {
+        return Err(eyre!(
+            "authenticated signed genesis must register the exact maintenance administrator and grant CanSetParameters"
+        ));
+    }
     Ok(())
 }
 
@@ -483,6 +449,10 @@ fn sign_inventory(
     }
     let claims = AuthorizationClaimsV1 {
         action: "reset_and_deploy".to_owned(),
+        epoch_supervisor_authorization: "until_stopped".to_owned(),
+        epoch_supervisor_policy_sha256: inventory.epoch_supervisor.policy_sha256.clone(),
+        maintenance_admin_config_sha256: inventory.maintenance_admin_config_sha256.clone(),
+        maintenance_admin_identity: inventory.maintenance_admin_identity.clone(),
         qualification_scope: inventory.qualification_scope,
         deployment_id: inventory.deployment_id.clone(),
         inventory_sha256: sha256_hex(bytes),

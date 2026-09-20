@@ -578,7 +578,7 @@ def _prebuilt_directory_inventory(
                         f"{name} contains more entries than its exact closed inventory"
                     )
                 if (
-                    _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
+                    _EVIDENCE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
                     and entry.name != _PREBUILT_MANIFEST_NAME
                 ):
                     raise ReceiptError(f"{name} does not have its exact closed inventory")
@@ -796,7 +796,7 @@ def _prebuilt_binary_bundle(
     )
     _prebuilt_directory_inventory(
         bundle_dir / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"iroha3d", "iroha", "kagami", "iroha3d_taira"},
         "prebuilt release directory",
     )
     _prebuilt_directory_inventory(
@@ -1072,7 +1072,7 @@ def _corridor_artifacts(
         expected_path = expected_tool_paths.get(tool)
         path_is_exact = (
             tool_path.parent == runtime_root / "swift-toolchain" / "bin"
-            and _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(tool_path.name)
+            and _EVIDENCE_PATH_COMPONENT_RE.fullmatch(tool_path.name)
             is not None
             if tool == "swift"
             else tool_path == expected_path
@@ -1494,6 +1494,7 @@ def _seed_run_logs(
             f"TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL={message_control_irohad} "
             f"TEST_NETWORK_BIN_IROHA={iroha} "
             f"KAGAMI_BIN={kagami} "
+            f"TEST_NETWORK_BIN_IROHAD_TAIRA={program_target_dir / 'release' / 'iroha3d_taira'} "
             "CARGO_NET_OFFLINE=true "
             "IROHA_TEST_REQUIRE_NETWORK=1 "
             "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
@@ -2645,7 +2646,7 @@ def _require_g12_directory_inventory(
     actual_names: set[str] = set()
     for entry in entries:
         if (
-            _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
+            _EVIDENCE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
             or entry.name in actual_names
         ):
             raise ReceiptError(f"{name} directory contains an unsafe entry")

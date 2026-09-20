@@ -32,7 +32,7 @@ fn plain_ballot_conviction_applies() {
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.min_bond_amount = 0_u64.into();
     state.set_gov(gov_cfg);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     stx.world.governance_referenda_mut().insert(

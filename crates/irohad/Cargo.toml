@@ -144,6 +144,7 @@ iroha_data_model = { workspace = true, default-features = false }
 iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true, optional = true }
 iroha_config = { workspace = true }
+iroha_config_base = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false }
 iroha_torii = { workspace = true, default-features = false }
 iroha_torii_shared = { workspace = true }
@@ -185,7 +186,6 @@ serial_test = "3.5.0"
 tempfile = { workspace = true }
 path-absolutize = { workspace = true }
 assertables = { workspace = true }
-iroha_config_base = { workspace = true }
 iroha_test_samples = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
 

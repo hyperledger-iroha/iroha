@@ -90,12 +90,13 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        '8cb10f1984af55194c2209d3a65a5e28e1a2ab563a5e333f49bc9184e7f83a9e'
+        "c881a4f0e313b7c00823f62fa2d4e766c04c3b365eeb1847423c7a30cba7a9f6"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        '6d1f78d58ce2455dbd7a6426cd8d8f82f5b2752b126d04c38a81811a8fb85ec7'
+        "d32bb675f783227f514f00f542ea5fef78507f08f4587fff684057fbe4c1ce9c"
     ),
 }
+_EVIDENCE_PATH_COMPONENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SSH_FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
@@ -184,6 +185,7 @@ _PREBUILT_BINARY_SPECS = (
     ),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
+    ("irohad_taira", "release/iroha3d_taira"),
 )
 _PREBUILT_MANIFEST_FIELDS = (
     "schema_version",
@@ -208,7 +210,7 @@ _PREBUILT_MANIFEST_FIELDS = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "76c512b2a7e345a9613b154a36dcbf88560ef0b03ade9e1de42b24d968f2d422"
+    "42902589fe5175f22f13a0881684f721c0cfd72fa0cb3048f1b413f3aa6433d2"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -266,15 +268,15 @@ _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
         "2e997ee27e45fdf6651cd1e94689e08d348078e688ab34862d8d6396c6887ba5"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-        '8cb10f1984af55194c2209d3a65a5e28e1a2ab563a5e333f49bc9184e7f83a9e'
+        "c881a4f0e313b7c00823f62fa2d4e766c04c3b365eeb1847423c7a30cba7a9f6"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        '6d1f78d58ce2455dbd7a6426cd8d8f82f5b2752b126d04c38a81811a8fb85ec7'
+        "d32bb675f783227f514f00f542ea5fef78507f08f4587fff684057fbe4c1ce9c"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        '8efda50ba816170d063ca8b4755a05189c6d5fff8ae64d5746d9bebfcb40b824'
+        "06e5d09c2971525119a68c874937547f47ed20d2a061f4738673a6c44b97d239"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -403,17 +405,20 @@ _G12_SOAK_TEST = (
     "nexus::cross_dataspace_localnet::"
     "cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
 )
+# TODO: implement the first two native qualifications before opening G-4P.
+# The source inventory/launcher refuses their current absence. Retired
+# executable MergeQC logs must not satisfy these required evidence identities.
 _G4P_RELEASE_TESTS = (
     (
         "nexus_and_streaming",
         "nexus::autoscale_localnet::"
-        "nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+        "nexus_autoscale_native_four_peer_recreates_lane_and_"
         "rejects_stale_artifacts",
     ),
     (
         "nexus_and_streaming",
         "nexus::autoscale_localnet::"
-        "nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart",
+        "nexus_autoscale_native_recovers_missing_execution_evidence_after_restart",
     ),
     (
         "nexus_and_streaming",

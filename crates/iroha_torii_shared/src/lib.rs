@@ -1096,13 +1096,14 @@ pub struct PipelineTransactionStatus {
     norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_torii_shared::PipelineTransactionDetailsResponse")]
+#[norito(deny_unknown_fields)]
 pub struct PipelineTransactionDetailsResponse {
-    /// Canonical signed transaction hash requested by the caller.
+    /// Exact requested network entrypoint hash, including the outer sealed-reveal identity.
     pub hash: String,
-    /// Exact committed transaction, including its entrypoint, result, and batch receipts.
+    /// Exact Network input and sole full typed output, including its result, receipts,
+    /// and owned callback completions. Separate Pipeline/Time outputs require their own
+    /// authenticated output proofs; this response never infers their association.
     pub transaction: CommittedTransaction,
-    /// Trigger completions associated with the exact committed entrypoint.
-    pub trigger_completions: Vec<TriggerCompletionSummary>,
 }
 impl PipelineTransactionStatusResponse {
     /// Construct a public status-only response.
@@ -2384,6 +2385,168 @@ mod tests {
             );
         }
     }
+    fn canonical_details_fixture(rejected: bool) -> super::PipelineTransactionDetailsResponse {
+        use iroha_data_model::{
+            block::execution_output::{
+                ExecutionOutputV1, InvocationCompletionV1, NetworkExecutionOutputV1,
+            },
+            events::trigger_completed::TriggerCompletedOutcome,
+            transaction::{
+                TransactionEntrypoint, TransactionResult, error::TransactionRejectionReason,
+            },
+        };
+        let key = checked_test_keypair(0x48);
+        let entrypoint = TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                    b"details fixture network",
+                ))),
+                AccountId::new(key.public_key().clone()),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .try_sign(key.private_key())
+            .unwrap(),
+        );
+        let result = if rejected {
+            TransactionResult::new(Err(TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted("fixture refusal".into()),
+            )))
+        } else {
+            TransactionResult::new(Ok(Vec::new()))
+        };
+        let output = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result,
+            completions: if rejected {
+                Vec::new()
+            } else {
+                vec![InvocationCompletionV1 {
+                    callback_index: 0,
+                    trigger_id: "owned-completion".parse().unwrap(),
+                    outcome: TriggerCompletedOutcome::Success,
+                }]
+            },
+        });
+        let block_hash = HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"details fixture carrier"),
+        );
+        let entrypoint_proof =
+            iroha_crypto::MerkleProof::<TransactionEntrypoint>::from_audit_path(0, Vec::new());
+        let output_proof =
+            iroha_crypto::MerkleProof::<ExecutionOutputV1>::from_audit_path(0, Vec::new());
+        // Exercise the public decoder without relying on another crate's transparent_api feature.
+        let transaction: iroha_data_model::query::CommittedTransaction =
+            norito::json::from_value(norito::json!({
+                "block_hash": block_hash,
+                "entrypoint_hash": (entrypoint.hash()),
+                "entrypoint": entrypoint,
+                "entrypoint_proof": entrypoint_proof,
+                "output_hash": (HashOf::new(&output)),
+                "output": output,
+                "output_proof": output_proof,
+            }))
+            .expect("public canonical committed transaction fixture");
+        super::PipelineTransactionDetailsResponse {
+            hash: transaction.entrypoint_hash().to_string(),
+            transaction,
+        }
+    }
+
+    #[test]
+    fn transaction_details_roundtrip_has_one_full_network_output_owner() {
+        for rejected in [false, true] {
+            let details = canonical_details_fixture(rejected);
+            let bytes = norito::to_bytes(&details).unwrap();
+            assert_eq!(
+                norito::core::Header::read(bytes.as_slice()).unwrap().schema,
+                norito::schema::identity::frame_hash::<super::PipelineTransactionDetailsResponse>()
+            );
+            let decoded: super::PipelineTransactionDetailsResponse =
+                norito::decode_from_bytes(&bytes).unwrap();
+            assert_eq!(decoded, details);
+            assert_eq!(decoded.transaction.result().is_err(), rejected);
+            assert_eq!(
+                decoded.transaction.output().completions().len(),
+                usize::from(!rejected)
+            );
+            decoded
+                .transaction
+                .output()
+                .validate_structure(1, std::slice::from_ref(decoded.transaction.entrypoint()))
+                .expect("details fixture obeys the canonical Network rollback contract");
+            let json = norito::json::to_value(&details).unwrap();
+            assert_eq!(json.as_object().unwrap().len(), 2);
+            assert!(
+                !json
+                    .as_object()
+                    .unwrap()
+                    .contains_key("trigger_completions")
+            );
+            assert_eq!(
+                norito::json::from_value::<super::PipelineTransactionDetailsResponse>(json)
+                    .unwrap(),
+                details
+            );
+            for end in 0..bytes.len() {
+                assert!(
+                    norito::decode_from_bytes::<super::PipelineTransactionDetailsResponse>(
+                        &bytes[..end]
+                    )
+                    .is_err()
+                );
+            }
+            let mut trailing = bytes;
+            trailing.push(0);
+            assert!(
+                norito::decode_from_bytes::<super::PipelineTransactionDetailsResponse>(&trailing)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn transaction_details_rejects_retired_parallel_completion_layout() {
+        #[derive(norito::NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_torii_shared::PipelineTransactionDetailsResponse")]
+        struct RetiredDetails {
+            hash: String,
+            transaction: iroha_data_model::query::CommittedTransaction,
+            trigger_completions: Vec<super::TriggerCompletionSummary>,
+        }
+        let details = canonical_details_fixture(false);
+        for completions in [
+            Vec::new(),
+            vec![super::TriggerCompletionSummary {
+                trigger_id: "retired-completion".into(),
+                trigger_execution_hash: details.hash.clone(),
+                step_index: 0,
+                outcome: "Success".into(),
+                message: None,
+            }],
+        ] {
+            let retired = RetiredDetails {
+                hash: details.hash.clone(),
+                transaction: details.transaction.clone(),
+                trigger_completions: completions.clone(),
+            };
+            assert!(
+                norito::decode_from_bytes::<super::PipelineTransactionDetailsResponse>(
+                    &norito::to_bytes(&retired).unwrap()
+                )
+                .is_err()
+            );
+            let mut json = norito::json::to_value(&details).unwrap();
+            json.as_object_mut().unwrap().insert(
+                "trigger_completions".into(),
+                norito::json::to_value(&completions).unwrap(),
+            );
+            assert!(
+                norito::json::from_value::<super::PipelineTransactionDetailsResponse>(json)
+                    .is_err()
+            );
+        }
+    }
+
     #[test]
     fn account_read_response_fixture_uses_checked_key_derivation() {
         let key_pair = checked_test_keypair(0x23);

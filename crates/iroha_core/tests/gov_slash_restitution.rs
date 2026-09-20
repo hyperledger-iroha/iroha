@@ -157,7 +157,7 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
     let state = setup_state(&def_id, &receiver_id);
     let alice_id = ALICE_ID.clone();
     let referendum_id = "rid-slash";
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     grant_governance_perms(&mut stx, referendum_id, &alice_id);

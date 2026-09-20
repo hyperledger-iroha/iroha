@@ -922,6 +922,12 @@ impl Reducer {
     pub(crate) fn queued_signatures(&self) -> impl Iterator<Item = &SignableMessage> {
         self.signature_queue.iter()
     }
+    /// Exact body witnesses retained by the reducer, including a Set B
+    /// candidate awaiting fallback while no body effect is currently issued.
+    /// This is a borrowed owner projection, not a second eligibility decision.
+    pub(crate) fn retained_body_references(&self) -> impl Iterator<Item = (Round, Subject)> + '_ {
+        self.body_work.keys().copied()
+    }
     /// Returns the body state for a round and subject.
     #[must_use]
     pub fn body_state(&self, round: Round, subject: Subject) -> BodyState {

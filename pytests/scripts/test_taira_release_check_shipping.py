@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import test_taira_release_check as existing
+from taira_fake_libtest import executable
 
 gate = existing.gate
 ACTUAL_SHIPPING_AUDIT = gate.shipping_harnesses
@@ -112,12 +113,7 @@ class ShippingArtifactTests(unittest.TestCase):
         self.events = {}
         for selection in (*SHIPPING, "network"):
             name = self.names.get(selection)
-            payload = (f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
-                       f"if '--list' in sys.argv: print({str(name) + ': test'!r}); sys.exit(0)\n"
-                       f"assert sys.argv[1] == {name!r}, 'compile-only target must not execute'\n"
-                       f"with Path({str(self.executed)!r}).open('a') as f: f.write({str(name) + chr(10)!r})\n"
-                       "print('test ' + sys.argv[1] + ' ... ok')\n"
-                       "print('test result: ok. 1 passed; 0 failed; 0 ignored;')\n").encode()
+            payload = executable([name] if name is not None else [], self.executed).encode()
             _, _, event = self.artifact(selection, payload)
             self.events[selection] = event
         self.checkpoint = None
@@ -133,7 +129,8 @@ class ShippingArtifactTests(unittest.TestCase):
         stack.enter_context(patch.object(gate, "KAGAMI_STAGES", (("Kagami", (self.names["kagami"],)),)))
         stack.enter_context(patch.object(gate, "NETWORK_STAGES", (("network", (self.names["network"],)),)))
         stack.enter_context(patch.object(gate, "shipping_harnesses", wraps=ACTUAL_SHIPPING_AUDIT))
-        for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity"):
+        for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity",
+                     "check_shipping_binaries"):
             stack.enter_context(patch.object(gate, name))
         stack.enter_context(patch.object(gate, "native_artifact_guard", side_effect=lambda *_: contextlib.nullcontext()))
         stack.enter_context(patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=1024**4)))

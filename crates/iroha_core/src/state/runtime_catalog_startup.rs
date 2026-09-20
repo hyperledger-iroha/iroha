@@ -4,9 +4,11 @@ impl State {
         &self,
         manifests: &LaneManifestRegistryHandle,
     ) -> bool {
+        let privacy = Arc::new(LanePrivacyRegistry::from_manifest_registry(manifests));
+        let manifests = Arc::clone(manifests);
         let _state_write_lock = self.state_write_lock.lock();
         let publication = self.begin_state_view_write();
-        if !manifests.is_bound_to_catalog(&self.nexus.read().lane_catalog) {
+        if !manifests.is_bound_to_catalog(&self.nexus_ownership_projection().lane_catalog) {
             return false;
         }
         {
@@ -18,7 +20,7 @@ impl State {
                 return false;
             }
         }
-        self.install_lane_manifests_in_publication(manifests, &publication);
+        self.install_prepared_lane_manifests_in_publication(manifests, privacy, &publication);
         true
     }
 
@@ -28,7 +30,8 @@ impl State {
     /// publication. It never promotes restored or locally supplied additions into static policy.
     ///
     /// # Errors
-    /// Rejects malformed committed additions, a changed baseline, or a restored owner mismatch.
+    /// Rejects malformed committed additions or a configured physical baseline
+    /// that differs from retained snapshot or post-genesis authority.
     pub fn nexus_with_committed_catalog(
         &self,
         mut nexus: iroha_config::parameters::actual::Nexus,
@@ -36,13 +39,16 @@ impl State {
         let runtime = runtime_catalog_from_world(&self.world.view())?;
         nexus.dataspace_catalog =
             runtime_catalog_dataspaces(&nexus.configured_dataspace_catalog, runtime.as_ref())?;
-        if runtime.is_some() && self.nexus_runtime_restored_from_snapshot {
-            let restored = self.nexus.read();
+        // An absent overlay still has an authoritative physical baseline once
+        // State is restored or committed. Only fresh H0 construction/replay may
+        // replace placeholder defaults with the configured initial baseline.
+        if self.nexus_runtime_restored_from_snapshot || self.committed_height() != 0 {
+            let retained = self.nexus_snapshot();
             if SnapshotNexusOwnerPolicy::from_nexus(&nexus).dataspaces
-                != SnapshotNexusOwnerPolicy::from_nexus(&restored).dataspaces
+                != SnapshotNexusOwnerPolicy::from_nexus(&retained).dataspaces
             {
                 return Err(runtime_catalog_invalid(
-                    "committed catalog differs from restored physical dataspace authority",
+                    "configured catalog differs from retained physical dataspace authority",
                 ));
             }
         }

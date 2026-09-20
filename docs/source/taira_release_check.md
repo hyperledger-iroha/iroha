@@ -2,19 +2,135 @@
 
 Run `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` for basic Taira qualification. The default
-`--native-check-scope basic` runs **483 native regressions on macOS**: startup
+`--native-check-scope basic` selects native regressions for startup
 admission, configuration, deployment and secret custody, cryptography, public
 onboarding/faucet and SDK/Torii contracts, plus real four-validator Applied
 transactions and a signed-snapshot restart. It does not claim complete consensus
 fault or advanced product qualification.
 
-Use `--native-check-scope full` to execute the full **664-case** native census,
+Use `--native-check-scope full` to execute the full native census,
 including advanced Core history, compaction and fault matrices and proof
-production. Linux adds one OpenSSH descriptor-custody case to each scope.
+production. Linux additionally selects OpenSSH descriptor custody, native worker
+identity, and generation controls. The runner's selected regression census is
+authoritative for the current source and platform.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
 and proof-size limits. These are test selections, not runtime feature toggles.
+
+Both scopes reject pulse-only proposal work, including received and recovered
+bodies. An idle mandatory height defers session activation and signing until
+independent work exists; useful work still requires its exact validated pulse.
+The bounded proposal snapshot retains its queue ownership while that pulse is
+pending, and the real threshold-signature regression checks the shared gate.
+Both scopes also verify a genuine threshold pulse composed with certified merge
+execution: original certified roots remain bound, the composed state commits
+once, and invalid effects or changes after sealing are rejected.
+
+Before the four-peer fixture, both scopes check that paid lane authorities come
+from registered and activated accounts bound to peers in signed genesis, and
+that failure summaries retain public phase status without transaction payloads.
+
+Both scopes select the seven native single-epoch derivation controls and four
+bounded public epoch-schedule controls. They cover exact network, epoch and
+validator binding, range and fee bounds, explicit public CLI inputs, one private
+pipe consumption, descriptor closure, wiped inputs and complete public output.
+These producer controls do not establish committed maintenance or authorize a
+live transaction; the operator workflow requires its separate lifecycle checks.
+
+Both scopes require the native epoch-maintenance controls for authenticated
+current-height observation, bounded roster schedules, actual-epoch and carrier
+deadlines, fee and lifetime binding, durable single dispatch across renewal, and
+staking admission. The two fixture controls reject unsafe seed-pipe custody and
+noncontiguous or incorrectly bound public schedules before peer startup. The
+complete four-peer network selector remains unchanged. These gate selections do
+not claim operational maintainer startup or supervision; those remain deployment
+prerequisites.
+
+Both scopes qualify production beacon capability against the exact public session
+and validator seat, consumed runtime credentials, genesis-bound bootstrap and
+readiness before network fixtures. An uninitialized signer fails readiness while
+bootstrap ingress remains available. Setup uses real committed transactions to
+advance DKG phases; it never creates empty blocks or invents committed heights.
+The shipping Taira bootstrap executable is a separately authenticated artifact.
+The real four-peer fixture uses fresh native DKG custody and crosses the mandatory
+beacon pulse during the complete paid dataspace deployment and four-peer
+finality workflow, additive catalog recovery, and both public routing sequences.
+Its signed short epoch allows the real admission, payload-anchor and merge
+carriers to complete before certificate installation and signer activation. DKG
+finalization records the actual authenticated committed height; it does not
+assume one block per operation. Pulse verification derives its height and parent
+anchor from the signed genesis and accepts only a nonempty canonical carrier.
+One fresh ceremony serves this complete sequence in both scopes. Its generated custody lives only in a validated owner-only
+runtime directory outside Git; the isolated shipping Kagami and Taira launcher
+are explicit inputs, and a separate message-control daemon exercises the exact
+Core-only seam. The full launcher’s Linux/Inrou requirements remain enforced.
+
+Both Core startup selections check the fixed-domain IPA parameter cache with
+concurrent cold initialization, canonical bytes/fingerprints, owned clone
+isolation, rejected domains, warm-cache malformed metadata and relabelled-key
+rejection. Caching public parameters never substitutes for key authentication.
+
+Both Core startup selections require interrupted Kura Apply recovery after a
+real persisted-block crash. Standalone and linked owners retain their original
+ledger rows until verified application completes. The checks reject changed
+owner, signed predecessor, and Decision-WAL identities without mutating the
+retained ledger. PendingKura recovery remains the sole executable Apply owner.
+This group runs immediately after configuration and MV ownership checks in both
+scopes. Any failure stops qualification before other startup groups, shipping binary builds
+or network execution; it reuses the same compiled harness and runs each case once.
+
+Both scopes first run 56 selected MV ownership checks after configuration and
+before PendingKura: finite allocation credits, exact release/poison wakes, charged
+Cell generations, original map/undo retention, actual epoch reclamation and
+strict allocation-free map handoff/publication. These run once from the same
+immutable copied artifacts and enter the exact independent-pass census. A failure
+stops later Core runtime checks, shipping builds and network qualification; a
+changed MV artifact or selector cannot reuse an earlier checkpoint. The runner
+still compiles its complete native feature graph first. For a cheaper development
+check before that full compilation, existing `--focus-regression` selections can
+target `mv`, `mv-ebr` and `mv-map` plus mandatory configuration. That result remains
+a diagnostic, with no release qualification or independent-checkpoint credit.
+
+Both scopes also require the signed stopped-predecessor controls: strict state
+decoding, retained directory identity across archive/restore, complete process
+absence, exact prior/successor unit authority, and rollback without restarting an
+explicitly stopped predecessor or downgrading a failed running predecessor.
+
+Both scopes exercise the native reset controller’s signed beacon plan, exact
+roster/seat and provider/unit bindings, and bounded continuation after submission.
+A lost ceremony or an early child exit cannot repeat committed canaries or admit
+a later operation. Public input assembly derives beacon authority from the exact
+native genesis and unsigned draft, rejects caller-supplied generated authority,
+and preserves credential-free preparation and atomic public bundle publication.
+These controls use the existing CLI harness and support exact focused selection.
+
+Prepared canary and beacon-install transactions bind their TTL to the signed
+execution window before fee quoting, retaining the exact creation timestamp and
+any shorter configured lifetime. Both scopes check exhausted windows before HTTP
+and delayed quotes without extending authorization or repeating submission.
+
+Finality readback honors HTTP 429 retry delays within the caller’s original
+absolute deadline. Invalid retry instructions and fixed response/proof failures
+remain errors; a failed or late read cannot advance the verification anchor or
+cause a transaction resubmission.
+
+Both scopes require canonical transaction reads to release their State snapshot
+before Kura and merge-proof authentication, then recheck the exact committed
+binding. They exercise bounded lane-recovery batches, preserve completion and
+yield handling, and reject corrupt or foreign durable evidence while avoiding
+duplicate validation of already authenticated reads. These use the existing
+Core and Torii unit harnesses.
+
+Both scopes require the blocking SDK to drive pooled HTTP connections and
+background tasks between calls, preserve clone ownership, and cancel tasks after
+the final runtime owner is dropped. These reuse the existing native SDK harness.
+
+Both scopes include seven public faucet policy checks: exact configuration,
+asset alias resolution, disabled 403, route-catalog policy, OpenAPI shape and
+read-only MCP visibility and dispatch. These reuse the existing Torii HTTP,
+Torii unit and shared-library harnesses. Public discovery never replaces an
+independently trusted faucet authority pin.
 
 Both scopes cover Proposal Fetch-to-Store handoff after Prepare or Commit
 authority refinement, including a completion queued before the upgrade. The
@@ -58,7 +174,8 @@ Query failures decode the node's bounded error envelope; a missing asset, unknow
 route or malformed response cannot be reported as an expired or missing cursor
 solely from its HTTP status. Both scopes include these focused regressions.
 
-Both scopes compile the identical configuration, data-model, crypto, P2P, CLI, daemon, Core,
+Both scopes compile the identical MV library and explicit allocation integrations,
+configuration, data-model, crypto, P2P, CLI, daemon, Core,
 proof, Torii and consensus harness graph plus native shipping binaries with six
 Cargo jobs. This preserves the warm target and dependency feature union. Deferred
 harnesses have compile coverage only; their cases never appear as test passes.
@@ -118,21 +235,35 @@ build and four-validator test. It needs no second Cargo test build. Its manifest
 bin target kind and test profile distinguish it from the Rust SDK's `iroha`
 library harness and the production CLI. Each completed test copy is released
 through its existing owner. Any collected test failure stops before production
-compilation or network execution; production snapshots remain retained. Configuration
+codegen or network execution; production snapshots remain retained. Configuration
 and proof-bound checks retain their selected cases in both scopes. Adding the CLI changes the combined test feature union,
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
 
-After configuration and CLI checks, both scopes execute empty-journal Queue
-admission, HTTP readiness and daemon startup-policy regressions before other
-runtime checks. The full scope also executes Core snapshot-owner and cold
+After configuration, MV ownership and the pending-Kura recovery group, both scopes execute empty-journal Queue
+admission, HTTP readiness and daemon startup-policy regressions before CLI and other
+runtime checks. Admission handoff controls require Torii to await a closed live owner
+within the original monotonic and wire deadlines, without creating a journal claim
+or dispatching during that wait. They verify exact successor admission, cancellation
+and memory release, and preserve exact transaction uncertainty for expired retries,
+partial durable claims and post-quorum expiry, including expiry before dispatch.
+Missing recovery, fail-stop and invalid capacity fail immediately.
+The full scope also executes Core snapshot-owner and cold
 certified-history groups at this early boundary. Every installed replay remains quarantined until exact State/Kura
 reconciliation completion, even when it contains no reservation owners. Full-scope cold storage cases restore multiple completed slots, recover only the current
 partial publication, recover independently pruned pairs using an authenticated
 retention frontier, and reject corrupt or missing retained history. Discarded local
-certificate history cannot be resurrected after replica application advances. All startup
-groups report their failures before stopping expensive work. On
-success, the remaining groups execute each selected test once. The checkpoint
+certificate history cannot be resurrected after replica application advances. The remaining startup
+groups collect their failures before stopping expensive work. On success, a separate
+`cargo check` selects only the authoritative shipping binaries with default features,
+without test targets, a test profile or fixture-feature overrides. It preserves the
+warm target, tool environment and locks, and must observe every production binary.
+Core and Torii library artifact events must exclude their `iroha-core-tests` and
+`test-fixtures` features, so a dependency/default-feature leak also fails this gate.
+This metadata check runs before CLI and long independent tests, including when their
+checkpoint is reused. It supplies no qualification evidence and does not replace
+later shipping codegen or network execution. The remaining groups execute each
+selected test once. The checkpoint
 binds the explicit scope, exact selected census and artifact identity. Core and daemon
 copies stay retained until their final selected stage. A failed startup preflight
 never publishes independent-check success. Strict storage construction and both
@@ -234,22 +365,30 @@ confirmation budget. It continues polling within that deadline;
 shorter configured request timeouts, malformed responses and other lookup
 failures remain errors. Confirmation never resubmits the transaction.
 
-The next gate launches four validators from the freshly emitted native
-`iroha3d` binary using the same three-dataspace topology and mandatory NPoS/DA
-policies in both scopes. Basic uses the already funded genesis account on the
-universal default route, matching basic BPNG traffic. Full additionally runs the
-original ALICE account route through lane 1/dataspace 1. Neither scope changes
-the network topology, fee policy or confirmation deadlines. Each test submits
-three consecutive signature-bound `QueuePlanSynced` public transactions, as
-required by public Torii admission, and requires state-resolved Applied
-in both local and global status on every validator at each transaction's committed height.
-Between the second and third transactions it waits for a signed snapshot, stops
-and restarts one validator with the same storage, and requires the new process to
-load that snapshot, serve `/readyz`, and retain the snapshot height. An unchanged idle height is valid; the third
-transaction must then reach Applied on all four validators.
+The network gate runs one fresh native four-validator production-custody fixture
+with mandatory NPoS/DA in both scopes. It preserves the generated Taira catalog
+and tests both its funded universal default-route account and a distinct fresh
+funded account explicitly routed through the configured PayNet lane. The paid
+DPN workflow precedes a second additive catalog transition, full authenticated
+Kura replay and signed-snapshot recovery, with exact historical transaction,
+committee, permission and storage proofs retained on all four peers.
+
+Each public routing sequence submits three consecutive signature-bound
+`QueuePlanSynced` transactions and requires the same exact state-resolved Applied
+height in both local and global status on every validator. Between the second
+and third transactions, all four validators publish complete signed snapshots
+and restart with their retained storage and real custody. Every new process must
+load its exact snapshot, serve `/readyz`, and retain at least that height; the
+third transaction then proves renewed Applied execution on all four peers.
+The original transaction, observation and restart deadlines remain unchanged.
 The CLI gate also checks that prepared Inrou pin operations preserve sponsored
 fees and the public QueuePlanSynced intent through signing and replay validation.
-Dedicated service-owned Ordinary admission remains a separate contract.
+Dedicated service-owned Ordinary admission remains a separate contract. A sole
+native threshold-key lifecycle certificate also uses signed Ordinary admission
+so that its exact next-height authorization executes in the same global carrier.
+That ingress authenticates the current frozen-roster quorum certificate and
+preserves fee, signature, network, height and routing checks. Other public
+transactions still require QueuePlanSynced admission.
 Global status can query other peers, so only the additional local observation
 establishes each validator's own application. Peer clients ignore ambient client
 identity and endpoint overrides. Each status read uses the SDK routed request
@@ -384,7 +523,8 @@ descriptor cleanup and replacement of the original paths. Every test selected by
 Missing, ignored or failed selected tests fail the command; deferred cases are
 omitted from the success census and independent-check evidence. After the mandatory startup
 preflight passes, remaining independent cases report their combined failures.
-The short startup groups stop expensive work after collecting their failures. Missing selected tests, artifact custody
+The pending-Kura group stops before other startup groups on failure; the remaining
+startup groups stop expensive work after collecting their failures. Missing selected tests, artifact custody
 failures and infrastructure errors still stop immediately. Fix the named failures and
 rerun the same command to reuse compiled dependencies.
 

@@ -2,9 +2,9 @@
 //!
 //! This owner checks the original fact frame, signed schedule, finality chain and
 //! complete query-frame consistency, then encodes the existing request/bundle
-//! transports. It does not read Kura, authenticate the complete merge transcript,
+//! transports. It does not read Kura, authenticate the complete Native transcript,
 //! retain filesystem authority or publish anything. Only export/replay can prove
-//! the query proofs against the real carrier and certified full merge entry.
+//! the query proofs against the real Native carrier and complete context-write witness.
 //! The filesystem prepare-pair owner retains the original facts lease through
 //! both output publications and the final reply. These buffers alone are neither
 //! a prepare publication receipt nor canonical execution authority.
@@ -133,16 +133,20 @@ pub(in crate::kura::scaling_evidence::export) fn prepare(
         mut plan,
         expected,
         by_hash,
-        mut finality,
         mut input_bytes,
         ..
     } = admit(plan, limits, &bindings)?;
+    let mut finality = iroha_data_model::bridge::BridgeFinalityVerifier::with_context(
+        plan.network_id,
+        plan.first_context,
+    );
     let mut query_count = 0usize;
     let mut seen = vec![false; expected.len()];
     for (height, binding) in heights.iter().zip(&bindings) {
         input_bytes = check_supplied(
             height.height,
             &height.finality,
+            &height.contexts,
             &height.queries,
             binding,
             input_bytes,
@@ -155,28 +159,26 @@ pub(in crate::kura::scaling_evidence::export) fn prepare(
             "prepare finality height mismatch"
         );
         finality.verify(&proof)?;
-        let mut inclusion_context = None;
+        let _: iroha_core::state::NativeLaneContextsEvidenceV1 = canonical(&height.contexts)?;
+        let mut previous_output = None;
         for (index, raw) in height.queries.iter().enumerate() {
             let query: CommittedTransaction = canonical(raw)?;
-            let inclusion = query
-                .merge_inclusion
-                .as_ref()
-                .ok_or_else(|| eyre!("prepare query used ordinary fallback"))?;
+            let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
+                &query.output
+            else {
+                return Err(eyre!("prepare query is not a Network output"));
+            };
+            let output_index = query.output_proof.leaf_index();
             ensure!(
                 query.block_hash == proof.block_header.hash()
                     && query.entrypoint_hash == query.entrypoint.hash()
-                    && query.result_hash == query.result.hash()
+                    && query.output_hash == HashOf::new(&query.output)
                     && usize::try_from(query.entrypoint_proof.leaf_index())? == index
-                    && usize::try_from(query.result_proof.leaf_index())? == index
-                    && inclusion.version == 1
-                    && inclusion.entrypoint_count == u64::try_from(height.queries.len())?,
+                    && usize::try_from(output.input_index)? == index
+                    && previous_output.is_none_or(|previous| previous < output_index),
                 "prepare query carrier, identity, or ordered leaf mismatch"
             );
-            if let Some(first) = &inclusion_context {
-                ensure!(inclusion == first, "prepare query merge context mismatch");
-            } else {
-                inclusion_context = Some(inclusion.clone());
-            }
+            previous_output = Some(output_index);
             let slot = *by_hash
                 .get(&query.entrypoint_hash)
                 .ok_or_else(|| eyre!("prepare query is not a scheduled request"))?;
@@ -189,8 +191,8 @@ pub(in crate::kura::scaling_evidence::export) fn prepare(
             ensure!(
                 signed_count == original.request.signed_transaction.len()
                     && signed == &original.transaction
-                    && query.result.0.is_ok()
-                    && query.result.1.is_empty(),
+                    && query.result().0.is_ok()
+                    && query.result().1.is_empty(),
                 "prepare signed request failed or changed"
             );
             let signed_bytes = norito::encode_canonical(signed)?;
@@ -264,6 +266,8 @@ fn derive_bindings(
         );
         bounded(&row.finality, MAX_FINALITY_BYTES)?;
         total = charged(total, row.finality.len(), limits.input_bytes)?;
+        bounded(&row.contexts, MAX_FINALITY_BYTES)?;
+        total = charged(total, row.contexts.len(), limits.input_bytes)?;
         queries = queries
             .checked_add(row.queries.len())
             .ok_or_else(|| eyre!("prepare query count overflow"))?;
@@ -281,6 +285,7 @@ fn derive_bindings(
         .map(|row| HeightInputBinding {
             height: row.height,
             finality_hash: Hash::new(&row.finality),
+            contexts_hash: Hash::new(&row.contexts),
             query_hashes: row.queries.iter().map(Hash::new).collect(),
         })
         .collect())

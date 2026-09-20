@@ -2,22 +2,20 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use iroha_data_model::{
-    fastpq::{
-        FastpqOrdinarySourceStatementLeafV1, FastpqOrdinarySourceStatementManifestV1,
-        FastpqSourceStatementContextV1,
-    },
-    transaction::TransactionEntrypoint,
+use iroha_data_model::fastpq::{
+    FastpqOrdinarySourceStatementLeafV1, FastpqOrdinarySourceStatementManifestV1,
+    FastpqSourceStatementContextV1,
 };
 
-use super::{BTreeMap, Hash, StateBlock};
-use crate::{
-    fastpq::{
-        FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits,
-        derive_fastpq_ordinary_source_manifest_v1,
-    },
-    queue::RoutingDecision,
+use super::{BTreeMap, Hash, StateBlock, output_capacity::OwnedExecutionSources};
+use crate::fastpq::{
+    FastpqSourceExecutionEntryV1, FastpqSourceStatementBuildLimits,
+    derive_fastpq_ordinary_source_manifest_v1,
 };
+#[cfg(test)]
+use crate::queue::RoutingDecision;
+#[cfg(test)]
+use iroha_data_model::transaction::TransactionEntrypoint;
 use iroha_model_base::topology::DataSpaceId;
 
 mod content_verification;
@@ -33,12 +31,12 @@ pub use statement_reservation::{
 
 /// Complete local source projection captured by a validator's block execution.
 ///
-/// Entries are external calls in block order, then time invocations in invocation
-/// order, then remaining applied transcript sources in ascending hash order. The
-/// last group includes native purposes and internally derived calls. This is a
-/// canonical source projection, not the physical order of state fragments.
-/// External and time entries without transfers are retained, including rejected
-/// entries. Native work without a transcript is not a proof source.
+/// Entries are the actual producer-owned Network, Pipeline and Time calls in
+/// canonical output order, followed by applied protocol-purpose sources in hash
+/// order. This is not the physical order of state fragments. Rejected and
+/// zero-transcript calls remain present; a transcript capture does not invent an
+/// additional execution call. Protocol work without a transcript is not a proof
+/// source. The inactive native prefix retains separate test-only join controls.
 ///
 /// Private construction prevents a supplied archive from becoming an owned
 /// inventory. The seal retains exact finalized public occurrences while excluding
@@ -125,12 +123,70 @@ impl FastpqSourceInventoryV1 {
 }
 
 impl StateBlock<'_> {
-    /// Seal the source inventory before draining this block's transcript accumulator.
+    /// Seal actual Network/Pipeline/Time sources before draining their transcripts.
     ///
-    /// Both block execution paths supply their complete external entrypoints,
-    /// validated routes and actual time-invocation hashes. Applied captures supply
-    /// every other transcript source. A mismatch is latched and cannot be repaired
-    /// by retrying with a smaller archive. No partially built inventory is published.
+    /// The nonconstructible capsule belongs to the completed applying producer.
+    /// Rejected calls remain valid owners of separately applied fee/penalty work;
+    /// this method never derives capture authority from the result disposition.
+    /// Every mismatch is latched before any partial inventory can be published.
+    pub(super) fn finalize_owned_fastpq_source_inventory_with_pending(
+        &mut self,
+        sources: &OwnedExecutionSources,
+        pending: Option<crate::fastpq::PendingTransferTranscriptDigests>,
+    ) -> Result<(), String> {
+        self.finalize_fastpq_source_inventory_from(
+            pending,
+            |state| state.validate_owned_fastpq_sources(sources),
+            |state, tx_set_hash| state.build_owned_fastpq_source_inventory(sources, tx_set_hash),
+        )
+    }
+
+    fn validate_owned_fastpq_sources(&self, sources: &OwnedExecutionSources) -> Result<(), String> {
+        if sources.proposal() != self._curr_block.hash() {
+            return Err("FASTPQ owned sources belong to another proposal".into());
+        }
+        let frozen = self
+            .fastpq_source_context
+            .as_ref()
+            .ok_or("FASTPQ inventory has no frozen source-height context")?;
+        if sources.source_context() != frozen.source
+            || frozen.source.network_id != self.network_id
+            || frozen.source.height != self._curr_block.height().get()
+        {
+            return Err(
+                "FASTPQ owned sources differ from the applying source-height context".into(),
+            );
+        }
+        if sources.is_native() {
+            self.verify_native_owned_fastpq_output_join(sources)?;
+        } else if self
+            .native_lane_stage_for_inventory()
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Err("ordinary FASTPQ inventory cannot replace a native stage".into());
+        }
+        let routes = sources.network_routes();
+        if routes.len() > sources.entries().len() {
+            return Err("FASTPQ owned Network routes exceed the actual source count".into());
+        }
+        for (source, route) in sources.entries().iter().zip(routes) {
+            if source.lane() != Some(route.lane_id) || source.dataspace() != route.dataspace_id {
+                return Err("FASTPQ owned Network source differs from its frozen route".into());
+            }
+        }
+        for source in &sources.entries()[routes.len()..] {
+            if source.lane().is_some() || source.dataspace() != DataSpaceId::UNIVERSAL {
+                return Err(
+                    "FASTPQ internal source differs from its actual unrouted execution".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Fixture-only source construction, including the inactive native prefix.
+    /// Supplied calls here are not an ordinary production acceptance authority.
     #[cfg(test)]
     pub(crate) fn finalize_fastpq_source_inventory(
         &mut self,
@@ -141,13 +197,9 @@ impl StateBlock<'_> {
         self.finalize_fastpq_source_inventory_with_pending(external, routing, time_calls, None)
     }
 
-    /// Finalize pending public digests and seal the still-owned transcript accumulator.
-    ///
-    /// A previous success or failure is preserved before any transcript mutation.
-    /// The caller may drain transcripts only after this method succeeds. Private
-    /// paths are excluded from the seal; supplied single-delta digests are checked
-    /// fallibly before legacy finalization and missing digests are completed before
-    /// the public facts are committed. Invalid supplied digests remain unchanged.
+    /// Preserve existing exact native-prefix and transcript fixture controls.
+    /// Production callers must consume the actual producer-owned capsule instead.
+    #[cfg(test)]
     pub(crate) fn finalize_fastpq_source_inventory_with_pending(
         &mut self,
         external: &[TransactionEntrypoint],
@@ -155,34 +207,48 @@ impl StateBlock<'_> {
         time_calls: &[Hash],
         pending: Option<crate::fastpq::PendingTransferTranscriptDigests>,
     ) -> Result<(), String> {
+        self.finalize_fastpq_source_inventory_from(
+            pending,
+            |_| Ok(()),
+            |state, tx_set_hash| {
+                state.verify_native_lane_fastpq_output_join(external, routing)?;
+                state.build_fastpq_source_inventory(external, routing, time_calls, tx_set_hash)
+            },
+        )
+    }
+
+    /// Shared exact digest/seal/latch boundary; source authority is checked first.
+    fn finalize_fastpq_source_inventory_from(
+        &mut self,
+        pending: Option<crate::fastpq::PendingTransferTranscriptDigests>,
+        validate: impl FnOnce(&Self) -> Result<(), String>,
+        build: impl FnOnce(&Self, [u8; 32]) -> Result<FastpqSourceInventoryV1, String>,
+    ) -> Result<(), String> {
         if self.fastpq_source_inventory.is_some() {
             return Err("FASTPQ source inventory has already been finalized".into());
         }
-        // Reject a malformed identity before digest finalization inspects a
-        // precomputed digest against that identity. Preserve the original shape
-        // error rather than exposing an assertion in a debug digest backend.
-        let inventory = self
-            .fastpq_tx_set_hash
-            .filter(|hash| *hash != [0; 32])
-            .ok_or_else(|| {
-                crate::fastpq::TranscriptBatchError::MissingTransactionSetCommitment.to_string()
-            })
-            .and_then(|tx_set_hash| {
-                self.validate_fastpq_source_transcript_shape()?;
-                crate::fastpq::validate_precomputed_transfer_transcript_digests_in_map(
-                    &self.fastpq_transcripts,
-                )?;
-                crate::fastpq::finalize_transfer_transcript_digests_in_map_with_pending(
-                    &mut self.fastpq_transcripts,
-                    pending,
-                );
-                let inventory =
-                    self.build_fastpq_source_inventory(external, routing, time_calls, tx_set_hash)?;
-                self.fastpq_source_captures
-                    .seal()
-                    .map_err(|error| error.to_string())?;
-                Ok(inventory)
-            });
+        let inventory = validate(self).and_then(|()| {
+            let tx_set_hash = self
+                .fastpq_tx_set_hash
+                .filter(|hash| *hash != [0; 32])
+                .ok_or_else(|| {
+                    crate::fastpq::TranscriptBatchError::MissingTransactionSetCommitment.to_string()
+                })?;
+            // Check shape and supplied digests before legacy digest finalization.
+            self.validate_fastpq_source_transcript_shape()?;
+            crate::fastpq::validate_precomputed_transfer_transcript_digests_in_map(
+                &self.fastpq_transcripts,
+            )?;
+            crate::fastpq::finalize_transfer_transcript_digests_in_map_with_pending(
+                &mut self.fastpq_transcripts,
+                pending,
+            );
+            let inventory = build(self, tx_set_hash)?;
+            self.fastpq_source_captures
+                .seal()
+                .map_err(|error| error.to_string())?;
+            Ok(inventory)
+        });
         match inventory {
             Ok(inventory) => {
                 self.fastpq_entry_dataspaces = inventory
@@ -200,6 +266,90 @@ impl StateBlock<'_> {
         }
     }
 
+    fn build_owned_fastpq_source_inventory(
+        &self,
+        sources: &OwnedExecutionSources,
+        tx_set_hash: [u8; 32],
+    ) -> Result<FastpqSourceInventoryV1, String> {
+        let frozen = self
+            .fastpq_source_context
+            .as_ref()
+            .ok_or("FASTPQ inventory has no frozen source-height context")?;
+        let captures = self
+            .captured_fastpq_transcript_sources()
+            .map_err(ToString::to_string)?;
+        if !captures.keys().eq(self.fastpq_transcripts.keys()) {
+            return Err("FASTPQ applied source keys differ from the transcript accumulator".into());
+        }
+        if u32::try_from(sources.entries().len()).is_err() {
+            return Err("FASTPQ source inventory entry count exceeds u32".into());
+        }
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(sources.entries().len())
+            .map_err(|_| "host cannot retain owned FASTPQ sources")?;
+        let mut identities = BTreeSet::new();
+        for source in sources.entries() {
+            let call = source.call();
+            if !identities.insert(call) {
+                return Err(
+                    "FASTPQ source inventory contains a duplicate execution identity".into(),
+                );
+            }
+            let expected = frozen
+                .capture_transcript(Some(call), call, source.lane(), Some(source.dataspace()), 0)
+                .map_err(|error| error.to_string())?;
+            if let Some(captured) = captures.get(&call) {
+                if captured.entry_hash() != call
+                    || captured.source() != expected.source()
+                    || captured.route() != expected.route()
+                    || captured.dataspace_id() != expected.dataspace_id()
+                    || captured.execution_kind() != expected.execution_kind()
+                {
+                    return Err("FASTPQ block entry differs from its applied source context".into());
+                }
+            }
+            entries.push(FastpqSourceExecutionEntryV1 {
+                entry_hash: call,
+                execution_kind: expected.execution_kind(),
+                route: expected.route(),
+                dataspace_id: expected.dataspace_id(),
+            });
+        }
+        // Applied captures are already in hash order. An unknown execution call
+        // cannot manufacture an invocation omitted by the actual output owner.
+        for (hash, captured) in captures {
+            if captured.source() != frozen.source || captured.entry_hash() != *hash {
+                return Err("FASTPQ captured source differs from the frozen block scope".into());
+            }
+            if identities.contains(hash) {
+                continue;
+            }
+            if !captured.is_protocol_purpose() {
+                return Err("FASTPQ transcript has no owned execution call".into());
+            }
+            if entries.len() >= u32::MAX as usize {
+                return Err("FASTPQ additional source identity or count is invalid".into());
+            }
+            entries
+                .try_reserve(1)
+                .map_err(|_| "host cannot retain FASTPQ protocol sources")?;
+            entries.push(FastpqSourceExecutionEntryV1 {
+                entry_hash: *hash,
+                execution_kind: captured.execution_kind(),
+                route: captured.route(),
+                dataspace_id: captured.dataspace_id(),
+            });
+        }
+        Ok(FastpqSourceInventoryV1 {
+            source: frozen.source,
+            entries,
+            transcript_entry_hashes: captures.keys().copied().collect(),
+            transcript_seal: seal_public_transcripts(&self.fastpq_transcripts)?,
+            tx_set_hash,
+        })
+    }
+
     fn validate_fastpq_source_transcript_shape(&self) -> Result<(), String> {
         for (hash, bundle) in &self.fastpq_transcripts {
             if bundle.is_empty()
@@ -215,6 +365,7 @@ impl StateBlock<'_> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn build_fastpq_source_inventory(
         &self,
         external: &[TransactionEntrypoint],
@@ -249,22 +400,38 @@ impl StateBlock<'_> {
             entries.push(entry);
             Ok(())
         };
-        for (hash, lane, dataspace) in external
-            .iter()
-            .zip(routing)
-            .map(|(entry, route)| {
-                (
-                    Hash::from(entry.execution_call_hash()),
+        let native = self
+            .native_lane_stage_for_inventory()
+            .map_err(|error| error.to_string())?
+            .map(|(batch, _)| batch);
+        if native.is_some() && (!external.is_empty() || !routing.is_empty()) {
+            return Err("native source inventory cannot accept competing external inputs".into());
+        }
+        let ordinary = external.iter().zip(routing).map(|(entry, route)| {
+            Ok::<_, String>((
+                Hash::from(entry.execution_call_hash()),
+                Some(route.lane_id),
+                route.dataspace_id,
+            ))
+        });
+        let native = native
+            .into_iter()
+            .flat_map(|batch| &batch.groups)
+            .map(|group| {
+                let input = &group.payload.input;
+                let route = input.routing_plan()?.coordinator_route();
+                Ok((
+                    Hash::from(input.entrypoint.execution_call_hash()),
                     Some(route.lane_id),
                     route.dataspace_id,
-                )
-            })
-            .chain(
-                time_calls
-                    .iter()
-                    .map(|hash| (*hash, None, DataSpaceId::UNIVERSAL)),
-            )
-        {
+                ))
+            });
+        for source in ordinary.chain(native).chain(
+            time_calls
+                .iter()
+                .map(|hash| Ok((*hash, None, DataSpaceId::UNIVERSAL))),
+        ) {
+            let (hash, lane, dataspace) = source?;
             let expected = frozen
                 .capture_transcript(Some(hash), hash, lane, Some(dataspace), 0)
                 .map_err(|error| error.to_string())?;
@@ -409,3 +576,6 @@ mod precomputed_digest_tests;
 mod recorder_isolation_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod owned_sources_tests;

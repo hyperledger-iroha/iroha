@@ -129,7 +129,6 @@ pub(super) fn configure_future_created_autoscale_route_for_test(
         NonZeroU64::new(1).expect("nonzero authority height"),
         None,
         None,
-        None,
         0,
         0,
     ));
@@ -181,7 +180,10 @@ fn torii_explicit_lane_route_rejects_inactive_autoscale_range_lane() {
 }
 #[test]
 fn public_lane_route_rejects_restricted_selector_like_absent() {
-    let mut app = mk_app_state_for_tests();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        iroha_core::state::World::default(),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     let (restricted_lane, _) = configure_private_ingress_routes_for_test(&mut app);
     let restricted_error = torii_route_for_public_lane_id(app.as_ref(), restricted_lane)
         .expect_err("public-lane route must hide a restricted lane");
@@ -924,7 +926,10 @@ async fn collect_torii_account_history_json_payloads_fails_on_mid_route_not_foun
 #[tokio::test]
 async fn execute_account_history_single_route_preserves_index_metadata() {
     let authority = routed_read_test_account(0x91);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
         .expect("universal route");
@@ -1109,7 +1114,10 @@ async fn collect_torii_alias_json_payloads_returns_permission_denied_when_only_s
 #[tokio::test]
 async fn collect_torii_alias_json_payloads_returns_not_found_when_no_visible_routes_remain() {
     let authority = routed_read_test_account(0x92);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (restricted_route, _) =
         crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     let (routes, denied_routes) =
@@ -1381,7 +1389,10 @@ async fn routed_contract_views_require_bound_caller() {
 #[tokio::test]
 async fn protected_contract_views_ignore_unsigned_public_upstream() {
     let authority = routed_read_test_account(0xb7);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     Arc::get_mut(&mut app)
         .expect("unique app state")
@@ -1707,7 +1718,10 @@ async fn routed_contract_alias_sanitizer_rejects_forged_subject_payload() {
 #[tokio::test]
 async fn protected_alias_reads_ignore_unsigned_public_upstream() {
     let authority = routed_read_test_account(0x97);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let _ = crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
@@ -1829,7 +1843,6 @@ fn exact_alias_resolve_rejects_expired_authoritative_lease() {
         std::num::NonZeroU64::new(height).expect("nonzero height"),
         None,
         None,
-        None,
         2,
         0,
     );
@@ -1880,7 +1893,6 @@ fn exact_alias_resolve_rejects_rekey_index_split_brain() {
         std::num::NonZeroU64::new(height).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -1910,7 +1922,10 @@ fn exact_alias_resolve_rejects_rekey_index_split_brain() {
 #[tokio::test]
 async fn execute_torii_read_request_locally_alias_resolve_index_uses_route_local_index() {
     let authority = routed_read_test_account(0x85);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
@@ -1961,7 +1976,10 @@ async fn execute_torii_read_request_locally_alias_resolve_index_uses_route_local
 #[tokio::test]
 async fn execute_alias_resolve_index_local_read_returns_not_found_for_route_without_aliases() {
     let authority = routed_read_test_account(0x86);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
@@ -1979,7 +1997,10 @@ async fn execute_alias_resolve_index_local_read_returns_not_found_for_route_with
 async fn execute_torii_read_request_locally_alias_lookup_by_account_filters_items_to_route_dataspace()
  {
     let authority = routed_read_test_account(0x87);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
@@ -2059,7 +2080,10 @@ fn execute_alias_resolve_local_read_rejects_empty_alias() {
 #[test]
 fn execute_alias_resolve_local_read_returns_not_found_for_route_mismatch() {
     let authority = routed_read_test_account(0x89);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
@@ -2130,7 +2154,10 @@ fn execute_alias_lookup_by_account_local_read_rejects_invalid_account_id() {
 async fn execute_alias_lookup_by_account_local_read_returns_empty_items_when_route_filters_out_aliases()
  {
     let authority = routed_read_test_account(0x8c);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
     let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
@@ -2162,11 +2189,10 @@ async fn torii_partition_routes_by_visibility_counts_private_dataspaces_as_denie
  {
     let authority = routed_read_test_account(0x8d);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::partition-unsigned"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(10),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     let (allowed_routes, denied_routes) = torii_partition_routes_by_visibility(
         &app,
@@ -2277,11 +2303,10 @@ async fn torii_visibility_account_from_headers_accepts_signed_caller() {
 async fn torii_partition_routes_by_visibility_allows_bound_private_dataspaces_for_signed_caller() {
     let authority = routed_read_test_account(0x90);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::partition-caller"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(10),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     let (allowed_routes, denied_routes) = torii_partition_routes_by_visibility(
         &app,

@@ -1699,10 +1699,10 @@ impl CommittedTxPredicate {
             P::EntryNin(list) => !list.iter().any(|x| x == &tx.entrypoint_hash),
             P::EntryExists(req) | P::ResultExists(req) => *req,
             // Result .is_ok()
-            P::ResultEq(b) => tx.result.as_ref().is_ok() == *b,
-            P::ResultNe(b) => tx.result.as_ref().is_ok() != *b,
-            P::ResultIn(list) => list.contains(&tx.result.as_ref().is_ok()),
-            P::ResultNin(list) => !list.contains(&tx.result.as_ref().is_ok()),
+            P::ResultEq(b) => tx.result().as_ref().is_ok() == *b,
+            P::ResultNe(b) => tx.result().as_ref().is_ok() != *b,
+            P::ResultIn(list) => list.contains(&tx.result().as_ref().is_ok()),
+            P::ResultNin(list) => !list.contains(&tx.result().as_ref().is_ok()),
             // Metadata map comparisons (External entrypoints only)
             P::MetadataExists { key, exists } => Self::metadata_value(tx, key).is_some() == *exists,
             P::MetadataEq { key, value } => {
@@ -2479,10 +2479,12 @@ mod tests {
             entrypoint_hash: entrypoint.hash(),
             entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
             entrypoint: entrypoint.clone(),
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, vec![]),
-            result,
-            merge_inclusion: None,
+            output_hash: iroha_crypto::HashOf::new(&crate::block::output_test_support::network(
+                0,
+                result.clone(),
+            )),
+            output_proof: MerkleProof::from_audit_path(0, vec![]),
+            output: crate::block::output_test_support::network(0, result),
         }
     }
     #[test]

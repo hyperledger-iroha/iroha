@@ -1,42 +1,110 @@
+// Structural HTTP fixtures; execution/finality authority is established separately below.
 fn canonical_executed_block_fixture() -> (NonZeroU64, SignedBlock, CommittedTransaction) {
+    canonical_executed_network_fixture(1, false, 0)
+}
+
+fn canonical_executed_network_fixture(
+    inputs: u32,
+    include_internal: bool,
+    selected: u32,
+) -> (NonZeroU64, SignedBlock, CommittedTransaction) {
     use crate::crypto::{PrivateKey, PublicKey};
-    use iroha_data_model::block::builder::BlockBuilder;
+    use iroha_data_model::block::{
+        builder::BlockBuilder,
+        execution_output::{ExecutionOutputV1, TimeInvocationV1, TriggerUseV1},
+    };
+    use iroha_data_model::events::time::{TimeEvent, TimeInterval};
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
-            .expect("fixture public key");
+            .unwrap();
     let private_key: PrivateKey =
         "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
             .parse()
-            .expect("fixture private key");
-    let transaction = TransactionBuilder::new(
-        test_network_id(),
-        AccountId::new(public_key),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .try_sign(&private_key)
-    .expect("sign executed-block fixture transaction");
-    let height = NonZeroU64::new(1).expect("non-zero fixture height");
-    let header = BlockHeader::new(height, None, None, None, 0, 0);
+            .unwrap();
+    let authority = AccountId::new(public_key);
+    let height = NonZeroU64::new(1).unwrap();
+    let header = BlockHeader::new(height, None, None, 10, 0);
     let mut builder = BlockBuilder::new(header);
-    builder.push_transaction(transaction);
-    builder.push_result(Ok(
-        iroha_data_model::transaction::DataTriggerSequence::default(),
-    ));
-    let block = builder
-        .try_build_with_signature(0, &private_key)
-        .expect("sign canonical result-bearing block");
+    for index in 0..inputs {
+        let mut transaction = TransactionBuilder::new(
+            test_network_id(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        transaction.set_creation_time(Duration::from_millis(u64::from(index) + 1));
+        builder.push_transaction(transaction.try_sign(&private_key).unwrap());
+    }
+    let mut block = builder.try_build_with_signature(0, &private_key).unwrap();
+    let mut outputs = (0..inputs)
+        .map(|index| {
+            client_fixture_network_output(
+                index,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()).into(),
+            )
+        })
+        .collect::<Vec<_>>();
+    if include_internal {
+        let invocation = TimeInvocationV1 {
+            schedule_index: 0,
+            event: TimeEvent {
+                interval: TimeInterval {
+                    since_ms: 9,
+                    length_ms: 1,
+                },
+            },
+            trigger: TriggerUseV1 {
+                trigger_id: "client-internal-output".parse().unwrap(),
+                registered_at_height: 0,
+                action_hash: Hash::new(b"client exact action fixture"),
+            },
+        };
+        outputs.push(ExecutionOutputV1::Time(
+            iroha_data_model::block::execution_output::TimeExecutionOutputV1 {
+                result: Ok(vec![iroha_data_model::trigger::DataTriggerStep {
+                    id: invocation.trigger.trigger_id.clone(),
+                    instructions: iroha_data_model::transaction::ExecutionStep(Vec::new().into()),
+                }])
+                .into(),
+                invocation,
+                failure_root: None,
+                completions: Vec::new(),
+            },
+        ));
+    }
+    attach_client_fixture_outputs(&mut block, outputs, u64::from(inputs));
+    let (output_index, row) = block.network_output_at(selected).unwrap();
+    let output = ExecutionOutputV1::Network(row.clone());
     let committed = CommittedTransaction {
         block_hash: block.hash(),
-        entrypoint_hash: block.entrypoint_hashes().next().expect("entrypoint hash"),
-        entrypoint_proof: block.entrypoint_proofs().next().expect("entrypoint proof"),
-        entrypoint: block.entrypoints_cloned().next().expect("entrypoint"),
-        result_hash: block.result_hashes().next().expect("result hash"),
-        result_proof: block.result_proofs().next().expect("result proof"),
-        result: block.results().next().cloned().expect("result"),
-        merge_inclusion: None,
+        entrypoint_hash: block
+            .network_entrypoint_at(selected as usize)
+            .unwrap()
+            .hash(),
+        entrypoint_proof: block.network_input_proof(selected).unwrap(),
+        entrypoint: block
+            .network_entrypoint_at(selected as usize)
+            .unwrap()
+            .clone(),
+        output_hash: HashOf::new(&output),
+        output_proof: block.output_proof(output_index).unwrap(),
+        output,
     };
     assert!(committed.verify_inclusion_in_block(&block));
+    if include_internal {
+        assert_eq!(
+            block
+                .network_input_merkle_commitment()
+                .unwrap()
+                .leaf_count()
+                .get(),
+            u64::from(inputs)
+        );
+        assert_eq!(
+            block.output_merkle_commitment().unwrap().leaf_count().get(),
+            u64::from(inputs) + 1
+        );
+    }
     (height, block, committed)
 }
 
@@ -45,77 +113,10 @@ fn synthetic_executed_commitment(
 ) -> iroha_data_model::block::consensus_v2::ExecutionCommitment {
     let wire = block.encode_wire().expect("fixture executed wire");
     // The HTTP tests supply a trust input; they do not claim consensus qualification.
-    let mut commitment = iroha_data_model::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+    iroha_data_model::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"fixture parent state"), Hash::new(b"fixture post state"),
         Hash::new(b"fixture ordinary writes"), wire.len() as u64, Hash::new(&wire),
-    );
-    commitment.merge_carrier = block
-        .execution_context()
-        .and_then(|context| context.merge_entry.as_ref())
-        .map(|reference| {
-            iroha_data_model::block::consensus_v2::MergeCarrierCommitmentV1::new(
-                reference.entry_hash,
-            )
-        });
-    commitment
-}
-
-fn canonical_executed_merge_fixture() -> (NonZeroU64, SignedBlock, CommittedTransaction) {
-    use iroha_data_model::{
-        block::{
-            BlockExecutionContextBundle, CertifiedMergeLedgerReference, builder::BlockBuilder,
-        },
-        merge::MergeQuorumCertificate,
-        query::CertifiedMergeTransactionInclusion,
-    };
-    let (_, ordinary, mut committed) = canonical_executed_block_fixture();
-    let height = NonZeroU64::new(5).expect("merge carrier height");
-    let parent = HashOf::from_untyped_unchecked(Hash::new(b"fixture merge parent"));
-    let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"fixture merge entry"));
-    let execution_batch_hash = Hash::new(b"fixture merge batch");
-    let validators = Vec::<iroha_model_base::peer::PeerId>::new();
-    let reference = CertifiedMergeLedgerReference {
-        version: 1,
-        entry_hash,
-        encoded_len: 1,
-        epoch_id: 7,
-        execution_batch_hash: Some(execution_batch_hash),
-        entrypoint_count: Some(1),
-        entrypoint_merkle_root: ordinary.full_entry_merkle_root(),
-        result_merkle_root: ordinary.header().result_merkle_root(),
-        base_state_height: Some(4),
-        base_state_hash: Some(parent),
-        merge_qc: MergeQuorumCertificate::new(
-            0,
-            7,
-            5,
-            parent,
-            test_network_id(),
-            1,
-            HashOf::new(&validators),
-            validators,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Hash::new(b"fixture merge message"),
-        ),
-    };
-    committed.merge_inclusion = Some(CertifiedMergeTransactionInclusion {
-        version: 1,
-        merge_entry_hash: entry_hash,
-        merge_epoch_id: 7,
-        execution_batch_hash,
-        entrypoint_count: 1,
-        entrypoint_merkle_root: reference.entrypoint_merkle_root.unwrap(),
-        result_merkle_root: reference.result_merkle_root.unwrap(),
-    });
-    let mut builder = BlockBuilder::new(BlockHeader::new(height, Some(parent), None, None, 10, 0));
-    builder.set_execution_context(Some(
-        BlockExecutionContextBundle::new(Vec::new()).with_merge_entry(reference),
-    ));
-    let block = builder.build(std::collections::BTreeSet::default());
-    committed.block_hash = block.hash();
-    (height, block, committed)
+    )
 }
 
 #[test]
@@ -123,7 +124,7 @@ fn canonical_executed_block_reader_requires_authenticated_execution_commitment()
     let client = client_with_base_url(base_url());
     for (height, block, committed) in [
         canonical_executed_block_fixture(),
-        canonical_executed_merge_fixture(),
+        canonical_executed_network_fixture(2, true, 1),
     ] {
         let expected = synthetic_executed_commitment(&block);
         let wire = block.encode_wire().expect("fixture wire");
@@ -136,7 +137,10 @@ fn canonical_executed_block_reader_requires_authenticated_execution_commitment()
             },
         )
         .0;
-        assert_eq!(response.expect("ordinary and merge carriers verify"), wire);
+        assert_eq!(
+            response.expect("exact Network sources and separate output trees verify"),
+            wire
+        );
         for wrong_length in [false, true] {
             let mut wrong = expected.clone();
             if wrong_length {
@@ -163,28 +167,30 @@ fn canonical_executed_block_reader_requires_authenticated_execution_commitment()
     }
     let (height, accepted, committed) = canonical_executed_block_fixture();
     let mut actually_rejected = accepted.clone();
-    let entry_hashes = actually_rejected.entrypoint_hashes().collect::<Vec<_>>();
-    actually_rejected
-        .set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![Err(
+    attach_client_fixture_outputs(
+        &mut actually_rejected,
+        vec![client_fixture_network_output(
+            0,
+            Err(
                 iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                     iroha_data_model::ValidationFail::NotPermitted(
                         "authenticated rejected execution".into(),
                     ),
                 ),
-            )],
-        )
-        .expect("native rejected result carrier");
+            )
+            .into(),
+        )],
+        0,
+    );
+    assert_eq!(accepted.header(), actually_rejected.header());
     assert_eq!(
         accepted.hash(),
         actually_rejected.hash(),
-        "result root is outside consensus hash"
+        "outputs do not rewrite the proposal"
     );
     assert_ne!(
-        accepted.header().result_merkle_root(),
-        actually_rejected.header().result_merkle_root()
+        accepted.output_merkle_commitment(),
+        actually_rejected.output_merkle_commitment()
     );
     let expected = synthetic_executed_commitment(&actually_rejected);
     let response = capture_request(
@@ -308,6 +314,147 @@ fn canonical_executed_block_reader_rejects_trailing_wire_and_wrong_carrier_hash(
     assert!(error.to_string().contains("carrier hash"));
 }
 
+#[test]
+fn canonical_executed_block_reader_rejects_rehashed_source_and_internal_substitutions() {
+    use iroha_data_model::block::execution_output::ExecutionOutputV1;
+    let client = client_with_base_url(base_url());
+    let (height, block, committed) = canonical_executed_network_fixture(2, true, 1);
+    let commitment = synthetic_executed_commitment(&block);
+    let wire = block.encode_wire().unwrap();
+    for mutation in 0..5 {
+        let mut changed = committed.clone();
+        match mutation {
+            0 => {
+                let ExecutionOutputV1::Network(row) = &mut changed.output else {
+                    unreachable!()
+                };
+                row.input_index = 0;
+            }
+            1 => changed.entrypoint_proof = block.network_input_proof(0).unwrap(),
+            2 => {
+                changed.entrypoint = block.network_entrypoint_at(0).unwrap().clone();
+                changed.entrypoint_hash = changed.entrypoint.hash();
+                changed.entrypoint_proof = block.network_input_proof(0).unwrap();
+            }
+            3 => {
+                changed.output = block.execution_outputs()[2].clone();
+                changed.output_proof = block.output_proof(2).unwrap();
+                assert!(
+                    changed.result().is_ok(),
+                    "internal success is still no Network result"
+                );
+            }
+            4 => changed.output_proof = block.output_proof(0).unwrap(),
+            _ => unreachable!(),
+        }
+        changed.output_hash = HashOf::new(&changed.output);
+        let error = capture_request(
+            mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
+            |transport| {
+                let client = client.clone().with_test_http_transport(transport);
+                mark_data_model_compatible(&client);
+                client.get_canonical_executed_block_wire(height, &changed, &commitment)
+            },
+        )
+        .0
+        .expect_err(
+            "a complete self-consistent claim must still have exact authenticated inclusion",
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated execution commitment"),
+            "mutation {mutation}: {error}"
+        );
+    }
+}
+
+#[test]
+fn canonical_executed_block_reader_joins_real_bls_finality_to_exact_output_wire() {
+    let client = client_with_base_url(base_url());
+    let (height, block, committed) = canonical_executed_network_fixture(2, true, 1);
+    let (proof, _, mut verifier) = bridge_finality_chain_fixture_for_block(Some(&block));
+    assert_eq!(proof.finality_artifact.height_context.roster.len(), 4);
+    assert_eq!(proof.finality_artifact.commit_qc.signers.len(), 3);
+    assert_eq!(proof.finality_artifact.validator_set_pops.len(), 4);
+    let authenticated = capture_request(
+        mk_response(
+            StatusCode::OK,
+            norito::to_bytes(&proof).unwrap(),
+            Some(APPLICATION_NORITO),
+        ),
+        |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_bridge_finality_proof(height, block.hash(), &mut verifier)
+        },
+    )
+    .0
+    .expect("actual BLS+PoP finality verifies against the independently pinned context");
+    assert_eq!(authenticated.block_header.hash(), block.hash());
+    let commitment = &authenticated
+        .finality_artifact
+        .commit_qc
+        .execution_commitment;
+    let wire = block.encode_wire().unwrap();
+    let verified = capture_request(
+        mk_response(StatusCode::OK, wire.clone(), Some(APPLICATION_NORITO)),
+        |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_canonical_executed_block_wire(height, &committed, commitment)
+        },
+    )
+    .0
+    .expect("exact output wire is bound by the verified commitment");
+    assert_eq!(verified, wire);
+    let mut altered = block.clone();
+    let mut outputs = altered.execution_outputs().to_vec();
+    let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(row) =
+        &mut outputs[1]
+    else {
+        unreachable!()
+    };
+    row.completions.push(
+        iroha_data_model::block::execution_output::InvocationCompletionV1 {
+            callback_index: 0,
+            trigger_id: "substituted-completion".parse().unwrap(),
+            outcome: iroha_data_model::events::trigger_completed::TriggerCompletedOutcome::Success,
+        },
+    );
+    attach_client_fixture_outputs(&mut altered, outputs, 2);
+    assert_eq!(altered.header(), block.header());
+    let (_, altered_row) = altered.network_output_at(1).unwrap();
+    let mut changed = committed.clone();
+    changed.output =
+        iroha_data_model::block::execution_output::ExecutionOutputV1::Network(altered_row.clone());
+    changed.output_hash = HashOf::new(&changed.output);
+    changed.output_proof = altered.output_proof(1).unwrap();
+    assert!(
+        changed.verify_inclusion_in_block(&altered),
+        "alteration is structurally self-consistent"
+    );
+    let error = capture_request(
+        mk_response(
+            StatusCode::OK,
+            altered.encode_wire().unwrap(),
+            Some(APPLICATION_NORITO),
+        ),
+        |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_canonical_executed_block_wire(height, &changed, commitment)
+        },
+    )
+    .0
+    .expect_err("rehashed full output cannot replace signed executed wire");
+    assert!(
+        error
+            .to_string()
+            .contains("authenticated execution commitment")
+    );
+}
+
 fn sign_bridge_finality_qc(commit_qc: &mut QuorumCertificate, keys: &[KeyPair]) {
     let preimage = Vote {
         round: commit_qc.round,
@@ -338,11 +485,21 @@ fn sign_bridge_finality_qc(commit_qc: &mut QuorumCertificate, keys: &[KeyPair]) 
         .expect("aggregate finality fixture votes");
 }
 
+fn bridge_finality_chain_fixture() -> (
+    BridgeFinalityProof,
+    BridgeFinalityProof,
+    BridgeFinalityVerifier,
+) {
+    bridge_finality_chain_fixture_for_block(None)
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the fixture builds a self-contained cryptographically valid v2 proof chain"
 )]
-fn bridge_finality_chain_fixture() -> (
+fn bridge_finality_chain_fixture_for_block(
+    block: Option<&SignedBlock>,
+) -> (
     BridgeFinalityProof,
     BridgeFinalityProof,
     BridgeFinalityVerifier,
@@ -373,7 +530,11 @@ fn bridge_finality_chain_fixture() -> (
         })
         .collect::<Vec<_>>();
     let height = NonZeroU64::new(1).expect("non-zero finality height");
-    let header = BlockHeader::new(height, None, None, None, 0, 0);
+    let header = block.map_or_else(
+        || BlockHeader::new(height, None, None, 0, 0),
+        SignedBlock::header,
+    );
+    assert_eq!(header.height(), height);
     let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
         mint_finality_roster_fixture(&roster);
     let context = HeightContext {
@@ -406,19 +567,27 @@ fn bridge_finality_chain_fixture() -> (
     let subject = BlockSubject {
         parent_block_hash: None,
         block_hash: header.hash(),
-        payload_hash: Hash::new(b"client finality fixture payload"),
+        payload_hash: block.map_or_else(
+            || Hash::new(b"client finality fixture payload"),
+            |block| block.canonical_proposal_wire_hash().unwrap(),
+        ),
     };
     let round = ConsensusRound {
         context_id,
         height: height.get(),
         view: 0,
     };
-    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"client finality fixture parent state"),
-        Hash::new(b"client finality fixture post state"),
-        Hash::new(b"client finality fixture ordinary writes"),
-        1,
-        Hash::new(b"client finality fixture executed wire"),
+    let execution_commitment = block.map_or_else(
+        || {
+            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"client finality fixture parent state"),
+                Hash::new(b"client finality fixture post state"),
+                Hash::new(b"client finality fixture ordinary writes"),
+                1,
+                Hash::new(b"client finality fixture executed wire"),
+            )
+        },
+        synthetic_executed_commitment,
     );
     let mut commit_qc = QuorumCertificate {
         round,
@@ -448,8 +617,7 @@ fn bridge_finality_chain_fixture() -> (
         successor_height,
         Some(parent_artifact.block_hash),
         None,
-        None,
-        1,
+        header.creation_time_ms + 1,
         0,
     );
     let successor_context = HeightContext {
@@ -1414,7 +1582,7 @@ fn genesis_attestation_reader_rejects_wrong_proof_header_and_duplicate_proofs() 
     let fixture = GenesisAttestationFixture::new();
     let mut wrong_header = fixture.attestation.clone();
     wrong_header.body.genesis_finality_proof.block_header =
-        BlockHeader::new(NonZeroU64::new(1).expect("one"), None, None, None, 999, 0);
+        BlockHeader::new(NonZeroU64::new(1).expect("one"), None, None, 999, 0);
     wrong_header.body.finality_proof = wrong_header.body.genesis_finality_proof.clone();
     fixture.resign(&mut wrong_header);
     fixture.reject(&wrong_header, "genesis attestation verification failed");
@@ -1655,6 +1823,169 @@ fn genesis_readiness_preserves_all_explicit_failure_reasons() {
         assert!(
             matches!(poll_genesis_fixture_response(&fixture, response).unwrap(), GenesisFinalityReadiness::NotReady(actual) if actual == reason)
         );
+    }
+}
+
+#[test]
+fn bridge_finality_reader_retries_only_backpressure_within_original_deadline() {
+    let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
+    verifier.verify(&anchor).expect("anchor");
+    let expected = successor.clone();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let observations = Arc::clone(&calls);
+    let started = std::time::Instant::now();
+    let deadline = started + Duration::from_secs(10);
+    let result = with_mock_http(
+        move |request| {
+            let mut observations = observations.lock().expect("observations");
+            observations.push((std::time::Instant::now(), request));
+            if observations.len() == 1 {
+                let mut response = empty_response(StatusCode::TOO_MANY_REQUESTS);
+                response
+                    .headers_mut()
+                    .insert("retry-after", "1".parse().unwrap());
+                Ok(response)
+            } else {
+                Ok(norito_response(StatusCode::OK, &expected))
+            }
+        },
+        |transport| {
+            let client = client_with_base_url(base_url())
+                .with_test_http_transport(transport)
+                .with_request_deadline(deadline);
+            mark_data_model_compatible(&client);
+            client.get_next_bridge_finality_proof(successor.block_header.height(), &mut verifier)
+        },
+    )
+    .expect("bounded retry accepts exact successor");
+    assert_eq!(result, successor);
+    let calls = calls.lock().expect("observations");
+    assert_eq!(calls.len(), 2);
+    assert!(calls[1].0.duration_since(calls[0].0) >= Duration::from_secs(1));
+    for (_, request) in calls.iter() {
+        assert_eq!(request.method, HttpMethod::GET);
+        assert_eq!(request.url.path(), "/v1/bridge/finality/2");
+        assert!(request.timeout.unwrap() <= deadline.duration_since(started));
+    }
+    assert!(calls[1].1.timeout.unwrap() < calls[0].1.timeout.unwrap());
+}
+
+#[test]
+fn bridge_finality_reader_rejects_unbounded_or_invalid_backpressure_without_advancing() {
+    let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
+    verifier.verify(&anchor).expect("anchor");
+    let height = successor.block_header.height();
+    // A missing operation deadline, malformed/duplicate hints, an excessive delay,
+    // and non-429 errors must all make exactly one dispatch without changing trust.
+    for (status, hints, budget) in [
+        (StatusCode::TOO_MANY_REQUESTS, vec!["0"], None),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            vec!["-1"],
+            Some(Duration::from_secs(5)),
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            vec!["0", "1"],
+            Some(Duration::from_secs(5)),
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            vec!["18446744073709551615"],
+            Some(Duration::from_secs(5)),
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            vec!["1"],
+            Some(Duration::from_millis(500)),
+        ),
+        (
+            StatusCode::UNAUTHORIZED,
+            vec!["0"],
+            Some(Duration::from_secs(5)),
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            vec!["0"],
+            Some(Duration::from_secs(5)),
+        ),
+    ] {
+        let mut response = empty_response(status);
+        for hint in hints {
+            response
+                .headers_mut()
+                .append("retry-after", hint.parse().unwrap());
+        }
+        let (result, _) = capture_request(response, |transport| {
+            let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+            let client = budget.map_or_else(
+                || client.clone(),
+                |budget| client.with_request_deadline(std::time::Instant::now() + budget),
+            );
+            mark_data_model_compatible(&client);
+            client.get_next_bridge_finality_proof(height, &mut verifier)
+        });
+        assert!(result.is_err(), "{status} must fail");
+    }
+    let actual = capture_request(norito_response(StatusCode::OK, &successor), |transport| {
+        let client = client_with_base_url(base_url()).with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_next_bridge_finality_proof(height, &mut verifier)
+    })
+    .0
+    .expect("all failed reads retained the original chain anchor");
+    assert_eq!(actual, successor);
+}
+
+#[test]
+fn activation_evidence_backpressure_preserves_challenge_and_response_bounds() {
+    for hint in [None, Some("0")] {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let observations = Arc::clone(&calls);
+        let challenge = [0x73; 32];
+        with_mock_http(
+            move |request| {
+                let mut observations = observations.lock().unwrap();
+                observations.push(request);
+                if observations.len() == 1 {
+                    let mut response = empty_response(StatusCode::TOO_MANY_REQUESTS);
+                    if let Some(hint) = hint {
+                        response
+                            .headers_mut()
+                            .insert("retry-after", hint.parse().unwrap());
+                    }
+                    Ok(response)
+                } else {
+                    Ok(empty_response(StatusCode::CONFLICT))
+                }
+            },
+            |transport| {
+                let client = client_with_base_url(base_url())
+                    .with_test_http_transport(transport)
+                    .with_request_deadline(std::time::Instant::now() + Duration::from_secs(5));
+                let result = client
+                    .send_activation_evidence_read(
+                        "/v1/bridge/finality/2/attestation",
+                        2048,
+                        Some(challenge),
+                    )
+                    .expect("read-only retry");
+                assert_eq!(result.status(), StatusCode::CONFLICT);
+            },
+        );
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        for request in calls.iter() {
+            assert_eq!(request.method, HttpMethod::GET);
+            assert_eq!(request.max_response_bytes, 2048);
+            let challenges: Vec<_> = request
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("x-iroha-finality-challenge"))
+                .collect();
+            assert_eq!(challenges.len(), 1);
+            assert_eq!(challenges[0].1, hex::encode(challenge));
+        }
     }
 }
 
@@ -1915,4 +2246,32 @@ fn genesis_readiness_rejects_unbound_tip_payload_and_never_retries_valid_tip_cha
     for invalid in [missing, node, network, inner_challenge, mixed] {
         assert!(poll_genesis_fixture_response(&fixture, response(&invalid)).is_err());
     }
+}
+
+#[test]
+fn bridge_finality_reader_expired_deadline_does_not_dispatch_or_advance() {
+    let (anchor, successor, mut verifier) = bridge_finality_chain_fixture();
+    verifier.verify(&anchor).expect("anchor");
+    with_mock_http(
+        |_| panic!("expired deadline must not dispatch"),
+        |transport| {
+            let client = client_with_base_url(base_url())
+                .with_test_http_transport(transport)
+                .with_request_deadline(std::time::Instant::now());
+            mark_data_model_compatible(&client);
+            assert!(
+                client
+                    .get_next_bridge_finality_proof(successor.block_header.height(), &mut verifier)
+                    .is_err()
+            );
+            assert!(
+                client
+                    .verify_activation_evidence_successor(&successor, &mut verifier)
+                    .is_err()
+            );
+        },
+    );
+    verifier
+        .verify(&successor)
+        .expect("deadline retained original anchor");
 }

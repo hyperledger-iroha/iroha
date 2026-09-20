@@ -99,14 +99,12 @@ impl Disk {
         let signed = fixture::Fixture::with_request_count(lanes, requests);
         let mut store = BlockStore::new(&root);
         store.create_files_if_they_do_not_exist().unwrap();
-        store.append_block_to_chain(&signed.genesis).unwrap();
-        store.append_block_to_chain(&signed.carrier).unwrap();
+        for height in &signed.heights {
+            store.append_block_to_chain(&height.block).unwrap();
+        }
         drop(store);
         let log = root.join("merge.log");
-        let encoded = signed.entry.encode();
-        let mut entry = (encoded.len() as u32).to_le_bytes().to_vec();
-        entry.extend_from_slice(&encoded);
-        fs::write(&log, entry).unwrap();
+        fs::write(&log, []).unwrap();
         Self {
             files,
             root,
@@ -129,6 +127,7 @@ impl Disk {
                 .map(|b| HeightInputBinding {
                     height: b.height,
                     finality_hash: b.finality_hash,
+                    contexts_hash: b.contexts_hash,
                     query_hashes: b.query_hashes.clone(),
                 })
                 .collect(),
@@ -162,18 +161,16 @@ impl Disk {
         open_launcher(self.launcher_file()).unwrap()
     }
     fn supplied(&self) -> Vec<SuppliedHeightEvidence> {
-        vec![
-            SuppliedHeightEvidence {
-                height: 1,
-                finality: norito::encode_canonical(&self.signed.first).unwrap(),
-                queries: vec![],
-            },
-            SuppliedHeightEvidence {
-                height: 2,
-                finality: norito::encode_canonical(&self.signed.second).unwrap(),
-                queries: self.signed.queries(),
-            },
-        ]
+        self.signed
+            .heights
+            .iter()
+            .map(|height| SuppliedHeightEvidence {
+                height: height.block.header().height().get(),
+                finality: norito::encode_canonical(&height.proof).unwrap(),
+                contexts: height.evidence.clone(),
+                queries: height.queries(),
+            })
+            .collect()
     }
     fn bindings(&self) -> Vec<HeightInputBinding> {
         self.supplied()
@@ -181,6 +178,7 @@ impl Disk {
             .map(|row| HeightInputBinding {
                 height: row.height,
                 finality_hash: Hash::new(&row.finality),
+                contexts_hash: Hash::new(&row.contexts),
                 query_hashes: row.queries.iter().map(Hash::new).collect(),
             })
             .collect()
@@ -188,8 +186,8 @@ impl Disk {
     fn reader_limits(&self) -> CanonicalKuraEvidenceLimits {
         CanonicalKuraEvidenceLimits {
             first_height: 1,
-            last_height: 2,
-            max_committed_blocks: 8,
+            last_height: self.signed.heights.len() as u64,
+            max_committed_blocks: 1025,
             max_store_data_bytes: 2 * 1024 * 1024,
             max_carrier_bytes: 1024 * 1024,
             max_merge_log_bytes: 2 * 1024 * 1024,
@@ -236,6 +234,7 @@ impl Disk {
                 .map(|h| SuppliedEvidenceHeightV1 {
                     height: h.height,
                     finality: h.finality,
+                    contexts: h.contexts,
                     queries: h.queries,
                 })
                 .collect(),
@@ -799,7 +798,18 @@ fn one_canonical_bundle_authenticates_128_requests_without_per_leaf_files() {
     let disk = Disk::with_requests(4, 128);
     let expected = disk.export();
     assert_eq!(expected.rows().len(), 128);
-    assert_eq!(disk.bindings()[1].query_hashes.len(), 128);
+    assert_eq!(
+        disk.bindings()
+            .iter()
+            .map(|height| height.query_hashes.len())
+            .sum::<usize>(),
+        128
+    );
+    assert!(
+        disk.bindings()
+            .iter()
+            .all(|height| height.query_hashes.len() <= 4)
+    );
     let input = disk.bundle_file();
     assert_eq!(input.path.file_name().unwrap(), "supplied.norito");
     let retained = export_bound_request(
@@ -865,7 +875,8 @@ fn supplied_bundle_requires_exact_canonical_v1_framing() {
 
 #[test]
 fn supplied_bundle_rehash_cannot_change_complete_height_or_leaf_roles() {
-    let disk = Disk::new(1);
+    // Four lanes place multiple independent Native proof queries in each execution carrier.
+    let disk = Disk::new(4);
     let positive = export_bound_request(
         disk.request_with(disk.signed.plan(), disk.limits(), &disk.bindings()),
         &disk.root,
@@ -875,7 +886,8 @@ fn supplied_bundle_rehash_cannot_change_complete_height_or_leaf_roles() {
     )
     .unwrap();
     assert_eq!(positive.proof.rows().len(), 8);
-    for change in 0..5 {
+    assert!(disk.bundle().heights[1].queries.len() > 1);
+    for change in 0..6 {
         let mut bundle = disk.bundle();
         match change {
             0 => bundle.heights.swap(0, 1),
@@ -886,7 +898,8 @@ fn supplied_bundle_rehash_cannot_change_complete_height_or_leaf_roles() {
                 bundle.heights[1].queries.pop();
             }
             3 => bundle.heights[1].queries.swap(0, 1),
-            _ => bundle.heights[1].finality[0] ^= 1,
+            4 => bundle.heights[1].finality[0] ^= 1,
+            _ => bundle.heights[1].contexts[0] ^= 1,
         }
         let path = disk.bundle_file().path;
         fs::write(&path, norito::encode_canonical(&bundle).unwrap()).unwrap();
@@ -1162,18 +1175,16 @@ fn supplied_evidence_bundle_declares_v1_identity_for_exact_finality_and_queries(
     let fixture = fixture::Fixture::new(1);
     let bundle = SuppliedEvidenceBundleV1 {
         version: 1,
-        heights: vec![
-            SuppliedEvidenceHeightV1 {
-                height: 1,
-                finality: norito::encode_canonical(&fixture.first).unwrap(),
-                queries: vec![],
-            },
-            SuppliedEvidenceHeightV1 {
-                height: 2,
-                finality: norito::encode_canonical(&fixture.second).unwrap(),
-                queries: fixture.queries(),
-            },
-        ],
+        heights: fixture
+            .heights
+            .iter()
+            .map(|height| SuppliedEvidenceHeightV1 {
+                height: height.block.header().height().get(),
+                finality: norito::encode_canonical(&height.proof).unwrap(),
+                contexts: height.evidence.clone(),
+                queries: height.queries(),
+            })
+            .collect(),
     };
     let decoded = crate::kura::scaling_evidence::tests::assert_declared_scaling_frame::<
         SuppliedEvidenceBundleV1,
@@ -1186,10 +1197,11 @@ fn supplied_evidence_bundle_declares_v1_identity_for_exact_finality_and_queries(
         ],
     );
     assert_eq!(decoded.version, 1);
-    assert_eq!(decoded.heights.len(), 2);
+    assert_eq!(decoded.heights.len(), fixture.heights.len());
     assert_eq!(decoded.heights[0].height, 1);
     assert_eq!(decoded.heights[1].height, 2);
     assert_eq!(decoded.heights[0].finality, bundle.heights[0].finality);
+    assert_eq!(decoded.heights[0].contexts, bundle.heights[0].contexts);
     assert_eq!(decoded.heights[1].queries, bundle.heights[1].queries);
 }
 

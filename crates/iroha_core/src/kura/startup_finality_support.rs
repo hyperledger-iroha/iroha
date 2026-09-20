@@ -334,6 +334,24 @@ pub(crate) enum V2StartupReplayStorageBinding {
     EmergencyFast(Arc<EmergencyFastStartupReplayBinding>),
 }
 impl V2StartupReplayStorageBinding {
+    /// Match the original audit owner, never a newly recaptured equal inventory.
+    pub(crate) fn original_owner_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Strict(a), Self::Strict(b)) => Arc::ptr_eq(a, b),
+            (
+                Self::StrictAfterGeometryPublication {
+                    inventory: a,
+                    publication: ap,
+                },
+                Self::StrictAfterGeometryPublication {
+                    inventory: b,
+                    publication: bp,
+                },
+            ) => Arc::ptr_eq(a, b) && Arc::ptr_eq(ap, bp),
+            (Self::EmergencyFast(a), Self::EmergencyFast(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
     fn strict_parts(
         &self,
     ) -> Option<(
@@ -374,8 +392,8 @@ impl V2StartupReplayStorageBinding {
 /// exact live-body validation performed by the startup audit.
 pub(crate) struct V2StartupFinalityVerificationSession<'a> {
     kura: &'a Kura,
-    _prune_guard: parking_lot::MutexGuard<'a, ()>,
-    _canonical_chain_guard: parking_lot::MutexGuard<'a, ()>,
+    _prune_guard: PublicationGuard<'a>,
+    _canonical_chain_guard: PublicationGuard<'a>,
     inventory: Arc<V2StartupFinalityVerificationInventory>,
     binding: V2StartupReplayStorageBinding,
 }

@@ -2230,6 +2230,17 @@ impl GlobalBeaconPartialSignerBrokerBackendV1 for TestGlobalBeaconBrokerBackendV
         Ok(self.qualification)
     }
 
+    fn attest_partial_signing_capability(
+        &self,
+        _session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        _expected_signer_index: u16,
+    ) -> Result<
+        iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    > {
+        Err(GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected)
+    }
+
     fn sign_partial(
         &self,
         _session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
@@ -2279,6 +2290,18 @@ impl GlobalBeaconPartialSignerBrokerBackendV1
         self.inner.qualification()
     }
 
+    fn attest_partial_signing_capability(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<
+        iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    > {
+        self.inner
+            .attest_partial_signing_capability(session, expected_signer_index)
+    }
+
     fn sign_partial(
         &self,
         session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
@@ -2308,6 +2331,20 @@ impl GlobalBeaconPartialSignerBrokerBackendV1 for InvalidGlobalBeaconBrokerBacke
     ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>
     {
         Ok(self.qualification)
+    }
+
+    fn attest_partial_signing_capability(
+        &self,
+        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+        _expected_signer_index: u16,
+    ) -> Result<
+        iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1,
+        GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    > {
+        iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1::for_validated_session(
+            session, 2,
+        )
+        .map_err(|_| GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected)
     }
 
     fn sign_partial(
@@ -3598,4 +3635,406 @@ fn parliament_tle_partial_release_reconnects_after_broker_restart() {
         .join()
         .expect("join replacement TLE broker")
         .expect("replacement TLE broker exits cleanly");
+}
+
+#[test]
+fn global_beacon_capability_attestation_round_trips_over_authenticated_broker() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let counted = Arc::new(TransientQualificationGlobalBeaconBrokerBackendV1 {
+        inner: fixture
+            .backends
+            .global_beacon_partial_signer
+            .as_ref()
+            .expect("real custody backend")
+            .clone(),
+        qualification_calls: AtomicU64::new(0),
+        fail_on_qualification_call: AtomicU64::new(0),
+        sign_calls: AtomicU64::new(0),
+    });
+    let backends = fixture
+        .backends
+        .with_global_beacon_partial_signer(counted.clone());
+    let (_directory, policy, shutdown, server) = start_signer(fixture.catalog.clone(), backends);
+    let requested_catalog = fixture
+        .catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project exact beacon broker catalog");
+    let (client, observations) = connect_test_process(
+        &policy,
+        fixture.catalog.chain_id(),
+        *fixture.catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate beacon capability broker client session");
+    let payload = encode_canonical(
+        &GlobalBeaconCapabilityAttestRequestWireV1 {
+            session: fixture.session.record().clone(),
+            signer_index: 1,
+        },
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )
+    .expect("encode exact beacon capability operation");
+    let result = client
+        .call(
+            &requested_catalog[0],
+            observations[0].metadata_digest,
+            OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1,
+            payload,
+            false,
+        )
+        .expect("round-trip global beacon capability through authenticated broker");
+    let attested = client
+        .decode_operation_result::<GlobalBeaconCapabilityAttestResultWireV1>(
+            &result,
+            OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1,
+        )
+        .expect("decode brokered global beacon capability");
+    assert_eq!(attested.session_id, fixture.session.record().session_id);
+    assert_eq!(
+        attested.transcript_hash,
+        fixture.session.record().transcript_hash
+    );
+    assert_eq!(attested.signer_index, 1);
+    let wrong_seat_payload = encode_canonical(
+        &GlobalBeaconCapabilityAttestRequestWireV1 {
+            session: fixture.session.record().clone(),
+            signer_index: 2,
+        },
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )
+    .expect("encode wrong-seat beacon capability operation");
+    assert!(matches!(
+        client.call(
+            &requested_catalog[0],
+            observations[0].metadata_digest,
+            OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1,
+            wrong_seat_payload,
+            false,
+        ),
+        Err(BrokerError::Rejected)
+    ));
+    assert_eq!(
+        counted.sign_calls.load(Ordering::Acquire),
+        0,
+        "capability lookup must never sign a pulse"
+    );
+    drop(client);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join global beacon capability broker")
+        .expect("global beacon capability broker exits cleanly");
+}
+
+#[test]
+fn global_beacon_capability_typed_proxy_requalifies_before_and_after_lookup() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let catalog = fixture.catalog;
+    let session = fixture.session;
+    drop(fixture.backends);
+    let binding = ProviderBindingWireV1::try_from_binding(
+        catalog.iter().next().expect("one beacon signer binding"),
+    )
+    .expect("project exact-capability beacon binding");
+    let revision = binding.revision.expect("beacon signer revision");
+    let policy_digest = binding.policy_digest.expect("beacon signer policy digest");
+    let expected_public_state = session.record().clone();
+    let expected_session_id = expected_public_state.session_id;
+    let expected_transcript_hash = expected_public_state.transcript_hash;
+    let server_network_id = *catalog.network_id();
+    let (_directory, _path, policy, listener) = bind_fake_broker();
+    let server_binding = binding.clone();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("accept exact-capability beacon client");
+        let handshake = read_handshake(&mut stream);
+        assert_eq!(handshake.requested_catalog, vec![server_binding]);
+        send_handshake(&mut stream, &handshake_response(&handshake));
+
+        expect_and_answer_consensus_signer_qualification(&mut stream, 1, revision, policy_digest);
+        let attest = read_consensus_signer_operation(&mut stream, &server_network_id);
+        assert_eq!(attest.request_id, 2);
+        assert_eq!(
+            attest.operation,
+            OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1
+        );
+        let request = decode_canonical::<GlobalBeaconCapabilityAttestRequestWireV1>(
+            &attest.payload,
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .expect("decode exact typed-proxy beacon capability request");
+        assert_eq!(request.session, expected_public_state);
+        assert_eq!(request.signer_index, 1);
+        let exact = encode_canonical(
+            &GlobalBeaconCapabilityAttestResultWireV1 {
+                session_id: expected_session_id,
+                transcript_hash: expected_transcript_hash,
+                signer_index: 1,
+            },
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .expect("encode exact typed-proxy beacon capability result");
+        send_operation(
+            &mut stream,
+            &operation_response(&attest, STATUS_OK_V1, exact),
+        );
+        expect_and_answer_consensus_signer_qualification(&mut stream, 3, revision, policy_digest);
+    });
+    let requested_catalog = catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project exact-capability beacon catalog");
+    let (broker_session, observations) = connect_test_process(
+        &policy,
+        catalog.chain_id(),
+        *catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate exact-capability beacon broker session");
+    let signer = GlobalBeaconBrokerPartialSigner {
+        session: broker_session,
+        binding: requested_catalog[0].clone(),
+        metadata_digest: observations[0].metadata_digest,
+    };
+    assert_eq!(
+        iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::attest_partial_signing_capability(
+            &signer, &session, 0
+        ),
+        Err(iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::InvalidRequest),
+        "invalid seats fail before any broker operation",
+    );
+    let attestation = iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::attest_partial_signing_capability(&signer, &session, 1)
+        .expect("typed proxy accepts the exact capability result");
+    assert!(attestation.matches(&session, 1));
+    server.join().expect("join exact-capability beacon broker");
+}
+
+#[derive(Clone, Copy)]
+enum GlobalBeaconCapabilityResultFault {
+    WrongSessionId,
+    WrongTranscriptHash,
+    WrongSignerIndex,
+    Truncated,
+}
+
+fn assert_invalid_beacon_capability_result_is_rejected(fault: GlobalBeaconCapabilityResultFault) {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let catalog = fixture.catalog;
+    let session = fixture.session;
+    drop(fixture.backends);
+    let binding = ProviderBindingWireV1::try_from_binding(
+        catalog.iter().next().expect("one beacon signer binding"),
+    )
+    .expect("project mismatched-capability beacon binding");
+    let revision = binding.revision.expect("beacon signer revision");
+    let policy_digest = binding.policy_digest.expect("beacon signer policy digest");
+    let session_id = session.record().session_id;
+    let transcript_hash = session.record().transcript_hash;
+    let server_network_id = *catalog.network_id();
+    let (_directory, _path, policy, listener) = bind_fake_broker();
+    let server_binding = binding.clone();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("accept mismatched-capability beacon client");
+        let handshake = read_handshake(&mut stream);
+        assert_eq!(handshake.requested_catalog, vec![server_binding]);
+        send_handshake(&mut stream, &handshake_response(&handshake));
+        expect_and_answer_consensus_signer_qualification(&mut stream, 1, revision, policy_digest);
+        let attest = read_consensus_signer_operation(&mut stream, &server_network_id);
+        assert_eq!(attest.request_id, 2);
+        assert_eq!(
+            attest.operation,
+            OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1
+        );
+        let mut result = GlobalBeaconCapabilityAttestResultWireV1 {
+            session_id,
+            transcript_hash,
+            signer_index: 1,
+        };
+        match fault {
+            GlobalBeaconCapabilityResultFault::WrongSessionId => {
+                let candidate = [0xC7; 32];
+                result.session_id = if candidate == result.session_id {
+                    [0xC8; 32]
+                } else {
+                    candidate
+                };
+            }
+            GlobalBeaconCapabilityResultFault::WrongTranscriptHash => {
+                result.transcript_hash[0] ^= 1;
+            }
+            GlobalBeaconCapabilityResultFault::WrongSignerIndex => {
+                result.signer_index = 2;
+            }
+            GlobalBeaconCapabilityResultFault::Truncated => {}
+        }
+        let mut invalid = encode_canonical(&result, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1)
+            .expect("encode correlated invalid beacon capability result");
+        if matches!(fault, GlobalBeaconCapabilityResultFault::Truncated) {
+            invalid
+                .pop()
+                .expect("canonical beacon capability result is nonempty");
+        }
+        send_operation(
+            &mut stream,
+            &operation_response(&attest, STATUS_OK_V1, invalid),
+        );
+    });
+    let requested_catalog = catalog
+        .iter()
+        .map(ProviderBindingWireV1::try_from_binding)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project mismatched-capability beacon catalog");
+    let (broker_session, observations) = connect_test_process(
+        &policy,
+        catalog.chain_id(),
+        *catalog.network_id(),
+        requested_catalog.clone(),
+    )
+    .expect("authenticate mismatched-capability beacon broker session");
+    let signer = GlobalBeaconBrokerPartialSigner {
+        session: broker_session,
+        binding: requested_catalog[0].clone(),
+        metadata_digest: observations[0].metadata_digest,
+    };
+    let expected_error = if matches!(fault, GlobalBeaconCapabilityResultFault::Truncated) {
+        BrokerError::Protocol
+    } else {
+        BrokerError::Rejected
+    };
+    assert_eq!(
+        signer.attest_projected_capability(&session, 1),
+        Err(expected_error),
+        "an envelope-correlated response cannot substitute or truncate a public beacon capability"
+    );
+    assert_eq!(
+        signer.attest_projected_capability(&session, 1),
+        Err(BrokerError::Protocol),
+        "an invalid capability must permanently poison the beacon session without replay"
+    );
+    server
+        .join()
+        .expect("join invalid-capability beacon broker");
+}
+
+#[test]
+fn correlated_wrong_beacon_session_id_is_rejected_by_typed_proxy() {
+    assert_invalid_beacon_capability_result_is_rejected(
+        GlobalBeaconCapabilityResultFault::WrongSessionId,
+    );
+}
+
+#[test]
+fn correlated_wrong_beacon_transcript_hash_is_rejected_by_typed_proxy() {
+    assert_invalid_beacon_capability_result_is_rejected(
+        GlobalBeaconCapabilityResultFault::WrongTranscriptHash,
+    );
+}
+
+#[test]
+fn correlated_wrong_beacon_signer_index_is_rejected_by_typed_proxy() {
+    assert_invalid_beacon_capability_result_is_rejected(
+        GlobalBeaconCapabilityResultFault::WrongSignerIndex,
+    );
+}
+
+#[test]
+fn correlated_truncated_beacon_capability_is_rejected_by_typed_proxy() {
+    assert_invalid_beacon_capability_result_is_rejected(
+        GlobalBeaconCapabilityResultFault::Truncated,
+    );
+}
+
+#[test]
+fn global_beacon_capability_request_rejects_foreign_network_transcript_and_invalid_seat() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let encode = |session, signer_index| {
+        encode_canonical(
+            &GlobalBeaconCapabilityAttestRequestWireV1 {
+                session,
+                signer_index,
+            },
+            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        )
+        .expect("canonical public capability request")
+    };
+    let public = fixture.session.record();
+    for signer_index in [0, public.committee_size + 1] {
+        assert!(matches!(
+            decode_global_beacon_capability_attest_request(
+                &encode(public.clone(), signer_index),
+                fixture.catalog.network_id(),
+            ),
+            Err(BrokerError::Rejected)
+        ));
+    }
+    let mut foreign = public.clone();
+    foreign.network_id = NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xD9; 32])),
+    );
+    assert_ne!(foreign.network_id, *fixture.catalog.network_id());
+    assert!(matches!(
+        decode_global_beacon_capability_attest_request(
+            &encode(foreign, 1),
+            fixture.catalog.network_id(),
+        ),
+        Err(BrokerError::BindingMismatch)
+    ));
+    let mut corrupt = public.clone();
+    corrupt.transcript_hash[0] ^= 1;
+    assert!(matches!(
+        decode_global_beacon_capability_attest_request(
+            &encode(corrupt, 1),
+            fixture.catalog.network_id(),
+        ),
+        Err(BrokerError::Rejected)
+    ));
+}
+
+#[test]
+fn global_beacon_capability_server_rejects_a_qualified_backend_claiming_the_wrong_seat() {
+    let fixture = consensus_threshold_beacon_broker_test_fixture_v1();
+    let original = fixture
+        .backends
+        .global_beacon_partial_signer
+        .as_ref()
+        .expect("real backend");
+    let sign_calls = Arc::new(AtomicU64::new(0));
+    let backend = Arc::new(InvalidGlobalBeaconBrokerBackendV1 {
+        handle: original.handle().to_owned(),
+        qualification: original
+            .qualification()
+            .expect("exact provider qualification"),
+        sign_calls: sign_calls.clone(),
+    });
+    let (_directory, policy, shutdown, server) = start_signer(
+        fixture.catalog.clone(),
+        fixture.backends.with_global_beacon_partial_signer(backend),
+    );
+    let dependencies =
+        resolve_test_process(&fixture.catalog, &policy).expect("resolve qualified provider");
+    let signer = dependencies
+        .sumeragi_global_beacon_partial_signer
+        .as_ref()
+        .expect("typed proxy");
+    assert_eq!(
+        iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1::attest_partial_signing_capability(
+            signer.as_ref(),
+            &fixture.session,
+            1,
+        ),
+        Err(iroha_core::beacon::GlobalThresholdBeaconCapabilityErrorV1::NotOwned)
+    );
+    assert_eq!(sign_calls.load(Ordering::Acquire), 0);
+    drop(dependencies);
+    shutdown.request_shutdown();
+    server
+        .join()
+        .expect("join capability broker")
+        .expect("clean shutdown");
 }

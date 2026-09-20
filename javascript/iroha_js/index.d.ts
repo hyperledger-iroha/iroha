@@ -11675,7 +11675,9 @@ export declare class ToriiClient {
   submitTransactionBatch(
     payloads: ReadonlyArray<VersionedSignedTransactionV1>,
     options?: { signal?: AbortSignal },
-  ): Promise<{ acceptedCount: number; route?: unknown }>;
+  ): Promise<{ acceptedCount: number; route?: unknown; outcomes?: Array<{
+    signed_transaction_hash: string; status: number; reject_code: string | null;
+  }> }>;
   getTransactionStatus(
     hashHex: string,
     options?: TransactionStatusReadOptions,

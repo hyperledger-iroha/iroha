@@ -2096,7 +2096,6 @@ fn proposal_body_and_payload_at_view_signed_by(
         NonZeroU64::new(round.height).expect("non-zero fixture height"),
         None,
         None,
-        None,
         1_000,
         0,
     );
@@ -4803,4 +4802,76 @@ fn replayed_proposal_signature_rejects_missing_durable_payload() {
         Err(error) => error,
     };
     assert!(error.contains("no durable exact body"));
+}
+
+/// Inspect real retained worker ownership without replacing its network actor.
+pub(in crate::sumeragi) fn exact_output_snapshot_with_actor_owners_for_test(
+    service: &ProductionV2Services,
+) -> (usize, usize, String) {
+    let pending = service
+        .lock_pending_exact_output()
+        .expect("inspect actual retained output");
+    pending
+        .validate_durable_handoff_ownership()
+        .expect("all FIFO, target, payload and reservation owners are exact");
+    let tickets = pending
+        .fanouts
+        .iter()
+        .flat_map(|fanout| &fanout.targets)
+        .filter(|target| target.ticket.is_some())
+        .count();
+    (pending.fanouts.len(), tickets, format!("{pending:?}"))
+}
+
+/// Prepare a real successor WAL owner before the producer output is emitted.
+/// The returned transition authenticates a TC containing this exact view-zero
+/// PrepareQC, durably advances the adapter, and publishes EnterView to services.
+#[cfg(feature = "bls")]
+pub(in crate::sumeragi) fn prepare_successor_worker_view_one_for_test(
+    service: &mut ProductionV2Services,
+    keys: &[KeyPair],
+    subject: wire::BlockSubject,
+    entry_hash: HashOf<iroha_data_model::merge::MergeLedgerEntry>,
+) -> impl FnOnce(&mut ProductionV2Services) -> TempDir + use<> {
+    let (parent, receipt) = service
+        .kura
+        .v2_finality_artifact_with_receipt(1)
+        .expect("read exact durable parent")
+        .expect("height-two fixture has parent finality");
+    let verified = VerifiedHeightContext::successor(
+        service.context.clone(),
+        service.validator_set_pops.clone(),
+        &parent,
+        &receipt,
+        &parent.validator_set_pops,
+    )
+    .expect("authenticate the actual successor context");
+    let directory = TempDir::new().expect("first-bind successor WAL");
+    let local = service.local_validator;
+    let mut wal =
+        worker_wal_authority_fixture_with_verified_context(service, &directory, local, verified);
+    let round = wire::ConsensusRound {
+        context_id: service.context.id(),
+        height: service.context.height,
+        view: 0,
+    };
+    let mut commitment = worker_authority_commitment();
+    commitment.merge_carrier = Some(wire::MergeCarrierCommitmentV1::new(entry_hash));
+    commitment
+        .validate()
+        .expect("typed merge-bearing test execution commitment");
+    let prepare = worker_signed_prepare_certificate(keys, round, subject, commitment);
+    let certificate = worker_signed_timeout_certificate(&service.context, keys, 0, Some(prepare));
+    move |service| {
+        let tag = enter_worker_view_from_wal(service, &mut wal.adapter, certificate);
+        assert_eq!(tag.view(), 1);
+        assert_eq!(service.active_tag, tag);
+        assert!(
+            service
+                .leader_wire_recovery_authority
+                .matches_entered_view(tag, Some((round, subject)))
+        );
+        assert_ne!(service.local_validator, Some(service.context.leader(1)));
+        directory
+    }
 }

@@ -1,8 +1,5 @@
-//! Incremental block builder that uses typed incremental Merkle updates during assembly.
-use super::{
-    BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockResult, BlockSignature,
-    SignedBlock,
-};
+//! Proposal-only block builder. Actual typed outputs are installed by one checked owner.
+use super::{BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockSignature, SignedBlock};
 use crate::{
     consensus::NposConsensusEffects,
     da::{
@@ -11,24 +8,17 @@ use crate::{
     },
     transaction::signed::{
         SealedTransactionReveal, SignedSealedTransactionCommitment, SignedTransaction,
-        TransactionEntrypoint, TransactionResult, TransactionResultInner,
+        TransactionEntrypoint,
     },
-    trigger::TimeTriggerEntrypoint,
 };
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    vec::Vec,
-};
+use std::{collections::BTreeSet, vec::Vec};
 /// Helper to incrementally assemble a block while maintaining Merkle roots.
 #[derive(Debug, Clone)]
 pub struct BlockBuilder {
     header: BlockHeader,
     external_entrypoints: Vec<TransactionEntrypoint>,
-    time_triggers: Vec<TimeTriggerEntrypoint>,
-    results: Vec<TransactionResult>,
     entry_merkle: MerkleTree<TransactionEntrypoint>,
-    result_merkle: MerkleTree<TransactionResult>,
     da_commitments: Option<DaCommitmentBundle>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     da_pin_intents: Option<DaPinIntentBundle>,
@@ -42,10 +32,7 @@ impl BlockBuilder {
         Self {
             header,
             external_entrypoints: Vec::new(),
-            time_triggers: Vec::new(),
-            results: Vec::new(),
             entry_merkle: MerkleTree::default(),
-            result_merkle: MerkleTree::default(),
             execution_context: None,
             da_commitments: None,
             da_proof_policies: None,
@@ -83,22 +70,6 @@ impl BlockBuilder {
         self.external_entrypoints.push(entrypoint);
         idx
     }
-    /// Push a time trigger and update the entrypoint Merkle tree.
-    pub fn push_time_trigger(&mut self, trig: TimeTriggerEntrypoint) -> usize {
-        let idx = self.external_entrypoints.len() + self.time_triggers.len();
-        let h: HashOf<TransactionEntrypoint> = trig.hash_as_entrypoint();
-        self.entry_merkle.add(h);
-        self.time_triggers.push(trig);
-        idx
-    }
-    /// Push a transaction result and update the result Merkle tree.
-    pub fn push_result(&mut self, inner: TransactionResultInner) -> usize {
-        let idx = self.results.len();
-        let h: HashOf<TransactionResult> = TransactionResult::hash_from_inner(&inner);
-        self.result_merkle.add(h);
-        self.results.push(TransactionResult::from(inner));
-        idx
-    }
     /// Attach a pre-built DA commitment bundle that will be embedded in the resulting block.
     pub fn set_da_commitments(&mut self, bundle: Option<DaCommitmentBundle>) {
         self.da_commitments = bundle.filter(|bundle| !bundle.is_empty());
@@ -124,7 +95,6 @@ impl BlockBuilder {
     fn finalize_header(&mut self) {
         self.normalize_empty_da_bundles();
         self.header.merkle_root = self.entry_merkle.root();
-        self.header.result_merkle_root = self.result_merkle.root();
         self.header
             .set_da_proof_policies_hash(self.da_proof_policies.as_ref().map(HashOf::new));
         self.header.da_commitments_hash = self
@@ -152,7 +122,9 @@ impl BlockBuilder {
     pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
         self.header.set_sccp_commitment_root(root);
     }
-    /// Build a `SignedBlock` with the provided signatures.
+    /// Build untrusted structural block data with the provided signatures.
+    /// Native inputs are not execution authority; callers must attach
+    /// actual full results through the checked setter and validate the carrier.
     pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
         self.finalize_header();
         self.into_block(signatures)
@@ -167,29 +139,10 @@ impl BlockBuilder {
             da_pin_intents: self.da_pin_intents,
             npos_consensus_effects: self.npos_consensus_effects,
         };
-        let result = BlockResult {
-            time_triggers: self.time_triggers,
-            merkle: self.entry_merkle,
-            result_merkle: self.result_merkle,
-            committed_fragment_count: u64::try_from(
-                self.results
-                    .iter()
-                    .filter(|result| result.as_ref().is_ok())
-                    .count(),
-            )
-            .unwrap_or(u64::MAX),
-            transaction_results: self.results,
-            fastpq_transcripts: BTreeMap::new(),
-            axt_envelopes: Vec::new(),
-            axt_transitioned_dataspaces: BTreeSet::new(),
-            lane_finality_statements: Vec::new(),
-            trigger_completions: Vec::new(),
-            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
-        };
         SignedBlock {
             signatures,
             payload,
-            result: Some(result),
+            result: None,
         }
     }
     /// Convenience: fallibly sign the built header hash with a single validator and return the block.
@@ -197,17 +150,28 @@ impl BlockBuilder {
     /// # Errors
     ///
     /// Returns [`iroha_crypto::Error::Signing`] when the configured signing
-    /// backend rejects the private-key material or finalized header hash.
+    /// backend rejects the private-key material or finalized header hash, or native
+    /// source/output structure is malformed.
     pub fn try_build_with_signature(
         mut self,
         signatory_index: u64,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedBlock, iroha_crypto::Error> {
         self.finalize_header();
-        let sig = SignatureOf::try_from_hash(private_key, self.header.hash())?;
-        let mut set = BTreeSet::new();
-        set.insert(BlockSignature::new(signatory_index, sig));
-        Ok(self.into_block(set))
+        let mut block = self.into_block(BTreeSet::new());
+        block
+            .validate_native_lane_source()
+            .map_err(iroha_crypto::Error::Signing)?;
+        if block.has_results() {
+            block
+                .validate_native_lane_results()
+                .map_err(iroha_crypto::Error::Signing)?;
+        }
+        let sig = SignatureOf::try_from_hash(private_key, block.hash())?;
+        block
+            .signatures
+            .insert(BlockSignature::new(signatory_index, sig));
+        Ok(block)
     }
     /// Convenience: sign the built header hash with a single validator and return the block.
     #[must_use]
@@ -253,7 +217,7 @@ mod tests {
     #[test]
     fn builder_roots_match_manual_construction() {
         // Minimal header
-        let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
@@ -265,30 +229,15 @@ mod tests {
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions(core::iter::empty::<InstructionBox>())
+        .with_instructions([crate::isi::Log::new(crate::Level::INFO, "first".into())])
         .sign(&private_key);
         let tx2 = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions(core::iter::empty::<InstructionBox>())
+        .with_instructions([crate::isi::Log::new(crate::Level::INFO, "second".into())])
         .sign(&private_key);
-        // One trigger
-        let trig = TimeTriggerEntrypoint {
-            id: "test_trigger".parse().unwrap(),
-            // Empty execution step
-            instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
-            authority: authority.clone(),
-        };
-        // Three results
-        let r1 = TransactionResultInner::Ok(DataTriggerSequence::default());
-        let r2 = TransactionResultInner::Err(
-            crate::transaction::error::TransactionRejectionReason::Validation(
-                ValidationFail::InternalError("bad_query".into()),
-            ),
-        );
-        let r3 = TransactionResultInner::Ok(DataTriggerSequence::default());
         // Build incrementally
         let mut bb = BlockBuilder::new(header);
         bb.push_transaction(tx1.clone());
@@ -304,40 +253,34 @@ mod tests {
             built.header(), // reuse header values (roots) for signature correctness
             vec![tx1.clone(), tx2.clone()],
         );
-        let entry_hashes = vec![
-            tx1.hash_as_entrypoint(),
-            tx2.hash_as_entrypoint(),
-            trig.hash_as_entrypoint(),
+        assert_eq!(built, manual);
+        assert!(built.is_resultless_proposal());
+        assert!(built.execution_outputs().is_empty());
+        let time = crate::block::output_test_support::simple_time(&built, 0);
+        let rows = vec![
+            crate::block::output_test_support::network(0, Ok(Default::default())),
+            crate::block::output_test_support::network(1, Ok(Default::default())),
+            time,
         ];
-        let results = vec![r1.clone(), r2.clone(), r3.clone()];
-        built
-            .set_transaction_results(vec![trig.clone()], &entry_hashes, results.clone())
-            .expect("built block entrypoint hashes should match payload");
-        manual
-            .set_transaction_results(vec![trig], &entry_hashes, results)
-            .expect("manual block entrypoint hashes should match payload");
-        // Compare roots and contents
-        assert_eq!(built.header().merkle_root(), manual.header().merkle_root());
+        crate::block::output_test_support::install(&mut built, rows.clone(), 3).unwrap();
+        crate::block::output_test_support::install(&mut manual, rows, 3).unwrap();
+        assert_eq!(built, manual);
         assert_eq!(
-            built.header().result_merkle_root(),
-            manual.header().result_merkle_root()
+            built
+                .network_input_merkle_commitment()
+                .unwrap()
+                .leaf_count()
+                .get(),
+            2
         );
         assert_eq!(
-            built.external_entrypoint_count(),
-            manual.external_entrypoint_count()
-        );
-        assert_eq!(
-            built.entrypoint_hashes().collect::<Vec<_>>(),
-            manual.entrypoint_hashes().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            built.result_hashes().collect::<Vec<_>>(),
-            manual.result_hashes().collect::<Vec<_>>()
+            built.output_merkle_commitment().unwrap().leaf_count().get(),
+            3
         );
     }
     #[test]
     fn builder_attaches_da_bundle_and_sets_header_hash() {
-        let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(5_u64), None, None, 0, 0);
         let mut builder = BlockBuilder::new(header);
         let bundle = sample_da_bundle();
         builder.set_da_commitments(Some(bundle.clone()));
@@ -347,7 +290,7 @@ mod tests {
     }
     #[test]
     fn builder_normalizes_empty_da_bundles() {
-        let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(5_u64), None, None, 0, 0);
         let mut builder = BlockBuilder::new(header);
         builder.set_da_commitments(Some(DaCommitmentBundle::default()));
         builder.set_da_pin_intents(Some(DaPinIntentBundle::default()));
@@ -372,7 +315,7 @@ mod tests {
     }
     #[test]
     fn build_with_signature_keeps_da_policy_hash_consistent() {
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let policy = DaProofPolicy {
             lane_id: LaneId::new(1),
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -399,7 +342,7 @@ mod tests {
     }
     #[test]
     fn try_build_with_signature_matches_build_with_signature_and_verifies() {
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let keypair = checked_seeded_keypair(0x42, Algorithm::Ed25519);
         let mut builder = BlockBuilder::new(header);
         builder.set_da_commitments(Some(sample_da_bundle()));

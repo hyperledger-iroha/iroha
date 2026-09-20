@@ -2158,6 +2158,22 @@ fn fresh_certified_fetch_queues_after_capacity_consumes_its_target() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() {
+    run_certified_response_family_completion(None);
+}
+#[test]
+fn certified_persistence_wrong_work_is_permanent_before_ledger() {
+    run_certified_response_family_completion(Some(CertifiedPersistenceFault::Work));
+}
+#[test]
+fn certified_persistence_wrong_response_is_permanent_before_ledger() {
+    run_certified_response_family_completion(Some(CertifiedPersistenceFault::Response));
+}
+#[derive(Clone, Copy)]
+enum CertifiedPersistenceFault {
+    Work,
+    Response,
+}
+fn run_certified_response_family_completion(fault: Option<CertifiedPersistenceFault>) {
     let mut fixture = ProductionTransportFixture::new();
     fixture.executor.recovered_bodies.clear();
     let mut services = FakeServices {
@@ -2684,62 +2700,59 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     );
     drop(refreshed);
     let (mut persisted, work_ack) = completion.into_parts();
-    let exact_work_id = persisted.work_id();
-    let wrong_work_id = EffectWorkId::for_test(exact_work_id.get() ^ 1);
-    assert_ne!(wrong_work_id, exact_work_id);
-    assert_eq!(
-        persisted.replace_work_id_for_test(wrong_work_id),
-        exact_work_id,
-    );
-    let completion =
-        crate::sumeragi::v2_worker::PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
-            persisted, work_ack,
-        );
-    let completion = match owner.complete_certified_fetch_for_test(
-        &mut fixture.executor,
-        &mut production_services,
-        &ingress,
-        completion,
-    ) {
-        Err(crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(error)) => {
-            assert_eq!(error.reason(), "persistence completion identity");
-            assert!(error.detail().contains("work, response, or responder"));
-            error.into_completion()
+    if let Some(fault) = fault {
+        let exact_work_id = persisted.work_id();
+        match fault {
+            CertifiedPersistenceFault::Work => {
+                let wrong_work_id = EffectWorkId::for_test(exact_work_id.get() ^ 1);
+                assert_ne!(wrong_work_id, exact_work_id);
+                assert_eq!(
+                    persisted.replace_work_id_for_test(wrong_work_id),
+                    exact_work_id
+                );
+            }
+            CertifiedPersistenceFault::Response => {
+                drop(
+                    persisted.replace_authenticated_response_for_test(wrong_authenticated_response),
+                );
+            }
         }
-        Ok(()) => panic!("same-coordinate Phase B accepted a foreign work owner"),
-        Err(_) => panic!("wrong work ownership must be a retryable pre-LedgerV1 rejection"),
-    };
-    assert_eq!(ingress.len(), queue_depth_before_completion);
-    assert!(!fixture.executor.output_guard.restart_required());
-    let (mut persisted, work_ack) = completion.into_parts();
-    assert_eq!(
-        persisted.replace_work_id_for_test(exact_work_id),
-        wrong_work_id,
-    );
-    let exact_authenticated =
-        persisted.replace_authenticated_response_for_test(wrong_authenticated_response);
-    let completion =
-        crate::sumeragi::v2_worker::PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
-            persisted, work_ack,
+        let completion =
+            crate::sumeragi::v2_worker::PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+                persisted, work_ack,
+            );
+        let waiting = owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+        let registry = owner.fetch_registry_snapshot_for_test();
+        let pending = fixture.executor.pending_fetches.clone();
+        let requests = fixture.executor.outstanding_requests.hashes();
+        let physical = production_services.certified_fetch_persistence_work();
+        let error = match owner.complete_certified_fetch_for_test(
+            &mut fixture.executor, &mut production_services, &ingress, completion,
+        ) {
+            Err(crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::RestartRequiredBeforeLedger(error)) => error,
+            Ok(()) => panic!("foreign completion identity cannot cross LedgerV1"),
+            Err(_) => panic!("foreign completion identity is permanent before LedgerV1"),
+        };
+        assert_eq!(error.reason(), "persistence completion identity");
+        assert!(error.detail().contains("work, response, or responder"));
+        assert!(fixture.executor.output_guard.restart_required());
+        assert_eq!(ingress.len(), queue_depth_before_completion);
+        assert_eq!(
+            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+            waiting
         );
-    let completion = match owner.complete_certified_fetch_for_test(
-        &mut fixture.executor,
-        &mut production_services,
-        &ingress,
-        completion,
-    ) {
-        Err(crate::sumeragi::v2_lifecycle_coordinator::CertifiedFetchBodyPersistenceCompletionError::Retry(error)) => {
-            assert_eq!(error.reason(), "persistence completion identity");
-            assert!(error.detail().contains("work, response, or responder"));
-            error.into_completion()
-        }
-        Ok(()) => panic!("same-coordinate Phase B accepted a foreign signed response"),
-        Err(_) => panic!("wrong response identity must be a retryable pre-LedgerV1 rejection"),
-    };
-    assert_eq!(ingress.len(), queue_depth_before_completion);
-    assert!(!fixture.executor.output_guard.restart_required());
-    let (mut persisted, work_ack) = completion.into_parts();
-    drop(persisted.replace_authenticated_response_for_test(exact_authenticated));
+        assert_eq!(owner.fetch_registry_snapshot_for_test(), registry);
+        assert_eq!(fixture.executor.pending_fetches, pending);
+        assert_eq!(fixture.executor.outstanding_requests.hashes(), requests);
+        assert_eq!(
+            production_services.certified_fetch_persistence_work(),
+            physical
+        );
+        assert!(!fixture.executor.durable_bodies.contains_key(&body_key));
+        drop(error);
+        planner_io.detach(&mut production_services);
+        return;
+    }
     let phase_b_selector = fixture
         .executor
         .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)

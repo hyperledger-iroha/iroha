@@ -16,16 +16,22 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     let before_timeout = start + runtime.retransmit_interval();
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(before_timeout)
+            .step_and_take_scheduler_ownership_for_test(
+                before_timeout,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("service pre-fence retransmission"),
         RuntimeStep::Advanced(_)
     ));
     let proposal = signed_runtime_proposal(&context, &keys, 0xE1);
     runtime
-        .enqueue_network(proposal)
+        .enqueue_network(proposal, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("enqueue authenticated proposal");
     let proposal_effects = match runtime
-        .step_and_take_scheduler_ownership_for_test(before_timeout)
+        .step_and_take_scheduler_ownership_for_test(
+            before_timeout,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("dispatch authenticated proposal")
     {
         RuntimeStep::Advanced(effects) => effects,
@@ -46,7 +52,7 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         .expect("enqueue reconstructed body");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(before_timeout)
+            .step_and_take_scheduler_ownership_for_test(before_timeout, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("dispatch reconstructed body"),
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
@@ -62,7 +68,7 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         .expect("enqueue durable-body completion");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(before_timeout)
+            .step_and_take_scheduler_ownership_for_test(before_timeout, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("dispatch durable-body completion"),
         RuntimeStep::Advanced(ref effects)
             if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
@@ -96,9 +102,11 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         effects => panic!("unexpected validation effects: {effects:?}"),
     };
     assert_eq!(prepare_effect_ownership.len(), 1);
-    runtime
-        .set_external_lifecycle_owners(vec![prepare_effect_ownership[0].owner().clone()])
-        .expect("publish the pending Prepare signer owner");
+    let mut external_owners = vec![prepare_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     // The second periodic episode is still before the absolute deadline,
     // but it is frozen only at this serialized runner entry. The pending
     // Prepare signer already owns an older lifecycle position, so the new
@@ -107,7 +115,11 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     assert!(second_retransmission < start + runtime.round_timeout());
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(second_retransmission)
+            .step_and_take_scheduler_ownership_for_test(
+                second_retransmission,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners")
+            )
             .expect("freeze the pre-deadline second retransmission"),
         RuntimeStep::Idle
     ));
@@ -132,12 +144,18 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
             &prepare_effect_ownership[0],
         )
         .expect("enqueue exact Prepare signature completion");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire the pending Prepare signer owner after completion enqueue");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     assert_eq!(runtime.queued_commands(), 1);
     let prepare_broadcast = runtime
-        .step(second_retransmission)
+        .step(
+            second_retransmission,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("owned Prepare completion precedes the younger retransmission");
     let prepare_completion = runtime
         .take_last_scheduler_ownership()
@@ -175,7 +193,11 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     // Once the older completion drains, the retained fresh episode runs
     // and rebroadcasts the newly published Prepare vote.
     let retransmit_retry = runtime
-        .step_and_take_scheduler_ownership_for_test(second_retransmission)
+        .step_and_take_scheduler_ownership_for_test(
+            second_retransmission,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("service younger pre-deadline retransmission episode");
     assert!(matches!(
         retransmit_retry,
@@ -209,7 +231,11 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     // episode.
     let deadline = start + runtime.round_timeout();
     let timeout_macro_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("deliver the absolute timeout through the real adapter");
     runtime
         .take_last_scheduler_ownership()
@@ -230,16 +256,22 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
         effects => panic!("unexpected timeout effects: {effects:?}"),
     };
     assert_eq!(timeout_effect_ownership.len(), 1);
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_effect_ownership[0].owner().clone()])
-        .expect("publish the pending TimeoutVote signer owner");
+    external_owners = vec![timeout_effect_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     // A fresh retransmission episode becomes due while TimeoutVote signing
     // is active. Its new ordinal follows the signer, so it remains at the
     // runtime boundary instead of entering the adapter as Busy debt.
     let post_timeout_retransmission = deadline + runtime.retransmit_interval();
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(post_timeout_retransmission)
+            .step_and_take_scheduler_ownership_for_test(
+                post_timeout_retransmission,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners")
+            )
             .expect("freeze post-timeout retransmission behind signing"),
         RuntimeStep::Idle
     ));
@@ -263,11 +295,17 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
             &timeout_effect_ownership[0],
         )
         .expect("enqueue exact TimeoutVote signature completion");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire the pending TimeoutVote signer owner after completion enqueue");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let first_timeout_vote = runtime
-        .step(post_timeout_retransmission)
+        .step(
+            post_timeout_retransmission,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("owned TimeoutVote completion precedes the younger retransmission");
     let timeout_completion = runtime
         .take_last_scheduler_ownership()
@@ -303,7 +341,11 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     // periodic episode now owns the next serialized turn and rebroadcasts
     // the published vote.
     let timeout_vote_retry = runtime
-        .step_and_take_scheduler_ownership_for_test(post_timeout_retransmission)
+        .step_and_take_scheduler_ownership_for_test(
+            post_timeout_retransmission,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("rebroadcast a lost first TimeoutVote");
     assert!(matches!(
         timeout_vote_retry,
@@ -331,7 +373,11 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     // continues broadcasting the published TimeoutVote.
     let later_post_timeout_tick = post_timeout_retransmission + runtime.retransmit_interval();
     let later_retry = runtime
-        .step(later_post_timeout_tick)
+        .step(
+            later_post_timeout_tick,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("service a later post-timeout periodic tick");
     let later_retry_owner = runtime
         .take_last_scheduler_ownership()
@@ -405,9 +451,15 @@ fn recovered_nonzero_view_uses_scaled_timeout_from_live_arm() {
         .arm_live_clocks(armed_at)
         .expect("arm after recovered startup");
     assert_eq!(runtime.round_timeout(), Duration::from_secs(50));
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(49));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        armed_at + Duration::from_secs(49),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert!(runtime.driver.timeouts.is_empty());
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(50));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        armed_at + Duration::from_secs(50),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert_eq!(runtime.driver.timeouts, vec![recovered]);
 }
 #[test]
@@ -427,9 +479,15 @@ fn recovered_high_view_uses_bounded_timeout_from_live_arm() {
         .arm_live_clocks(armed_at)
         .expect("arm after recovered high-view startup");
     assert_eq!(runtime.round_timeout(), Duration::from_secs(100));
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(99));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        armed_at + Duration::from_secs(99),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert!(runtime.driver.timeouts.is_empty());
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(100));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        armed_at + Duration::from_secs(100),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert_eq!(runtime.driver.timeouts, vec![recovered]);
 }
 #[test]
@@ -488,8 +546,10 @@ fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
         Err(EnqueueError::Full)
     );
     for offset in 0..4 {
-        let _ = runtime
-            .step_and_take_scheduler_ownership_for_test(start + Duration::from_millis(offset));
+        let _ = runtime.step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_millis(offset),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        );
     }
     assert_eq!(
         runtime.driver.delivered,
@@ -537,7 +597,10 @@ fn scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields() {
             FakeCommand::record(9),
         ))
         .expect("progress causal owner fits");
-    assert!(matches!(runtime.step(start), Ok(RuntimeStep::Advanced(_))));
+    assert!(matches!(
+        runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Advanced(_))
+    ));
     let evidence = runtime
         .last_scheduler_ownership()
         .expect("FIFO dispatch retains exact scheduler ownership")
@@ -744,6 +807,7 @@ fn scheduler_minimum_uses_cached_admission_but_dispatch_revalidates_ingress() {
         .enqueue_network_with_ingress_ownership(
             message.clone(),
             fair_network_ownership(&message, source),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
         )
         .expect("deeply validated authenticated command enters the runtime FIFO");
     let lifecycle_ordinal = runtime
@@ -807,9 +871,13 @@ fn scheduler_queue_seal_rejects_valid_same_wire_ingress_carrier_substitution() {
         .enqueue_network_with_ingress_ownership(
             message.clone(),
             fair_network_ownership(&message, original_source),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
         )
         .expect("original authenticated carrier enters the runtime FIFO");
-    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Advanced(_))));
+    assert!(matches!(
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Advanced(_))
+    ));
     let evidence = runtime
         .last_scheduler_ownership()
         .expect("authenticated FIFO selection retains exact scheduler ownership")
@@ -892,7 +960,7 @@ fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
         .expect("selected Completion owner is present")
         .clone();
     assert!(matches!(
-        runtime.step(start),
+        runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     let evidence = runtime
@@ -930,16 +998,22 @@ fn full_lane_retryable_backpressure_preserves_owner_across_class_fairness() {
     assert!(runtime.take_last_scheduler_ownership().is_some());
     assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start),
+        runtime.step_and_take_scheduler_ownership_for_test(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
     ));
     assert_eq!(runtime.driver.delivered, vec![(owner_tag, 3)]);
     assert_eq!(runtime.ingress.len(), 2);
     runtime
-        .step_and_take_scheduler_ownership_for_test(start)
+        .step_and_take_scheduler_ownership_for_test(
+            start,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("Normal class receives its bounded turn");
     runtime
-        .step_and_take_scheduler_ownership_for_test(start)
+        .step_and_take_scheduler_ownership_for_test(
+            start,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("restored Completion owner is retried without replacement");
     assert_eq!(
         runtime.driver.delivered,
@@ -998,7 +1072,7 @@ fn prepared_completion_capacity_relief_dispatches_only_the_frozen_completion() {
 
     let supplied_cut = start + Duration::from_secs(30);
     assert!(matches!(
-        runtime.step_prepared_completion_capacity_relief(supplied_cut, prepared),
+        runtime.step_prepared_completion_capacity_relief(supplied_cut, prepared, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
     ));
     assert_eq!(runtime.driver.delivered, vec![(owner_tag, 2)]);
@@ -1133,7 +1207,11 @@ fn prepared_completion_capacity_relief_rejects_nonfull_younger_and_retyped_owner
     prepared.blocked_completion_lifecycle_ordinal = prepared.selected_lifecycle_ordinal;
     prepared.projection_hash = prepared_completion_capacity_relief_projection_hash(&prepared);
     assert!(matches!(
-        runtime.step_prepared_completion_capacity_relief(start, prepared),
+        runtime.step_prepared_completion_capacity_relief(
+            start,
+            prepared,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(RuntimeError::FailClosed)
     ));
     assert!(runtime.fail_closed);
@@ -1174,7 +1252,7 @@ fn retryable_completion_capacity_relief_preserves_cursor_debt_and_exact_owner() 
         .expect("prepare retryable capacity relief")
         .expect("full queue has one runnable Completion owner");
     assert!(matches!(
-        runtime.step_prepared_completion_capacity_relief(start, prepared),
+        runtime.step_prepared_completion_capacity_relief(start, prepared, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     assert_eq!(runtime.ingress.ownership_snapshot(), queue_before);
@@ -1220,7 +1298,7 @@ fn typed_pacemaker_escape_selects_only_progress_root() {
     )
     .expect("Progress owner fits");
     assert!(matches!(
-        runtime.try_step_pacemaker_escape(start),
+        runtime.try_step_pacemaker_escape(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(Some(RuntimeStep::Advanced(ref effects))) if effects.len() == 1
     ));
     let evidence = runtime
@@ -1236,10 +1314,16 @@ fn typed_pacemaker_escape_selects_only_progress_root() {
         .expect("consume the Progress effect owner");
     assert_eq!(runtime.driver.delivered, vec![(owner_tag, 2)]);
     assert_eq!(runtime.queued_commands(), 1);
-    assert!(matches!(runtime.try_step_pacemaker_escape(start), Ok(None)));
+    assert!(matches!(
+        runtime.try_step_pacemaker_escape(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(None)
+    ));
     assert_eq!(runtime.queued_commands(), 1);
     runtime
-        .step_and_take_scheduler_ownership_for_test(start)
+        .step_and_take_scheduler_ownership_for_test(
+            start,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("ordinary owner remains exact for the normal scheduler");
     assert_eq!(
         runtime.driver.delivered,
@@ -1314,7 +1398,10 @@ fn scheduler_owner_carrier_covers_live_and_typed_deferred_branches() {
         start,
         RuntimeQueueConfig::new(6, 2, 1),
     );
-    assert!(matches!(idle.step(start), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        idle.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     assert_eq!(
         idle.last_scheduler_ownership()
             .map(|evidence| evidence.selected),
@@ -1334,7 +1421,10 @@ fn scheduler_owner_carrier_covers_live_and_typed_deferred_branches() {
     );
     assert!(idle.take_last_scheduler_ownership().is_some());
     assert!(matches!(
-        idle.step(start + Duration::from_secs(2)),
+        idle.step(
+            start + Duration::from_secs(2),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(
@@ -1344,7 +1434,10 @@ fn scheduler_owner_carrier_covers_live_and_typed_deferred_branches() {
     );
     assert!(idle.take_last_scheduler_ownership().is_some());
     assert!(matches!(
-        idle.step(start + Duration::from_secs(10)),
+        idle.step(
+            start + Duration::from_secs(10),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(
@@ -1357,7 +1450,10 @@ fn scheduler_owner_carrier_covers_live_and_typed_deferred_branches() {
         .deferred_effects
         .push_back(vec![FakeEffect::other()]);
     let mut deferred = runtime(deferred_driver, start, RuntimeQueueConfig::new(6, 2, 1));
-    assert!(matches!(deferred.step(start), Ok(RuntimeStep::Advanced(_))));
+    assert!(matches!(
+        deferred.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Advanced(_))
+    ));
     let evidence = deferred
         .last_scheduler_ownership()
         .expect("deferred dispatch retains its typed occurrence");
@@ -1378,7 +1474,7 @@ fn scheduler_owner_carrier_covers_live_and_typed_deferred_branches() {
         .push_back(vec![FakeEffect::other()]);
     let mut unavailable = runtime(unavailable_driver, start, RuntimeQueueConfig::new(6, 2, 1));
     assert!(matches!(
-        unavailable.step(start),
+        unavailable.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Err(RuntimeError::FailClosed)
     ));
     assert!(unavailable.last_scheduler_ownership().is_none());
@@ -1408,9 +1504,15 @@ fn runtime_rejects_replayed_foreign_and_mutated_deferred_tokens() {
         .deferred_evidence_overrides
         .push_back(replayed);
     let mut replay = runtime(replay_driver, start, RuntimeQueueConfig::new(6, 2, 1));
-    assert!(matches!(replay.step(start), Ok(RuntimeStep::Advanced(_))));
+    assert!(matches!(
+        replay.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Advanced(_))
+    ));
     assert!(replay.take_last_scheduler_ownership().is_some());
-    assert!(matches!(replay.step(start), Err(RuntimeError::FailClosed)));
+    assert!(matches!(
+        replay.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Err(RuntimeError::FailClosed)
+    ));
     let mut foreign_driver = FakeDriver::new(owner_tag);
     foreign_driver
         .deferred_effects
@@ -1427,7 +1529,10 @@ fn runtime_rejects_replayed_foreign_and_mutated_deferred_tokens() {
         .deferred_evidence_overrides
         .push_back(foreign_evidence);
     let mut foreign = runtime(foreign_driver, start, RuntimeQueueConfig::new(6, 2, 1));
-    assert!(matches!(foreign.step(start), Err(RuntimeError::FailClosed)));
+    assert!(matches!(
+        foreign.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Err(RuntimeError::FailClosed)
+    ));
     let mut mutated_driver = FakeDriver::new(owner_tag);
     mutated_driver
         .deferred_effects
@@ -1444,7 +1549,10 @@ fn runtime_rejects_replayed_foreign_and_mutated_deferred_tokens() {
         .deferred_evidence_overrides
         .push_back(mutated);
     let mut mutated = runtime(mutated_driver, start, RuntimeQueueConfig::new(6, 2, 1));
-    assert!(matches!(mutated.step(start), Err(RuntimeError::FailClosed)));
+    assert!(matches!(
+        mutated.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Err(RuntimeError::FailClosed)
+    ));
 }
 #[test]
 fn runtime_rejects_driver_selection_outside_eligible_deferred_owner_set() {
@@ -1491,7 +1599,10 @@ fn runtime_rejects_driver_selection_outside_eligible_deferred_owner_set() {
             .expect("the active target has one exact eligible owner"),
         BTreeSet::from([1])
     );
-    assert!(matches!(runtime.step(start), Err(RuntimeError::FailClosed)));
+    assert!(matches!(
+        runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Err(RuntimeError::FailClosed)
+    ));
     assert_eq!(
         runtime.fail_closed_reason.as_deref(),
         Some("deferred driver selected an ineligible admission owner")
@@ -1551,7 +1662,10 @@ fn runtime_rejects_two_deferred_occurrences_for_one_logical_lifecycle() {
         runtime.eligible_deferred_admission_ordinals(),
         Err(EnqueueError::FailClosed)
     ));
-    assert!(matches!(runtime.step(start), Err(RuntimeError::FailClosed)));
+    assert!(matches!(
+        runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Err(RuntimeError::FailClosed)
+    ));
     assert_eq!(runtime.driver.deferred_dispatches, 0);
     assert_eq!(
         runtime.fail_closed_reason.as_deref(),
@@ -1567,14 +1681,20 @@ fn scheduler_owner_must_be_taken_before_a_later_step_can_enter() {
         start,
         RuntimeQueueConfig::new(6, 2, 1),
     );
-    assert!(matches!(blocked_runtime.step(start), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        blocked_runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     let first_projection_hash = blocked_runtime
         .last_scheduler_ownership()
         .expect("first idle selection retains a carrier")
         .projection_hash;
     let periodic_at = start + blocked_runtime.retransmit_interval();
     assert!(matches!(
-        blocked_runtime.step(periodic_at),
+        blocked_runtime.step(
+            periodic_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(RuntimeError::FailClosed)
     ));
     assert_eq!(
@@ -1597,7 +1717,10 @@ fn scheduler_owner_must_be_taken_before_a_later_step_can_enter() {
         start,
         RuntimeQueueConfig::new(6, 2, 1),
     );
-    assert!(matches!(runtime.step(start), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     let taken = runtime
         .take_last_scheduler_ownership()
         .expect("effect boundary takes the exact first occurrence");
@@ -1605,7 +1728,10 @@ fn scheduler_owner_must_be_taken_before_a_later_step_can_enter() {
     assert_eq!(taken.validate_exact(), Ok(()));
     assert!(runtime.last_scheduler_ownership().is_none());
     assert!(matches!(
-        runtime.step(periodic_at),
+        runtime.step(
+            periodic_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(

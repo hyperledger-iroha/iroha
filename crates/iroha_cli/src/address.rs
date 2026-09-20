@@ -812,12 +812,16 @@ mod tests {
                 if *expected == prefix && *found == DEFAULT_I105_PREFIX
         ));
         for input in ["invalid-address", wrong_prefix.as_str()] {
-            public_key_convert(input)
-                .run(&mut context)
-                .expect_err("conversion requires a valid address for the selected profile");
-            public_key_normalize()
-                .process_entries(&[input.to_owned()], &test_i18n(), prefix, prefix)
-                .expect_err("normalization requires a valid address for the selected profile");
+            assert!(
+                public_key_convert(input).run(&mut context).is_err(),
+                "conversion requires a valid address for the selected profile"
+            );
+            assert!(
+                public_key_normalize()
+                    .process_entries(&[input.to_owned()], &test_i18n(), prefix, prefix)
+                    .is_err(),
+                "normalization requires a valid address for the selected profile"
+            );
         }
         assert!(context.lines.is_empty());
     }

@@ -5,29 +5,39 @@
 //! payloads using the canonical Norito encoding, and emits a manifest so hosts can hydrate cold
 //! shards lazily. Snapshots can be built incrementally from per-block diffs to avoid full WSV
 //! scans, and heavy snapshot work can be offloaded after commit to reduce block latency.
+#[cfg(test)]
 use super::World;
 use crate::telemetry::StateTelemetry;
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
 use iroha_model_base::state_path::StatePath;
+#[cfg(test)]
 use mv::storage::StorageReadOnly;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
 use sha2::{Digest as _, Sha256};
+#[cfg(test)]
+use std::io::ErrorKind;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
-    io::{BufWriter, ErrorKind, Write},
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+mod geometry_attempt;
+pub(crate) use geometry_attempt::TieredGeometryAttempt;
+
 const WSV_COLD_COMPONENT: &str = "wsv_cold";
+#[cfg(test)]
 const DA_CACHE_HIT: &str = "hit";
+#[cfg(test)]
 const DA_CACHE_MISS: &str = "miss";
 const DA_CHURN_EVICTED: &str = "evicted";
+#[cfg(test)]
 const DA_CHURN_REHYDRATED: &str = "rehydrated";
 /// Lightweight handle describing a hot/cold storage split.
 #[derive(Debug, Clone, Default)]
@@ -52,6 +62,8 @@ pub struct TieredStateBackend {
     snapshot_counter: u64,
     /// Whether the snapshot counter has been seeded from disk.
     snapshot_counter_seeded: bool,
+    /// A complete retained baseline has been published, including an empty one.
+    snapshot_baseline_ready: bool,
     /// Per-entry metadata tracking heat and payload hashes.
     entries: BTreeMap<TieredEntryId, EntryMetadata>,
     /// Stable key metadata required to rebuild snapshot manifests incrementally.
@@ -81,9 +93,11 @@ struct SnapshotPayloadCache {
 }
 /// Changed WSV keys captured during a block for incremental snapshotting.
 #[derive(Debug, Default, Clone)]
+#[cfg(test)]
 pub(crate) struct TieredSnapshotDiff {
     entries: Vec<TieredKeyHandle>,
 }
+#[cfg(test)]
 impl TieredSnapshotDiff {
     /// Record a touched entry.
     pub(crate) fn push(&mut self, entry: TieredKeyHandle) {
@@ -99,12 +113,19 @@ impl TieredSnapshotDiff {
 #[derive(Default)]
 pub(crate) struct TieredSnapshotPayload {
     entries: Vec<TieredSnapshotPayloadEntry>,
+    complete: bool,
 }
 struct TieredSnapshotPayloadEntry {
     key: TieredKeyHandle,
     value: Option<Box<dyn TieredSnapshotValue>>,
 }
 impl TieredSnapshotPayload {
+    pub(crate) fn with_scope(complete: bool) -> Self {
+        Self {
+            entries: Vec::new(),
+            complete,
+        }
+    }
     pub(crate) fn push_value<T>(&mut self, key: TieredKeyHandle, value: Option<T>)
     where
         T: json::JsonSerialize + MeasuredBytes + Send + Sync + 'static,
@@ -119,6 +140,7 @@ impl TieredSnapshotPayload {
         self.entries.is_empty()
     }
 }
+#[cfg(test)]
 impl From<&TieredSnapshotPayload> for TieredSnapshotDiff {
     fn from(payload: &TieredSnapshotPayload) -> Self {
         let mut diff = TieredSnapshotDiff::default();
@@ -143,6 +165,7 @@ where
         json::to_vec(self).wrap_err("failed to encode snapshot value as JSON")
     }
 }
+#[cfg(test)]
 struct CollectContext<'a> {
     snapshot_idx: u64,
     scores: &'a mut Vec<EntryScore>,
@@ -152,6 +175,7 @@ impl TieredStateBackend {
     /// Construct a backend with explicit limits.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn new(
         enabled: bool,
         hot_retained_keys: usize,
@@ -173,6 +197,7 @@ impl TieredStateBackend {
             max_cold_bytes,
             snapshot_counter: 0,
             snapshot_counter_seeded: false,
+            snapshot_baseline_ready: false,
             entries: BTreeMap::new(),
             entry_keys: BTreeMap::new(),
             last_manifest: None,
@@ -188,20 +213,23 @@ impl TieredStateBackend {
     pub fn attach_telemetry(&mut self, telemetry: StateTelemetry) {
         self.telemetry = Some(telemetry);
     }
-    /// Record a snapshot of the current world.
+    /// Build the full-World reference snapshot used to check retained-payload snapshots.
+    #[cfg(test)]
     pub fn record_world_snapshot(&mut self, world: &World) -> Result<()> {
         if let Some(plan) = self.plan_world_snapshot(world)? {
             self.execute_snapshot_plan(plan, world)?;
+            self.snapshot_baseline_ready = true;
         }
         Ok(())
     }
     /// Record a snapshot using a diff of touched entries.
+    #[cfg(test)]
     pub(crate) fn record_world_snapshot_with_diff(
         &mut self,
         world: &World,
         diff: &TieredSnapshotDiff,
     ) -> Result<()> {
-        if self.entries.is_empty() {
+        if !self.snapshot_baseline_ready {
             return self.record_world_snapshot(world);
         }
         if let Some(plan) = self.plan_world_snapshot_with_diff(world, diff)? {
@@ -214,17 +242,31 @@ impl TieredStateBackend {
         &mut self,
         payload: &TieredSnapshotPayload,
     ) -> Result<()> {
-        if self.entries.is_empty() {
-            return Ok(());
+        if !payload.complete && !self.snapshot_baseline_ready {
+            eyre::bail!("incremental tiered payload has no complete snapshot baseline");
         }
         let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
             return Ok(());
         };
+        if payload.complete && !self.snapshot_baseline_ready {
+            // An initial or failed baseline has no reusable payload authority.
+            self.entries.clear();
+            self.entry_keys.clear();
+        }
+        // Any error below requires another complete retained baseline. A later
+        // incremental payload cannot silently continue from partial metadata.
+        self.snapshot_baseline_ready = false;
         let payload_cache = if payload.is_empty() {
             SnapshotPayloadCache::default()
         } else {
             self.apply_snapshot_payload(snapshot_idx, payload)?
         };
+        if payload.complete {
+            self.entries
+                .retain(|id, _| payload_cache.payloads.contains_key(id));
+            self.entry_keys
+                .retain(|id, _| payload_cache.payloads.contains_key(id));
+        }
         let scores = self.build_scores_from_keys(snapshot_idx);
         let plan = self.build_snapshot_plan(
             root,
@@ -234,6 +276,7 @@ impl TieredStateBackend {
             Some(&payload_cache.payloads),
         )?;
         self.execute_snapshot_plan_with_payload(plan, &payload_cache.payloads)?;
+        self.snapshot_baseline_ready = true;
         Ok(())
     }
     fn seed_snapshot_counter_if_needed(&mut self) -> Result<()> {
@@ -394,6 +437,7 @@ impl TieredStateBackend {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn plan_world_snapshot(&mut self, world: &World) -> Result<Option<TieredSnapshotPlan>> {
         let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
             return Ok(None);
@@ -406,6 +450,7 @@ impl TieredStateBackend {
         let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
         Ok(Some(plan))
     }
+    #[cfg(test)]
     fn plan_world_snapshot_with_diff(
         &mut self,
         world: &World,
@@ -667,6 +712,7 @@ impl TieredStateBackend {
             cold_entries: cold_plans,
         })
     }
+    #[cfg(test)]
     fn apply_snapshot_diff(
         &mut self,
         world: &World,
@@ -736,6 +782,7 @@ impl TieredStateBackend {
         Ok(cache)
     }
     #[allow(clippy::too_many_lines)]
+    #[cfg(test)]
     fn execute_snapshot_plan(&mut self, mut plan: TieredSnapshotPlan, world: &World) -> Result<()> {
         self.ensure_cold_roots()
             .wrap_err("failed to prepare cold tier root directory")?;
@@ -1100,11 +1147,6 @@ impl TieredStateBackend {
         self.prune_to_cold_bytes(&plan.root)?;
         Ok(())
     }
-    /// Returns the currently configured hot key retention limit.
-    #[must_use]
-    pub fn hot_retained_keys(&self) -> usize {
-        self.hot_retained_keys
-    }
     /// Returns the currently configured hot byte retention limit.
     #[must_use]
     pub fn hot_retained_bytes(&self) -> u64 {
@@ -1143,10 +1185,9 @@ impl TieredStateBackend {
     pub fn enabled(&self) -> bool {
         self.enabled
     }
-    /// Returns whether the backend has been seeded with at least one entry.
-    #[must_use]
-    pub(crate) fn has_entries(&self) -> bool {
-        !self.entries.is_empty()
+    /// Whether incremental payloads can extend an actual complete baseline.
+    pub(crate) fn snapshot_baseline_ready(&self) -> bool {
+        self.snapshot_baseline_ready
     }
     /// Returns the cached manifest of the latest snapshot, if any.
     #[must_use]
@@ -1180,6 +1221,7 @@ impl TieredStateBackend {
         Ok(Some(total))
     }
     /// Load a cold payload from the configured cold roots.
+    #[cfg(test)]
     pub fn read_cold_payload(
         &self,
         snapshot_index: u64,
@@ -1246,6 +1288,7 @@ impl TieredStateBackend {
         }
         Ok(None)
     }
+    #[cfg(test)]
     fn try_rehydrate_cold_payload(
         &self,
         snapshot_index: u64,
@@ -1324,6 +1367,7 @@ impl TieredStateBackend {
         }
         Ok(Some(u64::try_from(payload.len()).unwrap_or(u64::MAX)))
     }
+    #[cfg(test)]
     fn record_da_cache(&self, outcome: &'static str) {
         if let Some(telemetry) = self.telemetry.as_ref() {
             telemetry.inc_storage_da_cache(WSV_COLD_COMPONENT, outcome);
@@ -1339,6 +1383,7 @@ impl TieredStateBackend {
     }
     /// Update configuration knobs at runtime.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn reconfigure(
         &mut self,
         enabled: bool,
@@ -1350,6 +1395,41 @@ impl TieredStateBackend {
         max_snapshots: usize,
         max_cold_bytes: u64,
     ) {
+        let cold_root_changed = self.reconfigure_without_storage_effects(
+            enabled,
+            hot_retained_keys,
+            hot_retained_bytes,
+            hot_retained_grace_snapshots,
+            cold_store_root,
+            da_store_root,
+            max_snapshots,
+            max_cold_bytes,
+        );
+        if self.enabled && cold_root_changed {
+            if let Err(err) = self.ensure_cold_roots() {
+                iroha_logger::warn!(
+                    ?err,
+                    "tiered-state: failed to prepare cold tier root after reconfigure"
+                );
+            }
+        }
+    }
+    /// Update in-memory policy and caches without creating or changing storage.
+    ///
+    /// Returns whether either configured root changed. Startup uses this before
+    /// capturing a retained geometry owner so that owner performs every mkdir.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reconfigure_without_storage_effects(
+        &mut self,
+        enabled: bool,
+        hot_retained_keys: usize,
+        hot_retained_bytes: u64,
+        hot_retained_grace_snapshots: u64,
+        cold_store_root: Option<PathBuf>,
+        da_store_root: Option<PathBuf>,
+        max_snapshots: usize,
+        max_cold_bytes: u64,
+    ) -> bool {
         let cold_root_changed =
             self.cold_store_root != cold_store_root || self.da_store_root != da_store_root;
         let grace_changed = self.hot_retained_grace_snapshots != hot_retained_grace_snapshots;
@@ -1371,19 +1451,10 @@ impl TieredStateBackend {
             self.entry_keys.clear();
             self.snapshot_counter = 0;
             self.snapshot_counter_seeded = false;
+            self.snapshot_baseline_ready = false;
             self.last_manifest = None;
         }
-        if !self.enabled {
-            return;
-        }
-        if cold_root_changed {
-            if let Err(err) = self.ensure_cold_roots() {
-                iroha_logger::warn!(
-                    ?err,
-                    "tiered-state: failed to prepare cold tier root after reconfigure"
-                );
-            }
-        }
+        cold_root_changed
     }
     /// Validate lane snapshot geometry changes that can fail without mutating tiered state.
     ///
@@ -1474,187 +1545,16 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-    /// Ensure tiered snapshot directories reflect the configured lane geometry.
+    /// Test convenience around the same retained production geometry owner.
+    #[cfg(test)]
     pub fn reconcile_lane_geometry(
         &mut self,
         previous: &LaneConfig,
         current: &LaneConfig,
         replacements: &[(&LaneConfigEntry, &LaneConfigEntry)],
     ) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
-        }
-        let Some(root) = self.primary_cold_root().cloned() else {
-            return Ok(());
-        };
-        self.ensure_cold_roots()?;
-        let mut previous_map = BTreeMap::new();
-        for entry in previous.entries() {
-            previous_map.insert(entry.lane_id, entry);
-        }
-        let mut current_map = BTreeMap::new();
-        for entry in current.entries() {
-            current_map.insert(entry.lane_id, entry);
-        }
-        let replacement_ids: BTreeSet<_> = replacements
-            .iter()
-            .map(|(_, current)| current.lane_id)
-            .collect();
-        let added: Vec<&LaneConfigEntry> = current_map
-            .iter()
-            .filter(|(id, _)| !previous_map.contains_key(id) && !replacement_ids.contains(id))
-            .map(|(_, entry)| *entry)
-            .collect();
-        let retired: Vec<&LaneConfigEntry> = previous_map
-            .iter()
-            .filter(|(id, _)| !current_map.contains_key(id) && !replacement_ids.contains(id))
-            .map(|(_, entry)| *entry)
-            .collect();
-        let lanes_root = root.join("lanes");
-        fs::create_dir_all(&lanes_root).wrap_err_with(|| {
-            format!(
-                "failed to create tiered lanes root {path}",
-                path = lanes_root.display()
-            )
-        })?;
-        for (previous, _) in replacements {
-            self.retire_lane_snapshot_dir(&root, &lanes_root, previous)?;
-        }
-        for entry in added {
-            self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
-        }
-        for entry in current.entries() {
-            if replacement_ids.contains(&entry.lane_id) {
-                continue;
-            }
-            let dir = lane_snapshot_dir(&lanes_root, entry);
-            if dir.exists() {
-                continue;
-            }
-            let has_prev_lane_dir = previous_map
-                .get(&entry.lane_id)
-                .is_some_and(|prev| lane_snapshot_dir(&lanes_root, prev).exists());
-            if has_prev_lane_dir {
-                continue;
-            }
-            self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
-        }
-        for (_, current) in replacements {
-            self.ensure_lane_snapshot_dir(&lanes_root, current)?;
-        }
-        for entry in retired {
-            self.retire_lane_snapshot_dir(&root, &lanes_root, entry)?;
-        }
-        Ok(())
-    }
-    /// Relabel snapshot directories when lane aliases (and therefore slugs) change.
-    #[allow(clippy::too_many_lines)]
-    pub fn relabel_lane_geometry(
-        &mut self,
-        migrations: &[(&LaneConfigEntry, &LaneConfigEntry)],
-    ) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
-        }
-        let Some(root) = self.primary_cold_root().cloned() else {
-            return Ok(());
-        };
-        if migrations.is_empty() {
-            return Ok(());
-        }
-        let lanes_root = root.join("lanes");
-        fs::create_dir_all(&lanes_root).wrap_err_with(|| {
-            format!(
-                "failed to create tiered lanes root {path}",
-                path = lanes_root.display()
-            )
-        })?;
-        for (previous, current) in migrations {
-            let old_dir = lane_snapshot_dir(&lanes_root, previous);
-            let new_dir = lane_snapshot_dir(&lanes_root, current);
-            if old_dir == new_dir || !old_dir.exists() {
-                continue;
-            }
-            if let Some(parent) = new_dir.parent() {
-                fs::create_dir_all(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to prepare parent {path} for lane snapshot relabel",
-                        path = parent.display()
-                    )
-                })?;
-            }
-            if new_dir.exists() {
-                let retired_root = root.join("retired").join("lanes");
-                fs::create_dir_all(&retired_root).wrap_err_with(|| {
-                    format!(
-                        "failed to prepare retired lane root {path}",
-                        path = retired_root.display()
-                    )
-                })?;
-                let archive = unique_retired_lane_path(&retired_root, &current.kura_segment);
-                fs::rename(&new_dir, &archive).wrap_err_with(|| {
-                    format!(
-                        "failed to archive conflicting lane snapshot dir {path}",
-                        path = new_dir.display()
-                    )
-                })?;
-                let archive_parent = archive.parent();
-                let new_parent = new_dir.parent();
-                if let Some(parent) = archive_parent {
-                    Self::sync_dir(parent).wrap_err_with(|| {
-                        format!(
-                            "failed to sync retired lane snapshot dir {path}",
-                            path = parent.display()
-                        )
-                    })?;
-                }
-                if let Some(parent) = new_parent {
-                    if Some(parent) != archive_parent {
-                        Self::sync_dir(parent).wrap_err_with(|| {
-                            format!(
-                                "failed to sync lane snapshot directory {path}",
-                                path = parent.display()
-                            )
-                        })?;
-                    }
-                }
-            }
-            fs::rename(&old_dir, &new_dir).wrap_err_with(|| {
-                format!(
-                    "failed to relabel lane snapshot dir from {src} to {dst}",
-                    src = old_dir.display(),
-                    dst = new_dir.display()
-                )
-            })?;
-            let new_parent = new_dir.parent();
-            let old_parent = old_dir.parent();
-            if let Some(parent) = new_parent {
-                Self::sync_dir(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to sync lane snapshot directory {path}",
-                        path = parent.display()
-                    )
-                })?;
-            }
-            if let Some(parent) = old_parent {
-                if Some(parent) != new_parent {
-                    Self::sync_dir(parent).wrap_err_with(|| {
-                        format!(
-                            "failed to sync lane snapshot directory {path}",
-                            path = parent.display()
-                        )
-                    })?;
-                }
-            }
-            iroha_logger::info!(
-                lane = %current.lane_id.as_u32(),
-                alias_before = previous.alias,
-                alias_after = current.alias,
-                dir = %new_dir.display(),
-                "tiered-state: lane snapshot directory relabelled"
-            );
-        }
-        Ok(())
+        self.prepare_lane_geometry_attempt(previous, current, replacements, &[])?
+            .resume(self)
     }
     fn ensure_cold_roots(&self) -> Result<()> {
         for root in self.cold_store_root.iter().chain(self.da_store_root.iter()) {
@@ -1682,107 +1582,8 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-    #[allow(clippy::unused_self)]
-    fn ensure_lane_snapshot_dir(&self, lanes_root: &Path, entry: &LaneConfigEntry) -> Result<()> {
-        let dir = lane_snapshot_dir(lanes_root, entry);
-        fs::create_dir_all(&dir).wrap_err_with(|| {
-            format!(
-                "failed to prepare lane snapshot directory {path}",
-                path = dir.display()
-            )
-        })?;
-        iroha_logger::info!(
-            lane = %entry.lane_id.as_u32(),
-            alias = entry.alias,
-            dir = %dir.display(),
-            "tiered-state: lane snapshot directory provisioned"
-        );
-        Ok(())
-    }
-    #[allow(clippy::unused_self)]
-    fn retire_lane_snapshot_dir(
-        &mut self,
-        root: &Path,
-        lanes_root: &Path,
-        entry: &LaneConfigEntry,
-    ) -> Result<()> {
-        let dir = lane_snapshot_dir(lanes_root, entry);
-        if !dir.exists() {
-            return Ok(());
-        }
-        let retired_root = root.join("retired").join("lanes");
-        // Replay rollback can provision the same empty lane image that an earlier
-        // rollback already archived. Retain the first durable archive and remove
-        // only the redundant empty live image; any lane carrying state still
-        // follows the normal unique-archive path below.
-        if lane_snapshot_dir_is_empty(&dir)?
-            && has_matching_empty_retired_lane_snapshot(&retired_root, &entry.kura_segment)?
-        {
-            fs::remove_dir(&dir).wrap_err_with(|| {
-                format!(
-                    "failed to remove redundant empty lane snapshot directory {path}",
-                    path = dir.display()
-                )
-            })?;
-            if let Some(parent) = dir.parent() {
-                Self::sync_dir(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to sync lane snapshot directory {path}",
-                        path = parent.display()
-                    )
-                })?;
-            }
-            iroha_logger::info!(
-                lane = %entry.lane_id.as_u32(),
-                alias = entry.alias,
-                source = %dir.display(),
-                "tiered-state: removed redundant empty lane snapshot directory"
-            );
-            return Ok(());
-        }
-        fs::create_dir_all(&retired_root).wrap_err_with(|| {
-            format!(
-                "failed to create retired lane directory {path}",
-                path = retired_root.display()
-            )
-        })?;
-        let dest = unique_retired_lane_path(&retired_root, &entry.kura_segment);
-        fs::rename(&dir, &dest).wrap_err_with(|| {
-            format!(
-                "failed to archive retired lane directory {path}",
-                path = dir.display()
-            )
-        })?;
-        let dest_parent = dest.parent();
-        let dir_parent = dir.parent();
-        if let Some(parent) = dest_parent {
-            Self::sync_dir(parent).wrap_err_with(|| {
-                format!(
-                    "failed to sync retired lane snapshot directory {path}",
-                    path = parent.display()
-                )
-            })?;
-        }
-        if let Some(parent) = dir_parent {
-            if Some(parent) != dest_parent {
-                Self::sync_dir(parent).wrap_err_with(|| {
-                    format!(
-                        "failed to sync lane snapshot directory {path}",
-                        path = parent.display()
-                    )
-                })?;
-            }
-        }
-        iroha_logger::info!(
-            lane = %entry.lane_id.as_u32(),
-            alias = entry.alias,
-            source = %dir.display(),
-            target = %dest.display(),
-            "tiered-state: retired lane snapshot directory"
-        );
-        Ok(())
-    }
     #[allow(clippy::too_many_lines)]
+    #[cfg(test)]
     fn collect_world_entries(
         &mut self,
         world: &World,
@@ -2167,6 +1968,7 @@ impl TieredStateBackend {
         );
         Ok(())
     }
+    #[cfg(test)]
     fn collect_entry<K, V>(
         &mut self,
         segment: TieredSegment,
@@ -2182,6 +1984,7 @@ impl TieredStateBackend {
         let key_encoded = norito::codec::Encode::encode(key);
         self.collect_entry_with_encoded_key(segment, key_handle, key_encoded, value, ctx)
     }
+    #[cfg(test)]
     fn collect_entry_with_encoded_key<V>(
         &mut self,
         segment: TieredSegment,
@@ -2628,6 +2431,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     out.copy_from_slice(&Sha256::digest(bytes));
     out
 }
+#[cfg(test)]
 fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usize)> {
     let encoded = json::to_vec(value).wrap_err("failed to encode snapshot value as JSON")?;
     Ok((sha256(&encoded), encoded.len()))
@@ -2646,6 +2450,7 @@ pub(crate) trait MeasuredBytes {
     }
 }
 #[allow(clippy::unnecessary_wraps)]
+#[cfg(test)]
 fn compute_hot_bytes(value: &impl MeasuredBytes) -> Result<usize> {
     Ok(value.measured_bytes())
 }
@@ -4075,78 +3880,6 @@ mod measured_bytes_impls {
 fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
     root.join(&entry.kura_segment)
 }
-fn lane_snapshot_dir_is_empty(path: &Path) -> Result<bool> {
-    Ok(fs::read_dir(path)
-        .wrap_err_with(|| {
-            format!(
-                "failed to inspect lane snapshot directory {path}",
-                path = path.display()
-            )
-        })?
-        .next()
-        .transpose()
-        .wrap_err_with(|| {
-            format!(
-                "failed to inspect lane snapshot entry below {path}",
-                path = path.display()
-            )
-        })?
-        .is_none())
-}
-fn has_matching_empty_retired_lane_snapshot(retired_root: &Path, stem: &str) -> Result<bool> {
-    if !retired_root.exists() {
-        return Ok(false);
-    }
-    for entry in fs::read_dir(retired_root).wrap_err_with(|| {
-        format!(
-            "failed to inspect retired lane snapshot directory {path}",
-            path = retired_root.display()
-        )
-    })? {
-        let entry = entry.wrap_err_with(|| {
-            format!(
-                "failed to inspect retired lane snapshot entry below {path}",
-                path = retired_root.display()
-            )
-        })?;
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
-        };
-        let Some(suffix) = name
-            .strip_prefix(stem)
-            .and_then(|suffix| suffix.strip_prefix('_'))
-        else {
-            continue;
-        };
-        let mut suffix_parts = suffix.split('_');
-        let Some(stamp) = suffix_parts.next() else {
-            continue;
-        };
-        let counter = suffix_parts.next();
-        if stamp.is_empty()
-            || !stamp.bytes().all(|byte| byte.is_ascii_digit())
-            || counter.is_some_and(|part| {
-                part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit())
-            })
-            || suffix_parts.next().is_some()
-            || !entry
-                .file_type()
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to inspect retired lane snapshot entry type at {path}",
-                        path = entry.path().display()
-                    )
-                })?
-                .is_dir()
-        {
-            continue;
-        }
-        if lane_snapshot_dir_is_empty(&entry.path())? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
 fn unique_retired_lane_path(base: &Path, stem: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4563,6 +4296,7 @@ impl EntryScore {
         ));
         path
     }
+    #[cfg(test)]
     fn encode_value(&self, world: &World) -> Result<Vec<u8>> {
         self.key.encode_value(world)
     }
@@ -4876,6 +4610,7 @@ impl TieredKeyHandle {
         let key_hash = sha256(&key_encoded);
         Ok((TieredEntryId::new(self.segment(), key_hash), key_encoded))
     }
+    #[cfg(test)]
     fn measure_value(&self, world: &World) -> Result<Option<([u8; 32], usize)>> {
         macro_rules! fetch {
             ($storage:expr, $key:expr) => {{
@@ -5044,6 +4779,7 @@ impl TieredKeyHandle {
             }
         }
     }
+    #[cfg(test)]
     fn encode_value(&self, world: &World) -> Result<Vec<u8>> {
         macro_rules! fetch {
             ($storage:expr, $key:expr) => {{
@@ -5514,6 +5250,257 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
     use std::{fs, num::NonZeroU32};
     use tempfile::tempdir;
+
+    fn assert_retained_value(backend: &TieredStateBackend, key: &StatePath, value: &[u8]) {
+        let encoded_key = TieredKeyHandle::SmartContractState(key.clone())
+            .encode_key()
+            .unwrap();
+        let manifest = backend.last_manifest().expect("retained snapshot manifest");
+        let entry = manifest
+            .hot_entries
+            .iter()
+            .chain(&manifest.cold_entries)
+            .find(|entry| {
+                entry.segment == TieredSegment::SmartContractState
+                    && entry.key_payload == encoded_key
+            })
+            .expect("retained state key");
+        assert_eq!(
+            entry.value_hash_hex,
+            hex::encode(sha256(&json::to_vec(&value.to_vec()).unwrap()))
+        );
+    }
+
+    fn wait_snapshot_worker_idle(worker: &super::super::TieredSnapshotWorker) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut pending = worker.inner.pending.lock();
+        while pending.payload.is_some() || pending.processing {
+            assert!(
+                !worker
+                    .inner
+                    .cvar
+                    .wait_until(&mut pending, deadline)
+                    .timed_out(),
+                "snapshot worker did not drain"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_worker_bounds_pending_work_without_losing_disjoint_or_later_updates() {
+        use super::super::TieredSnapshotWorker;
+        use std::sync::{Arc, mpsc};
+        let temp = tempdir().unwrap();
+        let backend = Arc::new(crate::publication_lock::PublicationMutex::new(
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0),
+        ));
+        backend
+            .lock()
+            .record_world_snapshot(&World::default())
+            .unwrap();
+        let worker = TieredSnapshotWorker::new(
+            Arc::clone(&backend),
+            #[cfg(feature = "telemetry")]
+            None,
+        );
+        assert!(
+            worker.enabled(),
+            "regression requires a real background worker"
+        );
+        let (a, b) = (dummy_state_entry(201).0, dummy_state_entry(202).0);
+        let payload = |key: &StatePath, value| {
+            let mut payload = TieredSnapshotPayload::default();
+            payload.push_value(
+                TieredKeyHandle::SmartContractState(key.clone()),
+                Some(vec![value]),
+            );
+            payload
+        };
+        // Holding only the backend blocks its I/O, not dequeue or capacity
+        // notification. The worker never needs a State or World lock.
+        let blocked_backend = backend.lock();
+        assert!(worker.schedule(payload(&a, 1_u8)).is_ok());
+        {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut pending = worker.inner.pending.lock();
+            while !pending.processing {
+                assert!(
+                    !worker
+                        .inner
+                        .cvar
+                        .wait_until(&mut pending, deadline)
+                        .timed_out()
+                );
+            }
+            assert!(pending.payload.is_none());
+        }
+        assert!(worker.schedule(payload(&b, 2_u8)).is_ok());
+        std::thread::scope(|scope| {
+            let (entered_tx, entered_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let worker = &worker;
+            let a = &a;
+            scope.spawn(move || {
+                entered_tx.send(()).unwrap();
+                assert!(worker.schedule(payload(a, 3_u8)).is_ok());
+                done_tx.send(()).unwrap();
+            });
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            {
+                let pending = worker.inner.pending.lock();
+                let queued = pending
+                    .payload
+                    .as_ref()
+                    .expect("second update remains queued");
+                assert_eq!(queued.entries.len(), 1);
+                assert!(
+                    matches!(&queued.entries[0].key, TieredKeyHandle::SmartContractState(key) if key == &b)
+                );
+            }
+            drop(blocked_backend);
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+        });
+        wait_snapshot_worker_idle(&worker);
+        let backend = backend.lock();
+        assert_retained_value(&backend, &a, &[3]);
+        assert_retained_value(&backend, &b, &[2]);
+        assert_eq!(backend.last_manifest().unwrap().snapshot_index, 4);
+    }
+
+    #[test]
+    fn complete_empty_payload_establishes_a_valid_cold_baseline() {
+        let temp = tempdir().unwrap();
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        assert!(!backend.snapshot_baseline_ready());
+        assert!(
+            backend
+                .record_world_snapshot_with_payload(&TieredSnapshotPayload::default())
+                .is_err()
+        );
+        assert!(backend.last_manifest().is_none());
+        backend
+            .record_world_snapshot_with_payload(&TieredSnapshotPayload::with_scope(true))
+            .unwrap();
+        assert!(backend.snapshot_baseline_ready());
+        assert_eq!(backend.last_manifest().unwrap().total_entries, 0);
+        let key = dummy_state_entry(203).0;
+        let mut update = TieredSnapshotPayload::default();
+        update.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![8_u8]),
+        );
+        backend.record_world_snapshot_with_payload(&update).unwrap();
+        assert_retained_value(&backend, &key, &[8]);
+        let mut removal = TieredSnapshotPayload::default();
+        removal.push_value::<Vec<u8>>(TieredKeyHandle::SmartContractState(key), None);
+        backend
+            .record_world_snapshot_with_payload(&removal)
+            .unwrap();
+        assert!(backend.snapshot_baseline_ready());
+        assert_eq!(backend.last_manifest().unwrap().total_entries, 0);
+    }
+
+    #[test]
+    fn failed_payload_requires_another_complete_baseline_before_incremental_work() {
+        let temp = tempdir().unwrap();
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        backend
+            .record_world_snapshot_with_payload(&TieredSnapshotPayload::with_scope(true))
+            .unwrap();
+        let key = dummy_state_entry(205).0;
+        let mut update = TieredSnapshotPayload::default();
+        update.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![5_u8]),
+        );
+        let next_index = backend.last_manifest().unwrap().snapshot_index + 1;
+        let conflict = temp.path().join(format!("{next_index:020}.staging"));
+        fs::write(&conflict, b"blocked staging directory").unwrap();
+        assert!(backend.record_world_snapshot_with_payload(&update).is_err());
+        assert!(!backend.snapshot_baseline_ready());
+        fs::remove_file(conflict).unwrap();
+        assert!(backend.record_world_snapshot_with_payload(&update).is_err());
+        let mut complete = TieredSnapshotPayload::with_scope(true);
+        complete.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![6_u8]),
+        );
+        backend
+            .record_world_snapshot_with_payload(&complete)
+            .unwrap();
+        assert!(backend.snapshot_baseline_ready());
+        assert_retained_value(&backend, &key, &[6]);
+    }
+
+    #[test]
+    fn inert_and_shutdown_workers_return_unmodified_payloads_for_ordered_fallback() {
+        use super::super::TieredSnapshotWorker;
+        use std::sync::{Arc, atomic::Ordering};
+        let temp = tempdir().unwrap();
+        let backend = Arc::new(crate::publication_lock::PublicationMutex::new(
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0),
+        ));
+        let inert = TieredSnapshotWorker::inert(
+            Arc::clone(&backend),
+            #[cfg(feature = "telemetry")]
+            None,
+        );
+        let key = dummy_state_entry(204).0;
+        let mut baseline = TieredSnapshotPayload::with_scope(true);
+        baseline.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![1_u8]),
+        );
+        let baseline = match inert.schedule(baseline) {
+            Err(payload) => payload,
+            Ok(()) => panic!("inert worker accepted payload"),
+        };
+        backend
+            .lock()
+            .record_world_snapshot_with_payload(&baseline)
+            .unwrap();
+        let worker = TieredSnapshotWorker::new(
+            Arc::clone(&backend),
+            #[cfg(feature = "telemetry")]
+            None,
+        );
+        assert!(worker.enabled());
+        let mut accepted = TieredSnapshotPayload::default();
+        accepted.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![2_u8]),
+        );
+        assert!(worker.schedule(accepted).is_ok());
+        {
+            let _pending = worker.inner.pending.lock();
+            worker.inner.shutdown.store(true, Ordering::Relaxed);
+            worker.inner.cvar.notify_all();
+        }
+        let mut later = TieredSnapshotPayload::default();
+        later.push_value(
+            TieredKeyHandle::SmartContractState(key.clone()),
+            Some(vec![3_u8]),
+        );
+        let later = match worker.schedule(later) {
+            Err(payload) => payload,
+            Ok(()) => panic!("shutdown worker accepted payload"),
+        };
+        // Returning the later payload guarantees all previously accepted work
+        // finished, so synchronous fallback cannot be overwritten by the worker.
+        assert_retained_value(&backend.lock(), &key, &[2]);
+        backend
+            .lock()
+            .record_world_snapshot_with_payload(&later)
+            .unwrap();
+        assert_retained_value(&backend.lock(), &key, &[3]);
+    }
 
     #[test]
     fn retired_commit_qc_segment_is_rejected() {
@@ -6747,75 +6734,6 @@ mod tests {
         );
     }
     #[test]
-    fn repeated_empty_lane_retirement_reuses_exact_archive() {
-        let temp = tempdir().expect("tmpdir");
-        let mut backend =
-            TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 4, 0);
-        let lane = LaneConfig {
-            id: LaneId::from(1),
-            alias: "retry".to_string(),
-            ..LaneConfig::default()
-        };
-        let expanded_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), lane])
-            .expect("expanded catalog");
-        let expanded_cfg = RuntimeLaneConfig::from_catalog(&expanded_catalog);
-        let baseline_cfg = RuntimeLaneConfig::default();
-        let lane_entry = expanded_cfg
-            .entry(LaneId::from(1))
-            .expect("expanded lane entry");
-        let lanes_root = temp.path().join("lanes");
-        let live_dir = lane_snapshot_dir(&lanes_root, lane_entry);
-        let retired_root = temp.path().join("retired").join("lanes");
-        backend
-            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
-            .expect("provision lane");
-        backend
-            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
-            .expect("retire lane");
-        let initial_archives = fs::read_dir(&retired_root)
-            .expect("retired lane root")
-            .map(|entry| entry.expect("retired lane entry").file_name())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(initial_archives.len(), 1);
-        backend
-            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
-            .expect("reprovision lane");
-        backend
-            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
-            .expect("repeat lane retirement");
-        let retry_archives = fs::read_dir(&retired_root)
-            .expect("retired lane root")
-            .map(|entry| entry.expect("retired lane entry").file_name())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            retry_archives, initial_archives,
-            "an exact empty retry must not create a rollback-only archive"
-        );
-        assert!(!live_dir.exists());
-        backend
-            .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
-            .expect("reprovision populated lane");
-        fs::write(live_dir.join("marker"), b"retained state").expect("seed retained state");
-        backend
-            .reconcile_lane_geometry(&expanded_cfg, &baseline_cfg, &[])
-            .expect("retire populated lane");
-        let populated_archives = fs::read_dir(&retired_root)
-            .expect("retired lane root")
-            .map(|entry| entry.expect("retired lane entry").path())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            populated_archives.len(),
-            initial_archives.len() + 1,
-            "a populated normal retirement must retain a distinct archive"
-        );
-        assert!(
-            populated_archives
-                .iter()
-                .any(|archive| archive.join("marker").is_file()),
-            "the populated retirement archive must preserve lane state"
-        );
-    }
-    #[test]
     fn lane_snapshot_dirs_relabel_on_alias_change() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
@@ -6858,7 +6776,14 @@ mod tests {
             .entry(LaneId::SINGLE)
             .expect("updated lane entry");
         backend
-            .relabel_lane_geometry(&[(old_entry, new_entry)])
+            .prepare_lane_geometry_attempt(
+                &initial_cfg,
+                &updated_cfg,
+                &[],
+                &[(old_entry, new_entry)],
+            )
+            .expect("capture snapshot relabel")
+            .resume(&mut backend)
             .expect("relabel snapshot directories");
         let new_dir = lane_snapshot_dir(&lanes_root, new_entry);
         assert!(

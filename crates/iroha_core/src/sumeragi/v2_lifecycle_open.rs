@@ -1259,6 +1259,9 @@ pub(crate) enum LifecycleRecoveryAssemblyErrorKind {
     /// The opaque installed recovered-WAL projection and repaired frame differ.
     #[error("recovered-WAL Sign storage recovery is incomplete: {0}")]
     RecoveredWalSign(&'static str),
+    /// Native interrupted-tip Apply could not join its exact retained lifecycle owner.
+    #[error("pending Kura Apply storage recovery is incomplete: {0}")]
+    PendingKuraApply(&'static str),
     /// The complete recovered body-pipeline census differs from the ledger.
     #[error("durable body-pipeline startup census is inconsistent: {0}")]
     DurableCertifiedBodyPipeline(&'static str),
@@ -3659,7 +3662,7 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         }
         _ => {}
     }
-    let lifecycle_outputs = match body_pipeline.as_ref() {
+    let mut lifecycle_outputs = match body_pipeline.as_ref() {
         Some(pipeline) => PreparedLifecycleOutputRecoveryV1::assemble_with_frontier(
             ledger,
             pipeline.verified(),
@@ -3668,8 +3671,19 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         )?,
         None => PreparedLifecycleOutputRecoveryV1 {
             entries: BTreeMap::new(),
+            pending_apply: None,
         },
     };
+    if let Some(comparison) = body_pipeline
+        .as_mut()
+        .and_then(|pipeline| pipeline.take_pending_kura_apply())
+    {
+        let verified = body_pipeline
+            .as_ref()
+            .expect("pending Apply retains its body pipeline")
+            .verified();
+        lifecycle_outputs.attach_pending_apply(ledger, verified, comparison)?;
+    }
     let mut claims = BTreeMap::new();
     for record in ledger.records() {
         match classify_storage_only_record(record) {
@@ -3851,17 +3865,9 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         );
     }
     if !lifecycle_outputs.splice_candidates(&mut candidates) {
-        let (ordinal, output) = lifecycle_outputs
-            .entries
-            .first_key_value()
-            .expect("failed lifecycle output splice retains at least one entry");
-        return Err(
-            LifecycleRecoveryAssemblyErrorKind::InvalidLifecycleOutputRecovery {
-                ordinal: *ordinal,
-                work_class: output.candidate().work_class,
-                stage: output.candidate().stage,
-            },
-        );
+        return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+            "owner-held recovery candidates did not splice exactly once",
+        ));
     }
     match recovered_wal {
         RecoveredWalStartupProjectionV1::ControlContinuation(continuation) => {
@@ -4006,7 +4012,8 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         }
         RecoveredWalStartupProjectionV1::None => {
             if candidates.values().any(|candidate| {
-                !matches!(candidate.work_class, LifecycleWorkClass::Fetch)
+                !lifecycle_outputs.owns_candidate(candidate)
+                    && !matches!(candidate.work_class, LifecycleWorkClass::Fetch)
                     && !(body_pipeline_startup
                         && matches!(
                             candidate.work_class,

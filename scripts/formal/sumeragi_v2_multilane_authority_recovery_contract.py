@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from sumeragi_v2_multilane_geometry_evidence_contract import _code
+
 AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
   'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
   'method',
@@ -183,36 +185,31 @@ AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
   'tip.lane_id == lane_id\n'
   '                && tip.dataspace_id == dataspace_id\n'
   '                && tip.lane_incarnation == lane_incarnation',
+  'if !kura.emergency_fast_startup_enabled()',
   '.read_native_amx_participant_application_history(lane_id)\n'
   '            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;',
-  'Some(\n'
-  '                crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)\n'
-  '                | '
-  'crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)\n'
-  '                | '
-  'crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),\n'
-  '            ) => {',
+  '.entries()\n            .next_back()\n            .map(|(_, observation)| observation)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_)',
+  'Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(',
   'if descriptor.dataspace_id != dataspace_id\n'
   '                    || descriptor.lane_incarnation != lane_incarnation\n'
   '                    || latest_receipt.application_block_height >= proposal_height',
   '} else if matching.is_empty() {',
   'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
-  'if hashes.len() > 1 {\n        return Ok(None);\n    }',
-  'match history\n            .entries()\n            .next_back()'),
+  'if hashes.len() > 1 {\n        return Ok(None);\n    }'),
  ('let mut matching = v2_known_lane_tips(state, proposal_height)?',
-  '.read_native_amx_participant_application_history(lane_id)',
-  'Some(\n'
-  '                crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)\n'
-  '                | '
-  'crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)\n'
-  '                | '
-  'crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),\n'
-  '            ) => {',
+  '.read_native_amx_participant_application_history(lane_id)\n'
+  '            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;',
+  '.entries()\n            .next_back()\n            .map(|(_, observation)| observation)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)',
+  'crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_)',
   'return Ok(None);',
-  'Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(\n'
-  '                latest_receipt,\n'
-  '            )) => {',
+  'Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(',
   'if descriptor.dataspace_id != dataspace_id',
+  'return Ok(None);',
   '} else if matching.is_empty() {',
   'return Ok(None);',
   'if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }',
@@ -229,18 +226,21 @@ AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
    '        )',),
   ()),
  ('SumeragiV2AutoscaleLifecycle',
-  'crates/iroha_core/src/state.rs',
-  'fn',
-  'lane_has_drain_blocking_evidence',
-  ('unmerged_merge_admissible_relay_progress',
-   'pending_certified_merge_work_for_lane',
-   'unwrap_or(true)',
-   '.native_amx_participant_frontiers_pending_durable_evidence_snapshot()',
-   '.map_or(true, |markers|',
-   'marker.lane_id == lane_id',
-   'marker.dataspace_id == dataspace_id',
-   'marker.lane_incarnation == lane_incarnation'),
-  ()),
+ 'crates/iroha_core/src/state.rs',
+ 'fn',
+ 'lane_has_drain_blocking_evidence',
+ ('Result<bool, MergeLedgerCommitError>',
+  '.unmerged_merge_admissible_relay_progress(lane_id, dataspace_id)',
+  '.unapplied_lane_block_artifact_heights_snapshot_cached()?',
+  '.unapplied_certified_lane_block_heights_snapshot_cached()?',
+  '.native_amx_participant_frontiers_pending_durable_evidence_snapshot()?',
+  'marker.lane_id == lane_id',
+  'marker.dataspace_id == dataspace_id',
+  'marker.lane_incarnation == lane_incarnation',
+  'self.pending_queue_plan_admission_blocks_lane_drain(',
+  'self.queue_plan_pending_route_obligation_blocks_lane_drain(',
+  'self.kura.pending_certified_merge_work_for_lane('),
+ ()),
  ('SumeragiV2NativeApplicationEvidence',
   'crates/iroha_core/src/state.rs',
   'fn',
@@ -608,14 +608,12 @@ AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
    'retire_autonomous_payload_batch(&losing_pending)',
    'let canonical_recovery = (|| -> crate::kura::Result<bool> {',
    'Ok(canonical_v2_lane_payload_matches_kura(',
-   'let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery) else {\n'
-   '            return V2LaneIngressOutcome::Rejected;\n'
-   '        };'),
+   'let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {'),
   ('if !origin_matches || block.header().height().get() != self.context.height',
    'external_queue_plan_synced_entrypoint_index(block).is_some()',
    'return V2LaneIngressOutcome::Rejected;',
    'let canonical_recovery = (|| -> crate::kura::Result<bool> {',
-   'let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery)',
+   'let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {',
    'retain_pending_certified_merge_entry_for_locked_carrier(',
    'retire_autonomous_payload_batch(&losing_pending)')),
  ('SumeragiV2NativeApplicationEvidence',
@@ -683,43 +681,245 @@ AUTHORITY_RECOVERY_BINDINGS = (('SumeragiV2NativeApplicationEvidence',
    'return Err(Self::invalid_lane_artifact_error('),
   ()),
  ('SumeragiV2NativeApplicationEvidence',
-  'crates/iroha_core/src/kura.rs',
-  'fn',
-  'read_native_amx_participant_application_history',
-  ('self.ensure_prune_recovery_not_required()?;',
-   'self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;',
-   'self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;',
-   'self.inventory_native_amx_evidence_files_locked(&namespace, true)?',
-   'if !inventory.temporaries.is_empty()',
-   'Self::validate_native_amx_retained_history_continuity(',
-   'self.read_block_body_under_prune_and_canonical_guards(*height)?;',
-   '|| self.active_lane_incarnation_marker(&current)? != marker',
-   '|| !Self::progress_mutation_namespace_unchanged(&namespace)',
-   '|| u64::try_from(self.exact_durable_blocks_count()?)? != exact_tip',
-   'if !confirmed_inventory.temporaries.is_empty()',
-   'if !Self::stable_sidecar_metadata_unchanged(metadata, &confirmed)',
-   'if retained_manifests.get(height) != Some(&confirmed)',
-   'if retained_receipts.get(height) != Some(&confirmed)',
-   'if metadata.get(height) != Some(&confirmed)',
-   'Ok(NativeAmxParticipantApplicationHistory {'),
-  ('self.prune_lock.lock()',
-   'self.canonical_chain_lock.lock()',
-   'self.lane_geometry_lock.lock()',
-   'self.sidecar_lock.lock()',
-   'self.inventory_native_amx_evidence_files_locked(&namespace, true)?',
-   'drop(sidecar);',
-   'drop(geometry);',
-   'self.read_block_body_under_prune_and_canonical_guards(*height)?;',
-   'let geometry = self.lane_geometry_lock.lock();',
-   'if !confirmed_inventory.temporaries.is_empty()',
-   'if retained_manifests.get(height) != Some(&confirmed)',
-   'if retained_receipts.get(height) != Some(&confirmed)',
-   'if metadata.get(height) != Some(&confirmed)',
-   'drop(sidecar);',
-   'drop(geometry);',
-   'self.read_block_body_under_prune_and_canonical_guards(*height)?;',
-   'Ok(NativeAmxParticipantApplicationHistory {')))
+ 'crates/iroha_core/src/kura.rs',
+ 'fn',
+ 'read_native_amx_participant_application_history_with_lease',
+ ('if lease.is_some_and(|lease| !lease.belongs_to(self)) {',
+  "lease: Option<&KuraPublicationLease<'_>>",
+  'lease.is_none().then(|| self.prune_lock.lock())',
+  'lease.is_none().then(|| self.canonical_chain_lock.lock())',
+  'lease.is_none().then(|| self.lane_geometry_lock.lock())',
+  'lease.is_none().then(|| self.sidecar_lock.lock())',
+  'self.ensure_prune_recovery_not_required()?;',
+  'self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;',
+  'self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;',
+  'self.inventory_native_amx_evidence_files_locked(&namespace, true)?',
+  'if !inventory.temporaries.is_empty()',
+  'Self::validate_native_amx_retained_history_continuity(',
+  'self.read_block_body_under_prune_and_canonical_guards(*height)?;',
+  '|| self.active_lane_incarnation_marker(&current)? != marker',
+  '|| !Self::progress_mutation_namespace_unchanged(&namespace)',
+  '|| u64::try_from(self.exact_durable_blocks_count()?)? != exact_tip',
+  'if !confirmed_inventory.temporaries.is_empty()',
+  'if !Self::stable_sidecar_metadata_unchanged(metadata, &confirmed)',
+  'if retained_manifests.get(height) != Some(&confirmed)',
+  'if retained_receipts.get(height) != Some(&confirmed)',
+  'if metadata.get(height) != Some(&confirmed)',
+  'Ok(NativeAmxParticipantApplicationHistory {'),
+ ('if lease.is_some_and(|lease| !lease.belongs_to(self)) {',
+  'lease.is_none().then(|| self.prune_lock.lock())',
+  'lease.is_none().then(|| self.canonical_chain_lock.lock())',
+  'lease.is_none().then(|| self.lane_geometry_lock.lock())',
+  'lease.is_none().then(|| self.sidecar_lock.lock())',
+  'self.inventory_native_amx_evidence_files_locked(&namespace, true)?',
+  'drop(sidecar);',
+  'drop(geometry);',
+  'self.read_block_body_under_prune_and_canonical_guards(*height)?;',
+  'let geometry = lease.is_none().then(|| self.lane_geometry_lock.lock());',
+  'if !confirmed_inventory.temporaries.is_empty()',
+  'if retained_manifests.get(height) != Some(&confirmed)',
+  'if retained_receipts.get(height) != Some(&confirmed)',
+  'if metadata.get(height) != Some(&confirmed)',
+  'drop(sidecar);',
+  'drop(geometry);',
+  'self.read_block_body_under_prune_and_canonical_guards(*height)?;',
+  'Ok(NativeAmxParticipantApplicationHistory {')),
+ ('SumeragiV2NativeApplicationEvidence',
+ 'crates/iroha_core/src/kura.rs',
+ 'fn',
+ 'read_native_amx_participant_application_history',
+ ('self.read_native_amx_participant_application_history_with_lease(lane_id, None)',),
+ ('self.read_native_amx_participant_application_history_with_lease(lane_id, None)',)))
 
+
+# The actual typed-error and generation/post-generation owners replace the
+# former boolean fallback and monolithic lifecycle helper.
+AUTHORITY_RECOVERY_BINDINGS += (('SumeragiV2AutoscaleLifecycle',
+ 'crates/iroha_core/src/sumeragi/v2_lane_work.rs',
+ 'fn',
+ 'lane_drain_has_local_blockers',
+ ('lane_has_drain_blocking_evidence',
+  'lane_has_pending_work',
+  'pending_autonomous_anchor_payloads',
+  'native_sessions.has_pending_votes_for_lane',
+  'PendingMergeStage::Certified',
+  'let Some(queue) = self.lane_drain_queue.as_ref() else {\n            return true;\n        };',
+  '.lane_has_drain_blocking_evidence(',
+  '.unwrap_or(true)',
+  '|| queue.lane_has_pending_work(',
+  '|| self.lane_sessions.has_undrained_work_for_lane('),
+ ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state.rs',
+  'fn',
+  'validate_merge_lane_drain_certificate_payload',
+  ('self.lane_has_drain_blocking_evidence(',
+   '.map_err(|error| MergeLedgerCommitError::LocalDrainObservation(Box::new(error)))?',
+   'Self::queue_plan_pending_route_obligation_blocks_lane_drain_in_world(',
+   'if blocked {\n            return Err(MergeLedgerCommitError::ExecutionBatchInvalid('),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state.rs',
+  'fn',
+  'validate_committed_autoscale_lane_lifecycle',
+  ('commitment.carrier_height >= block_height',
+   '.lane_has_drain_blocking_evidence(',
+   '.map_err(LaneLifecycleError::DrainObservation)?',
+   'frontier != commitment.frontier'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/block.rs',
+  'method',
+  'BlockValidationError::from_autoscale_lifecycle_error',
+  ('LaneLifecycleError::DrainObservation(_)', 'Self::LocalStorageRecoveryRequired { reason }'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/block.rs',
+  'method',
+  'BlockValidationError::from_certified_merge_stage_error',
+  ('| MergeLedgerCommitError::LocalDrainObservation(_)', 'Self::LocalStorageRecoveryRequired {'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/sumeragi/v2_apply.rs',
+  'method',
+  'V2ApplyService::classify_candidate_validation_error',
+  ('if let BlockValidationError::LocalStorageRecoveryRequired { reason } = error {',
+   'super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.clone())',
+   'return V2ApplyError::LocalValidation('),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/sumeragi/v2_apply.rs',
+  'method',
+  'V2ApplyService::classify_lane_lifecycle_validation_error',
+  ('| crate::state::LaneLifecycleError::DrainObservation(_)',
+   'super::v2_body_store::LocalValidationRefusal::RecoveryRequired(',
+   'V2ApplyError::LocalValidation('),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/sumeragi/v2_apply/error_recovery.rs',
+  'fn',
+  'rejection_identity',
+  ('Self::LocalValidation(_)', '=> None,'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state/carrier_lifecycle_effects.rs',
+  'struct',
+  'PreparedLaneLifecycleEffects',
+  ('manifests: LaneManifestRegistryHandle',
+   'privacy: LanePrivacyRegistryHandle',
+   'lanes_to_reset: BTreeSet<LaneId>',
+   'active_reset_lanes: BTreeSet<LaneId>',
+   'lane_config: iroha_config::parameters::actual::LaneConfig',
+   'transition_height: u64'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state/carrier_lifecycle_effects.rs',
+  'method',
+  'PreparedLaneLifecycleEffects::prepare',
+  ('manifests: Arc::clone(&pending.updated_lane_manifests)',
+   'privacy: Arc::new(LanePrivacyRegistry::from_manifest_registry(',
+   '&pending.updated_lane_manifests,',
+   'lanes_to_reset: pending.catalog_update.lanes_to_reset.clone()',
+   'active_reset_lanes: State::active_reset_lanes(',
+   '&pending.catalog_update.lanes_to_reset,',
+   '&pending.catalog_update.updated_lane_config,',
+   'lane_config: pending.catalog_update.updated_lane_config.clone()',
+   'transition: pending.transition.clone()',
+   'transition_height: pending.transition_height'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state/carrier_lifecycle_effects.rs',
+  'method',
+  'PreparedLaneLifecycleEffects::publish',
+  ('self,',
+   "publication: &StateViewGenerationWriteGuard<'_>",
+   'state.install_prepared_lane_manifests_in_publication(',
+   'self.manifests,',
+   'self.privacy,',
+   'publication,',
+   'state.reset_lane_scoped_runtime_indexes(&self.lanes_to_reset);',
+   'if publish_process_runtime {',
+   'state.publish_lane_scoped_runtime_reset(&self.lanes_to_reset);',
+   'let records_reset = !self.active_reset_lanes.is_empty() && self.transition_height != 0;',
+   '.mark_lanes_canonically_reset(&self.active_reset_lanes, self.transition_height);',
+   'let persist_cursor_journal = publish_process_runtime',
+   '|| (!self.lanes_to_reset.is_empty() && state.da_indexes_hydrated.read().is_some())',
+   'LaneLifecyclePostPublication {',
+   'lane_config: self.lane_config,',
+   'persist_cursor_journal,'),
+  ('state.install_prepared_lane_manifests_in_publication(',
+   'state.reset_lane_scoped_runtime_indexes(',
+   'state.publish_lane_scoped_runtime_reset(',
+   '.mark_lanes_canonically_reset(',
+   'LaneLifecyclePostPublication {')),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state/carrier_lifecycle_effects.rs',
+  'method',
+  'LaneLifecyclePostPublication::publish',
+  ('fn publish(self, state: &State)',
+   'if self.persist_cursor_journal {',
+   'state.persist_da_shard_cursor_journal_with_config(&self.lane_config);',
+   'self.transition.log(self.transition_height);'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state.rs',
+  'fn',
+  'active_reset_lanes',
+  ('.filter(|lane_id| lane_config.entry(*lane_id).is_some())',),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state.rs',
+  'fn',
+  'install_prepared_lane_manifests_in_publication',
+  ("_publication: &StateViewGenerationWriteGuard<'_>",
+   '*guard = manifests;',
+   '*privacy_guard = privacy;'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state.rs',
+  'fn',
+  'reset_lane_scoped_runtime_indexes',
+  ('self.prune_merge_admission_lane_progress(lanes_to_reset);',
+   'self.lane_relays.write().prune_lanes(lanes_to_reset);',
+   'self.da_commitments.write().prune_lanes(lanes_to_reset);',
+   'self.da_confidential_compute\n            .write()\n            .prune_lanes(lanes_to_reset);',
+   'self.da_pin_intents.write().prune_lanes(lanes_to_reset);',
+   'self.da_receipt_cursors.write().prune_lanes(lanes_to_reset);',
+   'let mut cursors = self.da_shard_cursors.write();',
+   'cursors.prune_lanes(lanes_to_reset);'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state.rs',
+  'fn',
+  'persist_da_shard_cursor_journal_with_config',
+  ('let cursors = self.da_shard_cursors.read().clone();',
+   'DaShardCursorJournal::from_index(lane_config, &cursors, &path)',
+   'snapshot.persist()'),
+  ()),
+ ('SumeragiV2AutoscaleLifecycle',
+  'crates/iroha_core/src/state.rs',
+  'method',
+  'StateBlock::commit_inner',
+  ('let _state_commit_lock = state_ref.state_commit_lock.lock();',
+   'Some(state_ref.lane_lifecycle_lock.lock())',
+   'carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(pending, &nexus)',
+   'let _view_generation = state_ref.begin_state_view_write();',
+   'canonical_runtime.commit();',
+   'Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))',
+   'if let Some(post) = lifecycle_post_publication {\n'
+   '            post.publish(state_ref);\n'
+   '        }',
+   'drop(autoscale_lifecycle_guard);'),
+  ('let _state_commit_lock =',
+   'Some(state_ref.lane_lifecycle_lock.lock())',
+   'carrier_lifecycle_effects::PreparedLaneLifecycleEffects::prepare(',
+   'let mut lifecycle_post_publication = None;',
+   'canonical_runtime.commit();',
+   'Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))',
+   'world.commit();',
+   'block_hashes.commit();',
+   'if let Some(post) = lifecycle_post_publication {',
+   'drop(autoscale_lifecycle_guard);')))
 
 def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str]) -> None:
     """Require the reviewed predicates and their authority-before-use order."""
@@ -734,6 +934,185 @@ def validate_authority_recovery_item(item: str, binding: tuple, errors: list[str
             errors.append(f"{path}: authority/recovery item {symbol} violates order at {token!r}")
             break
         cursor = index + len(token)
+
+
+    code = _code(item)
+    def require(relation: str) -> None:
+        if _code(relation) not in code:
+            errors.append(f"authority/recovery item {symbol} loses executable relation {relation!r}")
+
+    if symbol == "lane_has_drain_blocking_evidence":
+        for call in ("self.pending_queue_plan_admission_blocks_lane_drain",
+                     "self.queue_plan_pending_route_obligation_blocks_lane_drain",
+                     "self.kura.pending_certified_merge_work_for_lane"):
+            require(f"{call}(lane_id, dataspace_id, lane_incarnation,)?")
+        if any(token in code for token in (".unwrap_or(", ".unwrap_or_default(", ".map_or(")):
+            errors.append("authority/recovery item drain observation must preserve typed local failure")
+    if symbol == "lane_drain_has_local_blockers":
+        require(""".lane_has_drain_blocking_evidence(
+            intent.lane_id, intent.dataspace_id, intent.lane_incarnation,
+        ).unwrap_or(true) || queue.lane_has_pending_work(""")
+    if symbol == "validate_merge_lane_drain_certificate_payload":
+        require("""Self::evidence_aware_lane_drain_frontier_from_world(
+            &self.world.view(), &self.kura,
+            intent.lane_id, intent.dataspace_id, intent.lane_incarnation,
+        ).map_err(|error| MergeLedgerCommitError::LocalDrainObservation(Box::new(error)))?""")
+        require("""self.lane_has_drain_blocking_evidence(
+            intent.lane_id, intent.dataspace_id, intent.lane_incarnation,
+        ).map_err(|error| MergeLedgerCommitError::LocalDrainObservation(Box::new(error)))?""")
+    if symbol == "validate_committed_autoscale_lane_lifecycle":
+        require("""Self::evidence_aware_lane_drain_frontier_from_world(
+            &self.world.view(), &self.kura, *lane, previous_lane.dataspace_id, incarnation,
+        ).map_err(LaneLifecycleError::DrainObservation)?""")
+        require(""".lane_has_drain_blocking_evidence(
+            *lane, previous_lane.dataspace_id, incarnation,
+        ).map_err(LaneLifecycleError::DrainObservation)?""")
+    if symbol == "BlockValidationError::from_autoscale_lifecycle_error":
+        require("""LaneLifecycleError::DrainObservation(_)
+            | LaneLifecycleError::Storage(_)
+            | LaneLifecycleError::GeometryStorage(_)
+            | LaneLifecycleError::PublicationBusy { .. } => {
+                Self::LocalStorageRecoveryRequired { reason }
+            }""")
+    if symbol == "BlockValidationError::from_certified_merge_stage_error":
+        require("""local @ (MergeLedgerCommitError::Persistence(_)
+            | MergeLedgerCommitError::LocalDrainObservation(_)) => {
+                Self::LocalStorageRecoveryRequired {
+                    reason: format!("certified merge entry could not be staged: {local}"),
+                }
+            }""")
+    if symbol == "V2ApplyService::classify_candidate_validation_error":
+        require("""if let BlockValidationError::LocalStorageRecoveryRequired { reason } = error {
+            return V2ApplyError::LocalValidation(
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.clone()),
+            );
+        }""")
+    if symbol == "V2ApplyService::classify_lane_lifecycle_validation_error":
+        require("""crate::state::LaneLifecycleError::Storage(_)
+            | crate::state::LaneLifecycleError::GeometryStorage(_)
+            | crate::state::LaneLifecycleError::DrainObservation(_)
+            | crate::state::LaneLifecycleError::PublicationBusy { .. } => {
+                V2ApplyError::LocalValidation(
+                    super::v2_body_store::LocalValidationRefusal::RecoveryRequired(
+                        error.to_string(),
+                    ),
+                )
+            }""")
+    if symbol == "rejection_identity":
+        # The exhaustive arm may include other local variants, but the actual
+        # LocalValidation arm must return None, never a persisted rejection id.
+        local = code.find(_code("Self::LocalValidation(_)"))
+        arm = code.find("=>", local) if local >= 0 else -1
+        if arm < 0 or not code[arm + 2:].startswith("None,"):
+            errors.append("authority/recovery item local drain failure cannot acquire rejection identity")
+    if symbol == "PreparedLaneLifecycleEffects::publish":
+        require("""if publish_process_runtime {
+            state.publish_lane_scoped_runtime_reset(&self.lanes_to_reset);
+        }""")
+        require("""if records_reset {
+            state.da_shard_cursors.write()
+                .mark_lanes_canonically_reset(&self.active_reset_lanes, self.transition_height);
+        }""")
+        require("""let persist_cursor_journal = publish_process_runtime
+            && (records_reset
+                || (!self.lanes_to_reset.is_empty() && state.da_indexes_hydrated.read().is_some()));""")
+        if "persist_da_shard_cursor_journal" in code:
+            errors.append("authority/recovery item lifecycle must defer cursor disk work past generation")
+    if symbol == "LaneLifecyclePostPublication::publish":
+        require("""if self.persist_cursor_journal {
+            state.persist_da_shard_cursor_journal_with_config(&self.lane_config);
+        }""")
+        if any(token in code for token in ("nexus_snapshot(", "reset_lane_scoped_runtime", "mark_lanes_canonically_reset(")):
+            errors.append("authority/recovery item lifecycle post work retargets or repeats published reset")
+    if symbol == "StateBlock::commit_inner":
+        # Follow the real lexical generation scope, not a later occurrence of
+        # the same publish token. Both physical State writer and generation
+        # must be gone before disk work; the original outer fences remain.
+        opening = code.find(_code("block_hashes.prepare_commit(); {"))
+        first = code.find("{", opening) if opening >= 0 else -1
+        depth = 0
+        last = -1
+        if first >= 0:
+            for index in range(first, len(code)):
+                depth += (code[index] == "{") - (code[index] == "}")
+                if depth == 0:
+                    last = index
+                    break
+        publication = code[first:last + 1] if last >= 0 else ""
+        operations = tuple(map(_code, (
+            "let _state_write_lock = state_write_lock.lock();",
+            "let _view_generation = state_ref.begin_state_view_write();",
+            "canonical_runtime.commit();",
+            "Some(prepared.publish(state_ref, &_view_generation, !replay_prevalidation))",
+            "Some(effects.publish(state_ref, &_view_generation, !replay_prevalidation))",
+            "world.commit();", "block_hashes.commit();",
+        )))
+        positions = [publication.find(operation) for operation in operations]
+        post = _code("if let Some(post) = lifecycle_post_publication { post.publish(state_ref); }")
+        if (not publication or any(index < 0 for index in positions)
+                or positions != sorted(positions) or post in publication
+                or not code[last + 1:].startswith(post)
+                or "drop(_view_generation)" in publication
+                or "drop(_state_write_lock)" in publication
+                or "drop(_state_commit_lock)" in code):
+            errors.append("authority/recovery item lifecycle publication loses generation/outer-fence ordering")
+    if symbol == "read_native_amx_participant_application_history":
+        # The existing caller owns the ordinary locking path. A successful
+        # fallback, altered lane, or caller-supplied lease cannot replace it.
+        exact_return = """{
+            self.read_native_amx_participant_application_history_with_lease(lane_id, None)
+        }"""
+        if not code.endswith(_code(exact_return)):
+            errors.append("authority/recovery item history wrapper must return the exact unleased delegate")
+    if symbol == "read_native_amx_participant_application_history_with_lease":
+        foreign_lease = """if lease.is_some_and(|lease| !lease.belongs_to(self)) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(), "Native history lease belongs to another Kura",
+            ));
+        }"""
+        if _code(foreign_lease) not in code:
+            errors.append("authority/recovery item history delegate must reject foreign lease before observation")
+        # Each existing physical probe is conditional on the same lease, also
+        # after the body-read gap. No unconditional relock may hide alongside
+        # one still-present required token.
+        for mutex, count in (("prune_lock", 1), ("canonical_chain_lock", 1),
+                             ("lane_geometry_lock", 2), ("sidecar_lock", 2)):
+            probe = f"self.{mutex}.lock()"
+            owned = f"lease.is_none().then(|| {probe})"
+            if code.count(_code(probe)) != count or code.count(_code(owned)) != count:
+                errors.append(f"authority/recovery item history delegate must lease-guard every {mutex} probe")
+    if symbol == "v2_known_lane_tip_for_route":
+        # Every authenticated occupied but incomplete highest slot must abstain;
+        # no pending repair may be filtered out to expose an older Applied slot.
+        pending = """Some(
+            crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)
+            | crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)
+            | crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),
+        ) => { return Ok(None); }"""
+        current = """if descriptor.dataspace_id != dataspace_id
+            || descriptor.lane_incarnation != lane_incarnation
+            || latest_receipt.application_block_height >= proposal_height
+            { return Ok(None); } matching.push(LaneBlockTip {"""
+        for predicate in (pending, current):
+            if _code(predicate) not in code:
+                errors.append("authority/recovery item Native lane tip must abstain on the highest pending, stale or future application")
+        if code.count(_code("read_native_amx_participant_application_history(")) != 1:
+            errors.append("authority/recovery item Native lane tip must read one authenticated complete history")
+    if symbol == "V2LaneWorkAdapter::bind_locked_global_body_from_origin":
+        # The storage failure may be logged, but cannot become a successful
+        # canonical match or reach any retention/reservation mutation.
+        rejection = """let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                if empty_merge_body {
+                    iroha_logger::warn!(?subject, ?error,
+                        "rejected empty merge carrier after canonical Kura read");
+                }
+                return V2LaneIngressOutcome::Rejected;
+            }
+        };"""
+        if _code(rejection) not in code:
+            errors.append("authority/recovery item canonical recovery storage failure must reject before mutation")
 
 
 def validate_authority_recovery_contract(

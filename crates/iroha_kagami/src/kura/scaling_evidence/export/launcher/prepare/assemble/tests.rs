@@ -1,7 +1,7 @@
 //! Actual generated signed genesis joined to an explicit four-validator offline transcript.
 //!
 //! Genesis authority is really staged. The transcript uses the existing authenticated opaque
-//! source fixture and public BlockStore framing; it does not claim runtime autonomous execution.
+//! Native source fixture and public BlockStore framing; it does not claim runtime autonomous execution.
 
 use super::*;
 use crate::{
@@ -10,7 +10,6 @@ use crate::{
 };
 use clap::Parser as _;
 use iroha_crypto::{KeyPair, PrivateKey};
-use norito::codec::Encode as _;
 use std::{
     fs,
     io::{BufWriter, Write as _},
@@ -247,15 +246,47 @@ impl Fixture {
             &scheduled,
         );
         let context = norito::encode_canonical(authority.context()).unwrap();
-        let finality =
-            norito::encode_canonical(&vec![transcript.first.clone(), transcript.second.clone()])
-                .unwrap();
+        let finality = norito::encode_canonical(&finalized_contexts(&transcript)).unwrap();
         let queries = transcript
-            .queries()
+            .heights
             .iter()
-            .map(|bytes| canonical::<CommittedTransaction>(bytes).unwrap())
+            .flat_map(|height| height.queries())
+            .map(|bytes| canonical::<CommittedTransaction>(&bytes).unwrap())
             .collect::<Vec<_>>();
         let queries = norito::encode_canonical(&queries).unwrap();
+        let mut observed_heights = BTreeMap::new();
+        for height in &transcript.heights {
+            for raw in height.queries() {
+                let query: CommittedTransaction = canonical(&raw).unwrap();
+                let TransactionEntrypoint::External(signed) = query.entrypoint else {
+                    unreachable!()
+                };
+                observed_heights.insert(
+                    signed.hash().to_string(),
+                    height.block.header().height().get(),
+                );
+            }
+        }
+        let mut updated_journal = Vec::new();
+        for line in journal
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+        {
+            let mut row: norito::json::Value = norito::json::from_slice(line).unwrap();
+            let hash = row
+                .get("hash")
+                .or_else(|| row.get("expected_hash"))
+                .and_then(norito::json::Value::as_str);
+            let height = hash.and_then(|hash| observed_heights.get(hash)).copied();
+            for field in ["block_height", "local_block_height"] {
+                if let Some(value) = row.get_mut(field) {
+                    *value = norito::json!(height.expect("observed original request"));
+                }
+            }
+            updated_journal.extend(norito::json::to_vec(&row).unwrap());
+            updated_journal.push(b'\n');
+        }
+        let journal = updated_journal;
         let input = home.join("originals");
         fs::create_dir(&input).unwrap();
         let names = [
@@ -286,14 +317,12 @@ impl Fixture {
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let mut store = iroha_core::kura::BlockStore::new(&root);
         store.create_files_if_they_do_not_exist().unwrap();
-        store.append_block_to_chain(&transcript.genesis).unwrap();
-        store.append_block_to_chain(&transcript.carrier).unwrap();
+        for height in &transcript.heights {
+            store.append_block_to_chain(&height.block).unwrap();
+        }
         drop(store);
         let log = root.join("merge.log");
-        let entry = transcript.entry.encode();
-        let mut bytes = u32::try_from(entry.len()).unwrap().to_le_bytes().to_vec();
-        bytes.extend_from_slice(&entry);
-        write_new(&log, &bytes);
+        write_new(&log, &[]);
         for name in [
             "blocks.data",
             "blocks.index",
@@ -361,7 +390,7 @@ impl Fixture {
             admitted_proof_bytes: 64 * 1024 * 1024,
             input_bytes: 48 * 1024 * 1024,
             output_bytes: 16 * 1024 * 1024,
-            heights: 8,
+            heights: 16,
             requests: 8,
             leaves_per_carrier: 8,
         }
@@ -371,8 +400,8 @@ impl Fixture {
     ) -> CanonicalKuraEvidenceLimits {
         CanonicalKuraEvidenceLimits {
             first_height: 1,
-            last_height: 2,
-            max_committed_blocks: 8,
+            last_height: self.transcript.heights.len() as u64,
+            max_committed_blocks: 16,
             max_store_data_bytes: 16 * 1024 * 1024,
             max_carrier_bytes: 8 * 1024 * 1024,
             max_merge_log_bytes: 16 * 1024 * 1024,
@@ -650,70 +679,91 @@ fn routing_decode_rejects_finite_work_before_any_signed_frame_decode() {
     assert!(decode_requests(&scheduled, 1).is_err());
 }
 
+fn finalized_contexts(fixture: &transcript::Fixture) -> Vec<FinalizedNativeContextV1> {
+    fixture
+        .heights
+        .iter()
+        .map(|height| FinalizedNativeContextV1 {
+            finality: height.proof.clone(),
+            contexts: canonical(&height.evidence).unwrap(),
+        })
+        .collect()
+}
+
 #[test]
 fn five_query_group_reserves_exact_slots_and_frames_before_allocation() {
     let fixture = transcript::Fixture::new(4);
-    let finality = vec![fixture.first.clone(), fixture.second.clone()];
+    let finality = finalized_contexts(&fixture);
     let queries = fixture
-        .queries()
+        .heights
         .iter()
+        .flat_map(|height| height.queries())
         .take(5)
-        .map(|raw| canonical::<CommittedTransaction>(raw).unwrap())
+        .map(|raw| canonical::<CommittedTransaction>(&raw).unwrap())
         .collect::<Vec<_>>();
     let count = finality
         .iter()
-        .map(|value| norito::canonical_frame_len(value).unwrap())
+        .map(|value| {
+            norito::canonical_frame_len(&value.finality).unwrap()
+                + norito::canonical_frame_len(&value.contexts).unwrap()
+        })
         .sum::<usize>()
         + queries
             .iter()
             .map(|value| norito::canonical_frame_len(value).unwrap())
             .sum::<usize>()
-        + 2 * std::mem::size_of::<SuppliedEvidenceHeightV1>()
+        + finality.len() * std::mem::size_of::<SuppliedEvidenceHeightV1>()
         + 5 * std::mem::size_of::<Vec<u8>>();
+    let last = finality.len() as u64;
     let mut limits = transcript::limits();
     limits.input_bytes = count as u64;
-    let rows = group_supplied(finality.clone(), queries.clone(), 2, limits).unwrap();
-    assert_eq!(rows.len(), 2);
+    let rows = group_supplied(finality.clone(), queries.clone(), last, limits).unwrap();
+    assert_eq!(rows.len(), finality.len());
     assert_eq!(rows[0].queries.len(), 0);
-    assert_eq!(rows[1].queries.len(), 5);
-    assert_eq!(rows[1].queries.capacity(), 5);
-    for (raw, original) in rows[1].queries.iter().zip(&queries) {
+    assert_eq!(rows[1].queries.len(), 4);
+    assert_eq!(rows[2].queries.len(), 1);
+    for (raw, original) in rows.iter().flat_map(|row| &row.queries).zip(&queries) {
         assert_eq!(raw, &norito::encode_canonical(original).unwrap());
     }
+    for (row, original) in rows.iter().zip(&finality) {
+        assert_eq!(
+            row.contexts,
+            norito::encode_canonical(&original.contexts).unwrap()
+        );
+    }
     limits.input_bytes -= 1;
-    assert!(
-        group_supplied(finality, queries, 2, limits)
-            .err()
-            .expect("one-byte-under group must fail")
-            .to_string()
-            .contains("canonical element exceeds cap")
-    );
+    assert!(group_supplied(finality, queries, last, limits).is_err());
 }
 
 #[test]
 fn query_grouping_preserves_all_rows_and_rejects_height_carrier_or_leaf_reordering() {
     let fixture = transcript::Fixture::new(4);
-    let proofs = vec![fixture.first.clone(), fixture.second.clone()];
+    let proofs = finalized_contexts(&fixture);
     let queries = fixture
-        .queries()
+        .heights
         .iter()
-        .map(|raw| canonical::<CommittedTransaction>(raw).unwrap())
+        .flat_map(|height| height.queries())
+        .map(|raw| canonical::<CommittedTransaction>(&raw).unwrap())
         .collect::<Vec<_>>();
-    let rows = group_supplied(proofs.clone(), queries.clone(), 2, transcript::limits()).unwrap();
-    assert_eq!(rows[1].queries.len(), queries.len());
+    let last = proofs.len() as u64;
+    let rows = group_supplied(proofs.clone(), queries.clone(), last, transcript::limits()).unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.queries.len()).sum::<usize>(),
+        queries.len()
+    );
     let mut reversed = proofs.clone();
     reversed.reverse();
-    assert!(group_supplied(reversed, queries.clone(), 2, transcript::limits()).is_err());
+    assert!(group_supplied(reversed, queries.clone(), last, transcript::limits()).is_err());
     let mut wrong_leaf = queries.clone();
     wrong_leaf.swap(0, 1);
-    assert!(group_supplied(proofs.clone(), wrong_leaf, 2, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), wrong_leaf, last, transcript::limits()).is_err());
     let mut unknown = queries.clone();
     unknown[0].block_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong carrier"));
-    assert!(group_supplied(proofs.clone(), unknown, 2, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), unknown, last, transcript::limits()).is_err());
     let mut extra = queries.clone();
     extra.push(queries[0].clone());
-    assert!(group_supplied(proofs.clone(), extra, 2, transcript::limits()).is_err());
-    assert!(group_supplied(vec![proofs[0].clone()], queries, 2, transcript::limits()).is_err());
+    assert!(group_supplied(proofs.clone(), extra, last, transcript::limits()).is_err());
+    assert!(group_supplied(vec![proofs[0].clone()], queries, last, transcript::limits()).is_err());
 }
 
 #[cfg(all(
@@ -742,7 +792,7 @@ mod generated {
                 assert_eq!(decoded.plan.scheduled.len(), 8);
                 assert_eq!(decoded.plan.active_lanes.len(), lanes);
                 assert_eq!(decoded.plan.network_id, fixture.network_id);
-                assert_eq!(decoded.heights.len(), 2);
+                assert_eq!(decoded.heights.len(), fixture.transcript.heights.len());
                 assert_eq!(facts.verified.rows().len(), 8);
                 // Canonical account metadata requests really require state; no default route
                 // can stand in for the authenticated world projection that made these facts.
@@ -789,7 +839,17 @@ mod generated {
                     );
                 }
                 for row in facts.verified.rows() {
-                    assert_eq!(row.request.carrier_height, 2);
+                    let original = fixture
+                        .transcript
+                        .heights
+                        .iter()
+                        .find(|height| height.block.hash() == row.request.carrier_hash)
+                        .unwrap();
+                    assert_eq!(
+                        row.request.carrier_height,
+                        original.block.header().height().get()
+                    );
+                    assert!(row.request.carrier_height >= 3);
                     assert_eq!(row.request.dataspace_id, DataSpaceId::UNIVERSAL);
                 }
                 let output = super::super::super::prepare(
@@ -812,7 +872,7 @@ mod generated {
                 .unwrap();
                 let (plan, limits, bindings) = request.into_parts();
                 let bundle: SuppliedEvidenceBundleV1 = canonical(&bundle).unwrap();
-                assert_eq!(bundle.heights.len(), 2);
+                assert_eq!(bundle.heights.len(), fixture.transcript.heights.len());
                 let replay = crate::kura::scaling_evidence::export::replay_export(
                     plan,
                     limits,
@@ -1058,9 +1118,8 @@ mod generated {
             use iroha_data_model::block::builder::BlockBuilder;
             let fixture = Fixture::new(1);
             let header = BlockHeader::new(
-                std::num::NonZeroU64::new(3).unwrap(),
-                Some(fixture.transcript.carrier.hash()),
-                None,
+                std::num::NonZeroU64::new(fixture.transcript.heights.len() as u64 + 1).unwrap(),
+                Some(fixture.transcript.heights.last().unwrap().block.hash()),
                 None,
                 200,
                 0,

@@ -791,6 +791,9 @@ fn get_block_caches_loaded_block() {
         block_count,
         "strict init should load all appended blocks"
     );
+    // Loaded bytes become reusable cache entries only after exact complete-wire
+    // finality authenticates them. Sign the retained chain before testing reuse.
+    finalize_chain_through_for_eviction(&kura, height);
     let first = kura.get_block(height).expect("block available");
     let second = kura.get_block(height).expect("cached block");
     assert!(Arc::ptr_eq(&first, &second));
@@ -809,7 +812,7 @@ fn transaction_index_completes_after_lazy_loading_reopened_blocks() {
     let blocks = create_blocks(&rt, &temp_dir);
     let entrypoint_hash = blocks[2]
         .as_ref()
-        .entrypoint_hashes()
+        .network_input_hashes()
         .next()
         .expect("canonical test block has a transaction");
     let (kura, block_count) = Kura::open_test_kura_with_configured_lane_config(

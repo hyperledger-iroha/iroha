@@ -44,7 +44,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "76c512b2a7e345a9613b154a36dcbf88560ef0b03ade9e1de42b24d968f2d422"
+        "42902589fe5175f22f13a0881684f721c0cfd72fa0cb3048f1b413f3aa6433d2"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     bootstrap_completion = evidence["bootstrap_completion"]
@@ -395,6 +395,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
                 ),
                 ("iroha", "release/iroha"),
                 ("kagami", "release/kagami"),
+                ("irohad_taira", "release/iroha3d_taira"),
             ),
             prebuilt_binaries,
         )

@@ -133,7 +133,7 @@ struct OriginalArgs {
     /// Maximum complete original journal bytes
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=MAX_BYTES))]
     journal_max_bytes: u64,
-    /// Original canonical Vec<BridgeFinalityProof> absolute path
+    /// Original canonical Vec<FinalizedNativeContextV1> absolute path
     #[arg(long)]
     finality: PathBuf,
     /// Independently pinned raw SHA-256 of the complete finality vector

@@ -56,14 +56,22 @@ fn queue_plan_admission_ingress_rejects_empty_and_oversized_bodies_before_enqueu
 ///
 /// The harness exposes only ordinary public ingress attempts and one exact
 /// dequeue operation; production queue internals remain private.
-#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
+#[cfg(any(
+    test,
+    feature = "sumeragi-main-loop-tests",
+    feature = "iroha-core-tests"
+))]
 pub struct SumeragiIngressTestHarness {
     handle: SumeragiHandle,
     block: Arc<FairV2Ingress>,
     _lane_relay: mpsc::Receiver<LaneRelayMessage>,
 }
 
-#[cfg(any(test, feature = "sumeragi-main-loop-tests"))]
+#[cfg(any(
+    test,
+    feature = "sumeragi-main-loop-tests",
+    feature = "iroha-core-tests"
+))]
 impl SumeragiIngressTestHarness {
     /// Construct an open bounded ingress with an empty validator roster.
     #[must_use]
@@ -80,6 +88,37 @@ impl SumeragiIngressTestHarness {
     #[must_use]
     pub fn handle(&self) -> SumeragiHandle {
         self.handle.clone()
+    }
+
+    /// Set only the fixture's live-owner readiness to model a successor handoff.
+    /// Authenticated capacity and all production admission checks remain unchanged.
+    pub fn set_admission_ready(&self, ready: bool) {
+        self.handle.ingress_ready.store(ready, Ordering::Release);
+    }
+
+    /// Authenticate a real genesis context before exposing its admission capacity.
+    /// This fixture uses the production verifier and capacity publisher; an
+    /// arbitrary layout or a missing proof of possession cannot initialize it.
+    ///
+    /// # Errors
+    /// Rejects invalid context, proofs, local resource geometry or repeated setup.
+    pub fn authenticate_admission_capacity(
+        &self,
+        context: iroha_data_model::block::consensus_v2::HeightContext,
+        proofs_of_possession: Vec<Vec<u8>>,
+        config: &iroha_config::parameters::actual::Sumeragi,
+    ) -> Result<(), String> {
+        let mode = context.mode;
+        let verified = v2::VerifiedHeightContext::genesis(context, proofs_of_possession)
+            .map_err(|error| error.to_string())?;
+        let config = config
+            .v2_config(Duration::from_secs(1), mode)
+            .map_err(|error| error.to_string())?;
+        admission_capacity::publish_authenticated_capacity(
+            &self.handle.admission_capacity,
+            &verified,
+            &config,
+        )
     }
 
     /// Remove one exact block occurrence and release its bounded inner owner.

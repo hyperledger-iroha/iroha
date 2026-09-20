@@ -2,6 +2,9 @@
 //! Native AMX multidataspace routing integration coverage.
 use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::StreamExt;
+#[path = "kura_storage_support.rs"]
+mod kura_storage_support;
+
 use integration_tests::sandbox;
 use iroha::nexus;
 use iroha::{
@@ -758,7 +761,7 @@ async fn wait_for_block_with_entrypoint(
             Ok(blocks) => {
                 if let Some(block) = blocks.into_iter().find(|block| {
                     block
-                        .entrypoint_hashes()
+                        .network_input_hashes()
                         .any(|hash| hash == entrypoint_hash)
                 }) {
                     return Ok(block);
@@ -1965,7 +1968,7 @@ fn assert_grouped_native_amx_execution(
         "grouped Native AMX release evidence reused a transaction entrypoint"
     );
     let ordered_entrypoints = block
-        .entrypoint_hashes()
+        .network_input_hashes()
         .map(Hash::from)
         .filter(|hash| submitted_entrypoints.contains(hash))
         .collect::<Vec<_>>();
@@ -2695,7 +2698,7 @@ async fn submit_grouped_native_amx_transactions(
     for transaction in &transactions {
         ensure!(
             block
-                .entrypoint_hashes()
+                .network_input_hashes()
                 .any(|hash| hash == transaction.hash_as_entrypoint()),
             "{context}: Torii accepted the two-source batch but the sources landed in separate canonical blocks"
         );
@@ -2773,14 +2776,12 @@ fn decode_block_index_entry(bytes: &[u8], height: u64) -> Result<(u64, u64)> {
     let length = u64::from_le_bytes(entry[8..].try_into().expect("index length is eight bytes"));
     Ok((offset, length))
 }
-fn native_amx_primary_blocks_dir(peer: &NetworkPeer) -> std::path::PathBuf {
-    ActualLaneConfig::from_catalog(&native_amx_lane_catalog())
-        .primary()
-        .blocks_dir(peer.kura_store_dir())
+fn native_amx_canonical_blocks_dir(peer: &NetworkPeer) -> std::path::PathBuf {
+    Kura::canonical_storage_paths(&peer.kura_store_dir()).0
 }
 fn native_amx_block_index_entry(peer: &NetworkPeer, height: u64) -> Result<(u64, u64)> {
     decode_block_index_entry(
-        &fs::read(native_amx_primary_blocks_dir(peer).join("blocks.index"))?,
+        &fs::read(native_amx_canonical_blocks_dir(peer).join("blocks.index"))?,
         height,
     )
 }
@@ -2820,15 +2821,25 @@ fn canonical_native_amx_height_artifact(name: &str) -> Option<(NativeAmxArtifact
 }
 fn native_amx_artifact_snapshot(
     peer: &NetworkPeer,
+    evidence: &GroupedNativeAmxEvidence,
     selection: NativeAmxArtifactSelection,
 ) -> Result<Vec<(String, Hash)>> {
-    let lane_config = ActualLaneConfig::from_catalog(&native_amx_lane_catalog());
-    let bank_entry = lane_config
-        .entry(LaneId::new(BANK_LANE))
-        .ok_or_else(|| eyre!("Native AMX lane catalog omitted BANK storage"))?;
-    let artifact_dir = bank_entry
-        .blocks_dir(peer.kura_store_dir())
-        .join("lane_artifacts");
+    let descriptor = &evidence.bank_leg.participant_proposal.descriptor;
+    ensure!(
+        descriptor.lane_id == LaneId::new(BANK_LANE)
+            && descriptor.dataspace_id == DataSpaceId::new(BANK_DATASPACE),
+        "Native AMX evidence must identify the expected BANK route"
+    );
+    let artifact_dir = kura_storage_support::lane_instance_blocks_dir(
+        &peer.kura_store_dir(),
+        *peer.client().client().network_id(),
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        Some(descriptor.lane_incarnation),
+        Some(0),
+    )?
+    .ok_or_else(|| eyre!("Native AMX BANK storage instance is absent"))?
+    .join("lane_artifacts");
     let mut snapshot = Vec::new();
     for entry in fs::read_dir(&artifact_dir)
         .wrap_err_with(|| format!("scan Native AMX evidence {}", artifact_dir.display()))?
@@ -2877,8 +2888,11 @@ fn native_amx_artifact_snapshot(
     snapshot.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Ok(snapshot)
 }
-fn native_amx_evidence_artifact_snapshot(peer: &NetworkPeer) -> Result<Vec<(String, Hash)>> {
-    let snapshot = native_amx_artifact_snapshot(peer, NativeAmxArtifactSelection::All)?;
+fn native_amx_evidence_artifact_snapshot(
+    peer: &NetworkPeer,
+    evidence: &GroupedNativeAmxEvidence,
+) -> Result<Vec<(String, Hash)>> {
+    let snapshot = native_amx_artifact_snapshot(peer, evidence, NativeAmxArtifactSelection::All)?;
     ensure!(
         snapshot
             .iter()
@@ -2929,7 +2943,7 @@ fn evict_native_amx_carrier_body_offline(peer: &NetworkPeer, height: u64) -> Res
         "Native AMX carrier index was not durably marked evicted: offset={offset}, length={retained_len}, expected={payload_len}"
     );
     ensure!(
-        !native_amx_primary_blocks_dir(peer)
+        !native_amx_canonical_blocks_dir(peer)
             .join("da_blocks")
             .join(format!("{height_u64:020}.norito"))
             .exists(),
@@ -2970,7 +2984,7 @@ async fn ensure_entrypoint_committed_once(
         .iter()
         .map(|block| {
             block
-                .entrypoint_hashes()
+                .network_input_hashes()
                 .filter(|hash| *hash == entrypoint_hash)
                 .count()
         })

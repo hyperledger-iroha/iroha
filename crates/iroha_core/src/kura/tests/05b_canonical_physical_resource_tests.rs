@@ -446,3 +446,128 @@ fn canonical_physical_periodic_forced_and_empty_eviction_flush_publish_pending_m
         assert!(!kura.disk_usage_total_initialized.load(Ordering::Acquire));
     }
 }
+
+#[test]
+fn immutable_instance_disk_scan_counts_current_and_retained_files_once() {
+    let directory = TempDir::new().unwrap();
+    let root = directory.path();
+    let blocks = root.join("blocks");
+    let merge = root.join("merge_ledger");
+    let first = LaneStorageIdentity {
+        network_id: test_network_id(b"immutable-accounting"),
+        lane_id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(2),
+        incarnation: Hash::new(b"first-accounting-incarnation"),
+        activation_height: 3,
+    };
+    let second = LaneStorageIdentity {
+        incarnation: Hash::new(b"second-accounting-incarnation"),
+        activation_height: 4,
+        ..first
+    };
+    let canonical = Kura::canonical_storage_paths(root);
+    let paths = [
+        (canonical.0.join(DATA_FILE_NAME), 11),
+        (first.blocks_dir(root).join(".lane-incarnation.norito"), 17),
+        (
+            first
+                .blocks_dir(root)
+                .join(LANE_ARTIFACTS_DIR_NAME)
+                .join("accounting.norito.tmp"),
+            19,
+        ),
+        (
+            first
+                .blocks_dir(root)
+                .join(RETAINED_BLOCKS_DIR_NAME)
+                .join("accounting.norito"),
+            23,
+        ),
+        (second.blocks_dir(root).join(".lane-incarnation.norito"), 29),
+        (canonical.1, 31),
+        (first.merge_log_path(root), 37),
+        (second.merge_log_path(root), 41),
+    ];
+    for (path, length) in &paths {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, vec![0_u8; *length]).unwrap();
+    }
+    // Accounting must include both identities without an active LaneId map;
+    // bytes stay charged until their actual collection, including temporaries.
+    assert_eq!(
+        Kura::blocks_root_usage_bytes(&blocks, u64::MAX).unwrap(),
+        (76, 99)
+    );
+    assert_eq!(Kura::blocks_root_bytes(&blocks, u64::MAX).unwrap(), 76);
+    assert_eq!(Kura::merge_root_bytes(&merge).unwrap(), 109);
+    fs::remove_file(&paths[2].0).unwrap();
+    assert_eq!(
+        Kura::blocks_root_usage_bytes(&blocks, u64::MAX).unwrap(),
+        (57, 80)
+    );
+}
+
+#[test]
+fn immutable_instance_disk_scan_rejects_unknown_nested_entries() {
+    for merge in [false, true] {
+        let directory = TempDir::new().unwrap();
+        let root = directory
+            .path()
+            .join(if merge { "merge_ledger" } else { "blocks" });
+        let unknown = root.join("instances").join("unowned");
+        fs::create_dir_all(unknown.parent().unwrap()).unwrap();
+        if merge {
+            fs::write(&unknown, [0_u8; 1]).unwrap();
+            assert!(Kura::merge_root_bytes(&root).is_err());
+        } else {
+            fs::create_dir(&unknown).unwrap();
+            assert!(Kura::blocks_root_usage_bytes(&root, u64::MAX).is_err());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn immutable_instance_disk_scan_rejects_symlinks_and_hardlinks() {
+    use std::os::unix::fs::symlink;
+
+    for merge in [false, true] {
+        for hardlink in [false, true] {
+            let directory = TempDir::new().unwrap();
+            let root = directory
+                .path()
+                .join(if merge { "merge_ledger" } else { "blocks" });
+            let key = "a".repeat(64);
+            let instance =
+                root.join("instances")
+                    .join(if merge { format!("{key}.log") } else { key });
+            fs::create_dir_all(instance.parent().unwrap()).unwrap();
+            let outside = directory.path().join("outside");
+            if merge || hardlink {
+                fs::write(&outside, [0_u8; 7]).unwrap();
+            } else {
+                fs::create_dir(&outside).unwrap();
+            }
+            if hardlink {
+                let target = if merge {
+                    instance
+                } else {
+                    fs::create_dir(&instance).unwrap();
+                    instance.join(".lane-incarnation.norito")
+                };
+                fs::hard_link(&outside, target).unwrap();
+            } else {
+                symlink(&outside, instance).unwrap();
+            }
+            if merge {
+                assert!(Kura::merge_root_bytes(&root).is_err());
+            } else {
+                assert!(Kura::blocks_root_usage_bytes(&root, u64::MAX).is_err());
+            }
+            assert_eq!(
+                fs::symlink_metadata(outside).unwrap().is_dir(),
+                !merge && !hardlink
+            );
+        }
+    }
+}

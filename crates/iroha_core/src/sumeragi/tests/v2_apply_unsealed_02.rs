@@ -56,9 +56,18 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
         },
     ])
     .expect("valid Native fixture dataspace catalog");
-    state
-        .set_nexus(nexus)
-        .expect("install Native fixture dataspace before genesis");
+    // This is process configuration installed before genesis, not a committed
+    // runtime catalog addition. Restore must retain the same source of authority.
+    nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+    // Follow the authenticated fresh-start order: establish the configured
+    // primary anchor, restore that replay floor, then publish Nexus settings.
+    // The helper rejects existing State or Kura history before changing either.
+    state.install_pre_genesis_nexus_for_testing(nexus);
+    assert_eq!(
+        state.nexus_snapshot().configured_dataspace_catalog,
+        state.nexus_snapshot().dataspace_catalog,
+        "startup must be able to reconstruct the exact configured dataspaces",
+    );
     let lane = LaneConfig {
         id: participant_lane,
         dataspace_id: participant_dataspace,
@@ -823,7 +832,8 @@ v2_apply_test!(
             let checkpoint_after_retry = fixture.kura.wsv_checkpoint(1);
             let manifest_after_retry = fixture.kura.commit_manifest(1);
             let replay_state_hash =
-                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref());
+                crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref())
+                    .expect("stable valid fixture snapshot");
             panic!(
                 "exact durable replay reuses the archived height: {error:?}; \
                      staged_state_hash={:?}; replay_state_hash={replay_state_hash:?}; \
@@ -878,9 +888,8 @@ v2_apply_test!(
             fixture.kura.get_block(height).is_some(),
             "warm the canonical body cache"
         );
-        let primary = fixture.state.nexus_snapshot().lane_config.primary().clone();
-        let body_path = primary
-            .blocks_dir(fixture.kura.store_root())
+        let body_path = Kura::canonical_storage_paths(&fixture.kura.store_root())
+            .0
             .join("blocks.data");
         let mut damaged = std::fs::read(&body_path).expect("read the actual durable body");
         *damaged.last_mut().expect("committed body bytes") ^= 1;
@@ -1137,15 +1146,8 @@ v2_apply_test!(
             fixture.kura.get_block(successor_height).is_some(),
             "the damaged durable body must have a previously valid cached copy"
         );
-        let primary = fixture
-            .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(LaneId::SINGLE)
-            .expect("primary storage lane")
-            .clone();
-        let body_file = primary
-            .blocks_dir(fixture.kura.store_root())
+        let body_file = Kura::canonical_storage_paths(&fixture.kura.store_root())
+            .0
             .join("blocks.data");
         let mut bytes = std::fs::read(&body_file).expect("read actual canonical body file");
         *bytes
@@ -1351,12 +1353,14 @@ v2_apply_test!(
             .expect("recovery publishes finality");
         assert_eq!(first_artifact.block_hash, fixture.body.hash());
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
+            crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref())
+                .expect("stable valid fixture snapshot"),
             staged_state_hash,
             "recovery must reproduce the exact pre-commit checkpointed WSV"
         );
         let durable_state_hash =
-            crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref());
+            crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref())
+                .expect("stable valid fixture snapshot");
         restarted_service
             .execute(&fixture.context, &mut restarted_store, &fixture.task)
             .expect("an exact post-finality retry is idempotent");
@@ -1369,7 +1373,8 @@ v2_apply_test!(
             Some(&first_artifact)
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
+            crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref())
+                .expect("stable valid fixture snapshot"),
             durable_state_hash,
             "idempotent retry must not execute the block twice"
         );
@@ -1471,7 +1476,8 @@ v2_apply_test!(
         let fixture = ApplyFixture::new();
         let mut store = fixture.reopen_body_store();
         fixture.execute(&mut store).expect("initial apply");
-        let state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        let state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("stable valid fixture snapshot");
         let artifact = fixture
             .kura
             .v2_finality_artifact(1)
@@ -1480,7 +1486,8 @@ v2_apply_test!(
         fixture.execute(&mut store).expect("idempotent replay");
         fixture.assert_complete();
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                .expect("stable valid fixture snapshot"),
             state_hash
         );
         assert_eq!(

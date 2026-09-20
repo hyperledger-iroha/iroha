@@ -204,7 +204,6 @@ fn header() -> BlockHeader {
             b"concrete fixture predecessor",
         ))),
         None,
-        None,
         1_700_000_000_007,
         3,
     )
@@ -243,15 +242,19 @@ fn stream_block() -> crate::block::SignedBlock {
     let mut builder = BlockBuilder::new(proposal.header());
     builder.set_da_proof_policies(proposal.da_proof_policies().cloned());
     builder.push_transaction(transaction);
-    builder.push_result(Ok(DataTriggerSequence::default()));
-    let block = builder
+    let mut block = builder
         .try_build_with_signature(0, keys.private_key())
-        .expect("sign result-bearing stream block");
+        .expect("sign proposal stream block");
+    crate::block::output_test_support::install_network(
+        &mut block,
+        vec![Ok(DataTriggerSequence::default())],
+    )
+    .unwrap();
     block
-        .validate_entrypoint_merkle_cache()
+        .validate_proposal_commitments()
         .expect("canonical entrypoint commitment");
     block
-        .validate_result_merkle_cache()
+        .validate_output_merkle_cache()
         .expect("canonical result commitment");
     let signatures = block.signatures().collect::<Vec<_>>();
     assert_eq!(signatures.len(), 1);
@@ -405,17 +408,52 @@ fn concrete_identity_frames_match_capture() {
 }
 
 #[cfg(feature = "http")]
-#[test]
-fn block_message_send_identity_projection_matches_capture() {
+fn block_message_send_identity_projection() -> Value {
     use crate::block::stream::{BlockMessage, BlockMessageSend};
     let block = stream_block();
     let owner = BlockMessage(block.clone());
     let projection = BlockMessageSend(std::sync::Arc::new(block));
+    projected_record(&projection, &owner)
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn block_message_send_identity_projection_matches_capture() {
     assert_eq!(
-        projected_record(&projection, &owner),
+        block_message_send_identity_projection(),
         fixture_values(include_str!(
             "../tests/fixtures/block_message_send_identity_frame.json"
         )),
+    );
+}
+
+#[cfg(all(
+    feature = "http",
+    feature = "governance",
+    not(feature = "ids_projection")
+))]
+#[test]
+#[ignore = "explicit fixture capture after reviewing an intentional wire-format change"]
+fn capture_current_concrete_identity_frames() {
+    let frames = norito::json!({
+        "governance": true,
+        "http": true,
+        "ids_projection": false,
+        "values": {"families": (concrete_identity_frames())},
+    });
+    let projection = norito::json!({
+        "governance": true,
+        "http": true,
+        "ids_projection": false,
+        "values": (block_message_send_identity_projection()),
+    });
+    println!(
+        "CONCRETE_CANONICAL_IDENTITY_CAPTURE={}",
+        norito::json::to_json(&frames).expect("serialize checked concrete identity frames")
+    );
+    println!(
+        "BLOCK_MESSAGE_CANONICAL_IDENTITY_CAPTURE={}",
+        norito::json::to_json(&projection).expect("serialize checked block message projection")
     );
 }
 

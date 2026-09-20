@@ -180,6 +180,7 @@ fn native_resources_account_recovery_latest_publication_and_bounded_pair_pruning
             &RuntimeLaneConfig::default(),
         )
         .unwrap();
+        establish_dummy_store_primary_anchor(&kura);
         let entry = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
         let heights: &[u64] = if scenario == "prune-pair" {
             &[1, 2]
@@ -277,6 +278,7 @@ fn native_resources_fail_closed_on_authenticated_protocol_failure_without_losing
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .unwrap();
+    establish_dummy_store_primary_anchor(&kura);
     let entry = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
     install_native_amx_evidence_fixture_heights(&kura, &entry, &[1]);
     let (latest, temporary) = native_amx_latest_index_test_paths(&kura, &entry);

@@ -4,6 +4,7 @@ pub(crate) mod tests_runtime_handlers {
     include!("lib_runtime_handlers/part_1.rs");
     include!("lib_runtime_handlers/part_2.rs");
     include!("lib_runtime_handlers/part_3.rs");
+    include!("lib_runtime_handlers/queue_plan_admission_handoff.rs");
     include!("lib_runtime_handlers/part_4.rs");
     include!("lib_runtime_handlers/part_5.rs");
     include!("lib_runtime_handlers/part_6.rs");

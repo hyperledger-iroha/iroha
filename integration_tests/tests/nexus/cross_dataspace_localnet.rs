@@ -3100,7 +3100,7 @@ fn entrypoint_occurrences(
         .execute_all()
         .wrap_err_with(|| format!("{context}: query canonical blocks"))?
     {
-        for observed in block.entrypoint_hashes() {
+        for observed in block.network_input_hashes() {
             for (index, expected) in entrypoint_hashes.iter().enumerate() {
                 if observed == *expected {
                     occurrences[index] = occurrences[index].saturating_add(1);

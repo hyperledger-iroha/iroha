@@ -201,7 +201,7 @@ fn non_vm_instructions_charge_fees() {
     .sign(alice_kp.private_key());
     // 4) Execute after genesis so the production fee exemption does not apply.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -308,7 +308,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     state_tx.current_dataspace_id = Some(route);
@@ -435,7 +435,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     .sign(alice_kp.private_key());
     // 4) Execute after genesis and verify sponsored fee transfer.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     provision_fee_sponsor_program(
@@ -600,7 +600,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     let _ = genesis_state_block.apply_without_execution(&setup_committed, Vec::new());
     genesis_state_block.commit().expect("commit setup block");
     {
-        let check_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let check_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut check_block = state.block(check_header);
         let check_tx = check_block.transaction();
         let program = check_tx
@@ -666,7 +666,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         .unpack(|event| validation_events.push(format!("{event:?}")));
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit block");
-    let inspect_header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let inspect_header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut inspect_block = state.block(inspect_header);
     let inspect_tx = inspect_block.transaction();
     let payer_balance_after = inspect_tx
@@ -797,7 +797,7 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     let committed = valid.commit_unchecked().unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed, Vec::new());
     state_block.commit().expect("commit genesis block");
-    let inspect_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let inspect_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut inspect_block = state.block(inspect_header);
     let inspect_tx = inspect_block.transaction();
     let account_after = inspect_tx
@@ -888,7 +888,7 @@ fn non_vm_gas_limit_too_low_rejects() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -966,7 +966,7 @@ fn ivm_syscall_charges_fees() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let contract_route = iroha_model_base::topology::DataSpaceId::new(10);
@@ -1146,7 +1146,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
     let tx_hash = tx.hash();
     // 4) Execute after genesis and verify settlement receipt is recorded.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -1231,7 +1231,7 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     )
     .with_executable(exec)
     .sign(alice_kp.private_key());
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     block.gas_limit_per_block = used.saturating_sub(1);
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();

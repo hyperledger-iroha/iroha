@@ -120,7 +120,12 @@ memory-heavy local builds. Use a small number of
 stable `--target-slot` names only when concurrent tasks need isolated Cargo
 locks; creating a fresh dated or temporary target for every build defeats
 incremental reuse. For intentionally cold or isolated lanes, use
-`--no-incremental` to improve `sccache` reuse across targets. The
+`--no-incremental` to improve `sccache` reuse across targets. Incremental mode
+(`--incremental` or inherited `CARGO_INCREMENTAL=1`) explicitly disables
+config-selected compiler wrappers so a configured `sccache` cannot reactivate.
+To retain compiler instrumentation, set `RUSTC_WRAPPER` or
+`CARGO_BUILD_RUSTC_WRAPPER` explicitly to its executable; `RUSTC_WRAPPER` takes
+precedence, including an explicit empty value. The
 wrapper clears the exact single-worker Cargo/CMake fingerprint inherited from
 local automation so its fast defaults can take effect; pass
 `--preserve-build-limits` when those inherited limits are intentional. Explicit

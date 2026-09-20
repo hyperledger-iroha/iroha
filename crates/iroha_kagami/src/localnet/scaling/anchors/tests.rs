@@ -214,9 +214,8 @@ fn receipt_public_typed_anchors_and_census_match_every_original() {
             receipt["chain_discriminant"].as_u64(),
             Some(u64::from(*config.common.chain_discriminant.value()))
         );
-        let primary = config.nexus.lane_config.primary();
-        let blocks = primary.blocks_dir(config.kura.store_dir.value());
-        let merge = primary.merge_log_path(config.kura.store_dir.value());
+        let (blocks, merge) =
+            iroha_core::kura::Kura::canonical_storage_paths(config.kura.store_dir.value());
         assert_eq!(
             receipt["peers"][index]["primary_block_store"].as_str(),
             blocks.to_str()
@@ -424,24 +423,26 @@ fn receipt_rejects_unlisted_scaffold_and_nonempty_initial_runtime() {
 }
 
 #[test]
-fn primary_reader_paths_follow_final_native_lane_geometry_and_bounds() {
+fn canonical_reader_paths_follow_chain_namespace_and_bounds() {
     let f = Fixture::new();
     for index in 0..4 {
         let path = f.root.join(format!("peer{index}.toml"));
         let text = Zeroizing::new(fs::read_to_string(&path).unwrap());
         let config = parse_localnet_peer_config(&text, Some(&path)).unwrap();
-        let (blocks, merge) = primary_reader_paths(&config).unwrap();
+        let (blocks, merge) = canonical_reader_paths(&config).unwrap();
         let root = config.kura.store_dir.value();
         assert!(Path::new(&blocks).starts_with(root));
         assert!(Path::new(&merge).starts_with(root));
         assert_ne!(Path::new(&blocks), root);
         assert_ne!(blocks, merge);
+        assert_eq!(Path::new(&blocks), root.join("blocks/canonical"));
+        assert_eq!(Path::new(&merge), root.join("merge_ledger/canonical.log"));
         let mut altered = config.clone();
         altered.kura.store_dir = iroha_config::base::WithOrigin::inline(PathBuf::from("relative"));
-        assert!(primary_reader_paths(&altered).is_err());
+        assert!(canonical_reader_paths(&altered).is_err());
         altered.kura.store_dir =
             iroha_config::base::WithOrigin::inline(PathBuf::from(format!("/{}", "x".repeat(4096))));
-        assert!(primary_reader_paths(&altered).is_err());
-        assert_eq!((blocks, merge), primary_reader_paths(&config).unwrap());
+        assert!(canonical_reader_paths(&altered).is_err());
+        assert_eq!((blocks, merge), canonical_reader_paths(&config).unwrap());
     }
 }

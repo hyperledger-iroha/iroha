@@ -553,8 +553,8 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         "every physical Fetch call keeps the original task owner"
     );
     assert!(fetch_executor.retained_effect_batch.is_none());
-    let external = fetch_executor
-        .external_lifecycle_owners()
+    let (_, _, external) = fetch_executor
+        .runtime_and_external_lifecycle_census()
         .expect("inspect external lifecycle ownership after coalescing the retry");
     assert!(
         external.iter().all(|owner| owner != incumbent.owner()),
@@ -1717,4 +1717,144 @@ fn advancing_pacemaker_frontier_without_enter_view_preserves_effect_sidecar() {
     assert!(executor.runtime.effect_owners.is_empty());
     assert!(services.entered_views.is_empty());
     assert!(executor.status().fail_closed);
+}
+
+#[test]
+fn borrowed_runtime_census_tracks_all_executor_sources_and_immediate_retirement() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let bind = |effect: &AdapterEffect, ordinal| {
+        bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(effect),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag(0), ordinal)],
+        )
+        .expect("bind exact census fixture effect")
+        .pop()
+        .expect("one bound owner")
+    };
+    let sign = timeout_sign(&fixture, 0);
+    executor.retained_effect_batch = Some(RetainedEffectBatch {
+        effects: VecDeque::from([OwnedAdapterEffect {
+            effect: sign.clone(),
+            ownership: bind(&sign, 1),
+            highest_prepare_retention: None,
+        }]),
+        oldest_at: Instant::now(),
+    });
+    executor.parked_effect_batch = Some(RetainedEffectBatch {
+        effects: VecDeque::from([OwnedAdapterEffect {
+            effect: sign.clone(),
+            ownership: bind(&sign, 2),
+            highest_prepare_retention: None,
+        }]),
+        oldest_at: Instant::now(),
+    });
+    let AdapterEffect::Sign {
+        tag: sign_tag,
+        request,
+    } = &sign
+    else {
+        panic!("the fixture has an exact Sign request")
+    };
+    executor.pending_signatures.insert(
+        EffectWorkId(3),
+        PendingSignature {
+            tag: *sign_tag,
+            request: request.clone(),
+            ownership: bind(&sign, 3),
+        },
+    );
+    executor.pending_stores.insert(
+        EffectWorkId(4),
+        PendingStore {
+            task: BodyStoreTask::for_test(
+                4,
+                tag(0),
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+            ),
+            consumer: None,
+        },
+    );
+    let durable = services
+        .body_store
+        .as_mut()
+        .expect("body store")
+        .store(fixture.manifest.clone(), fixture.body.clone())
+        .expect("persist the exact Apply fixture body");
+    let validated = validate_durable_body_fixture(&mut services, &fixture.manifest, durable);
+    let certificate = fixture.qc(wire::GlobalPhase::Commit);
+    let apply = AdapterEffect::Apply {
+        tag: tag(0),
+        subject: fixture.manifest.subject,
+        certificate: certificate.clone(),
+    };
+    executor.pending_applications.insert(
+        EffectWorkId(5),
+        PendingApply {
+            task: ApplyTask::for_test(
+                5,
+                tag(0),
+                fixture.manifest.subject,
+                certificate.clone(),
+                validated,
+            ),
+            ownership: bind(&apply, 5),
+        },
+    );
+    let output = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+    ));
+    let output_owner = bind(&output, 6);
+    let pending = PendingLifecycleOutputAdmissionV1::seal_exact(output, output_owner)
+        .unwrap_or_else(|_| panic!("seal the exact output census fixture"));
+    executor
+        .pending_lifecycle_output_admissions
+        .insert(pending.key(), pending);
+    executor.pending_fetches.insert(
+        EffectWorkId(7),
+        PendingFetch {
+            task: BodyFetchTask::ordinary_for_test(7, tag(0), fixture.manifest.clone()),
+            request_hash: None,
+        },
+    );
+    {
+        let (_, _, external) = executor
+            .runtime_and_external_lifecycle_census()
+            .expect("borrow all six source families");
+        assert_eq!(
+            external
+                .iter()
+                .map(RuntimeLifecycleOwner::lifecycle_ordinal)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6]
+        );
+    }
+    executor
+        .pending_signatures
+        .remove(&EffectWorkId(3))
+        .expect("retire exact Sign");
+    {
+        let (_, _, external) = executor
+            .runtime_and_external_lifecycle_census()
+            .expect("the next operation immediately sees retirement without a runtime step");
+        assert_eq!(
+            external
+                .iter()
+                .map(RuntimeLifecycleOwner::lifecycle_ordinal)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 4, 5, 6]
+        );
+    }
+    executor.retained_effect_batch = None;
+    executor.parked_effect_batch = None;
+    executor.pending_stores.clear();
+    executor.pending_applications.clear();
+    executor.pending_lifecycle_output_admissions.clear();
+    let (_, _, external) = executor
+        .runtime_and_external_lifecycle_census()
+        .expect("only passive acquisition remains");
+    assert_eq!(external.len(), 0);
+    assert_eq!(executor.pending_fetches.len(), 1);
 }

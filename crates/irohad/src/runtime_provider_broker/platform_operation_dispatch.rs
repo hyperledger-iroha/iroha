@@ -155,6 +155,11 @@ fn dispatch_server_operation_with_session(
         {
             consensus_operations::parliament_tle_capability_attest(state, request)
         }
+        (slot, OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1)
+            if slot == global_beacon_partial_signer_slot =>
+        {
+            consensus_operations::global_beacon_capability_attest(state, request)
+        }
         (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1)
             if slot == moderation_panel_notification_archive_slot =>
         {

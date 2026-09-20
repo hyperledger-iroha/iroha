@@ -14,7 +14,7 @@ from state_source_bundle import read_rust_source_bundle
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/state/tests.rs"
 AUTOSCALE_GUARD_PATH = REPO_ROOT / "scripts/tests/state_autoscale_case_matrix_source_test.py"
-AUTOSCALE_GUARD_SHA256 = "7e04f0cd09ddd357b9de5bd8a30fcba47cca8ada13ff84b54fd3975ea8b0ea67"
+AUTOSCALE_GUARD_SHA256 = "dcbaa0306c39869e8748cc32825508fbce43171662958a440c78102fb45d4930"
 MAX_SOURCE_LINES = 36_806
 
 REGIONS = {

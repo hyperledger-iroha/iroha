@@ -1,7 +1,7 @@
 //! Derive committed manifest additions from the immutable startup source authority.
 
 use super::*;
-use iroha_data_model::nexus::{DataSpaceCatalog, RuntimeLaneManifestV1};
+use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, RuntimeLaneManifestV1};
 
 impl LaneManifestRegistry {
     /// Whether these frozen sources are bound to this exact effective catalog.
@@ -48,6 +48,108 @@ impl LaneManifestRegistry {
                         .is_some_and(|source| source.content_digest.valid && source.parsed.is_ok())
             },
         )
+    }
+
+    /// Validate one native runtime manifest against its declared lane and dataspace.
+    ///
+    /// CLI producers use the same bounded parser and semantic authority as runtime
+    /// installation. `governance` must be the effective governance catalog, including
+    /// any authenticated startup overlay. This check neither authorizes publication
+    /// nor verifies live account, peer, role, consensus-key or PoP eligibility.
+    /// Installation additionally enforces immutable baseline ownership, cumulative
+    /// source budgets, cross-lane authority consistency and the complete catalog.
+    ///
+    /// # Errors
+    ///
+    /// Rejects mismatched lane/dataspace bindings, malformed or oversized sources,
+    /// invalid governance rules or privacy commitments, and any roster/quorum that
+    /// differs from the physical dataspace's exact `3f+1`/`2f+1` requirement.
+    pub fn validate_runtime_manifest(
+        addition: &RuntimeLaneManifestV1,
+        lane: &LaneConfig,
+        dataspace: &DataSpaceMetadata,
+        governance: &GovernanceCatalog,
+    ) -> Result<(), String> {
+        Self::prepare_runtime_manifest(
+            addition,
+            lane,
+            dataspace,
+            governance,
+            &mut ManifestSourceLoadBudget::default(),
+        )
+        .map(|_| ())
+    }
+
+    fn prepare_runtime_manifest(
+        addition: &RuntimeLaneManifestV1,
+        lane: &LaneConfig,
+        dataspace: &DataSpaceMetadata,
+        governance: &GovernanceCatalog,
+        budget: &mut ManifestSourceLoadBudget,
+    ) -> Result<FrozenLaneManifestSource, String> {
+        if addition.lane_id != lane.id {
+            return Err("runtime manifest must bind its exact effective lane id".to_owned());
+        }
+        if lane.dataspace_id != dataspace.id {
+            return Err("runtime manifest lane must bind its exact physical dataspace".to_owned());
+        }
+        let committee_size = dataspace
+            .fault_tolerance
+            .checked_mul(3)
+            .and_then(|f| f.checked_add(1))
+            .and_then(|size| usize::try_from(size).ok())
+            .filter(|size| *size <= LANE_MANIFEST_MAX_VALIDATORS_V1)
+            .ok_or_else(|| {
+                "runtime manifest dataspace committee exceeds the native bound".to_owned()
+            })?;
+        let quorum = dataspace
+            .fault_tolerance
+            .checked_mul(2)
+            .and_then(|f| f.checked_add(1))
+            .ok_or_else(|| "runtime manifest dataspace quorum overflowed".to_owned())?;
+        let raw = addition.manifest.get().as_bytes();
+        if raw.is_empty() || raw.len() > LANE_MANIFEST_MAX_BYTES_V1 {
+            return Err("runtime manifest source exceeds the native per-source bound".to_owned());
+        }
+        budget.charge_bytes(raw.len())?;
+        let parsed = Self::parse_bounded_manifest_json(raw, budget)?;
+        Self::validate_manifest_source_bounds(&parsed)?;
+        if parsed.lane.as_deref() != Some(lane.alias.as_str()) {
+            return Err("runtime manifest must name its exact effective lane alias".to_owned());
+        }
+        let artifacts = Self::validate_parsed_manifest(
+            &parsed,
+            lane.id,
+            &lane.alias,
+            lane.governance.as_deref(),
+            governance,
+        )?;
+        if artifacts.rules.validators.len() != committee_size
+            || artifacts.rules.validator_bindings.len() != committee_size
+            || artifacts.rules.quorum != Some(quorum)
+        {
+            return Err(
+                "runtime manifest requires exact 3f+1 validators and 2f+1 quorum".to_owned(),
+            );
+        }
+        if lane.storage == LaneStorageProfile::CommitmentOnly
+            && artifacts.privacy_commitments.is_empty()
+        {
+            return Err("runtime commitment-only manifest requires privacy commitments".to_owned());
+        }
+        let canonical = json::to_json(&parsed)
+            .map_err(|error| format!("runtime manifest canonical encoding failed: {error}"))?;
+        if canonical.len() > LANE_MANIFEST_MAX_CANONICAL_BYTES_V1 {
+            return Err("runtime manifest canonical source exceeds the native bound".to_owned());
+        }
+        Ok(FrozenLaneManifestSource {
+            path: None,
+            parsed: Ok(parsed),
+            content_digest: LaneManifestSourceContentDigestV1 {
+                valid: true,
+                digest: Hash::new(canonical.as_bytes()).into(),
+            },
+        })
     }
 
     /// Derive an effective registry from the full authenticated runtime overlay.
@@ -149,63 +251,16 @@ impl LaneManifestRegistry {
             let dataspace = dataspaces
                 .by_id(lane.dataspace_id)
                 .ok_or_else(|| "runtime manifest lane has no physical dataspace".to_owned())?;
-            let committee_size = dataspace
-                .fault_tolerance
-                .checked_mul(3)
-                .and_then(|f| f.checked_add(1))
-                .and_then(|size| usize::try_from(size).ok())
-                .filter(|size| *size <= LANE_MANIFEST_MAX_VALIDATORS_V1)
-                .ok_or_else(|| {
-                    "runtime manifest dataspace committee exceeds the native bound".to_owned()
-                })?;
-            let quorum = dataspace
-                .fault_tolerance
-                .checked_mul(2)
-                .and_then(|f| f.checked_add(1))
-                .ok_or_else(|| "runtime manifest dataspace quorum overflowed".to_owned())?;
-            let raw = addition.manifest.get().as_bytes();
-            if raw.is_empty() || raw.len() > LANE_MANIFEST_MAX_BYTES_V1 {
-                return Err(
-                    "runtime manifest source exceeds the native per-source bound".to_owned(),
-                );
-            }
-            budget.charge_bytes(raw.len())?;
-            let parsed = Self::parse_bounded_manifest_json(raw, &mut budget)?;
-            Self::validate_manifest_source_bounds(&parsed)?;
-            if parsed.lane.as_deref() != Some(lane.alias.as_str()) {
-                return Err("runtime manifest must name its exact effective lane alias".to_owned());
-            }
-            let artifacts = Self::validate_parsed_manifest(
-                &parsed,
-                lane.id,
-                &lane.alias,
-                lane.governance.as_deref(),
+            let source = Self::prepare_runtime_manifest(
+                addition,
+                lane,
+                dataspace,
                 &effective_governance,
+                &mut budget,
             )?;
-            if artifacts.rules.validators.len() != committee_size
-                || artifacts.rules.validator_bindings.len() != committee_size
-                || artifacts.rules.quorum != Some(quorum)
-            {
-                return Err(
-                    "runtime manifest requires exact 3f+1 validators and 2f+1 quorum".to_owned(),
-                );
-            }
-            let canonical = json::to_json(&parsed)
-                .map_err(|error| format!("runtime manifest canonical encoding failed: {error}"))?;
-            if canonical.len() > LANE_MANIFEST_MAX_CANONICAL_BYTES_V1 {
-                return Err("runtime manifest canonical source exceeds the native bound".to_owned());
-            }
-            effective_sources.manifests_by_alias.insert(
-                lane.alias.clone(),
-                FrozenLaneManifestSource {
-                    path: None,
-                    parsed: Ok(parsed),
-                    content_digest: LaneManifestSourceContentDigestV1 {
-                        valid: true,
-                        digest: Hash::new(canonical.as_bytes()).into(),
-                    },
-                },
-            );
+            effective_sources
+                .manifests_by_alias
+                .insert(lane.alias.clone(), source);
         }
         effective_sources.consensus_policy_digest =
             effective_sources.compute_consensus_policy_digest();

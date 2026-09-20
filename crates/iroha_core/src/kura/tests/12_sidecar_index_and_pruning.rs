@@ -115,6 +115,125 @@ fn indexed_sidecars_prune_to_retention() {
     }
 }
 #[test]
+fn block_store_reads_do_not_recreate_missing_journals() {
+    for missing_name in [DATA_FILE_NAME, INDEX_FILE_NAME, HASHES_FILE_NAME] {
+        let dir = TempDir::new().expect("temporary store");
+        let mut store = BlockStore::new(dir.path());
+        store
+            .create_files_if_they_do_not_exist()
+            .expect("initialize journals");
+        store
+            .append_block_to_chain(&DummyBlocks::new().next())
+            .expect("append nonempty block");
+        store.drop_cached_handles();
+        let missing_path = dir.path().join(missing_name);
+        fs::remove_file(&missing_path).expect("remove journal after closing cached handles");
+        let unchanged = [
+            DATA_FILE_NAME,
+            INDEX_FILE_NAME,
+            HASHES_FILE_NAME,
+            COUNT_FILE_NAME,
+        ]
+        .into_iter()
+        .filter(|name| *name != missing_name)
+        .map(|name| {
+            let path = dir.path().join(name);
+            let bytes = fs::read(&path).expect("read remaining canonical journal");
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+
+        let reads = match missing_name {
+            DATA_FILE_NAME => vec![
+                store.data_file_len().map(|_| ()),
+                store.read_block_data(0, &mut [0_u8; 1]),
+                store.block_bytes(0, 1).map(|_| ()),
+            ],
+            INDEX_FILE_NAME => vec![
+                store.read_block_index(0).map(|_| ()),
+                store.read_index_count().map(|_| ()),
+                store.read_exact_durable_index_count().map(|_| ()),
+            ],
+            HASHES_FILE_NAME => vec![
+                store.read_block_hashes(0, 1).map(|_| ()),
+                store.read_hashes_count().map(|_| ()),
+                store.read_exact_durable_index_count().map(|_| ()),
+            ],
+            _ => unreachable!("only canonical journals are removed"),
+        };
+        for result in reads {
+            let error = result.expect_err("a read must reject its missing canonical journal");
+            assert!(
+                matches!(&error, Error::IO(cause, path)
+                    if cause.kind() == ErrorKind::NotFound && *path == missing_path),
+                "unexpected {missing_name} read failure: {error:?}",
+            );
+        }
+        assert!(
+            !missing_path.exists(),
+            "reads must not recreate missing {missing_name}",
+        );
+        for (path, bytes) in unchanged {
+            assert_eq!(
+                fs::read(&path).expect("read unchanged canonical journal"),
+                bytes,
+                "rejecting a missing journal must not repair {}",
+                path.display(),
+            );
+        }
+    }
+}
+
+#[test]
+fn block_store_existing_journals_reopen_for_reads_and_writes() {
+    let dir = TempDir::new().expect("temporary store");
+    let mut store = BlockStore::new(dir.path());
+    store
+        .create_files_if_they_do_not_exist()
+        .expect("explicit initialization creates journals");
+    assert_eq!(store.read_exact_durable_index_count().unwrap(), 0);
+    let mut blocks = DummyBlocks::new();
+    let first = blocks.next();
+    store
+        .append_block_to_chain(&first)
+        .expect("write newly initialized journals");
+    store.drop_cached_handles();
+
+    let first_index = store.read_block_index(0).expect("reopen existing index");
+    assert_eq!(
+        store
+            .read_block_hashes(0, 1)
+            .expect("reopen existing hashes"),
+        [first.hash()],
+    );
+    let first_wire = first.encode_wire().expect("encode first block");
+    assert_eq!(
+        store
+            .block_bytes(first_index.start, first_index.length)
+            .expect("reopen existing data"),
+        first_wire,
+    );
+
+    let second = blocks.next();
+    store
+        .append_block_to_chain(&second)
+        .expect("read-reopened handles remain writable");
+    store.drop_cached_handles();
+    assert_eq!(store.read_exact_durable_index_count().unwrap(), 2);
+    assert_eq!(
+        store.read_block_hashes(0, 2).unwrap(),
+        [first.hash(), second.hash()],
+    );
+    let second_index = store.read_block_index(1).expect("read appended index");
+    assert_eq!(
+        store
+            .block_bytes(second_index.start, second_index.length)
+            .expect("read appended block"),
+        second.encode_wire().expect("encode second block"),
+    );
+}
+
+#[test]
 fn hashes_count_math() {
     let dir = TempDir::new().unwrap();
     let mut store = BlockStore::new(dir.path());
@@ -1723,12 +1842,21 @@ fn prune_intent_tampering_fails_closed() {
         )
         .expect("write symlink target intent");
         symlink(&symlink_target, &intent_path).expect("create intent symlink");
-        assert!(matches!(
-            Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
-            Err(Error::IO(source, path)) if source.kind() == ErrorKind::InvalidData
-                && source.to_string().contains("configured Kura tree contains a symbolic link")
-                && path == intent_path
-        ));
+        let error = match Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("canonical prune-intent inventory must reject the symlink"),
+        };
+        assert!(
+            matches!(&error, Error::PruneIntentConflict(message)
+            if message == &format!(
+                "canonical prune-intent artifact {} is not a regular no-follow file",
+                intent_path.display(),
+            )),
+            "unexpected prune-intent symlink rejection: {error:?}"
+        );
         assert!(
             std::fs::symlink_metadata(&intent_path)
                 .expect("retain rejected intent symlink")
@@ -1768,6 +1896,7 @@ fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("kura init");
+    establish_dummy_store_primary_anchor(&kura);
     let mut blocks = DummyBlocks::new();
     kura.store_block(blocks.next()).expect("store block 1");
     kura.store_block(blocks.next()).expect("store block 2");

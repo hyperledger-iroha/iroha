@@ -43,7 +43,9 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami advanced kura scaling-evidence prepare`↴](#kagami-advanced-kura-scaling-evidence-prepare)
 * [`kagami advanced kura scaling-evidence export`↴](#kagami-advanced-kura-scaling-evidence-export)
 * [`kagami advanced kura scaling-evidence replay`↴](#kagami-advanced-kura-scaling-evidence-replay)
+* [`kagami advanced kura beacon-history`↴](#kagami-advanced-kura-beacon-history)
 * [`kagami advanced kura print`↴](#kagami-advanced-kura-print)
+* [`kagami advanced kura finality`↴](#kagami-advanced-kura-finality)
 * [`kagami advanced kura sidecar`↴](#kagami-advanced-kura-sidecar)
 * [`kagami advanced markdown-help`↴](#kagami-advanced-markdown-help)
 * [`kagami advanced schema`↴](#kagami-advanced-schema)
@@ -274,7 +276,8 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 ###### **Subcommands:**
 
 * `authenticate-release-v1` — Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
-* `derive-mint-finality-next-epoch-v1` — Derive the typed next-epoch parameter from four inherited private seed blocks
+* `derive-mint-finality-next-epoch-v1` — Derive one typed next-epoch parameter from four inherited private seed blocks
+* `derive-mint-finality-epoch-schedule-v1` — Derive a bounded public epoch-maintenance schedule from one inherited seed pipe
 
 
 
@@ -302,18 +305,33 @@ Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
 
 ## `kagami kagemusha derive-mint-finality-next-epoch-v1`
 
-Derive the typed next-epoch parameter from four inherited private seed blocks
+Derive one typed public parameter without submitting a transaction.
 
 **Usage:** `kagami kagemusha derive-mint-finality-next-epoch-v1 --network-id <NETWORK_ID> --epoch <EPOCH> --validator <PEER_ID> --seed-fd <FD>`
 
-###### **Options:**
+* `--network-id <NETWORK_ID>` — Exact canonical genesis-derived network identity
+* `--epoch <EPOCH>` — Positive target epoch
+* `--validator <PEER_ID>` — Repeat exactly four BLS-normal voters in strictly increasing PeerId order
+* `--seed-fd <FD>` — Transferred read pipe descriptor at least 3; exactly four independent nonzero 32-byte seed blocks in voter order, followed by EOF
 
-* `--network-id <NETWORK_ID>` — Exact nonzero genesis-derived NetworkId in its canonical checked hash spelling
-* `--epoch <EPOCH>` — Next election epoch; epoch zero is reserved for genesis provisioning
-* `--validator <PEER_ID>` — Repeat four canonical BLS-normal voters in strict PeerId order; seeds use that order
-* `--seed-fd <FD>` — Transferred pipe read FD (>=3): exactly 128 raw seed bytes, then EOF; no file paths
+## `kagami kagemusha derive-mint-finality-epoch-schedule-v1`
 
+Derive the public schedule consumed by `iroha taira epoch-maintenance`. Private
+input uses the same owned pipe and is erased before public output. Required output
+`genesis_roster` contains the epoch-zero public keys derived from those same seeds;
+consumers compare it with their independently authenticated signed genesis.
 
+**Usage:** `kagami kagemusha derive-mint-finality-epoch-schedule-v1 --network-id <NETWORK_ID> --epoch <EPOCH> --validator <PEER_ID> --seed-fd <FD> --epoch-count <EPOCH_COUNT> --payment-asset <PAYMENT_ASSET> --transaction-fee-maximum <TRANSACTION_FEE_MAXIMUM>`
+
+* `--network-id <NETWORK_ID>` — Exact canonical genesis-derived network identity
+* `--epoch <EPOCH>` — First positive target epoch
+* `--validator <PEER_ID>` — Repeat exactly four BLS-normal voters in strictly increasing PeerId order
+* `--seed-fd <FD>` — Transferred read pipe descriptor at least 3; exactly 128 seed bytes, followed by EOF
+* `--epoch-count <EPOCH_COUNT>` — 1–256 consecutive epochs; overflow is rejected
+* `--payment-asset <PAYMENT_ASSET>` — Sole asset authorized for maintenance fees
+* `--transaction-fee-maximum <TRANSACTION_FEE_MAXIMUM>` — Positive maximum fee per transaction
+
+Neither derivation command establishes election eligibility or submits a transaction.
 
 ## `kagami genesis`
 
@@ -737,7 +755,9 @@ Commands related to block inspection
 ###### **Subcommands:**
 
 * `scaling-evidence` — Prepare, export or independently replay canonical scaling evidence
+* `beacon-history` — Project bounded typed public beacon candidates, with explicit coverage limits
 * `print` — Print contents of a certain length of the blocks
+* `finality` — Verify a locally anchored retained prefix and export its exact finality proof
 * `sidecar` — Print the pipeline recovery sidecar JSON for a given height
 
 
@@ -811,7 +831,7 @@ Authenticate original launch inputs and publish canonical preparation facts
 * `--journal <JOURNAL>` — Original complete signed-request collector journal absolute path
 * `--journal-sha256 <JOURNAL_SHA256>` — Independently pinned raw SHA-256 of the complete original journal
 * `--journal-max-bytes <JOURNAL_MAX_BYTES>` — Maximum complete original journal bytes
-* `--finality <FINALITY>` — Original canonical Vec<BridgeFinalityProof> absolute path
+* `--finality <FINALITY>` — Original canonical Vec<FinalizedNativeContextV1> absolute path
 * `--finality-sha256 <FINALITY_SHA256>` — Independently pinned raw SHA-256 of the complete finality vector
 * `--finality-max-bytes <FINALITY_MAX_BYTES>` — Maximum complete finality vector bytes
 * `--queries <QUERIES>` — Original canonical Vec<CommittedTransaction> absolute path, preserving every query
@@ -951,6 +971,25 @@ Reauthenticate a canonical proof and emit its complete ordered rows
 
 
 
+## `kagami advanced kura beacon-history`
+
+Project bounded typed public beacon candidates, with explicit coverage limits
+
+**Usage:** `kagami advanced kura beacon-history [OPTIONS] --from <BLOCK_HEIGHT> --length <LENGTH> <PATH_TO_BLOCK_STORE>`
+
+###### **Arguments:**
+
+* `<PATH_TO_BLOCK_STORE>` — Exact lane directory containing the canonical block journals
+
+###### **Options:**
+
+* `-f`, `--from <BLOCK_HEIGHT>` — First block height in the exact inspection interval
+* `--length <LENGTH>` — Exact number of blocks, from the --from height (1..=4096)
+* `--merge-sidecar <FILE>` — Exact canonical public merge-entry file; repeat for referenced carriers only
+* `-o`, `--output <OUTPUT>` — Write bounded JSON outside the inspected store; defaults to stdout
+
+
+
 ## `kagami advanced kura print`
 
 Print contents of a certain length of the blocks
@@ -968,6 +1007,23 @@ Print contents of a certain length of the blocks
 
   Default value: `1`
 * `-o`, `--output <OUTPUT>` — Where to write the results of the inspection If omitted, writes to stdout
+
+
+
+## `kagami advanced kura finality`
+
+Verify a locally anchored retained prefix and export its exact finality proof
+
+**Usage:** `kagami advanced kura finality [OPTIONS] --height <HEIGHT> <PATH_TO_BLOCK_STORE>`
+
+###### **Arguments:**
+
+* `<PATH_TO_BLOCK_STORE>` — Exact lane directory containing the canonical block journals
+
+###### **Options:**
+
+* `-H`, `--height <HEIGHT>` — Verify all heights from genesis through this height (1..=4096)
+* `-o`, `--output <OUTPUT>` — Write the public JSON outside the inspected store (default: stdout)
 
 
 

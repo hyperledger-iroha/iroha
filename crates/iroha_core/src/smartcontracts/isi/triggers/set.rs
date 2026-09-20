@@ -4,6 +4,14 @@
 //! The point of the idea is to create an ordering (or hash function) which maps the event filter
 //! and the event that triggers it to the same approximate location in the hierarchy, thus using
 //! Binary search trees (common lisp) or hash tables (racket) to quickly trigger hooks.
+/// Fresh persistent action binding for canonical invocation sources.
+#[path = "invocation_identity.rs"]
+pub(crate) mod invocation_identity;
+
+#[path = "set_detachment.rs"]
+mod detachment;
+pub(crate) use detachment::{DetachError, DetachedSet, PreparedSet, SetPublicationError};
+
 use super::{
     data_trigger_global_permission_grantee, data_trigger_scope_authorization_is_well_formed,
     replace_data_trigger_global_permission_grantee, trigger_is_enabled,
@@ -123,6 +131,93 @@ impl norito::core::SerializePayload for BorrowedEnumVariant<'_> {
             .checked_add(norito::core::len_prefix_len(value))?
             .checked_add(value)
     }
+}
+
+/// Forward a borrowed semantic payload without an extra field or codec frame.
+/// This private projection never serializes a materialized runtime or cache.
+struct WorldDeltaFieldRef<'a>(&'a dyn norito::core::SerializePayload);
+impl norito::core::SerializePayload for WorldDeltaFieldRef<'_> {
+    fn serialize(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> core::result::Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+/// Bare semantic action projection for the private World net delta.
+/// Field order matches the owned DTO; this is not a snapshot or witness proof.
+#[derive(Encode)]
+struct BorrowedWorldAction<'a> {
+    executable: BorrowedEnumVariant<'a>,
+    repeats: Repeats,
+    authority: WorldDeltaFieldRef<'a>,
+    filter: WorldDeltaFieldRef<'a>,
+    retry_policy: Option<TimeTriggerRetryPolicy>,
+    retry_state: Option<TimeTriggerRetryState>,
+    metadata: WorldDeltaFieldRef<'a>,
+}
+impl<'a> BorrowedWorldAction<'a> {
+    fn new<F: norito::core::SerializePayload>(action: &'a LoadedAction<F>) -> Self {
+        let LoadedAction {
+            executable,
+            repeats,
+            authority,
+            filter,
+            retry_policy,
+            retry_state,
+            metadata,
+        } = action;
+        let executable = match executable {
+            ExecutableRef::Ivm(hash) => BorrowedEnumVariant::new(0, hash),
+            ExecutableRef::ContractCall(invocation) => BorrowedEnumVariant::new(1, invocation),
+            ExecutableRef::Instructions(instructions) => BorrowedEnumVariant::new(2, instructions),
+            ExecutableRef::Batch(items) => BorrowedEnumVariant::new(3, items),
+        };
+        Self {
+            executable,
+            repeats: *repeats,
+            authority: WorldDeltaFieldRef(authority),
+            filter: WorldDeltaFieldRef(filter),
+            retry_policy: *retry_policy,
+            retry_state: *retry_state,
+            metadata: WorldDeltaFieldRef(metadata),
+        }
+    }
+}
+/// Exact retained contract identity, excluding any prepared-code cache.
+#[derive(Encode)]
+struct BorrowedWorldContract<'a> {
+    original_contract: WorldDeltaFieldRef<'a>,
+    code_hash: Hash,
+    count: u64,
+}
+impl<'a> From<&'a IvmBytecodeEntry> for BorrowedWorldContract<'a> {
+    fn from(entry: &'a IvmBytecodeEntry) -> Self {
+        let IvmBytecodeEntry {
+            original_contract,
+            code_hash,
+            count,
+        } = entry;
+        Self {
+            original_contract: WorldDeltaFieldRef(original_contract),
+            code_hash: *code_hash,
+            count: count.get(),
+        }
+    }
+}
+fn hash_world_action<F: norito::core::SerializePayload>(
+    action: &LoadedAction<F>,
+) -> core::result::Result<Hash, String> {
+    crate::state::world_projection::hash_value(&BorrowedWorldAction::new(action))
+}
+fn hash_world_contract(entry: &IvmBytecodeEntry) -> core::result::Result<Hash, String> {
+    crate::state::world_projection::hash_value(&BorrowedWorldContract::from(entry))
 }
 
 /// [`IvmBytecode`]s keyed by contract hash.
@@ -688,14 +783,13 @@ impl Set {
         !action.repeats.is_depleted() && trigger_is_enabled(&action.metadata)
     }
     fn collect_active_ids<F: mv::Value>(
-        triggers: &Storage<TriggerId, LoadedAction<F>>,
+        triggers: &mut Storage<TriggerId, LoadedAction<F>>,
     ) -> ActiveTriggerIdStore {
+        // Active IDs follow both action images, including deleted actions and
+        // prior absence. A restart must not change latest-block replacement.
         triggers
-            .view()
-            .iter()
-            .filter(|(_, action)| Self::action_is_active(action))
-            .map(|(id, _)| (id.clone(), ()))
-            .collect()
+            .history()
+            .project(|action| Self::action_is_active(action).then_some(()))
     }
 }
 impl json::JsonDeserialize for Set {
@@ -738,48 +832,56 @@ impl json::JsonDeserialize for Set {
             }
         }
         visitor.finish()?;
-        let data_triggers =
+        let mut data_triggers =
             data_triggers.ok_or_else(|| json::MapVisitor::missing_field("data_triggers"))?;
-        let pipeline_triggers = pipeline_triggers
+        let mut pipeline_triggers = pipeline_triggers
             .ok_or_else(|| json::MapVisitor::missing_field("pipeline_triggers"))?;
-        let time_triggers =
+        let mut time_triggers =
             time_triggers.ok_or_else(|| json::MapVisitor::missing_field("time_triggers"))?;
-        let by_call_triggers =
+        let mut by_call_triggers =
             by_call_triggers.ok_or_else(|| json::MapVisitor::missing_field("by_call_triggers"))?;
         let ids = ids.ok_or_else(|| json::MapVisitor::missing_field("ids"))?;
         let contracts = contracts.ok_or_else(|| json::MapVisitor::missing_field("contracts"))?;
-        let incompatible_data_trigger = {
-            let view = data_triggers.view();
-            view.iter()
-                .find(|(_, action)| {
-                    !data_trigger_scope_authorization_is_well_formed(action.metadata())
-                })
-                .map(|(id, _)| id.clone())
-        };
-        if let Some(id) = incompatible_data_trigger {
-            return Err(json::Error::InvalidField {
-                field: "data_triggers".into(),
-                message: format!(
-                    "incompatible data trigger `{id}`: missing or malformed v1 scope authorization metadata; regenerate the first-release snapshot"
-                ),
-            });
+        {
+            let history = data_triggers.history();
+            for previous in [false, true] {
+                let entries: Box<
+                    dyn Iterator<Item = (&TriggerId, &LoadedAction<DataEventFilter>)> + '_,
+                > = if previous {
+                    Box::new(history.iter_before_block())
+                } else {
+                    Box::new(history.current().iter())
+                };
+                for (id, action) in entries {
+                    if !data_trigger_scope_authorization_is_well_formed(action.metadata()) {
+                        return Err(json::Error::InvalidField {
+                            field: "data_triggers".into(),
+                            message: format!(
+                                "incompatible data trigger `{id}`: missing or malformed v1 scope authorization metadata in {} state; regenerate the first-release snapshot",
+                                if previous { "predecessor" } else { "current" },
+                            ),
+                        });
+                    }
+                }
+                let entries: Box<
+                    dyn Iterator<Item = (&TriggerId, &LoadedAction<DataEventFilter>)> + '_,
+                > = if previous {
+                    Box::new(history.iter_before_block())
+                } else {
+                    Box::new(history.current().iter())
+                };
+                validate_data_trigger_capacities(entries).map_err(|message| json::Error::InvalidField {
+                    field: "data_triggers".into(),
+                    message: format!(
+                        "incompatible first-release data-trigger snapshot: {message}; regenerate the snapshot"
+                    ),
+                })?;
+            }
         }
-        let capacity_error = {
-            let view = data_triggers.view();
-            validate_data_trigger_capacities(view.iter()).err()
-        };
-        if let Some(message) = capacity_error {
-            return Err(json::Error::InvalidField {
-                field: "data_triggers".into(),
-                message: format!(
-                    "incompatible first-release data-trigger snapshot: {message}; regenerate the snapshot"
-                ),
-            });
-        }
-        let active_data_trigger_ids = Self::collect_active_ids(&data_triggers);
-        let active_pipeline_trigger_ids = Self::collect_active_ids(&pipeline_triggers);
-        let active_time_trigger_ids = Self::collect_active_ids(&time_triggers);
-        let active_by_call_trigger_ids = Self::collect_active_ids(&by_call_triggers);
+        let active_data_trigger_ids = Self::collect_active_ids(&mut data_triggers);
+        let active_pipeline_trigger_ids = Self::collect_active_ids(&mut pipeline_triggers);
+        let active_time_trigger_ids = Self::collect_active_ids(&mut time_triggers);
+        let active_by_call_trigger_ids = Self::collect_active_ids(&mut by_call_triggers);
         Ok(Self {
             data_triggers,
             pipeline_triggers,
@@ -967,6 +1069,92 @@ impl SetBlock<'_> {
         });
     }
 }
+impl SetBlock<'_> {
+    /// Retain the exact ten original trigger journals for State publication.
+    /// Owner and acquisition mode checks read no values and acquire no locks.
+    pub(crate) fn append_world_publication_identities(
+        &self,
+        expected: &Set,
+        mode: mv::BlockMode,
+        identities: &mut Vec<mv::BlockPublicationIdentity>,
+    ) -> core::result::Result<(), String> {
+        macro_rules! append {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    if !self.$field.belongs_to(&expected.$field) || self.$field.mode() != mode {
+                        return Err(concat!("trigger publication journal owner or mode changed: ", stringify!($field)).into());
+                    }
+                )+
+                identities.extend([$(self.$field.publication_identity()),+]);
+            };
+        }
+        append!(
+            data_triggers,
+            pipeline_triggers,
+            time_triggers,
+            by_call_triggers,
+            ids,
+            active_data_trigger_ids,
+            active_pipeline_trigger_ids,
+            active_time_trigger_ids,
+            active_by_call_trigger_ids,
+            contracts,
+        );
+        Ok(())
+    }
+
+    /// Visit actual trigger stores for the private World projection.
+    ///
+    /// Delta and baseline owners share borrowed semantic encoders. This covers
+    /// the same ten stores as the merge encoder without changing that format or
+    /// cloning action instructions, metadata, contract arguments, or bytecode.
+    /// It provides no snapshot, read-witness, or full-state-root authority.
+    pub(crate) fn append_world_projection(
+        &self,
+        builder: &mut impl crate::state::world_projection::WorldProjection,
+    ) -> core::result::Result<(), String> {
+        use crate::state::world_projection::hash_value;
+        builder.append_storage_with("triggers.data", &self.data_triggers, hash_world_action)?;
+        builder.append_storage_with(
+            "triggers.pipeline",
+            &self.pipeline_triggers,
+            hash_world_action,
+        )?;
+        builder.append_storage_with("triggers.time", &self.time_triggers, hash_world_action)?;
+        builder.append_storage_with(
+            "triggers.by_call",
+            &self.by_call_triggers,
+            hash_world_action,
+        )?;
+        builder.append_storage_with("triggers.ids", &self.ids, hash_value)?;
+        builder.append_storage_with(
+            "triggers.active_data",
+            &self.active_data_trigger_ids,
+            hash_value,
+        )?;
+        builder.append_storage_with(
+            "triggers.active_pipeline",
+            &self.active_pipeline_trigger_ids,
+            hash_value,
+        )?;
+        builder.append_storage_with(
+            "triggers.active_time",
+            &self.active_time_trigger_ids,
+            hash_value,
+        )?;
+        builder.append_storage_with(
+            "triggers.active_by_call",
+            &self.active_by_call_trigger_ids,
+            hash_value,
+        )?;
+        builder.append_storage_with("triggers.contracts", &self.contracts, hash_world_contract)?;
+        Ok(())
+    }
+}
+#[cfg(test)]
+#[path = "set_world_projection_tests.rs"]
+mod world_projection_tests;
+
 #[cfg(test)]
 mod merge_write_set_tests {
     use super::*;
@@ -3285,7 +3473,6 @@ mod tests {
                 NonZeroU64::new(42).expect("nonzero height"),
                 None,
                 None,
-                None,
                 0,
                 0,
             ),
@@ -4032,6 +4219,8 @@ mod dto_tests {
             "unexpected compatibility error: {error}"
         );
     }
+    include!("set_snapshot_predecessor_tests.rs");
+
     #[test]
     fn set_roundtrips_rebuild_active_trigger_ids() {
         let authority = checked_account_id();

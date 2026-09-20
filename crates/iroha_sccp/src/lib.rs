@@ -6390,6 +6390,11 @@ fn preflight_uncompressed_norito_frame(bytes: &[u8], maximum: usize) -> bool {
         .is_some_and(|declared| declared <= maximum as u64)
 }
 /// Verify the canonical structure and quorum-certificate binding of Taira finality.
+///
+/// The SCCP root is a signed header commitment. Full outputs are bound by the QC's exact
+/// executed-wire commitment, not by a second header result root. Physical external-input
+/// Merkle-root presence is not an execution or source-layout proof. This header-only check
+/// does not authenticate a native source body or enable native SCCP delivery.
 pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityProofV1) -> bool {
     let artifact = &proof.finality_artifact;
     let roster_len = artifact.height_context.roster.len();
@@ -6407,8 +6412,6 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
             SCCP_TAIRA_MAX_BLOCK_HEADER_BYTES_V1,
         )
         || !h256_is_nonzero(&commitment_root)
-        || proof.block_header.merkle_root().is_none()
-        || proof.block_header.result_merkle_root().is_none()
         || roster_len == 0
         || roster_len > SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1
         || artifact.validator_set_pops.len() != roster_len
@@ -9185,37 +9188,83 @@ mod tests {
         );
     }
     #[test]
+    fn exact_v2_header_finality_does_not_infer_physical_network_input_layout() {
+        let mut proof = exact_v2_finality_fixture();
+        let original = proof.clone();
+        let mut header = BlockHeader::new(
+            proof.block_header.height(),
+            proof.block_header.prev_block_hash(),
+            None,
+            u64::try_from(proof.block_header.creation_time().as_millis()).unwrap(),
+            proof.block_header.view_change_index(),
+        );
+        header.set_sccp_commitment_root(proof.block_header.sccp_commitment_root());
+        header.set_execution_context_hash(Some(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::new(
+                b"header-proof source commitment, not native execution authority",
+            ),
+        )));
+        proof.block_header = header;
+        proof.finality_artifact.block_hash = header.hash();
+        proof.finality_artifact.subject.block_hash = header.hash();
+        proof.finality_artifact.commit_qc.subject.block_hash = header.hash();
+        assert!(verify_taira_bridge_finality_proof_structure(&proof));
+        assert!(
+            !verify_taira_bridge_finality_proof_cryptographic(&proof),
+            "unresigned header substitution is not finality"
+        );
+        // This is only the header/QC boundary: no native source, body replay, SCCP delivery or
+        // relationship to the former full fixture wire is asserted. The test roster attests the
+        // modified header and opaque proposal/execution commitments. Exact-body consumers must
+        // separately compare those commitments to actual canonical wire; their controls remain
+        // in test_fixtures. Native SCCP's canonical Core consumer remains disabled.
+        let mut keys = (1..=4)
+            .map(|seed| {
+                iroha_crypto::KeyPair::try_from_seed(
+                    vec![seed; 32],
+                    iroha_crypto::Algorithm::BlsNormal,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by_key(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()));
+        let artifact = &mut proof.finality_artifact;
+        let message = artifact
+            .commit_qc
+            .signer_preimage(&artifact.height_context, 0)
+            .unwrap();
+        let signatures = artifact
+            .commit_qc
+            .signers
+            .iter()
+            .map(|index| {
+                iroha_crypto::Signature::try_new(
+                    keys[usize::try_from(*index).unwrap()].private_key(),
+                    &message,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let payloads = signatures
+            .iter()
+            .map(iroha_crypto::Signature::payload)
+            .collect::<Vec<_>>();
+        artifact.commit_qc.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&payloads).unwrap();
+        assert!(verify_taira_bridge_finality_proof_cryptographic(&proof));
+        assert_eq!(proof.block_header.merkle_root(), None);
+        assert_eq!(
+            proof.block_header.sccp_commitment_root(),
+            original.block_header.sccp_commitment_root()
+        );
+        assert_eq!(
+            proof.finality_artifact.commit_qc.execution_commitment,
+            original.finality_artifact.commit_qc.execution_commitment
+        );
+    }
+    #[test]
     fn exact_v2_finality_rejects_missing_or_invalid_header_roots() {
         let proof = exact_v2_finality_fixture();
-        for (merkle_root, result_merkle_root, missing) in [
-            (None, proof.block_header.result_merkle_root(), "entrypoint"),
-            (proof.block_header.merkle_root(), None, "result"),
-        ] {
-            let mut attack = proof.clone();
-            let mut incomplete_header = BlockHeader::new(
-                proof.block_header.height(),
-                proof.block_header.prev_block_hash(),
-                merkle_root,
-                result_merkle_root,
-                u64::try_from(proof.block_header.creation_time().as_millis())
-                    .expect("fixture creation time fits u64"),
-                proof.block_header.view_change_index(),
-            );
-            incomplete_header.set_sccp_commitment_root(proof.block_header.sccp_commitment_root());
-            let incomplete_hash = incomplete_header.hash();
-            attack.block_header = incomplete_header;
-            attack.finality_artifact.block_hash = incomplete_hash;
-            attack.finality_artifact.subject.block_hash = incomplete_hash;
-            attack.finality_artifact.commit_qc.subject.block_hash = incomplete_hash;
-            attack
-                .finality_artifact
-                .validate_for_header(&incomplete_header)
-                .expect("the hostile artifact is otherwise structurally header-consistent");
-            assert!(
-                !verify_taira_bridge_finality_proof_structure(&attack),
-                "SCCP finality must reject a missing {missing} Merkle root"
-            );
-        }
         let mut attack = proof.clone();
         attack.block_header.set_sccp_commitment_root(None);
         assert!(!verify_taira_bridge_finality_proof_structure(&attack));

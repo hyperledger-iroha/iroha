@@ -1,69 +1,59 @@
-//! Offline collection fixture with real four-validator signatures and canonical BlockStore storage.
+//! Offline Native collection transcripts with exact four-validator signatures.
 //!
-//! This fixture proves authentication and transcript reconciliation. It does not
-//! run State, synthesize a state membership proof, or claim runtime execution of
-//! its opaque retained source bundle. All global, merge, lane and READY quorum
-//! signatures use exactly three of the same four BLS-normal validators.
-//! Adapted from the separately retained Kagami authentication fixture; this module
-//! imports public Core/data-model/SDK APIs only and defines no wire DTO or production shim.
-//! The test-local merge-log writer uses the existing four-byte payload-length framing.
-//! Opaque source_bundle bytes do not pass autonomous source admission and cannot establish
-//! State execution, valid runtime autonomous payloads, or full live Kura writer acceptance.
+//! Public Core producers authenticate admitted inputs, RS16 manifests, Native
+//! Decisions, global finality and context-write witnesses. Opaque State roots and
+//! fixture outputs establish no runtime execution or performance claim.
 
 use eyre::{Result, ensure, eyre};
 use iroha::http::{HttpTransport, Method, Response, TransportFuture, TransportRequest};
-use iroha_core::merge::{
-    MergeLedgerCandidate, merge_execution_batch_hash, merge_execution_entrypoint_merkle_root,
-    merge_execution_result_merkle_root, merge_execution_root, merge_expected_post_state_hash,
-    merge_qc_message_digest,
-};
 use iroha_core::{
     kura::{
         BlockStore, CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceLimits,
-        CanonicalKuraEvidenceReader, CanonicalKuraMergeRequest,
+        CanonicalKuraEvidenceReader,
     },
-    merge::merge_activation_root,
-    queue::{LaneQueueReservationKeyV1, RoutingDecision, RoutingPlan},
+    queue::{RoutingDecision, RoutingPlan},
+    state::{
+        FinalizedNativeContextV1, NativeLaneContextsEvidenceV1,
+        native_context_evidence_for_testing, native_lane_instance_for_testing,
+        native_lane_manifest_for_testing,
+    },
+    torii_proxy::{
+        new_queue_plan_admission_binding, queue_plan_admission_attestation_signing_bytes_v1,
+    },
 };
-use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
     block::{
-        BlockHeader, SignedBlock,
-        consensus::{CertPhase, LaneBlockProposalV1},
-        consensus_v2::MergeCarrierCommitmentV1,
-    },
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
-    isi::{InstructionBox, SetKeyValue},
-    merge::{MergeLaneAuthorityCatalogV1, MergeLaneBinding, MergeLaneExecution, MergeLedgerEntry},
-    nexus::{LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1},
-    query::CommittedTransaction,
-    transaction::{Executable, SignedTransaction, signed::TransactionEntrypoint},
-};
-use iroha_data_model::{
-    block::{
-        BlockExecutionContextBundle, CertifiedMergeLedgerReference,
+        BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
         builder::BlockBuilder,
-        consensus::{
-            LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockQcV1,
-            LanePayloadAvailabilityBodyV1, LanePayloadAvailabilityQcV1,
-        },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
             ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
             QuorumCertificate, ValidatorPower, Vote, finality::V2FinalityArtifact,
         },
+        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+        lane_admission::*,
+        lane_consensus::*,
+        lane_decision_batch::LaneDecisionBatchV1,
+        lane_input::*,
+        output_budget::ExecutionOutputLimits,
     },
-    bridge::BRIDGE_FINALITY_PROOF_VERSION_V2,
-    isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
-        KagemushaMintFinalityValidatorKeysV1,
+    bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof, BridgeFinalityVerifier},
+    isi::{
+        InstructionBox, SetKeyValue,
+        kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KagemushaMintFinalityValidatorKeysV1,
+        },
     },
-    merge::{MergeExecutionBatch, MergeLaneSignerProof, MergeQuorumCertificate, MergeSignerProof},
-    query::CertifiedMergeTransactionInclusion,
-    transaction::{FeePaymentIntent, TransactionBuilder, signed::TransactionResult},
+    query::CommittedTransaction,
+    transaction::{
+        Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
+        TransactionBuilder,
+        signed::{TransactionEntrypoint, TransactionResult},
+    },
     trigger::DataTriggerSequence,
 };
 use iroha_model_base::{
@@ -71,8 +61,9 @@ use iroha_model_base::{
     topology::{DataSpaceId, LaneId},
 };
 use iroha_primitives::json::Json;
+use norito::codec::{DecodeAll as _, Encode as _};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroU64,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -143,7 +134,7 @@ fn context(keys: &[KeyPair], network_id: NetworkId) -> HeightContext {
         epoch: 0,
         kagemusha_mint_finality_epoch_id: mint.finality_epoch_id().unwrap(),
         kagemusha_mint_finality_epoch_roster: mint,
-        epoch_end_height: 100,
+        epoch_end_height: 2048,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
         parent_commit_qc: None,
@@ -154,11 +145,11 @@ fn context(keys: &[KeyPair], network_id: NetworkId) -> HeightContext {
         execution_policy_hash: h("runtime execution policy"),
         da_layout: DataAvailabilityLayout {
             encoding: PayloadEncoding::ReedSolomon16,
-            chunk_size_bytes: 1024,
+            chunk_size_bytes: 8192,
             data_shards: 1,
             parity_shards: 1,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 8,
+            max_payload_size_bytes: 2 * 1024 * 1024,
+            max_chunk_count: 512,
         },
         leader_seed: [0xA5; 32],
     }
@@ -167,17 +158,16 @@ fn signed_proof(
     keys: &[KeyPair],
     context: HeightContext,
     block: &SignedBlock,
-    merge: Option<HashOf<MergeLedgerEntry>>,
+    ordinary_writes_root: Hash,
 ) -> BridgeFinalityProof {
     let wire = block.encode_wire().unwrap();
-    let mut execution = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+    let execution = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         h("pre state"),
         h("post state"),
-        h("ordinary writes"),
+        ordinary_writes_root,
         wire.len() as u64,
         Hash::new(&wire),
     );
-    execution.merge_carrier = merge.map(MergeCarrierCommitmentV1::new);
     let subject = BlockSubject {
         parent_block_hash: block.header().prev_block_hash(),
         block_hash: block.hash(),
@@ -215,228 +205,122 @@ fn signed_proof(
         finality_artifact: artifact,
     }
 }
-fn binding(index: usize) -> MergeLaneBinding {
-    MergeLaneBinding {
+
+#[derive(Clone)]
+struct Lane {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    incarnation: Hash,
+}
+fn binding(index: usize) -> Lane {
+    Lane {
         lane_id: LaneId::new(index as u32),
         dataspace_id: DataSpaceId::UNIVERSAL,
-        lane_config_hash: h(&format!("lane config {index}")),
         incarnation: h(&format!("incarnation {index}")),
-        activation_height: 1,
     }
 }
-fn lane(
-    keys: &[KeyPair],
-    network_id: NetworkId,
-    binding: &MergeLaneBinding,
-    txs: Vec<TransactionEntrypoint>,
-) -> MergeLaneExecution {
-    let validators = peers(keys);
-    let hashes: Vec<_> = txs.iter().map(|t| Hash::from(t.hash())).collect();
-    let mut descriptor = LaneBlockDescriptorV1 {
-        lane_id: binding.lane_id,
-        dataspace_id: binding.dataspace_id,
-        lane_incarnation: binding.incarnation,
-        proposal_height: 1,
-        previous_lane_block_height: 0,
-        previous_lane_block_descriptor_hash: None,
-        lane_block_height: 1,
-        lane_block_view: 0,
-        subject_hash: h("lane subject"),
-        payload_ownership_hash: h("payload owner"),
-        rbc_instance_hash: h("rbc instance"),
-        accepted_candidate_indices: (0..txs.len() as u64).collect(),
-        accepted_transaction_hashes: hashes.clone(),
-        validator_set_hash_version: 1,
-        validator_set_hash: HashOf::new(&validators),
-        validator_set: validators.clone(),
-        validator_count: 4,
-        min_quorum: 3,
-        qc_mode_tag: "permissioned:canonical-authentication-fixture".to_owned(),
-        descriptor_hash: h("unset descriptor"),
-    };
-    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-    let mut proposal = LaneBlockProposalV1 {
-        descriptor,
-        proposal_hash: h("unset proposal"),
-        payload_block_hint: None,
-    };
-    proposal.proposal_hash = proposal.computed_proposal_hash();
-    let d = &proposal.descriptor;
-    let payload_hash = h("retained autonomous payload identity");
-    let ready = LanePayloadAvailabilityBodyV1 {
-        version: 1,
-        network_id,
-        epoch: 0,
-        lane_id: d.lane_id,
-        dataspace_id: d.dataspace_id,
-        lane_incarnation: d.lane_incarnation,
-        proposal_height: 1,
-        lane_block_height: 1,
-        origin_lane_block_view: 0,
-        origin_proposal_hash: proposal.proposal_hash,
-        origin_descriptor_hash: d.descriptor_hash,
-        current_lane_block_view: 0,
-        current_proposal_hash: proposal.proposal_hash,
-        current_descriptor_hash: d.descriptor_hash,
-        current_subject_hash: d.subject_hash,
-        current_payload_ownership_hash: d.payload_ownership_hash,
-        current_rbc_instance_hash: d.rbc_instance_hash,
-        executable_payload_hash: payload_hash,
-        validator_set_hash_version: 1,
-        validator_set_hash: d.validator_set_hash,
-        validator_count: 4,
-        min_quorum: 3,
-        qc_mode_tag: d.qc_mode_tag.clone(),
-    };
-    let ready_qc = LanePayloadAvailabilityQcV1 {
-        body: ready.clone(),
-        validator_set_hash_version: 1,
-        validator_set_hash: d.validator_set_hash,
-        validator_set: validators.clone(),
-        validator_set_pops: pops(keys),
-        signers_bitmap: vec![7],
-        bls_aggregate_signature: aggregate(keys, &ready.signature_preimage()),
-    };
-    let qc = |phase| {
-        let body = proposal.vote_body(phase);
-        LaneBlockQcV1 {
-            bls_aggregate_signature: aggregate(keys, &body.signature_preimage()),
-            body,
-            validator_set_hash_version: 1,
-            validator_set_hash: d.validator_set_hash,
-            validator_set: validators.clone(),
-            signers_bitmap: vec![7],
-            payload_availability_qc: (phase == CertPhase::Prepare).then(|| ready_qc.clone()),
-        }
-    };
-    let routing = RoutingPlan::single(RoutingDecision::new(d.lane_id, d.dataspace_id));
-    let reservations: Vec<_> = txs
+
+fn attach_outputs(block: &mut SignedBlock, outputs: Vec<ExecutionOutputV1>, keys: &[KeyPair]) {
+    let fragments = outputs
         .iter()
-        .map(|tx| {
-            norito::encode_canonical(&LaneQueueReservationKeyV1 {
-                version: 1,
-                entrypoint_hash: tx.hash(),
-                queue_plan_admission_binding_hash: h("signed queue admission binding"),
-                routing_plan_digest: routing.digest(),
-                coordinator_leg: routing.coordinator_leg(),
-                lane_id: d.lane_id,
-                dataspace_id: d.dataspace_id,
-                lane_incarnation: d.lane_incarnation,
-                proposal_height: 1,
-                lane_block_height: 1,
-                lane_block_view: 0,
-                reservation_owner_hash: h("reservation owner"),
-                proposal_identity_hash: proposal.proposal_hash,
-            })
-            .unwrap()
-        })
-        .collect();
-    let results: Vec<_> = txs
-        .iter()
-        .map(|_| TransactionResult::from(Ok(DataTriggerSequence::default())))
-        .collect();
-    let settlement = LaneBlockCommitment {
-        block_height: 1,
-        lane_id: d.lane_id,
-        lane_incarnation: d.lane_incarnation,
-        dataspace_id: d.dataspace_id,
-        tx_count: txs.len() as u64,
-        total_local_amount: 0u32.into(),
-        total_xor_due: 0u32.into(),
-        total_xor_after_haircut: 0u32.into(),
-        total_xor_variance: 0u32.into(),
-        swap_metadata: None,
-        receipts: Vec::new(),
-        nexus_fee_receipts: Vec::new(),
-        native_amx_receipts: Vec::new(),
-    };
-    // Authentication consumer treats source bytes as globally authenticated opaque
-    // evidence. Runtime producer/State replay is a separate owner and fixture.
-    let source_bundle = norito::encode_canonical(&txs).unwrap();
-    MergeLaneExecution {
-        source_bundle_hash: Hash::new_from_chunks(&[
-            b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
-            &source_bundle,
-        ]),
-        source_bundle,
-        prepare_qc: qc(CertPhase::Prepare),
-        commit_qc: qc(CertPhase::Commit),
-        signer_proofs: keys
-            .iter()
-            .take(3)
-            .map(|k| MergeLaneSignerProof {
-                public_key: k.public_key().clone(),
-                proof_of_possession: iroha_crypto::bls_normal_pop_prove(k.private_key()).unwrap(),
-            })
+        .filter(|output| output.result().0.is_ok())
+        .count() as u64;
+    block
+        .set_execution_outputs(
+            outputs,
+            fragments,
+            BTreeMap::new(),
+            Vec::new(),
+            Default::default(),
+            BTreeSet::new(),
+            Vec::new(),
+            &ExecutionOutputLimits {
+                max_outputs: 1024,
+                max_output_bytes: 1024 * 1024,
+                max_total_output_bytes: 4 * 1024 * 1024,
+                max_executed_wire_bytes: 32 * 1024 * 1024,
+            },
+        )
+        .unwrap();
+    block
+        .replace_signatures(
+            [BlockSignature::new(
+                0,
+                SignatureOf::from_hash(keys[0].private_key(), block.hash()),
+            )]
+            .into_iter()
             .collect(),
-        autonomous_network_id: network_id,
-        autonomous_epoch: 0,
-        autonomous_payload_hash: payload_hash,
-        entrypoint_hashes: hashes,
-        authenticated_signed_replay_aliases: vec![None; txs.len()],
-        reservation_keys: reservations,
-        routing_plans: vec![norito::encode_canonical(&routing).unwrap(); txs.len()],
-        native_amx_receipts: vec![None; txs.len()],
-        result_hashes: results.iter().map(|r| Hash::from(r.hash())).collect(),
-        entrypoints: txs,
-        results,
-        settlement_hash: HashOf::new(&settlement),
-        settlement_commitment: settlement,
-        origin_proposal: proposal.clone(),
-        proposal,
-        fastpq_transcripts: Default::default(),
+        )
+        .unwrap();
+}
+
+fn successful_outputs(block: &SignedBlock) -> Vec<ExecutionOutputV1> {
+    (0..block.network_entrypoint_count())
+        .map(|index| {
+            ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                input_index: index as u32,
+                result: TransactionResult::from(Ok(DataTriggerSequence::default())),
+                completions: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+#[derive(Clone)]
+pub(super) struct Height {
+    pub block: SignedBlock,
+    pub proof: BridgeFinalityProof,
+    pub contexts: LaneConsensusContextsV1,
+    pub evidence: Vec<u8>,
+}
+impl Height {
+    pub fn queries(&self) -> Vec<CommittedTransaction> {
+        if self
+            .block
+            .execution_context()
+            .and_then(|context| context.native_lane_decisions.as_ref())
+            .is_none()
+        {
+            return Vec::new();
+        }
+        self.block
+            .network_entrypoints()
+            .enumerate()
+            .map(|(index, entrypoint)| {
+                let (output_index, _) = self.block.network_output_at(index as u32).unwrap();
+                let output = self.block.execution_outputs()[output_index as usize].clone();
+                CommittedTransaction {
+                    block_hash: self.block.hash(),
+                    entrypoint_hash: entrypoint.hash(),
+                    entrypoint_proof: self.block.network_input_proof(index as u32).unwrap(),
+                    entrypoint: entrypoint.clone(),
+                    output_hash: HashOf::new(&output),
+                    output_proof: self.block.output_proof(output_index).unwrap(),
+                    output,
+                }
+            })
+            .collect()
+    }
+    pub fn resign(&mut self, keys: &[KeyPair]) {
+        let (evidence, root) = native_context_evidence_for_testing(
+            self.proof.finality_artifact.height_context.network_id,
+            self.proof.block_header.height().get(),
+            self.contexts.clone(),
+        )
+        .unwrap();
+        self.evidence = evidence;
+        self.proof = signed_proof(
+            keys,
+            self.proof.finality_artifact.height_context.clone(),
+            &self.block,
+            root,
+        );
     }
 }
-fn rehash_batch(batch: &mut MergeExecutionBatch) {
-    batch.entrypoint_count = batch.lanes.iter().map(|l| l.entrypoints.len() as u64).sum();
-    batch.entrypoint_merkle_root = merge_execution_entrypoint_merkle_root(&batch.lanes).unwrap();
-    batch.result_merkle_root = merge_execution_result_merkle_root(&batch.lanes).unwrap();
-    batch.execution_root = merge_execution_root(&batch.lanes);
-    batch.expected_post_state_hash = merge_expected_post_state_hash(
-        batch.base_state_height,
-        batch.base_state_hash,
-        batch.write_set_root,
-    );
-    batch.batch_hash = merge_execution_batch_hash(batch);
-}
-fn sign_merge(entry: &mut MergeLedgerEntry, keys: &[KeyPair], network_id: NetworkId) {
-    let digest = merge_qc_message_digest(
-        &network_id,
-        &MergeLedgerCandidate::from(&*entry),
-        1,
-        entry.merge_qc.validator_set_hash,
-    );
-    entry.merge_qc.message_digest = digest;
-    entry.merge_qc.aggregate_signature = aggregate(keys, digest.as_ref());
-}
-/// Build the exact compact merge carrier without copying any storage representation.
-fn make_carrier(keys: &[KeyPair], genesis: &SignedBlock, entry: &MergeLedgerEntry) -> SignedBlock {
-    let mut builder = BlockBuilder::new(BlockHeader::new(
-        NonZeroU64::new(2).unwrap(),
-        Some(genesis.hash()),
-        None,
-        None,
-        100,
-        0,
-    ));
-    builder.set_execution_context(Some(
-        BlockExecutionContextBundle::new(Vec::new())
-            .with_merge_entry(CertifiedMergeLedgerReference::new(entry)),
-    ));
-    builder.build_with_signature(0, keys[0].private_key())
-}
-/// Offline archive only: public BlockStore owns every marker/index/hash/data byte.
-/// The merge log framing matches CanonicalKuraEvidenceReader::scan_merge_entries;
-/// source bundles intentionally remain opaque to this structural/crypto fixture.
-fn write_archive(
-    genesis: &SignedBlock,
-    carrier: &SignedBlock,
-    entry: &MergeLedgerEntry,
-) -> Result<tempfile::TempDir> {
-    use norito::codec::{Decode as _, Encode as _};
+
+fn write_archive(heights: &[Height]) -> Result<tempfile::TempDir> {
     use std::{
         fs,
-        io::Write,
         os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     };
     let archive = tempfile::tempdir()?;
@@ -444,8 +328,9 @@ fn write_archive(
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
     let mut store = BlockStore::new(&root);
     store.create_files_if_they_do_not_exist()?;
-    store.append_block_to_chain(genesis)?;
-    store.append_block_to_chain(carrier)?;
+    for height in heights {
+        store.append_block_to_chain(&height.block)?;
+    }
     drop(store);
     for name in [
         "blocks.data",
@@ -457,111 +342,75 @@ fn write_archive(
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         fs::File::open(path)?.sync_all()?;
     }
-    let canonical = entry.canonical_bytes();
-    ensure!(
-        canonical.len() <= iroha_data_model::merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
-        "canonical merge size"
-    );
-    ensure!(
-        norito::decode_canonical::<MergeLedgerEntry>(&canonical)? == *entry,
-        "canonical merge roundtrip"
-    );
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let payload = entry.encode();
-    ensure!(
-        !payload.is_empty()
-            && payload.len() <= iroha_data_model::merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
-        "stored merge size"
-    );
-    let mut cursor = std::io::Cursor::new(payload.as_slice());
-    let decoded = MergeLedgerEntry::decode(&mut cursor)?;
-    ensure!(
-        cursor.position() as usize == payload.len()
-            && decoded == *entry
-            && decoded.encode() == payload,
-        "stored merge exact codec"
-    );
-    let mut file = fs::OpenOptions::new()
+    fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(root.join("merge.log"))?;
-    file.write_all(&u32::try_from(payload.len())?.to_le_bytes())?;
-    file.write_all(&payload)?;
-    file.sync_all()?;
+        .open(root.join("merge.log"))?
+        .sync_all()?;
     fs::File::open(&root)?.sync_all()?;
     Ok(archive)
 }
-/// An independently signed two-height transcript stored through public Core writers.
-/// It has no State execution or network-performance authority.
-pub(super) struct Fixture {
-    /// Keeps the physical temporary archive alive through every reader capability.
-    _archive: tempfile::TempDir,
-    pub keys: Vec<KeyPair>,
-    pub network_id: NetworkId,
-    pub genesis: SignedBlock,
-    pub first: BridgeFinalityProof,
-    pub carrier: SignedBlock,
-    pub second: BridgeFinalityProof,
-    pub entry: MergeLedgerEntry,
-    pub requests: Vec<Request>,
-}
-/// Original independent offer order; queries are separately stored in merge-leaf order.
+
+/// Original offer order, independent of chronological Native input order.
 pub(super) struct Request {
     pub logical_id: String,
     pub signed: SignedTransaction,
     pub route: RoutingDecision,
     pub warmup: bool,
 }
+/// An independently signed chronological Native transcript with original storage custody.
+pub(super) struct Fixture {
+    _archive: tempfile::TempDir,
+    pub keys: Vec<KeyPair>,
+    pub network_id: NetworkId,
+    pub heights: Vec<Height>,
+    pub lane_count: usize,
+    pub requests: Vec<Request>,
+}
 impl Fixture {
-    /// Four warmup and four measured requests, with an optional authenticated rejection.
     pub fn new(lane_count: usize, rejected_logical_index: Option<usize>) -> Self {
         assert!(matches!(lane_count, 1 | 4));
-        assert!(rejected_logical_index.is_none_or(|i| i < 8));
-        let request_count = 8;
+        assert!(rejected_logical_index.is_none_or(|index| index < 8));
         let keys = keys();
-        let genesis = BlockBuilder::new(BlockHeader::new(
+        let mut genesis = BlockBuilder::new(BlockHeader::new(
             NonZeroU64::new(1).unwrap(),
-            None,
             None,
             None,
             0,
             0,
         ))
-        .build_with_signature(0, keys[0].private_key());
+        .build(BTreeSet::new());
+        attach_outputs(&mut genesis, Vec::new(), &keys);
         let network_id = NetworkId::from_genesis_hash(genesis.hash());
-        let first = signed_proof(&keys, context(&keys, network_id), &genesis, None);
+        let mut global_context = context(&keys, network_id);
         let bindings: Vec<_> = (0..lane_count).map(binding).collect();
-        let authorities =
-            MergeLaneAuthorityCatalogV1::from_lane_committees(&vec![peers(&keys); lane_count])
-                .unwrap();
         let mut requests = Vec::new();
-        let mut groups = vec![Vec::new(); lane_count];
-        for index in 0..request_count {
+        for index in 0..8 {
             let owner_key =
                 KeyPair::try_from_seed(vec![80 + (index % 4) as u8; 32], Algorithm::Ed25519)
                     .unwrap();
             let authority = AccountId::new(owner_key.public_key().clone());
             let logical = format!("{index:064x}");
-            let route = RoutingDecision::new(
-                bindings[index % lane_count].lane_id,
-                bindings[index % lane_count].dataspace_id,
-            );
-            let tx = TransactionBuilder::new(
+            let lane = &bindings[index % lane_count];
+            let route = RoutingDecision::new(lane.lane_id, lane.dataspace_id);
+            let mut builder = TransactionBuilder::new(
                 network_id,
                 authority.clone(),
                 FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_executable(Executable::Instructions(
-                vec![InstructionBox::from(SetKeyValue::account(
-                    authority.clone(),
-                    format!("gscale_{logical}").parse().unwrap(),
-                    Json::try_new(logical.as_str()).unwrap(),
-                ))]
-                .into(),
-            ))
-            .sign(owner_key.private_key());
-            groups[index % lane_count].push(TransactionEntrypoint::External(tx.clone()));
+            );
+            builder.set_creation_time(std::time::Duration::from_millis(index as u64));
+            let tx = builder
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+                .with_executable(Executable::Instructions(
+                    vec![InstructionBox::from(SetKeyValue::account(
+                        authority,
+                        format!("gscale_{logical}").parse().unwrap(),
+                        Json::try_new(logical.as_str()).unwrap(),
+                    ))]
+                    .into(),
+                ))
+                .sign(owner_key.private_key());
             requests.push(Request {
                 logical_id: logical,
                 signed: tx,
@@ -569,150 +418,317 @@ impl Fixture {
                 warmup: index < 4,
             });
         }
-        let header = BlockHeader::new(
-            NonZeroU64::new(2).unwrap(),
-            Some(genesis.hash()),
-            None,
-            None,
-            100,
-            0,
-        );
-        let mut batch = MergeExecutionBatch {
-            version: 1,
-            base_state_height: 1,
-            base_state_hash: genesis.hash(),
-            application_block_header: header,
-            lanes: bindings
+        let genesis = Some(genesis);
+        let network_id = global_context.network_id;
+        let lane_count = bindings.len();
+        let roster = peers(&keys);
+        let admission_height = if genesis.is_some() { 2 } else { 1 };
+        let parent_hash = genesis.as_ref().map(SignedBlock::hash);
+        let mut inputs = Vec::new();
+        for (index, request) in requests.iter().enumerate() {
+            let tx = &request.signed;
+            let route = &request.route;
+            let binding = bindings
                 .iter()
-                .zip(groups)
-                .map(|(b, txs)| lane(&keys, network_id, b, txs))
-                .collect(),
-            entrypoint_count: 0,
-            entrypoint_merkle_root: HashOf::from_untyped_unchecked(h("unset entry root")),
-            result_merkle_root: HashOf::from_untyped_unchecked(h("unset result root")),
-            execution_root: h("unset execution"),
-            application_write_set_root: h("application writes"),
-            write_set_root: h("full writes"),
-            expected_post_state_hash: HashOf::from_untyped_unchecked(h("unset post state")),
-            batch_hash: h("unset batch"),
-        };
-        if let Some(index) = rejected_logical_index {
-            let target = requests[index].signed.hash_as_entrypoint();
-            let lane = batch
-                .lanes
-                .iter_mut()
-                .find(|lane| lane.entrypoints.iter().any(|tx| tx.hash() == target))
+                .find(|lane| {
+                    lane.lane_id == route.lane_id && lane.dataspace_id == route.dataspace_id
+                })
                 .unwrap();
-            let position = lane
-                .entrypoints
+            let entrypoint = TransactionEntrypoint::External(tx.clone());
+            let routing = RoutingPlan::single(*route);
+            let context = QueuePlanAdmissionContextV1 {
+                version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
+                authority_height: admission_height - 1,
+                proposal_height: admission_height,
+                predecessor_block_hash: parent_hash,
+                routing_plan_digest: routing.digest(),
+                route_incarnations: vec![QueuePlanRouteIncarnationV1 {
+                    leg: routing.coordinator_leg(),
+                    lane_incarnation: binding.incarnation,
+                    validator_set_hash_version: 1,
+                    validator_set_hash: HashOf::new(&roster),
+                    validator_set: roster.clone(),
+                    validator_count: 4,
+                    durability_threshold: 2,
+                }],
+            };
+            let binding = new_queue_plan_admission_binding(
+                &network_id,
+                &entrypoint,
+                &routing,
+                context,
+                index as u64,
+            )
+            .unwrap();
+            let attestations = keys
                 .iter()
-                .position(|tx| tx.hash() == target)
-                .unwrap();
-            lane.results[position] = TransactionResult::from(Err(
-                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                    iroha_data_model::ValidationFail::NotPermitted(
-                        "committed collection fixture rejection".into(),
+                .take(2)
+                .enumerate()
+                .map(|(index, key)| QueuePlanAdmissionAttestationV1 {
+                    version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
+                    validator_index: index as u16,
+                    signature: Signature::new(
+                        key.private_key(),
+                        &queue_plan_admission_attestation_signing_bytes_v1(
+                            binding.canonical_hash(),
+                            index as u16,
+                        )
+                        .unwrap(),
                     ),
-                ),
-            ));
-            lane.result_hashes[position] = Hash::from(lane.results[position].hash());
+                })
+                .collect();
+            inputs.push(LaneAdmittedInputV1 {
+                entrypoint,
+                certificate: QueuePlanAdmissionCertificateV1 {
+                    version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+                    binding,
+                    attestations,
+                },
+            });
         }
-        rehash_batch(&mut batch);
-        let validators = peers(&keys);
-        let mut entry = MergeLedgerEntry {
-            version: 3,
-            epoch_id: 1,
-            lane_catalog_hash: h("independently pinned catalog"),
-            incarnation_root: LaneLifecycleParameterV1::incarnation_root(
-                &bindings
+        inputs.sort_by_key(|input| input.certificate.binding.registry_key());
+        let pending: Vec<Vec<usize>> = (0..lane_count)
+            .map(|lane| {
+                inputs
                     .iter()
-                    .map(|b| LaneLifecycleIncarnationEntry {
-                        lane_id: b.lane_id,
-                        incarnation: b.incarnation,
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-            activation_root: merge_activation_root(&bindings),
-            active_lanes: bindings,
-            lane_authority_catalog: authorities,
-            lane_snapshots: Vec::new(),
-            global_state_root: h("global reduction"),
-            execution_batch: Some(batch),
-            lane_drain_certificates: Vec::new(),
-            merge_qc: MergeQuorumCertificate::new(
-                0,
-                1,
-                2,
-                genesis.hash(),
-                network_id,
-                1,
-                HashOf::new(&validators),
-                validators,
-                vec![7],
-                pops(&keys)
-                    .into_iter()
-                    .take(3)
                     .enumerate()
-                    .map(|(signer, proof_of_possession)| MergeSignerProof {
-                        signer: signer as u32,
-                        proof_of_possession,
+                    .filter_map(|(index, input)| {
+                        (input
+                            .routing_plan()
+                            .unwrap()
+                            .coordinator_leg()
+                            .route
+                            .lane_id
+                            == bindings[lane].lane_id)
+                            .then_some(index)
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut offsets = vec![0usize; lane_count];
+        let mut frontiers = vec![(0u64, None, 0u64); lane_count];
+        let mut heights = Vec::new();
+        if let Some(genesis) = genesis {
+            let contexts = LaneConsensusContextsV1::default();
+            let (evidence, root) =
+                native_context_evidence_for_testing(network_id, 1, contexts.clone()).unwrap();
+            let proof = signed_proof(&keys, global_context.clone(), &genesis, root);
+            heights.push(Height {
+                block: genesis,
+                proof: proof.clone(),
+                contexts,
+                evidence,
+            });
+            global_context.height = admission_height;
+            global_context.parent_commit_qc = Some(proof.finality_artifact.commit_qc);
+        }
+        let admission_bytes: Vec<_> = inputs
+            .iter()
+            .map(|input| norito::encode_canonical(input).unwrap())
+            .collect();
+        let mut builder = BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(admission_height).unwrap(),
+            parent_hash,
+            None,
+            admission_height * 100,
+            0,
+        ));
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::default()
+                .with_queue_plan_admissions(admission_bytes.clone()),
+        ));
+        let mut block = builder.build(BTreeSet::new());
+        attach_outputs(&mut block, Vec::new(), &keys);
+        let admission_carrier_hash = block.hash();
+        loop {
+            let height = block.header().height().get();
+            let contexts = LaneConsensusContextsV1::new(
+                (0..lane_count)
+                    .filter_map(|lane| {
+                        let index = *pending[lane].get(offsets[lane])?;
+                        let input = &inputs[index];
+                        let binding = &bindings[lane];
+                        let (previous, hash, applied) = frontiers[lane];
+                        Some(FrozenLaneConsensusContextV1 {
+                            network_id,
+                            protocol_version: PROTOCOL_VERSION,
+                            opening_global_height: height,
+                            opening_global_context_id: global_context.id(),
+                            admitted_binding_hash: input.certificate.binding.canonical_hash(),
+                            admission_priority: QueuePlanAdmissionPriorityV1::new(
+                                admission_height,
+                                index,
+                            )
+                            .unwrap(),
+                            epoch: global_context.epoch,
+                            mode: global_context.mode,
+                            lane_id: binding.lane_id,
+                            dataspace_id: binding.dataspace_id,
+                            lane_incarnation: binding.incarnation,
+                            next_lane_height: previous + 1,
+                            predecessor_height: previous,
+                            predecessor_hash: hash,
+                            predecessor_applied_global_height: applied,
+                            committee: roster.clone(),
+                            validator_set_pops: pops(&keys),
+                            nexus_amx_context_hash: global_context.nexus_amx_context_hash,
+                            execution_policy_hash: global_context.execution_policy_hash,
+                            da_layout: global_context.da_layout,
+                            leader_seed: global_context.leader_seed,
+                        })
                     })
                     .collect(),
-                Vec::new(),
-                h("unset merge signature"),
-            ),
-        };
-        sign_merge(&mut entry, &keys, network_id);
-        let carrier = make_carrier(&keys, &genesis, &entry);
-        let mut next = first.finality_artifact.height_context.clone();
-        next.height = 2;
-        next.parent_commit_qc = Some(first.finality_artifact.commit_qc.clone());
-        let second = signed_proof(&keys, next, &carrier, Some(entry.canonical_hash()));
-        let archive = write_archive(&genesis, &carrier, &entry)
-            .expect("public offline block store and exact merge log");
+            )
+            .unwrap();
+            let (evidence, root) =
+                native_context_evidence_for_testing(network_id, height, contexts.clone()).unwrap();
+            let proof = signed_proof(&keys, global_context.clone(), &block, root);
+            heights.push(Height {
+                block: block.clone(),
+                proof: proof.clone(),
+                contexts: contexts.clone(),
+                evidence,
+            });
+            if contexts.contexts.is_empty() {
+                break;
+            }
+            let mut groups = Vec::new();
+            for frozen in &contexts.contexts {
+                let lane = bindings
+                    .iter()
+                    .position(|binding| binding.lane_id == frozen.lane_id)
+                    .unwrap();
+                let index = pending[lane][offsets[lane]];
+                let input = inputs[index].clone();
+                let instance =
+                    native_lane_instance_for_testing(frozen.clone(), &proof.finality_artifact)
+                        .unwrap();
+                let payload = LaneInputPayloadV1 {
+                    input,
+                    descriptor: LaneInputDescriptorV1 {
+                        version: LANE_INPUT_VERSION_V1,
+                        admission_priority: frozen.admission_priority,
+                        admission_carrier_hash,
+                        admitted_input_hash: Hash::new(&admission_bytes[index]),
+                        slots: vec![LaneInputRouteSlotV1 {
+                            route: RoutingDecision::new(frozen.lane_id, frozen.dataspace_id),
+                            lane_incarnation: frozen.lane_incarnation,
+                            instance_id: instance,
+                            lane_height: frozen.next_lane_height,
+                        }],
+                    },
+                };
+                let manifest = native_lane_manifest_for_testing(
+                    frozen.clone(),
+                    &proof.finality_artifact,
+                    &payload,
+                    0,
+                )
+                .unwrap();
+                let statement = LaneVoteStatementV1 {
+                    round: LaneRoundV1 {
+                        instance_id: instance,
+                        lane_height: frozen.next_lane_height,
+                        voting_view: 0,
+                    },
+                    phase: LanePhaseV1::Commit,
+                    value: manifest.value,
+                };
+                let shares = keys
+                    .iter()
+                    .take(3)
+                    .enumerate()
+                    .map(|(index, key)| LaneSignatureShareV1 {
+                        signer: index as u32,
+                        signature: Signature::try_new(
+                            key.private_key(),
+                            &statement.signature_preimage().unwrap(),
+                        )
+                        .unwrap()
+                        .payload()
+                        .to_vec(),
+                    })
+                    .collect();
+                frontiers[lane] = (
+                    frozen.next_lane_height,
+                    Some(payload.descriptor.canonical_hash().unwrap()),
+                    height + 1,
+                );
+                offsets[lane] += 1;
+                groups.push(LaneDecisionGroupV1 {
+                    payload,
+                    decisions: vec![LaneDecisionV1 {
+                        manifest,
+                        commit_qc: LaneQcV1 { statement, shares },
+                    }],
+                });
+            }
+            groups.sort_by_key(|group| group.payload.descriptor.admission_priority);
+            let batch = LaneDecisionBatchV1 {
+                base_state_height: height,
+                base_state_hash: HashOf::from_untyped_unchecked(h(&format!(
+                    "explicit offline State cut {height}"
+                ))),
+                groups,
+            };
+            let mut builder = BlockBuilder::new(BlockHeader::new(
+                NonZeroU64::new(height + 1).unwrap(),
+                Some(block.hash()),
+                None,
+                height * 100,
+                0,
+            ));
+            builder.set_execution_context(Some(
+                BlockExecutionContextBundle::default().with_native_lane_decisions(batch),
+            ));
+            block = builder.build(BTreeSet::new());
+            let mut outputs = successful_outputs(&block);
+            if let Some(rejected) = rejected_logical_index {
+                let hash = requests[rejected].signed.hash_as_entrypoint();
+                if let Some(index) = block
+                    .network_entrypoints()
+                    .position(|entry| entry.hash() == hash)
+                {
+                    let ExecutionOutputV1::Network(output) = &mut outputs[index] else {
+                        unreachable!()
+                    };
+                    output.result = TransactionResult::from(Err(
+                        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                            iroha_data_model::ValidationFail::NotPermitted("committed collection fixture rejection".into()),
+                        ),
+                    ));
+                }
+            }
+            attach_outputs(&mut block, outputs, &keys);
+            global_context.height = height + 1;
+            global_context.parent_commit_qc = Some(proof.finality_artifact.commit_qc);
+        }
+        let archive = write_archive(&heights).expect("public offline Native block store");
         Self {
             _archive: archive,
-            network_id,
             keys,
-            genesis,
-            first,
-            carrier,
-            second,
-            entry,
+            network_id,
+            heights,
+            lane_count,
             requests,
         }
     }
     pub fn queries(&self) -> Vec<CommittedTransaction> {
-        let batch = self.entry.execution_batch.as_ref().unwrap();
-        let entries: Vec<_> = batch
-            .lanes
+        self.heights.iter().flat_map(Height::queries).collect()
+    }
+    pub fn native_contexts(&self) -> Vec<NativeLaneContextsEvidenceV1> {
+        self.heights
             .iter()
-            .flat_map(|l| l.entrypoints.iter())
-            .collect();
-        let results: Vec<_> = batch.lanes.iter().flat_map(|l| l.results.iter()).collect();
-        let et: MerkleTree<TransactionEntrypoint> = entries.iter().map(|e| e.hash()).collect();
-        let rt: MerkleTree<TransactionResult> = results.iter().map(|r| r.hash()).collect();
-        entries
+            .map(|height| norito::decode_canonical(&height.evidence).unwrap())
+            .collect()
+    }
+    pub fn finalized_contexts(&self) -> Vec<FinalizedNativeContextV1> {
+        self.heights
             .iter()
-            .zip(results)
-            .enumerate()
-            .map(|(i, (e, r))| CommittedTransaction {
-                block_hash: self.carrier.hash(),
-                entrypoint_hash: e.hash(),
-                entrypoint_proof: et.get_proof(i as u32).unwrap(),
-                entrypoint: (*e).clone(),
-                result_hash: r.hash(),
-                result_proof: rt.get_proof(i as u32).unwrap(),
-                result: r.clone(),
-                merge_inclusion: Some(CertifiedMergeTransactionInclusion {
-                    version: 1,
-                    merge_entry_hash: self.entry.canonical_hash(),
-                    merge_epoch_id: self.entry.epoch_id,
-                    execution_batch_hash: batch.batch_hash,
-                    entrypoint_count: batch.entrypoint_count,
-                    entrypoint_merkle_root: batch.entrypoint_merkle_root,
-                    result_merkle_root: batch.result_merkle_root,
-                }),
+            .zip(self.native_contexts())
+            .map(|(height, contexts)| FinalizedNativeContextV1 {
+                finality: height.proof.clone(),
+                contexts,
             })
             .collect()
     }
@@ -758,8 +774,8 @@ impl Fixture {
             .unwrap()
     }
     /// Valid signatures and exact header, but a deliberately incorrect executed-wire tuple.
-    pub fn second_with_wrong_executed_wire(&self) -> BridgeFinalityProof {
-        let mut proof = self.second.clone();
+    pub fn height_with_wrong_executed_wire(&self, index: usize) -> BridgeFinalityProof {
+        let mut proof = self.heights[index].proof.clone();
         let qc = &mut proof.finality_artifact.commit_qc;
         qc.execution_commitment.executed_block_wire_hash = h("wrong but signed executed wire");
         qc.execution_commitment.executed_block_wire_len += 1;
@@ -776,41 +792,80 @@ impl Fixture {
         proof.finality_artifact.verify().unwrap();
         proof
             .finality_artifact
-            .validate_for_header(&self.carrier.header())
+            .validate_for_header(&self.heights[index].block.header())
             .unwrap();
         proof
     }
-    /// Rebuild a bounded nonempty malformed transcript through the public offline block writer.
-    /// The test-local log writer permits semantic mutants; errors leave this fixture unchanged.
-    pub fn rewrite_entry_for_test(
+    /// Re-sign a bounded malformed Native carrier and its global descendants.
+    /// Original Native Decisions remain unchanged so source/order mutations fail authentication.
+    pub fn rewrite_native_for_test(
         &mut self,
-        mutate: impl FnOnce(&mut MergeLedgerEntry),
+        height_index: usize,
+        mutate: impl FnOnce(&mut LaneDecisionBatchV1),
     ) -> Result<()> {
-        let mut entry = self.entry.clone();
-        mutate(&mut entry);
-        let batch = entry
-            .execution_batch
-            .as_mut()
-            .ok_or_else(|| eyre!("fixture requires a batch"))?;
-        ensure!((1..=4).contains(&batch.lanes.len()), "fixture lane bound");
         ensure!(
-            batch.lanes.iter().all(|lane| !lane.entrypoints.is_empty()
-                && lane.entrypoints.len() <= 8
-                && !lane.results.is_empty()
-                && lane.results.len() <= 8),
-            "fixture leaf bound"
+            height_index >= 2 && height_index < self.heights.len(),
+            "Native fixture height bound"
         );
-        rehash_batch(batch);
-        sign_merge(&mut entry, &self.keys, self.network_id);
-        let carrier = make_carrier(&self.keys, &self.genesis, &entry);
-        let mut next = self.first.finality_artifact.height_context.clone();
-        next.height = 2;
-        next.parent_commit_qc = Some(self.first.finality_artifact.commit_qc.clone());
-        let second = signed_proof(&self.keys, next, &carrier, Some(entry.canonical_hash()));
-        let archive = write_archive(&self.genesis, &carrier, &entry)?;
-        self.entry = entry;
-        self.carrier = carrier;
-        self.second = second;
+        let mut heights = self.heights.clone();
+        let mut execution = heights[height_index]
+            .block
+            .execution_context()
+            .cloned()
+            .ok_or_else(|| eyre!("Native context missing"))?;
+        let batch = execution
+            .native_lane_decisions
+            .as_mut()
+            .ok_or_else(|| eyre!("Native batch missing"))?;
+        mutate(batch);
+        ensure!(
+            (1..=4).contains(&batch.groups.len()),
+            "Native fixture group bound"
+        );
+        for index in height_index..heights.len() {
+            let selected = if index == height_index {
+                execution.clone()
+            } else {
+                heights[index]
+                    .block
+                    .execution_context()
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let mut raw = RawBlock::decode_all(&mut heights[index].block.encode().as_slice())?;
+            raw.payload.execution_context = Some(selected);
+            raw.payload.header = BlockHeader::new(
+                NonZeroU64::new(index as u64 + 1).unwrap(),
+                Some(heights[index - 1].block.hash()),
+                None,
+                index as u64 * 100,
+                0,
+            );
+            raw.payload.header.set_execution_context_hash(
+                raw.payload.execution_context.as_ref().map(HashOf::new),
+            );
+            raw.signatures = [BlockSignature::new(
+                0,
+                SignatureOf::from_hash(self.keys[0].private_key(), raw.payload.header.hash()),
+            )]
+            .into_iter()
+            .collect();
+            let block = SignedBlock::decode_all(&mut raw.encode().as_slice())?;
+            ensure!(
+                block.network_entrypoint_count() == block.execution_outputs().len(),
+                "Native fixture output bound"
+            );
+            heights[index].block = block;
+            heights[index]
+                .proof
+                .finality_artifact
+                .height_context
+                .parent_commit_qc =
+                Some(heights[index - 1].proof.finality_artifact.commit_qc.clone());
+            heights[index].resign(&self.keys);
+        }
+        let archive = write_archive(&heights)?;
+        self.heights = heights;
         self._archive = archive;
         Ok(())
     }
@@ -819,12 +874,12 @@ impl Fixture {
         let root = self._archive.path().canonicalize().unwrap();
         (root.clone(), root.join("merge.log"))
     }
-    /// Independently fixed reader budget for the complete two-height archive.
+    /// Independently fixed reader budget for the complete chronological archive.
     pub fn limits(&self) -> CanonicalKuraEvidenceLimits {
         CanonicalKuraEvidenceLimits {
             first_height: 1,
-            last_height: 2,
-            max_committed_blocks: 2,
+            last_height: self.heights.len() as u64,
+            max_committed_blocks: self.heights.len() as u64,
             max_store_data_bytes: 4 * 1024 * 1024,
             max_carrier_bytes: 1024 * 1024,
             max_merge_log_bytes: 8 * 1024 * 1024,
@@ -839,38 +894,34 @@ impl Fixture {
         CanonicalKuraEvidenceReader::open(&blocks, &merge, self.limits())
             .expect("real archive admission")
     }
-    /// Retain the returned capability and `self` through the collection/publication check.
+    /// Retain this capability and original archive through collection/publication.
     pub fn complete(&self) -> CanonicalKuraEvidenceComplete {
         let mut reader = self.open_reader();
-        assert_eq!(
-            reader.read_carrier(1).unwrap(),
-            self.genesis.encode_wire().unwrap()
-        );
-        assert_eq!(
-            reader.read_carrier(2).unwrap(),
-            self.carrier.encode_wire().unwrap()
-        );
-        let mut seen = 0;
+        for height in &self.heights {
+            assert_eq!(
+                reader
+                    .read_carrier(height.block.header().height().get())
+                    .unwrap(),
+                height.block.encode_wire().unwrap()
+            );
+        }
         reader
-            .scan_merge_entries(
-                &[CanonicalKuraMergeRequest {
-                    carrier_height: 2,
-                    reference: CertifiedMergeLedgerReference::new(&self.entry),
-                }],
-                |height, entry, canonical| {
-                    assert_eq!(height, 2);
-                    assert_eq!(entry, &self.entry);
-                    assert_eq!(canonical, self.entry.canonical_bytes().as_slice());
-                    seen += 1;
-                    Ok(())
-                },
-            )
+            .scan_merge_entries(&[], |_, _, _| {
+                unreachable!("Native archive has no merge entries")
+            })
             .unwrap();
-        assert_eq!(seen, 1);
         reader
             .finish()
-            .expect("all carriers and the entire merge log consumed")
+            .expect("all carriers and the complete empty merge log consumed")
     }
+}
+
+// Test-only wire projection for authenticated malformed-source controls.
+#[derive(norito::Encode, norito::Decode)]
+struct RawBlock {
+    signatures: BTreeSet<BlockSignature>,
+    payload: iroha_data_model::block::BlockPayload,
+    result: Option<iroha_data_model::block::BlockResult>,
 }
 
 /// An exact ordered SDK response, selected by the test before Client admission.
@@ -915,7 +966,6 @@ impl Reply {
                 &iroha_torii_shared::PipelineTransactionDetailsResponse {
                     hash: transaction.entrypoint_hash.to_string(),
                     transaction,
-                    trigger_completions: Vec::new(),
                 },
             )
             .unwrap(),

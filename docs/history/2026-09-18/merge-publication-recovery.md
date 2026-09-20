@@ -1,0 +1,44 @@
+# Publication and recovery merge validation
+
+This record preserves the superseded local evidence verbatim. These observations describe prior source compositions and do not qualify the current checkout. Current results are recorded in [status](../../../status.md).
+
+## Superseded status
+
+The four complete-input review findings are corrected. Actual 800 KiB admission batching within a 2 MiB carrier, signed 160 KiB gossip within 256 KiB, deferred custody and cold recovery pass their scoped controls. Completed-publication repair also passes its real economic two-cycle regression and all 133 selected Core/61 Torii checks; actual completed-secondary cold archival subsequently passed. These results do not qualify the replacement runtime.
+
+The retained-source/common-tail candidate builds and passes all 594 selected Core tests on 20,548 unchanged local source/config inputs, including 16 new controls and all 21 publication/repair/capacity cases. Its model executable is byte-identical to the prior 345/345 passing artifact; model tests were not rerun. The 19-path runtime/inventory change is integrated into main with independent staged changes preserved. The inventory correction passes 34 source-loader controls in an exact source mirror; full structural output returns to its prior 148 errors. Main composition and full workspace remain uncompiled/unqualified.
+
+All active Sumeragi edits and validation use `/Users/takemiyamakoto/dev/iroha` on `optimizations`. All 93 MV tests pass, including nonblocking publication-identity contention and poisoned-owner controls. The emitted Core artifact from combined build04 passes all 16 new membership/hash/TriggerSet publication controls, both native frame-bound controls and authenticated receipt retry. Its nine retained failures are four driver-fixture failures before opening, two lifecycle publication failures and three merge/beacon ownership failures; none are counted as passing. The driver admission fixture now reattaches exact zero-work outputs and signs its final proposal. Complete 278-field World preparation/abort and six controls are added; test-image compiler errors are corrected and combined build07 is running. Kagami and catalog/recovery proof consumers now use typed outputs and exact native carrier proofs, pending rebuilt runtime checks. Earlier 104 source-contract passes do not establish runtime progress. Aggregate State authorization/resource policy, original Validate-to-Apply custody, Direct/Merge pre-vote receipt capacity, carrier-proof custody, native/beacon production cutover and unchanged four/seven-validator qualification remain open. No L1–L6 goal is complete.
+
+## Superseded roadmap
+
+The next Sumeragi cutover must carry exact prepared State/resource ownership through validation, cached/recovered markers, voting and Apply; returning only the execution hash drops that owner. Acquire bounded descriptor/capacity resources before voting and preserve typed local deferral with a reachable retry. Prototype530 was withdrawn for post-finality descriptor growth. Retain historical Native authority, stable canonical storage and immutable incarnation directories. Replace mandatory per-route application files with one authenticated carrier proof bundle and bounded complete history references; preserve exact merge-source/finality/WSV joins before source release, and charge whole bundles while any route retains them. Defer physical GC with release, snapshot/recovery pins and an instance-local deletion fence. Preserve cross-route closure and drain/signing fences. Remove the post-finality local Queue veto only with the complete consuming path. Continue all edits and validation in `/Users/takemiyamakoto/dev/iroha` on `optimizations`. Complete and test the aggregate consuming State publisher using the retained journals and prepared MV publications; the current checkout passes all 93 MV controls and 16 hash/membership/TriggerSet publication controls. Qualify the new complete World preparation and corrected native opening fixture, then join runtime, geometry, exact QC/Kura authority and all resource guards before State visibility. Finish the original Validate-to-Apply custody and capacity policy, authenticated receipt retry and Direct/Merge pre-vote admission. Preserve independent beacon and key-lifecycle behavior during integration. Connect the process-lived shared lane reducer to transport, exact Decision groups and candidate application while retiring the old fresh-signing authority at one complete cutover. Resolve the retained State ownership failures, carrier proof custody and historical work authority, remove unused instance journals, and qualify one unchanged four/seven-validator fault/restart/final-transaction candidate before closing any liveness goal.
+
+## Current repair scope
+
+The merge joins the original MV/World/runtime journals to one consuming output owner. Publication checks the captured witness, complete execution wire, immutable staged surface, exact verified CommitQC and durable Kura finality. Snapshot deserialization receives the frozen manifest baseline before rebuilding projections. Native Decisions preserve merge-ledger query metadata; recovery validates the latest applied ledger entry without rewriting the canonical World or its undo state.
+
+Coverage uses actual signed native Decisions and ordinary execution outputs, including two separate economic applications, replay denial, cold copied-store restoration, exact runtime catalog recovery, and retained Queue custody during authenticated publication repair. Executable MergeQC success fixtures are retired; their remaining coverage rejects that source and verifies unchanged custody. No compatibility path or finality bypass is introduced.
+
+The pending-publication repair fixtures admit their successor QueuePlan through actual ordinary execution and finality before cold restoration. The copied store preserves both artifact bytes and exact source permissions; the original Queue reservations move into the restored adapter without being released or recreated. Terminal ingress checks exact retained CommitQC fanout under bounded output pressure, and reservation diagnostics are checked independently from durable FIFO order.
+
+Unused NetworkBuilder-era fixture helpers are removed from the network target while preserving all 23 existing network test entry points and the native beacon-custody scenario. The shared multiroute fixture remains available to the localnet integration tests. The release-check unit tests use `ExitStack` for large mock groups so supported Python interpreters retain every assertion without exceeding their static nesting limit.
+
+## Validation
+
+The final Core test executable passes all 1,030 selected tests with no failures or ignored tests. The selection includes every one of the 87 focused regression checks and covers publication ownership, native economics/history, retired-source rejection, snapshot restoration, runtime catalogs, Queue custody, lifecycle, and telemetry. Each selected test ran as an isolated `--exact <test> --nocapture --test-threads=1` invocation, with eight independent workers and a 300-second timeout per test. The two cold Native repair controls also pass separately. All 114 changed Rust source files present at compilation remain byte-identical through the final run.
+
+| Command or check | Result |
+| --- | --- |
+| `cargo test -p iroha_core --lib --no-run` | Pass; no warnings. |
+| Selected tests from the resulting Core library-test executable | 1,030 passed; zero failed or ignored. |
+| `cargo test -p mv --lib` | 105 passed; zero failed or ignored. |
+| `cargo check -p irohad --bin iroha3d` | Pass; no warnings. |
+| `cargo check -p iroha_kagami --bin kagami` | Pass; no warnings. |
+| `cargo check -p iroha_test_network --test taira_consensus_contracts` | Pass; no warnings. The 23 network test entry points are preserved. |
+| `python -m pytest -q pytests/scripts/sumeragi_v2_source_inventory_test.py pytests/scripts/sumeragi_v2_multilane_native_fixture_delegation_test.py` | 74 passed, including the adverse source-mutation controls. |
+| `python -m pytest -q pytests/scripts/test_taira_release_check.py` | 163 passed; 1,284 subtests passed; two macOS-only native clone checks skipped on Linux. |
+| `bash scripts/check_no_legacy_codec.sh` | Pass. |
+| `python3 scripts/archive_project_history.py verify --archive docs/history/2026-09-06 --check-current` | Pass; 64,736 records and 67,311 occurrences verified. |
+
+Rust sources were formatted with `cargo fmt --all` and direct edition-2024 formatting for included test files. Unrelated formatter-only changes were excluded. The complete workspace suite and live four/seven-validator qualification were not run; these scoped results do not establish release readiness or complete the separate production-runner cutover.

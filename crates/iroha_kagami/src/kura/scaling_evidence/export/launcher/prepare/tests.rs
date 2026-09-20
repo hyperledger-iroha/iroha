@@ -23,6 +23,7 @@ pub(in crate::kura::scaling_evidence::export) fn encode_facts(
             .map(|height| SuppliedEvidenceHeightV1 {
                 height: height.height,
                 finality: height.finality,
+                contexts: height.contexts,
                 queries: height.queries,
             })
             .collect(),
@@ -37,18 +38,17 @@ fn facts(f: &fixture::Fixture) -> PrepareFactsV1 {
         version: 1,
         plan,
         limits,
-        heights: vec![
-            SuppliedEvidenceHeightV1 {
-                height: 1,
-                finality: norito::encode_canonical(&f.first).unwrap(),
-                queries: vec![],
-            },
-            SuppliedEvidenceHeightV1 {
-                height: 2,
-                finality: norito::encode_canonical(&f.second).unwrap(),
-                queries: f.queries(),
-            },
-        ],
+        heights: f
+            .heights
+            .iter()
+            .enumerate()
+            .map(|(index, height)| SuppliedEvidenceHeightV1 {
+                height: index as u64 + 1,
+                finality: norito::encode_canonical(&height.proof).unwrap(),
+                contexts: height.evidence.clone(),
+                queries: height.queries(),
+            })
+            .collect(),
     }
 }
 
@@ -78,9 +78,15 @@ fn change_query(
     index: usize,
     change: impl FnOnce(&mut CommittedTransaction),
 ) {
-    let mut query: CommittedTransaction = canonical(&facts.heights[1].queries[index]).unwrap();
+    let raw = facts
+        .heights
+        .iter_mut()
+        .flat_map(|height| &mut height.queries)
+        .nth(index)
+        .unwrap();
+    let mut query: CommittedTransaction = canonical(raw).unwrap();
     change(&mut query);
-    facts.heights[1].queries[index] = norito::encode_canonical(&query).unwrap();
+    *raw = norito::encode_canonical(&query).unwrap();
 }
 
 #[test]
@@ -92,18 +98,18 @@ fn one_and_four_lane_pair_preserves_every_independent_fact_binding_and_original_
             encode_facts(
                 f.plan(),
                 fixture::limits(),
-                vec![
-                    crate::kura::scaling_evidence::export::SuppliedHeightEvidence {
-                        height: 1,
-                        finality: norito::encode_canonical(&f.first).unwrap(),
-                        queries: vec![],
-                    },
-                    crate::kura::scaling_evidence::export::SuppliedHeightEvidence {
-                        height: 2,
-                        finality: norito::encode_canonical(&f.second).unwrap(),
-                        queries: f.queries(),
-                    },
-                ]
+                f.heights
+                    .iter()
+                    .enumerate()
+                    .map(|(index, height)| {
+                        crate::kura::scaling_evidence::export::SuppliedHeightEvidence {
+                            height: index as u64 + 1,
+                            finality: norito::encode_canonical(&height.proof).unwrap(),
+                            contexts: height.evidence.clone(),
+                            queries: height.queries(),
+                        }
+                    })
+                    .collect()
             ),
             norito::encode_canonical(&original).unwrap()
         );
@@ -124,6 +130,8 @@ fn one_and_four_lane_pair_preserves_every_independent_fact_binding_and_original_
         {
             assert_eq!(got.height, raw.height);
             assert_eq!(got.finality, raw.finality);
+            assert_eq!(got.contexts, raw.contexts);
+            assert_eq!(binding.contexts_hash, Hash::new(&raw.contexts));
             assert_eq!(got.queries, raw.queries);
             assert_eq!(binding.height, raw.height);
             assert_eq!(binding.finality_hash, Hash::new(&raw.finality));
@@ -309,6 +317,7 @@ fn height_interval_rejects_missing_extra_duplicate_reordered_zero_and_overflow_r
                 value.heights.push(SuppliedEvidenceHeightV1 {
                     height: 3,
                     finality: vec![1],
+                    contexts: vec![1],
                     queries: vec![],
                 });
             }
@@ -340,6 +349,9 @@ fn bounded_inner_preflight_runs_before_decoding_finality_or_query_frames() {
     heights[0].finality = vec![0; MAX_FINALITY_BYTES + 1];
     assert!(derive_bindings(&heights, &f.plan(), fixture::limits()).is_err());
     let mut heights = facts(&f).heights;
+    heights[0].contexts = vec![0; MAX_FINALITY_BYTES + 1];
+    assert!(derive_bindings(&heights, &f.plan(), fixture::limits()).is_err());
+    let mut heights = facts(&f).heights;
     heights[1].queries[0] = vec![0; MAX_TRANSACTION_BYTES + 1];
     assert!(derive_bindings(&heights, &f.plan(), fixture::limits()).is_err());
     let mut small = fixture::limits();
@@ -368,7 +380,7 @@ fn every_work_and_byte_limit_is_reused_from_actual_launcher_admission() {
             1 => value.limits.input_bytes = u64::MAX,
             2 => value.limits.output_bytes = 1,
             3 => value.limits.requests = 7,
-            _ => value.limits.leaves_per_carrier = 7,
+            _ => value.limits.leaves_per_carrier = 0,
         }
         assert!(prepare_facts(&value).is_err());
     }
@@ -380,16 +392,18 @@ fn canonical_inner_schema_version_and_original_digest_bindings_are_not_summary_c
     for change in 0..6 {
         let mut value = facts(&f);
         match change {
-            0 => value.heights[0].finality = f.first.encode(),
+            0 => value.heights[0].finality = f.heights[0].proof.encode(),
             1 => value.heights[1].queries[0].push(0),
-            2 => value.heights[1].queries[0] = norito::encode_canonical(&f.second).unwrap(),
+            2 => {
+                value.heights[1].queries[0] = norito::encode_canonical(&f.heights[1].proof).unwrap()
+            }
             3 => value.heights[0].finality = value.heights[1].queries[0].clone(),
             4 => {
-                let mut proof = f.first.clone();
+                let mut proof = f.heights[0].proof.clone();
                 proof.version = 0;
                 value.heights[0].finality = norito::encode_canonical(&proof).unwrap();
             }
-            _ => value.heights[1].finality = norito::encode_canonical(&f.first).unwrap(),
+            _ => value.heights[1].finality = norito::encode_canonical(&f.heights[0].proof).unwrap(),
         }
         assert!(
             prepare_facts(&value).is_err(),
@@ -437,12 +451,16 @@ fn missing_duplicate_extra_and_reordered_queries_never_create_a_complete_pair() 
                 0 => {
                     value.heights[1].queries.pop();
                 }
-                1 => value.heights[1].queries[1] = value.heights[1].queries[0].clone(),
+                1 => value.heights[2].queries[0] = value.heights[1].queries[0].clone(),
                 2 => {
                     let extra = value.heights[1].queries[0].clone();
                     value.heights[1].queries.push(extra);
                 }
-                _ => value.heights[1].queries.swap(0, 1),
+                _ => {
+                    let first = value.heights[1].queries[0].clone();
+                    value.heights[1].queries[0] = value.heights[2].queries[0].clone();
+                    value.heights[2].queries[0] = first;
+                }
             }
             assert!(prepare_facts(&value).is_err());
         }
@@ -455,12 +473,6 @@ fn coherent_counts_still_reject_missing_or_repeated_scheduled_identity() {
         let f = fixture::Fixture::new(lanes);
         let mut missing = facts(&f);
         missing.heights[1].queries.pop();
-        let count = missing.heights[1].queries.len();
-        for index in 0..count {
-            change_query(&mut missing, index, |query| {
-                query.merge_inclusion.as_mut().unwrap().entrypoint_count = count as u64;
-            });
-        }
         assert!(
             prepare_facts(&missing)
                 .err()
@@ -473,8 +485,6 @@ fn coherent_counts_still_reject_missing_or_repeated_scheduled_identity() {
         change_query(&mut repeated, 1, |query| {
             query.entrypoint = original.entrypoint;
             query.entrypoint_hash = original.entrypoint_hash;
-            query.result = original.result;
-            query.result_hash = original.result_hash;
         });
         assert!(
             prepare_facts(&repeated)
@@ -487,21 +497,32 @@ fn coherent_counts_still_reject_missing_or_repeated_scheduled_identity() {
 }
 
 #[test]
-fn query_carrier_self_hash_count_context_and_fallback_are_checked_through_prepare() {
+fn query_carrier_self_hash_and_input_output_order_are_checked_through_prepare() {
     let f = fixture::Fixture::new(4);
-    for change in 0..7 {
+    for change in 0..5 {
         let mut value = facts(&f);
         change_query(&mut value, 0, |query| match change {
-            0 => query.block_hash = f.genesis.hash(),
+            0 => query.block_hash = f.heights[0].block.hash(),
             1 => {
                 query.entrypoint_hash =
                     HashOf::from_untyped_unchecked(Hash::new(b"changed request"))
             }
-            2 => query.result_hash = HashOf::from_untyped_unchecked(Hash::new(b"changed result")),
-            3 => query.merge_inclusion.as_mut().unwrap().entrypoint_count -= 1,
-            4 => query.merge_inclusion.as_mut().unwrap().version = 2,
-            5 => query.merge_inclusion.as_mut().unwrap().merge_epoch_id += 1,
-            _ => query.merge_inclusion = None,
+            2 => query.output_hash = HashOf::from_untyped_unchecked(Hash::new(b"changed output")),
+            3 => {
+                query.entrypoint_proof =
+                    canonical::<CommittedTransaction>(&f.heights[1].queries()[1])
+                        .unwrap()
+                        .entrypoint_proof
+            }
+            _ => {
+                let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
+                    &mut query.output
+                else {
+                    unreachable!()
+                };
+                output.input_index += 1;
+                query.output_hash = HashOf::new(&query.output);
+            }
         });
         assert!(prepare_facts(&value).is_err(), "query mutation {change}");
     }
@@ -512,12 +533,17 @@ fn rejected_request_is_not_removed_or_promoted_into_successful_transport() {
     let f = fixture::Fixture::new(1);
     let mut value = facts(&f);
     change_query(&mut value, 0, |query| {
-        query.result.0 = Err(
+        let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) =
+            &mut query.output
+        else {
+            unreachable!()
+        };
+        output.result.0 = Err(
             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted("rejected fixture".into()),
             ),
         );
-        query.result_hash = query.result.hash();
+        query.output_hash = HashOf::new(&query.output);
     });
     assert!(
         prepare_facts(&value)
@@ -571,18 +597,15 @@ fn unaligned_facts_preserve_the_exact_two_canonical_outputs() {
 }
 
 #[test]
-fn preparation_does_not_authenticate_self_consistent_claimed_merge_roots() {
+fn preparation_does_not_authenticate_a_claimed_inclusion_proof() {
     let f = fixture::Fixture::new(4);
     let mut value = facts(&f);
-    let count = value.heights[1].queries.len();
-    for index in 0..count {
-        change_query(&mut value, index, |query| {
-            query.merge_inclusion.as_mut().unwrap().execution_batch_hash =
-                Hash::new(b"not the real carrier batch");
-        });
-    }
-    // This is a coherent transport claim; preparation deliberately has no carrier
-    // or certified merge-entry authority. The real verifier must still reject it.
+    // Claim a different input proof with the same leaf index and self-consistent
+    // query bytes. Only the complete carrier can authenticate its sibling path.
+    change_query(&mut value, 0, |query| {
+        let other: CommittedTransaction = canonical(&f.heights[2].queries()[0]).unwrap();
+        query.entrypoint_proof = other.entrypoint_proof;
+    });
     let (request, bundle) = prepare_facts(&value).unwrap().into_buffers();
     let (plan, limits, _) = super::super::decode(
         &request,
@@ -593,21 +616,17 @@ fn preparation_does_not_authenticate_self_consistent_claimed_merge_roots() {
     .into_parts();
     let bundle: SuppliedEvidenceBundleV1 = canonical(&bundle).unwrap();
     let mut verifier = f.start(plan, limits);
-    let queries = bundle.heights[1]
-        .queries
-        .iter()
-        .map(Vec::as_slice)
-        .collect::<Vec<_>>();
+    let row = &bundle.heights[1];
     let result = verifier.push_height(
-        &bundle.heights[1].finality,
-        &f.carrier.encode_wire().unwrap(),
-        Some(&norito::encode_canonical(&f.entry).unwrap()),
-        &queries,
+        &row.finality,
+        &f.heights[1].block.encode_wire().unwrap(),
+        &row.contexts,
+        &row.queries.iter().map(Vec::as_slice).collect::<Vec<_>>(),
     );
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err().to_string(),
-        "queried leaf is not this exact full transcript leaf"
+        "queried leaf is not this exact typed Network output"
     );
     assert!(verifier.finish().is_err());
 }

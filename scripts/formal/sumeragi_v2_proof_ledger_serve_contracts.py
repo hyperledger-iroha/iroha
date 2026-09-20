@@ -1455,16 +1455,16 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "1696486255d16af1779a46c10dee8e213104aa4c900d089f3ab0f962b11607eb"
+        "61db96eb8aa3d537a144083dcf12021bdd411ad02b116cbf0a0a8960172308c1"
     ),
     "freeze_due_clock_owners": (
-        "d1c028eb58483adffe8eb1415b431d3f031714167535af7382d3ee39b5cf4027"
+        "afc726a30c90fe1f7237ac3ea085368ad4011ca45cef8c97c1f96fc3395e4d35"
     ),
     "minimum_active_lifecycle_ordinal": (
-        "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d"
+        "369f400c9486265a85026b708b51ede27ef77ac679bb848148a9847d865cae07"
     ),
     "minimum_active_lifecycle_ordinal_excluding": (
-        "bb53e945b76e2bdbd83e60c3e259d6a946eaf83be9685ca099c01fc8da5dbdf8"
+        "490773d10b7dc3223bd1381a279df3a21a8c5b19ea7978470d7d4a35523bb2cd"
     ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
@@ -1483,10 +1483,10 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "d806941928afcb15ee72ed7eef771ac10cad55a7b714827b49052617b76c894d"
     ),
     "dispatch_one_fence_dependency": (
-        "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
+        "916461d676ba8ae5d5208366c8072b0e71484b03f71026b28bad93b650c7092c"
     ),
     "dispatch_one_adapter_deferred": (
-        "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
+        "a13dd6bacf84916f4044fb9cacb9a1db8f6fd0163b26ca6565e0b35be17cc130"
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
@@ -1571,7 +1571,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
         "36092769fa443044ada01878360c825f359e5d0eae1626a785d15316d8fd97cd"
     ),
     "restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect": (
-        "b13646ed6219f0c11276f6ab64fd2270353015c8183da26c61524570f1b279de"
+        "dc1e08c3122e06db601ee2a257c5c8de02e24846db1fa7cab7653f8b908895ef"
     ),
     "live_producer_owner_cannot_replace_immutable_identity": (
         "fe58056b871ed225ceabf68f95ff99b6ea7882da5ba9e384c45d0864a74eb697"
@@ -1627,13 +1627,13 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
         "e3aad9aae8a82eb29d223230fa3f8b2cf26ba5dfa75b6859be40d0ce1cd45b71"
     ),
     "same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner": (
-        "9c2930e2bec6e33904f20f6135300bcce4164b36a2cd03d9c8e516729ab84666"
+        "a5331bd6b634a10f9024cd8ba6540509eb87123a60a4de38a76f6eddc62fe865"
     ),
     "dormant_fresh_owner_cache_is_derived_bounded_and_purged_by_round_tag": (
         "fe0bed714176dd7a285e7dcdd448f9468c60b13aee7dcac8a8c67affc2a3c333"
     ),
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
-        "22e6b7d6b7620598c67f3e942898d695e717bca1625f3af3572dcce450d43093"
+        "48189b40998a7568d1d217b5831e607b7fc4628a11fdcffd8c151d27a6b2a754"
     ),
     "dormant_local_fifo_metadata_rejects_wrong_stage_ordinal_and_capacity": (
         "e882762fdaf772c5a57d5277f4b29f0d6ae71ffb9d4374edd3c7dd1fdb42117d"
@@ -1645,7 +1645,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
         "bd1273f883c17b13d555ed690c5cfaec2b62ab159c20e2be49def98a3058e7e2"
     ),
     "busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation": (
-        "738c238a671607d0a0033f16839bd648eaeb3eefebae3348016414858d2869bd"
+        "761b107f6be9e5560800914c9241a3ceb773b439519153b9f30cf93c71455296"
     ),
 }
 _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {}
@@ -1830,7 +1830,7 @@ let older_signer_blocks_fifo =
         .as_ref()
         .is_some_and(|(candidate, _, _)| {
             self.driver.signature_fence_is_active()
-                && self.external_lifecycle_owners.iter().any(|owner| {
+                && external.iter().any(|owner| {
                     owner.lifecycle_ordinal() < candidate.lifecycle_ordinal()
                         || owner
                             .causal_origin()

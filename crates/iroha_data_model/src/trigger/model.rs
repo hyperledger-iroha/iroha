@@ -387,6 +387,8 @@ pub mod action {
         /// Repetition policy for a trigger action.
         #[derive(Debug, Copy, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_data_model::trigger::model::action::model::Repeats")]
         pub enum Repeats {
             /// Repeat the trigger indefinitely until it is unregistered.
             Indefinitely,
@@ -1164,6 +1166,33 @@ mod tests {
         assert!(!Repeats::Indefinitely.is_depleted());
         assert!(!Repeats::Exactly(1).is_depleted());
         assert!(Repeats::Exactly(0).is_depleted());
+    }
+
+    #[test]
+    fn repeats_canonical_frame_preserves_variant_count_and_layout() {
+        let variants = [
+            Repeats::Indefinitely,
+            Repeats::Exactly(0),
+            Repeats::Exactly(1),
+            Repeats::Exactly(u32::MAX),
+        ];
+        let mut frames = std::collections::BTreeSet::new();
+        for value in variants {
+            let bytes = norito::encode_canonical(&value).unwrap();
+            assert_eq!(norito::decode_canonical::<Repeats>(&bytes).unwrap(), value);
+            assert!(
+                frames.insert(bytes.clone()),
+                "variant and repeat count must remain distinct"
+            );
+            let alternative =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternative);
+            assert_eq!(norito::encode_canonical(&value).unwrap(), bytes);
+        }
+        assert_eq!(
+            <Repeats as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::trigger::model::action::model::Repeats"
+        );
     }
 
     #[test]

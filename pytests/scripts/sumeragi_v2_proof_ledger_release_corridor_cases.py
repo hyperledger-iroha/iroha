@@ -805,9 +805,10 @@ def test_workspace_excluded_harness_pins_complete_unit_inventory() -> None:
     unit_run = source.index("--lib -- --test-threads=1", ignored_inventory)
 
     assert unit_branch < unit_inventory < ignored_inventory < unit_run
-    assert "if ((${#listed_unit_tests[@]} != 197)); then" in source
-    assert "expected exactly 197 Sumeragi v2 reducer unit tests" in source
-    assert "reducer unit gate requires all 197 tests to be runnable" in source
+    assert "if ((${#listed_unit_tests[@]} != 224)); then" in source
+    assert "if ((${#listed_ignored_unit_tests[@]} != 0)); then" in source
+    assert "expected exactly 224 Sumeragi v2 reducer unit tests" in source
+    assert "reducer unit gate requires all 224 tests to be runnable" in source
 
 
 def test_workspace_excluded_harness_names_every_required_fast_simulation() -> None:

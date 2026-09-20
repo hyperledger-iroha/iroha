@@ -2550,8 +2550,7 @@ mod tests {
             u64::MAX,
             iroha_model_base::metadata::Metadata::default(),
         );
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let world = tx.world_mut_for_testing();

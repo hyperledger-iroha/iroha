@@ -92,6 +92,9 @@ impl<'storage, K: Key, V: Value> History<'storage, K, V> {
             .map(|(key, previous)| (key.clone(), previous.as_ref().and_then(&project)))
             .collect();
         Storage {
+            publication: crate::publication::Publication::new(),
+            revert_released: crate::ReleaseNotification::default(),
+            blocks_released: crate::ReleaseNotification::default(),
             revert: EbrCell::new(revert),
             blocks,
         }

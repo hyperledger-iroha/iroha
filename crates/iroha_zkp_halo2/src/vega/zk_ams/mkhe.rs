@@ -209,7 +209,9 @@ mod rns_native_qpcs_initial;
 mod rns_native_qpcs_leaf;
 #[path = "mkhe/rns_native_qpcs_prefix.rs"]
 mod rns_native_qpcs_prefix;
+// Prototype tree construction is exercised by internal fixtures; production uses the verifier.
 #[path = "mkhe/rns_native_qpcs_tree.rs"]
+#[cfg(test)]
 mod rns_native_qpcs_tree;
 #[path = "mkhe/rns_native_radix_complement_linear_relation.rs"]
 mod rns_native_radix_complement_linear_relation;

@@ -20,7 +20,6 @@ fn state_block_accounts_snapshot_is_cached() {
         NonZeroU64::new(1).expect("nonzero height"),
         None,
         None,
-        None,
         0,
         0,
     );

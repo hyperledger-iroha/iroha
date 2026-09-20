@@ -3398,7 +3398,8 @@ impl DurableRecoveredWalSignWork {
 /// Whether one concrete registry row is still an executable adapter effect or
 /// a closed durable carrier awaiting its dedicated typed consumer. Installed
 /// move-only carriers retain their complete authority. The largest retained
-/// lineages are heap-owned so unrelated BTree entries do not copy their inline
+/// lineages are heap-owned to bound individual carrier moves. Every registry
+/// row is separately heap-owned to keep BTree nodes independent of carrier
 /// size. Live Broadcast storage is reserved before publication; its typed
 /// commit only initializes that allocation.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -3657,54 +3658,56 @@ pub(super) struct ConcreteLifecycleWork {
 impl ConcreteLifecycleWork {
     /// Seal one recovered durable Fetch completion as registry work.
     fn from_recovered_durable_fetch(
-        completion: CertifiedFetchCompletion,
-    ) -> Result<Self, CertifiedFetchCompletion> {
+        completion: Box<CertifiedFetchCompletion>,
+    ) -> Result<Box<Self>, Box<CertifiedFetchCompletion>> {
         let Some(digest) = completion.ready_digest() else {
             return Err(completion);
         };
-        let work = Self {
+        let work = Box::new(Self {
             digest,
-            kind: ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion),
-        };
+            kind: ConcreteLifecycleWorkKind::CertifiedFetchCompletion(*completion),
+        });
         if work.validate_exact() {
             Ok(work)
         } else {
             let ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion) = work.kind else {
                 unreachable!("new recovered Fetch work retains its closed completion kind")
             };
-            Err(completion)
+            Err(Box::new(completion))
         }
     }
-    fn from_recovered_durable_store(store: DurableStoreBody) -> Result<Self, DurableStoreBody> {
+    fn from_recovered_durable_store(
+        store: Box<DurableStoreBody>,
+    ) -> Result<Box<Self>, Box<DurableStoreBody>> {
         let digest = store.ready_digest();
-        let work = Self {
+        let work = Box::new(Self {
             digest,
-            kind: ConcreteLifecycleWorkKind::DurableStoreBody(store),
-        };
+            kind: ConcreteLifecycleWorkKind::DurableStoreBody(*store),
+        });
         if work.validate_exact() {
             Ok(work)
         } else {
             let ConcreteLifecycleWorkKind::DurableStoreBody(store) = work.kind else {
                 unreachable!("new recovered Store work retains its closed carrier kind")
             };
-            Err(store)
+            Err(Box::new(store))
         }
     }
     fn from_recovered_durable_validate(
-        validate: DurableValidateBody,
-    ) -> Result<Self, DurableValidateBody> {
+        validate: Box<DurableValidateBody>,
+    ) -> Result<Box<Self>, Box<DurableValidateBody>> {
         let digest = validate.ready_digest();
-        let work = Self {
+        let work = Box::new(Self {
             digest,
-            kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
-        };
+            kind: ConcreteLifecycleWorkKind::DurableValidateBody(*validate),
+        });
         if work.validate_exact() {
             Ok(work)
         } else {
             let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = work.kind else {
                 unreachable!("new recovered Validate work retains its closed carrier kind")
             };
-            Err(validate)
+            Err(Box::new(validate))
         }
     }
     /// Build one direct-signed registry carrier for closed admission tests.
@@ -4828,7 +4831,7 @@ pub(super) enum ProducerTurnTerminalRegistryPublicationError<E> {
     Publication(E, PreparedProducerTurnTerminalRegistryTransitionV1),
 }
 struct StagedCertifiedServeRegistryBatch<'registry> {
-    entries: &'registry mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
+    entries: &'registry mut BTreeMap<ConcreteWorkAddress, Box<ConcreteLifecycleWork>>,
     addresses: Vec<ConcreteWorkAddress>,
 }
 impl StagedCertifiedServeRegistryBatch<'_> {
@@ -4844,7 +4847,7 @@ impl StagedCertifiedServeRegistryBatch<'_> {
                     .entries
                     .remove(&address)
                     .expect("staged Serve/Producer carrier remains at its exact address");
-                (address, work)
+                (address, *work)
             })
             .collect();
         PreparedCertifiedServeRegistryBatchV1 { entries }
@@ -4858,9 +4861,9 @@ impl Drop for StagedCertifiedServeRegistryBatch<'_> {
     }
 }
 struct StagedCertifiedServeTerminalProducer<'registry> {
-    entries: &'registry mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
+    entries: &'registry mut BTreeMap<ConcreteWorkAddress, Box<ConcreteLifecycleWork>>,
     producer_address: ConcreteWorkAddress,
-    incumbent: Option<ConcreteLifecycleWork>,
+    incumbent: Option<Box<ConcreteLifecycleWork>>,
 }
 impl StagedCertifiedServeTerminalProducer<'_> {
     fn commit(mut self) {
@@ -5168,6 +5171,7 @@ mod tests {
     include!("tests/v2_lifecycle_work_registry_02.rs");
     include!("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs");
     include!("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs");
+    include!("tests/v2_lifecycle_validate_local_wait_cases.rs");
     include!("tests/v2_lifecycle_work_registry_validate_sidecar_cases.rs");
     include!("tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs");
     include!("tests/v2_lifecycle_work_registry_exact_registry_cases.rs");

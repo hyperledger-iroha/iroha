@@ -179,11 +179,13 @@ scrypt = { version = "0.11.0", default-features = false, features = ["std"] }
 halo2curves = { version = "0.9" }
 
 mv = { path = "crates/mv" }
-concread = "=0.5.7"
+concread = { version = "=0.5.10", default-features = false }
 
 # [patch.crates-io] was temporarily disabled; keep the local overrides we still
 # rely on for Halo2 helpers and the CUDA helper.
 [patch.crates-io]
+# Allocation custody must follow actual epoch reclamation in the locked EBR owner.
+concread = { path = "vendor/concread" }
 halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
@@ -408,6 +410,14 @@ opt-level = 3
 [profile.test.package.blake2]
 opt-level = 3
 
+# The native faucet solver executes the configured memory-hard Scrypt puzzle.
+# Optimize its arithmetic in local profiles without changing work or deadlines.
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.test.package.scrypt]
+opt-level = 3
+
 # Four-peer native consensus profiling found BLS signing and verification in
 # unoptimized field arithmetic. Optimize the concrete crypto instantiations and
 # their arithmetic dependencies in both runnable profiles, retaining assertions
@@ -452,6 +462,30 @@ opt-level = 3
 opt-level = 3
 
 [profile.test.package.ark-serialize]
+opt-level = 3
+
+# Linux startup profiling found unoptimized field arithmetic instantiated in
+# halo2curves-axiom. Optimize this crate in both runnable profiles while keeping
+# their existing debug assertions and overflow checks.
+[profile.dev.package.halo2curves-axiom]
+opt-level = 3
+
+[profile.test.package.halo2curves-axiom]
+opt-level = 3
+
+# Pasta owns the concrete field and curve operations reexported by halo2curves.
+# Optimizing the reexporting crate alone leaves its upstream arithmetic at O0.
+# Preserve assertions and overflow checks in both local runnable profiles.
+[profile.dev.package.pasta_curves]
+opt-level = 3
+
+[profile.test.package.pasta_curves]
+opt-level = 3
+
+[profile.dev.package.norito]
+opt-level = 3
+
+[profile.test.package.norito]
 opt-level = 3
 
 # Eight, 16, and 64 CGUs all measured about 12.1 GiB before decoder de-duplication;

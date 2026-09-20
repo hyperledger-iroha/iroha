@@ -334,8 +334,8 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 "lineage-separated durable Validate retry seal",
                 cold_validate_seal,
                 (
-                    "Live { effect: AdapterEffect, ownership: RuntimeEffectOwnership, store_terminal: Option<DurableStoreTerminalRetrySealV1>, lifecycle_ordinal: Option<u128>, }",
-                    "Recovered { owner: Arc<RecoveredDurableValidateRetryOwnerV1>, frontier: RecoveredDurableValidateRetryFrontierV1, lifecycle_ordinal: Option<u128>, }",
+                    "Live { effect: AdapterEffect, ownership: RuntimeEffectOwnership, store_terminal: Option<DurableStoreTerminalRetrySealV1>, lifecycle_state: DurableValidateRetryLifecycleStateV1, }",
+                    "Recovered { owner: Arc<RecoveredDurableValidateRetryOwnerV1>, frontier: RecoveredDurableValidateRetryFrontierV1, lifecycle_state: DurableValidateRetryLifecycleStateV1, }",
                 ),
             )
             reject_tokens(
@@ -348,9 +348,9 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                 (
                     "lifecycle_ordinal",
                     (
-                        "Self::Live { lifecycle_ordinal, .. }",
-                        "Self::Recovered { lifecycle_ordinal, .. }",
-                        "*lifecycle_ordinal",
+                        "match self.lifecycle_state()",
+                        "DurableValidateRetryLifecycleStateV1::Bound(ordinal) => Some(*ordinal)",
+                        "DurableValidateRetryLifecycleStateV1::PendingAdmission | DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_) => None",
                     ),
                     "exact durable Validate retry lifecycle row projection",
                 ),
@@ -358,39 +358,34 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "bind_lifecycle_ordinal",
                     (
                         "if ordinal == 0",
-                        "Self::Live { lifecycle_ordinal, .. }",
-                        "Self::Recovered { lifecycle_ordinal, .. }",
-                        "Some(existing) if existing != ordinal",
-                        "None => { *lifecycle_ordinal = Some(ordinal)",
+                        "Self::Live { lifecycle_state, .. }",
+                        "Self::Recovered { lifecycle_state, .. }",
+                        "DurableValidateRetryLifecycleStateV1::PendingAdmission =>",
+                        "*state = DurableValidateRetryLifecycleStateV1::Bound(ordinal)",
+                        "DurableValidateRetryLifecycleStateV1::Bound(existing) if *existing == ordinal => Ok(())",
+                        "DurableValidateRetryLifecycleStateV1::Bound(_) =>",
+                        "DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_) => Err(",
                     ),
                     "single-assignment durable Validate retry lifecycle row binding",
                 ),
                 (
                     "release_lifecycle_ordinal",
                     (
-                        "self.lifecycle_ordinal() != Some(ordinal)",
-                        "Self::Live { lifecycle_ordinal, .. }",
-                        "Self::Recovered { lifecycle_ordinal, .. }",
-                        "*lifecycle_ordinal = None",
+                        "outcome: Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>",
+                        "self.lifecycle_state() != &DurableValidateRetryLifecycleStateV1::Bound(outcome.ordinal())",
+                        "Self::Live { lifecycle_state, .. }",
+                        "Self::Recovered { lifecycle_state, .. }",
+                        "*lifecycle_state = DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(outcome)",
                     ),
                     "exact durable Validate retry lifecycle row release",
                 ),
             ):
                 ordinal_item = _require_qualified_rust_item(
-                    effects_path,
-                    effects_source,
-                    "DurableValidateRetrySealV1",
-                    ordinal_method,
-                    errors,
-                    description,
+                    effects_path, effects_source, "DurableValidateRetrySealV1",
+                    ordinal_method, errors, description,
                 )
                 if ordinal_item is not None:
-                    require_order(
-                        effects_path,
-                        description,
-                        ordinal_item.source,
-                        ordinal_fragments,
-                    )
+                    require_order(effects_path, description, ordinal_item.source, ordinal_fragments)
             cold_validate_retry_projection = _require_qualified_rust_item(
                 effects_path,
                 effects_source,
@@ -405,18 +400,18 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "non-substitutable live and recovered Validate retry projection",
                     cold_validate_retry_projection.source,
                     (
-                        "Self::Live { effect: incumbent_effect, ownership: incumbent_ownership, store_terminal, lifecycle_ordinal, }",
+                        "Self::Live { effect: incumbent_effect, ownership: incumbent_ownership, store_terminal, lifecycle_state, }",
                         "store_terminal.as_ref().is_some_and(|store| !store.exactly_precedes_validate(effect))",
                         "adopt_incumbent_body_stage_for_retry_or_authority(incoming, effect)",
                         "seal: Self::Live",
                         "store_terminal: store_terminal.clone()",
-                        "lifecycle_ordinal: *lifecycle_ordinal",
-                        "Self::Recovered { owner, frontier, lifecycle_ordinal, }",
+                        "lifecycle_state: lifecycle_state.clone()",
+                        "Self::Recovered { owner, frontier, lifecycle_state, }",
                         "owner.exactly_matches_retry(frontier, effect, incoming)",
                         "seal: Self::Recovered {",
                         "owner: Arc::clone(owner)",
                         "frontier",
-                        "lifecycle_ordinal: *lifecycle_ordinal",
+                        "lifecycle_state: lifecycle_state.clone()",
                     ),
                 )
                 reject_tokens(
@@ -438,11 +433,11 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     cold_validate_durable_commitment_join.source,
                     (
                         "Self::Live { .. } => Ok(None)",
-                        "Self::Recovered { owner, frontier, lifecycle_ordinal, }",
+                        "Self::Recovered { owner, frontier, lifecycle_state, }",
                         "frontier.project_commitment_ceiling(commitment)",
                         "owner: Arc::clone(owner)",
                         "frontier",
-                        "lifecycle_ordinal: *lifecycle_ordinal",
+                        "lifecycle_state: lifecycle_state.clone()",
                     ),
                 )
             cold_validate_install = region(
@@ -483,7 +478,7 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     (
                         "body_store.ensure_recovered_markers_revalidated()",
                         "let recovered_bodies = body_store.recovery_catalog()",
-                        "let recovered_validations = body_store.validated_recovery_catalog()",
+                        "let mut recovered_validations = body_store.validated_recovery_catalog()",
                         "for (key, validated_receipt) in &recovered_validations",
                         "validated_receipt.durable() != durable_receipt",
                         "recovered_validate_retry_census.classify_and_bind_validated_marker(",
@@ -671,7 +666,7 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     (
                         "self.executor.arm_live_clocks(clock_activation, now)",
                         "self.services.activate_effect_completion_observer(observer)",
-                        "publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status)",
+                        "publication.open_and_publish(&self.leader_wire_ingress_binding.ingress, status, recovered_decision,)",
                     ),
                 )
             cold_apply_startup = _require_rust_item(
@@ -1318,7 +1313,7 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "self.executor.successor_activation_status_snapshot()",
                     "self.completion_observer_activation.take()",
                     "self.services.activate_effect_completion_observer(observer)",
-                    "publication.open_and_publish( &self.leader_wire_ingress_binding.ingress, status )?",
+                    "publication.open_and_publish( &self.leader_wire_ingress_binding.ingress, status, recovered_decision, )?",
                     "activation.complete()",
                     "ActivatedProductionLifecycleV1 { runner_activation, local_proposal, launched: self, }",
                 ),
@@ -1487,10 +1482,10 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "self.ingress_ready.store(false, Ordering::Release)",
                     "Arc::ptr_eq(&self.block_ingress, launched_ingress)",
                     "self.block_ingress.close()",
-                    "retirement.authorizes_successor_status(&successor)",
+                    "retirement.authorizes_successor_status_with_decision(&successor, decision.as_ref())",
                     "self.block_ingress.close()",
                     "self.block_ingress.open()",
-                    "status::activate_recovered_complete_tip_v2_height(retirement, successor)",
+                    "status::activate_recovered_complete_tip_v2_height_with_decision( retirement, successor, decision, )",
                     "self.block_ingress.close()",
                     "self.ingress_ready.store(true, Ordering::Release)",
                 ),
@@ -2618,9 +2613,9 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "body_store_identity: body_store_identity.clone()",
                     "output_guard: Arc::clone(&authority_output_guard)",
                     "RecoveredLifecycleProposalExactOutputAuthorityV1::from_service_retry(",
-                    "payload.into_parts()",
                     "let sender = proposal.proposer",
-                    "sign_payload_chunks(&manifest, chunks, sender)",
+                    "let (validated, signed_chunks) = self.sign_payload_chunks(payload, sender)?;",
+                    "let manifest = validated.into_manifest();",
                     "Self::preencode_v2_network_message",
                     "let peers = self.remote_voters()",
                     "let control = PendingExactFanout::claimed(",
@@ -2714,7 +2709,8 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "vec![Some(expected_batch_first_fifo), expected_batch_first_fifo.checked_add(1),]",
                     "fanout.peers.iter().cloned().collect::<BTreeSet<_>>()",
                     "wire::ConsensusMessageV2Payload::PayloadChunk(chunk)",
-                    "chunk.validate(&service.context, manifest)",
+                    "wire::ValidatedPayloadManifest::new(&service.context, manifest.clone())",
+                    "chunk.validate_for_authentication(&validated)",
                     "Signature::try_from_bytes(&chunk.signature)",
                     "signature.verify(signer.public_key()",
                     "capture_recovered_lifecycle_proposal_exact_output(retirement_authority).is_err()",
@@ -3451,12 +3447,11 @@ def _successor_recovery_lifecycle_source_fidelity_errors(
                     "ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1::Applied",
                 ),
             )
-            require_token_count(
+            reject_tokens(
                 launch_path,
-                "typed recovered Proposal pre-fsync output release",
+                "restart-closed recovered Proposal reserved output",
                 recovered_proposal_two_child_settlement,
-                "output.abort_before_publication()",
-                2,
+                ("output.abort_before_publication()", "retry!()"),
             )
             require_tokens(
                 launch_path,

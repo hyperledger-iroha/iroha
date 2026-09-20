@@ -5,6 +5,12 @@ cryptography, complete-store scheduling and leaf reconciliation. The mandatory
 runtime callback binds the original peer3 clean stop, exact stopped tip and peer0
 liveness; this component alone never proves those lifecycle facts or a release.
 Keep original ReadinessInputs and NativeOutputs open through later facts/replay.
+
+TODO: retain the original complete Native context-witness archive and forward its
+path, raw SHA-256 and byte reservation to collect-scaling-inputs. The canonical
+collector requires that archive; genesis-only contexts and finality proofs cannot
+replace it. The fixed trial cannot qualify collection until this producer joins
+the stopped-peer input owner.
 """
 from __future__ import annotations
 

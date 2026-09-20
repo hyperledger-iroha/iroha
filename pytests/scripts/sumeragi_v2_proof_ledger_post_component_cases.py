@@ -1929,3 +1929,137 @@ def test_retained_candidate_retry_semantics_survive_item_digest_refresh(
     errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
 
     assert any(expected_error in error for error in errors), errors
+
+
+def test_ordinary_ingress_retained_waits_and_barriers_reject_mutations() -> None:
+    """Exercise the maintained owner contracts with real Rust item mutations."""
+    import ast
+
+    module = load_checker()
+    contract_path = ROOT_DIR / "scripts/formal/sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py"
+    tree = ast.parse(contract_path.read_text(encoding="utf-8"))
+    owner = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors"
+    )
+    helpers = [
+        node for node in owner.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"item", "require_tokens", "require_order", "launched_completion_item"}
+    ]
+    assert len(helpers) == 4
+
+    def assignment(name: str) -> int:
+        positions = [
+            index for index, node in enumerate(owner.body)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+        ]
+        assert len(positions) == 1, name
+        return positions[0]
+
+    start = assignment("completion_pre_gate")
+    end = next(
+        index for index, node in enumerate(owner.body[start:], start)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+        and len(node.value.args) > 2 and isinstance(node.value.args[2], ast.Constant)
+        and node.value.args[2].value == "fresh lifecycle Completion Ready-work dispatch"
+    )
+    barrier_nodes = [
+        node for node in owner.body
+        if isinstance(node, ast.If)
+        and any(isinstance(child, ast.Name) and child.id == "barrier_start" for child in ast.walk(node))
+    ]
+    assert len(barrier_nodes) == 1
+    probe = ast.parse(
+        "def _ordinary_owner_probe(source_name, path, source):\n"
+        "    errors = []\n"
+        "    paths = {source_name: path}\n"
+        "    sources = {source_name: source}\n"
+        "    return errors\n"
+    ).body[0]
+    driver_branch = ast.If(
+        test=ast.Compare(left=ast.Name(id="source_name", ctx=ast.Load()),
+                         ops=[ast.Eq()], comparators=[ast.Constant(value="driver")]),
+        body=owner.body[start:end],
+        orelse=[*owner.body[assignment("active_driver_calls"):assignment("lifecycle_live_loop")],
+                ast.parse('lifecycle_live_loop = item("lifecycle_run_inner", "run_lifecycle_active_height")').body[0],
+                *barrier_nodes],
+    )
+    probe.body[-1:-1] = helpers + [driver_branch]
+    ast.fix_missing_locations(probe)
+    exec(compile(ast.Module(body=[probe], type_ignores=[]), str(contract_path), "exec"), module.__dict__)
+    sources = {}
+    for name, relative in (
+        ("driver", "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"),
+        ("lifecycle_run_inner", "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"),
+    ):
+        errors = []
+        path, source = module._read_reviewed_rust_source(ROOT_DIR, relative, errors, name)
+        assert not errors, errors
+        assert module._ordinary_owner_probe(name, path, source) == []
+        sources[name] = (path, source)
+    mutations = (
+        ("driver", "drive_completion_pre_gate_inner",
+         "let selected = self.retry_local_lifecycle_validate(retained);",
+         "let selected = self.retry_foreign_lifecycle_validate(retained);",
+         "retained LifecycleValidateLocalWaiting"),
+        ("driver", "drive_completion_pre_gate_inner",
+         "if matches!(selected, ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting)",
+         "if matches!(selected, ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued)",
+         "retained LifecycleValidateLocalWaiting"),
+        ("driver", "drive_completion_pre_gate_inner",
+         "self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)",
+         "self.drive_registered_lifecycle_validate_sidecar(foreign_registration, lane_work)",
+         "retained LifecycleValidateSidecarWaiting"),
+        ("driver", "drive_completion_pre_gate_inner",
+         "ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWaiting\n                    )",
+         "ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken\n                    )",
+         "retained LifecycleValidateSidecarWaiting"),
+        ("lifecycle_run_inner", "run_lifecycle_active_height",
+         "if !finalized_ingress_closed", "if finalized_ingress_closed",
+         "finite recovery batches retain Completion priority"),
+        ("lifecycle_run_inner", "run_lifecycle_active_height",
+         "!activated.ready_for_finalized_rollover(&mut active_runner)?", "false",
+         "finite recovery batches retain Completion priority"),
+        ("lifecycle_run_inner", "run_lifecycle_active_height",
+         "if let Some(_permit) = producer_claim.validate_sidecar_pacemaker_escape_permit()",
+         "if let Some(_permit) = producer_claim.decided_lane_recovery_permit()",
+         "must remain inside the exact Validate-sidecar pacemaker permit"),
+        ("lifecycle_run_inner", "run_lifecycle_active_height",
+         "executor.step_completion_capacity_relief_after_cut(\n                                    completion_cut,",
+         "executor.step_completion_capacity_relief_after_cut_unchecked(\n                                    completion_cut,",
+         "typed sidecar/Apply barrier requires"),
+    )
+    for source_name, item_name, old, new, diagnostic in mutations:
+        path, source = sources[source_name]
+        items = module.rust_items(source, item_name)
+        assert len(items) == 1
+        item = items[0]
+        assert item.source.count(old) == 1, old
+        mutated = source.replace(item.source, item.source.replace(old, new, 1), 1)
+        errors = module._ordinary_owner_probe(source_name, path, mutated)
+        assert any(diagnostic in error for error in errors), (old, errors)
+
+
+def test_lifecycle_stack_wrapper_contract_binds_only_its_executable_body() -> None:
+    module = load_checker()
+    path = ROOT_DIR / "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"
+    name = "production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout"
+    source = path.read_text(encoding="utf-8")
+    errors = []
+    body = module._require_lifecycle_stack_test_body(path, source, name, errors)
+    assert not errors, errors
+    assert body is not None and body.name == name + "_body"
+    mutations = (
+        (f"{name}_body,", "foreign_body,"),
+        (f"fn {name}_body()", f"#[cfg(test)]\nfn {name}_body()"),
+        (f"fn {name}_body()", f"fn {name}_detached_body()"),
+        (f"fn {name}()", f"fn {name}_detached_wrapper()"),
+    )
+    for old, new in mutations:
+        assert source.count(old) == 1, old
+        errors = []
+        module._require_lifecycle_stack_test_body(path, source.replace(old, new, 1), name, errors)
+        assert errors, old

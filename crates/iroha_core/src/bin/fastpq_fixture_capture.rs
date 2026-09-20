@@ -90,7 +90,7 @@ fn capture_transfer_batch(
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.tx_call_hash = Some(entry_hash);
@@ -132,7 +132,7 @@ fn capture_opaque_effect_batch(
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.tx_call_hash = Some(entry_hash);

@@ -172,7 +172,7 @@ fn fraud_monitoring_default_matches_defaults() {
     assert!(cfg.attesters.is_empty());
 }
 #[test]
-fn lane_config_derives_storage_geometry() {
+fn lane_config_derives_display_and_cache_labels() {
     let catalog = LaneCatalog::new(
         NonZeroU32::new(2).expect("nonzero lane count"),
         vec![
@@ -196,8 +196,9 @@ fn lane_config_derives_storage_geometry() {
     assert_eq!(default_entry.kura_segment, "lane_000_default");
     assert_eq!(default_entry.merge_segment, "lane_000_default_merge");
     assert_eq!(
-        default_entry.merge_log_path("/tmp/iroha"),
-        PathBuf::from("/tmp/iroha/merge_ledger/lane_000_default_merge.log")
+        default_entry.lane_id,
+        LaneId::SINGLE,
+        "display/cache labels retain the configured route identity"
     );
     assert_eq!(
         default_entry.key_prefix,
@@ -215,8 +216,9 @@ fn lane_config_derives_storage_geometry() {
     assert_eq!(public_entry.kura_segment, "lane_001_public_lane");
     assert_eq!(public_entry.merge_segment, "lane_001_public_lane_merge");
     assert_eq!(
-        public_entry.merge_log_path("/tmp/iroha"),
-        PathBuf::from("/tmp/iroha/merge_ledger/lane_001_public_lane_merge.log")
+        public_entry.lane_id,
+        LaneId::new(1),
+        "alias normalization cannot change the configured route identity"
     );
     assert_eq!(
         public_entry.key_prefix,

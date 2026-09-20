@@ -2,11 +2,11 @@
 fn assert_passive_state_diagnostics(
     state: &State,
     kura: &Kura,
-    lane_config: &RuntimeLaneConfig,
+    _lane_config: &RuntimeLaneConfig,
     session: &crate::lane_consensus::CommittedLaneBlockSession,
 ) {
-    let lane_artifact_dir = lane_config
-        .entry(LaneId::SINGLE)
+    let lane_artifact_dir = state
+        .lane_storage_identity(LaneId::SINGLE)
         .expect("default diagnostic lane entry")
         .blocks_dir(kura.store_root())
         .join("lane_artifacts");

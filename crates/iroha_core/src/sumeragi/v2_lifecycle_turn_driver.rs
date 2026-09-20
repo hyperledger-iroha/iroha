@@ -6,9 +6,9 @@ use super::super::{
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
-    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ProductionIngressCapacityStatus,
-    ReadyValidateSuccessorDispatchV1, SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken,
-    claim_certified_serve_turn_v1,
+    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, LifecycleWorkClass,
+    ProductionIngressCapacityStatus, ReadyValidateSuccessorDispatchV1,
+    SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -91,6 +91,10 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
         /// Exact lifecycle ordinal whose executed Validate carrier became Ready.
         ordinal: u128,
     },
+    /// The original Validate dispatch remains parked on actual local release/capacity.
+    LifecycleValidateLocalWaiting,
+    /// The original local-waiting dispatch re-entered the same keyed worker queue.
+    LifecycleValidateLocalRequeued,
     /// A missing-sidecar Validate remains parked under its immutable registration owner.
     LifecycleValidateDeferred,
     /// A registered sidecar wait is externally parked and ordinary ingress may resume.
@@ -186,6 +190,8 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::ApplyTerminalDirectBroadcastDeferred
             | Self::LifecycleValidatePublished { .. }
             | Self::LifecycleValidateDeferred
+            | Self::LifecycleValidateLocalWaiting
+            | Self::LifecycleValidateLocalRequeued
             | Self::LifecycleValidateSidecarWaiting
             | Self::LifecycleValidateSidecarWoken { .. }
             | Self::LifecycleValidateSidecarSuperseded
@@ -1052,6 +1058,99 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
 }
 
 impl LaunchedProductionLifecycleV1 {
+    /// Derive scheduling permissions from retained work, never from a runner's
+    /// remembered completion history. Workers retain their queue identity until
+    /// acknowledgement, so completion arrival cannot make this census lose work.
+    pub(in crate::sumeragi) fn producer_claim_projection(
+        &self,
+    ) -> Result<crate::sumeragi::v2_runner::LifecycleProducerClaimDispositionV1, String> {
+        use crate::sumeragi::{
+            v2_runner::LifecycleProducerClaimDispositionV1 as Claim,
+            v2_worker::LifecycleServeAuthorityKindV1,
+        };
+
+        if self.executor.lifecycle_decision_apply_is_complete() {
+            return Ok(Claim::ApplyTerminalSettled);
+        }
+        if let Some(pending) = self.pending_lifecycle_completion.as_ref() {
+            return Ok(match pending {
+                PendingLifecycleCompletionV1::ReadyValidateSuccessor(successor) => {
+                    let ordinal = successor.lifecycle_ordinal();
+                    match successor.reducer_fence_wait() {
+                        Some(wait) => Claim::AwaitingValidateFence { ordinal, wait },
+                        None => Claim::AwaitingValidateSuccessor { ordinal },
+                    }
+                }
+                PendingLifecycleCompletionV1::RegisteredDeferredValidate(_) => {
+                    Claim::AwaitingValidateSidecar
+                }
+                PendingLifecycleCompletionV1::LifecycleDecisionApplyDeferred(_) => {
+                    Claim::AwaitingApplyCompletion
+                }
+                PendingLifecycleCompletionV1::CertifiedFetch(_)
+                | PendingLifecycleCompletionV1::RecoveredDecisionFetch(_)
+                | PendingLifecycleCompletionV1::RecoveredSign(_)
+                | PendingLifecycleCompletionV1::Validate(_)
+                | PendingLifecycleCompletionV1::LocalValidate(_)
+                | PendingLifecycleCompletionV1::DeferredValidate(_) => Claim::AwaitingCompletion,
+            });
+        }
+        if let Some(lease) = self.owner.coordinator.active_lease.as_ref() {
+            match lease.work_class() {
+                LifecycleWorkClass::Apply => return Ok(Claim::AwaitingApplyCompletion),
+                LifecycleWorkClass::ProducerTurn => {}
+                _ => return Ok(Claim::AwaitingCompletion),
+            }
+        }
+        // Validate and certified-body persistence release their execution lease
+        // when they enter an external wait. Their worker index, not the lease,
+        // retains custody until the result is acknowledged by this owner.
+        if self
+            .services
+            .has_unleased_lifecycle_completion_work()
+            .ok_or_else(|| "lifecycle scheduler has no I/O owner".to_owned())?
+        {
+            return Ok(Claim::AwaitingCompletion);
+        }
+        if let Some(key) = self.executor.live_lifecycle_decision_apply_key() {
+            let authority = self
+                .owner
+                .registry
+                .registry()
+                .prepare_ready_live_decision_apply_reconciliation(
+                    &self.owner.coordinator,
+                    key.lifecycle_ordinal(),
+                )
+                .map_err(|error| format!("live Apply scheduler owner is not Ready: {error:?}"))?
+                .ok_or_else(|| "live Apply scheduler owner has recovered lineage".to_owned())?;
+            if authority.dispatch_key() != key
+                || !self
+                    .executor
+                    .exactly_owns_live_lifecycle_decision_apply(&authority)
+            {
+                return Err("live Apply scheduler owner differs from its exact carrier".to_owned());
+            }
+            return Ok(Claim::AwaitingLiveApplyQueue {
+                parent_ordinal: authority.validate_predecessor_ordinal(),
+                child_ordinal: key.lifecycle_ordinal(),
+            });
+        }
+        let serves = self
+            .services
+            .lifecycle_serve_ownership_snapshot()
+            .ok_or_else(|| "lifecycle scheduler has no I/O owner".to_owned())?;
+        if serves
+            .iter()
+            .any(|serve| serve.authority == LifecycleServeAuthorityKindV1::Claimed)
+        {
+            return Err("claimed Serve has no active lifecycle lease".to_owned());
+        }
+        if !serves.is_empty() {
+            return Ok(Claim::AwaitingReplayCompletion);
+        }
+        Ok(Claim::Eligible)
+    }
+
     fn drive_registered_lifecycle_validate_sidecar(
         &mut self,
         registration: RegisteredLifecycleValidateSidecarWaitV1,
@@ -1128,6 +1227,27 @@ impl LaunchedProductionLifecycleV1 {
         self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)
     }
 
+    fn retry_local_lifecycle_validate(
+        &mut self,
+        retained: RetainedLocalLifecycleValidateV1,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        match retained.retry() {
+            LocalLifecycleValidateRetryV1::Waiting(retained) => {
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting
+            }
+            LocalLifecycleValidateRetryV1::Requeued => {
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalRequeued
+            }
+            LocalLifecycleValidateRetryV1::RecoveryRequired(retained) => {
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::LocalValidate(retained));
+                ProductionLifecycleCompletionSelectionV1::RestartRequired
+            }
+        }
+    }
+
     fn settle_parked_lifecycle_validate_completion(
         &mut self,
     ) -> ProductionLifecycleCompletionSelectionV1 {
@@ -1144,6 +1264,10 @@ impl LaunchedProductionLifecycleV1 {
                 .lifecycle_output_guard()
                 .close_admission_for_restart();
             return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+        };
+        let completion = match completion.into_local_or_publication() {
+            Ok(completion) => completion,
+            Err(retained) => return self.retry_local_lifecycle_validate(retained),
         };
         let (dispatch, ack) = completion.into_publication_parts();
         let physical_completion = ack.physical_completion();
@@ -1301,7 +1425,7 @@ impl LaunchedProductionLifecycleV1 {
                     reason = error.reason(),
                     detail = error.detail(),
                     work_id = error.work_id().get(),
-                    "ordinary certified-Fetch Phase B found invalid productive ingress"
+                    "ordinary certified-Fetch Phase B found permanent invalid ownership"
                 );
                 services
                     .lifecycle_output_guard()
@@ -1471,6 +1595,23 @@ impl LaunchedProductionLifecycleV1 {
                         Some(PendingLifecycleCompletionV1::Validate(completion));
                     self.settle_parked_lifecycle_validate_completion()
                 }
+                PendingLifecycleCompletionV1::LocalValidate(retained) => {
+                    let selected = self.retry_local_lifecycle_validate(retained);
+                    if matches!(selected, ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalWaiting) {
+                        match self.services.prepare_ordinary_completion_behind_validate_fence() {
+                            Ok(true) => return ProductionLifecycleCompletionPreGateV1::Ordinary(runner),
+                            Ok(false) => {},
+                            Err(reason) => {
+                                self.services.lifecycle_output_guard().retain_effect_failure(reason);
+                                self.close_output_for_restart();
+                                return ProductionLifecycleCompletionPreGateV1::Selected(
+                                    ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                                );
+                            }
+                        }
+                    }
+                    selected
+                },
                 PendingLifecycleCompletionV1::ReadyValidateSuccessor(published) => self
                     .settle_ready_validate_successor(published, runner.debt()),
                 PendingLifecycleCompletionV1::DeferredValidate(deferred) => {
@@ -2596,6 +2737,21 @@ impl LaunchedProductionLifecycleV1 {
 }
 
 impl ActivatedProductionLifecycleV1 {
+    /// Observe the current owner's scheduling permissions without retaining a
+    /// second state machine in the height runner.
+    pub(in crate::sumeragi) fn producer_claim_projection(
+        &self,
+    ) -> Result<
+        crate::sumeragi::v2_runner::LifecycleProducerClaimDispositionV1,
+        crate::sumeragi::v2_runner::V2RunnerError,
+    > {
+        self.launched.producer_claim_projection().map_err(|reason| {
+            iroha_logger::error!(%reason, "lifecycle scheduling ownership is inconsistent");
+            self.launched.close_output_for_restart();
+            crate::sumeragi::v2_runner::V2RunnerError::RestartRequired
+        })
+    }
+
     /// Reconcile current-height capacity observations retained across a terminal barrier.
     ///
     /// A capacity-blocked Serve has not committed its fair-ingress dequeue, so the direct
@@ -2936,6 +3092,7 @@ impl ActivatedProductionLifecycleV1 {
                     }
                     PendingLifecycleCompletionV1::RecoveredSign(_) => "RecoveredSign",
                     PendingLifecycleCompletionV1::Validate(_) => "Validate",
+                    PendingLifecycleCompletionV1::LocalValidate(_) => "LocalValidate",
                     PendingLifecycleCompletionV1::ReadyValidateSuccessor(_) => {
                         "ReadyValidateSuccessor"
                     }

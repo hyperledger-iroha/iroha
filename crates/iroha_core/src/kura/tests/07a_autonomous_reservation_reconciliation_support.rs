@@ -28,7 +28,7 @@ fn two_reservation_autonomous_lane_payload_for_kura(
     let (network_id, epoch, source) =
         autonomous_lane_payload_for_kura(lane_id, dataspace_id, lane_block_height, signer);
     let second = TransactionBuilder::new(
-        test_network_id(b"kura-autonomous-view-checkpoint"),
+        network_id,
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

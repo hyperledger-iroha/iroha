@@ -109,6 +109,7 @@ def test_ast_reader_authenticates_the_same_inventory_as_checker_bootstrap() -> N
     [
         "crates/iroha_core/src/block.rs",
         "crates/iroha_core/src/smartcontracts/ivm/host.rs",
+        "crates/iroha_core/src/kura.rs",
     ],
 )
 def test_inventory_matches_live_reviewed_rust_closure(
@@ -124,6 +125,29 @@ def test_inventory_matches_live_reviewed_rust_closure(
     )
     assert errors == []
     assert closure is not None
+    if owner == "crates/iroha_core/src/block.rs":
+        assert module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner][:4] == (
+            "block/carrier_preparation.rs",
+            "block/post_execution_tail.rs",
+            "block/parallel_account_profile_tests.rs",
+            "block/post_execution_tail_tests.rs",
+        )
+        assert "block/output_event_tests.rs" in module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]
+        tail = Path("crates/iroha_core/src/block/post_execution_tail.rs")
+        assert module._REVIEWED_RUST_INCLUDE_MANIFESTS[tail.as_posix()] == ("native_execution_metadata.rs",)
+        assert any(edge.parent == tail and edge.provider == tail.parent / "native_execution_metadata.rs"
+                   for edge in closure.provenance)
+    elif owner == "crates/iroha_core/src/smartcontracts/ivm/host.rs":
+        assert "host/shared_vm_cycle_budget_tests.rs" in module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]
+    else:
+        reviewed = module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]
+        first_test = reviewed.index("kura/tests/canonical_network_index.rs")
+        assert reviewed[first_test:first_test + 4] == (
+            "kura/tests/canonical_network_index.rs",
+            "kura/tests/bounded_canonical_body_reads.rs",
+            "kura/tests/committed_network_proof_support.rs",
+            "kura/tests/canonical_network_query_support.rs",
+        )
     parent = Path(owner)
     assert tuple(
         edge.provider.relative_to(parent.parent).as_posix()
@@ -159,13 +183,55 @@ def test_ast_reader_has_no_former_owner_fallback(tmp_path: Path) -> None:
     assert any("regular non-symlink file" in error for error in errors)
 
 
-@pytest.mark.parametrize("mutation", ["omitted_child", "duplicate_assignment", "executable_payload"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "omitted_child",
+        "omitted_common_tail",
+        "omitted_native_execution_metadata",
+        "omitted_common_tail_tests",
+        "omitted_carrier_preparation",
+        "omitted_output_event_tests",
+        "omitted_shared_vm_cycle_budget_tests",
+        "omitted_canonical_network_index",
+        "omitted_bounded_canonical_body_reads",
+        "omitted_committed_network_proof_support",
+        "omitted_canonical_network_query_support",
+        "duplicate_assignment",
+        "executable_payload",
+    ],
+)
 def test_ast_reader_rejects_inventory_substitution(tmp_path: Path, mutation: str) -> None:
     """Path migration retains digest, unique-assignment and data-only checks."""
     module = reader()
     source = OWNER.read_text(encoding="utf-8")
     if mutation == "omitted_child":
         source = source.replace("        'consensus_v2_context_tests.rs',\n", "")
+        expected = "manifest digest must equal"
+    elif mutation in (
+        "omitted_common_tail", "omitted_common_tail_tests", "omitted_native_execution_metadata",
+        "omitted_carrier_preparation", "omitted_output_event_tests",
+        "omitted_shared_vm_cycle_budget_tests",
+        "omitted_canonical_network_index",
+        "omitted_bounded_canonical_body_reads",
+        "omitted_committed_network_proof_support",
+        "omitted_canonical_network_query_support",
+    ):
+        component = {
+            "omitted_common_tail": "block/post_execution_tail.rs",
+            "omitted_native_execution_metadata": "native_execution_metadata.rs",
+            "omitted_common_tail_tests": "block/post_execution_tail_tests.rs",
+            "omitted_carrier_preparation": "block/carrier_preparation.rs",
+            "omitted_output_event_tests": "block/output_event_tests.rs",
+            "omitted_shared_vm_cycle_budget_tests": "host/shared_vm_cycle_budget_tests.rs",
+            "omitted_canonical_network_index": "kura/tests/canonical_network_index.rs",
+            "omitted_bounded_canonical_body_reads": "kura/tests/bounded_canonical_body_reads.rs",
+            "omitted_committed_network_proof_support": "kura/tests/committed_network_proof_support.rs",
+            "omitted_canonical_network_query_support": "kura/tests/canonical_network_query_support.rs",
+        }[mutation]
+        declaration = f"        '{component}',\n"
+        assert source.count(declaration) == 1
+        source = source.replace(declaration, "")
         expected = "manifest digest must equal"
     elif mutation == "duplicate_assignment":
         source += "\n_KURA_PRODUCTION_COMPONENT_FILES = ()\n"
@@ -202,3 +268,34 @@ def test_release_fixture_retains_canonical_owner_and_checker_protocol(tmp_path: 
     (formal / OWNER_NAME).unlink()
     with pytest.raises(FileNotFoundError):
         module.proof_ledger_checker_components(tmp_path)
+
+
+def test_native_metadata_exact_nested_provider_is_in_authenticated_fixture(tmp_path: Path) -> None:
+    """The common owner admits only its named Native child, under a real index."""
+    support = load_module(
+        ROOT / "pytests/scripts/sumeragi_v2_multilane_models_test.py",
+        "_native_metadata_inventory_support",
+    )
+    checker = support.load_checker()
+    parent = Path("crates/iroha_core/src/block/post_execution_tail.rs")
+    child = parent.parent / "native_execution_metadata.rs"
+    support.copy_reviewed_source_fixture_with_includes(tmp_path, checker, {
+        parent, checker.REVIEWED_RUST_SOURCE_HELPER_RELATIVE,
+        checker.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE,
+    })
+    module = reader()
+    errors: list[str] = []
+    closure = module._resolve_reviewed_rust_source(tmp_path, parent.as_posix(), "Native metadata owner", errors)
+    assert errors == []
+    assert closure is not None
+    assert tuple(closure.providers) == (parent, child)
+    assert [(edge.parent, edge.provider) for edge in closure.provenance] == [(parent, child)]
+    source = (tmp_path / parent).read_text()
+    assert source.count('include!("native_execution_metadata.rs");') == 1
+    (tmp_path / parent).write_text(source.replace(
+        'include!("native_execution_metadata.rs");',
+        'include!("other_native_execution_metadata.rs");',
+    ))
+    errors = []
+    assert module._resolve_reviewed_rust_source(tmp_path, parent.as_posix(), "Native metadata substitution", errors) is None
+    assert any("include inventory must equal" in error for error in errors), errors

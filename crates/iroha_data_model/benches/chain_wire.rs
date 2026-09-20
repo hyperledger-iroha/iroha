@@ -448,7 +448,7 @@ fn bench_signed_block_mixed(c: &mut Criterion) {
     bench_layout_candidates(c, "signed_block_mixed", &block);
 }
 fn bench_empty_block_header(c: &mut Criterion) {
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let bare = norito::codec::encode_adaptive(&header);
     report_size("block_header/bare", &bare);
     c.bench_function("chain_wire/block_header/bare_encode", |b| {

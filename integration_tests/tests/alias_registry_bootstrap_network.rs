@@ -23,6 +23,9 @@ use std::{
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::future::try_join_all;
+#[path = "kura_storage_support.rs"]
+mod kura_storage_support;
+
 use integration_tests::sandbox;
 use iroha::{blocking::Client, sns::SnsNamespacePath};
 use iroha_config::{
@@ -1375,20 +1378,27 @@ fn bitmap_signer_count(bitmap: &[u8]) -> u32 {
     bitmap.iter().map(|byte| byte.count_ones()).sum()
 }
 
-fn bpng_certified_sidecar_paths(store_root: &Path) -> Result<(PathBuf, PathBuf)> {
-    let catalog = LaneCatalog::default().apply_lifecycle(&LaneLifecyclePlan {
-        additions: vec![bpng_fixture_lane()],
-        retire: Vec::new(),
-    })?;
-    let lanes = ActualLaneConfig::from_catalog(&catalog);
-    let entry = lanes
-        .entry(BPNG_FIXTURE_LANE)
-        .ok_or_else(|| eyre!("fixture-only BPNG lane has no derived Kura segment"))?;
-    let directory = entry.blocks_dir(store_root).join("lane_artifacts");
-    Ok((
+fn bpng_certified_sidecar_paths(
+    store_root: &Path,
+    network_id: NetworkId,
+    expected_incarnation: Option<Hash>,
+) -> Result<Option<(PathBuf, PathBuf)>> {
+    let Some(blocks) = kura_storage_support::lane_instance_blocks_dir(
+        store_root,
+        network_id,
+        BPNG_FIXTURE_LANE,
+        DataSpaceId::new(BPNG_ID),
+        expected_incarnation,
+        None,
+    )?
+    else {
+        return Ok(None);
+    };
+    let directory = blocks.join("lane_artifacts");
+    Ok(Some((
         directory.join("certified_blocks.norito"),
         directory.join("certified_blocks.index"),
-    ))
+    )))
 }
 
 fn read_optional_evidence_file(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -1488,12 +1498,21 @@ fn validate_certified_bpng_artifact(artifact: &CertifiedLaneBlockArtifact) -> Re
 // Kura reader.
 fn inspect_certified_bpng_lane_evidence(
     store_root: &Path,
+    network_id: NetworkId,
     retained: &RetainedHistory,
     expected_incarnation: Option<Hash>,
     expected_validators: &[PeerId],
     original_voters: &BTreeMap<PeerId, Vec<u8>>,
 ) -> Result<CertifiedBpngLaneEvidence> {
-    let (data_path, index_path) = bpng_certified_sidecar_paths(store_root)?;
+    let Some((data_path, index_path)) =
+        bpng_certified_sidecar_paths(store_root, network_id, expected_incarnation)?
+    else {
+        ensure!(
+            expected_incarnation.is_none(),
+            "expected BPNG lane instance is absent"
+        );
+        return Ok(CertifiedBpngLaneEvidence::absent());
+    };
     let before = (
         read_optional_evidence_file(&data_path)?,
         read_optional_evidence_file(&index_path)?,
@@ -1825,7 +1844,7 @@ fn inspect_stopped_peer(
 ) -> Result<StoppedEvidence> {
     let catalog = LaneCatalog::default();
     let lanes = ActualLaneConfig::from_catalog(&catalog);
-    let blocks_dir = lanes.primary().blocks_dir(peer.kura_store_dir());
+    let (blocks_dir, _) = Kura::canonical_storage_paths(&peer.kura_store_dir());
     let indexed_count = BlockStore::open_read_only(&blocks_dir)?.read_index_count()?;
     ensure!(
         (1..=MAX_RETAINED_HEIGHT).contains(&indexed_count),
@@ -1894,6 +1913,7 @@ fn inspect_stopped_peer(
     }
     let certified_bpng_lane = inspect_certified_bpng_lane_evidence(
         &peer.kura_store_dir(),
+        NetworkId::from_genesis_hash(genesis.0.hash()),
         &retained,
         expected_bpng_incarnation,
         expected_bpng_validators,
@@ -1916,10 +1936,13 @@ fn execution_height(history: &RetainedHistory, transaction: &SignedTransaction) 
     let mut found = None;
     for wire in &history.blocks {
         let block = decode_framed_signed_block(wire)?;
-        for (_, entrypoint, result) in block.entrypoint_results() {
-            if entrypoint == expected {
+        for (input_index, entrypoint) in block.network_entrypoints().enumerate() {
+            if entrypoint == &expected {
+                let (_, output) = block
+                    .network_output_at(u32::try_from(input_index)?)
+                    .ok_or_else(|| eyre!("retained transaction omitted its Network output"))?;
                 ensure!(
-                    found.is_none() && result.0.is_ok(),
+                    found.is_none() && output.result.0.is_ok(),
                     "signed transaction must have one successful retained execution"
                 );
                 let context = block
@@ -1964,14 +1987,19 @@ fn bpng_transaction_ownership(
     for wire in &history.blocks {
         let block = decode_framed_signed_block(wire)?;
         let matches = block
-            .entrypoint_results()
-            .filter(|(_, entrypoint, _)| entrypoint == &expected_entrypoint)
+            .network_entrypoints()
+            .enumerate()
+            .filter(|(_, entrypoint)| *entrypoint == &expected_entrypoint)
             .collect::<Vec<_>>();
         if matches.is_empty() {
             continue;
         }
         ensure!(
-            matches.len() == 1 && matches[0].2.0.is_ok() && found.is_none(),
+            matches.len() == 1
+                && block
+                    .network_output_at(u32::try_from(matches[0].0)?)
+                    .is_some_and(|(_, output)| output.result.0.is_ok())
+                && found.is_none(),
             "BPNG transaction must have one successful retained execution"
         );
         let context = block

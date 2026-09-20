@@ -20,6 +20,7 @@ fn autonomous_application_or_predecessor_read_waits_for_one_state_publication() 
             lane_incarnation: incarnation,
             lane_block_height: 1,
             lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash.unwrap(),
+            applied_global_height: 1,
         })
         .unwrap();
     let (_, applied) = State::encode_merge_lane_frontier_marker(AppliedMergeLaneFrontierMarker {
@@ -29,6 +30,7 @@ fn autonomous_application_or_predecessor_read_waits_for_one_state_publication() 
         lane_incarnation: incarnation,
         lane_block_height: 2,
         lane_block_descriptor_hash: descriptor.descriptor_hash,
+        applied_global_height: 1,
     })
     .unwrap();
     let mut world = World::default();
@@ -119,6 +121,7 @@ fn autonomous_application_or_predecessor_read_preserves_absent_conflicting_and_c
             lane_incarnation: incarnation,
             lane_block_height: 1,
             lane_block_descriptor_hash: Hash::new(b"different predecessor"),
+            applied_global_height: 1,
         })
         .unwrap();
     for payload in [None, Some(conflicting), Some(b"corrupt marker".to_vec())] {
@@ -204,6 +207,7 @@ fn autonomous_lane_predecessor_rejects_hash_only_absence_and_accepts_exact_wsv_f
         lane_incarnation: incarnation,
         lane_block_height: 1,
         lane_block_descriptor_hash: previous_descriptor_hash,
+        applied_global_height: 1,
     })
     .expect("encode exact autonomous predecessor frontier");
     let mut world = World::default();
@@ -293,11 +297,8 @@ fn autonomous_lane_predecessor_authenticates_receipt_and_preserves_occupied_corr
             .expect("a healthy different predecessor is ordinary rejection")
     );
     let lane_entry = state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
-        .expect("active predecessor lane")
-        .clone();
+        .lane_storage_identity(lane_id)
+        .expect("active predecessor lane identity");
     let receipt_dir = lane_entry
         .blocks_dir(kura.store_root())
         .join("lane_artifacts");
@@ -376,6 +377,7 @@ fn autonomous_lane_predecessor_rejects_conflicting_or_malformed_wsv_frontier() {
         lane_incarnation: incarnation,
         lane_block_height: 1,
         lane_block_descriptor_hash: Hash::new(b"wrong-autonomous-predecessor"),
+        applied_global_height: 1,
     })
     .expect("encode conflicting autonomous predecessor frontier");
     let mut conflicting_world = World::default();

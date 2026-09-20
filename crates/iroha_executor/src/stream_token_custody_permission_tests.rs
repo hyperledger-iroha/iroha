@@ -78,7 +78,7 @@ fn stream_token_custody_exact_holders_can_grant_and_revoke_without_scope_expansi
     );
     let context = Context {
         authority: authority.clone(),
-        curr_block: BlockHeader::new(NonZeroU64::new(2).expect("height"), None, None, None, 0, 0),
+        curr_block: BlockHeader::new(NonZeroU64::new(2).expect("height"), None, None, 0, 0),
     };
     let exact: PermissionObject = token(1).into();
     let any = AnyPermission::try_from(&exact).expect("typed permission");

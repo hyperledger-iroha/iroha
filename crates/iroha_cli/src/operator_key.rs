@@ -230,7 +230,8 @@ fn operator_key_metadata_unchanged(before: &std::fs::Metadata, after: &std::fs::
         && before.ctime_nsec() == after.ctime_nsec()
 }
 
-fn parse_operator_private_key(bytes: &[u8]) -> Result<KeyPair> {
+/// Parse native-only held bytes with the same canonical checks as the file and FD loaders.
+pub(crate) fn parse_operator_private_key(bytes: &[u8]) -> Result<KeyPair> {
     let encoded = std::str::from_utf8(bytes)
         .map_err(|_| eyre!("operator private-key file must contain one canonical ASCII key"))?;
     let encoded = encoded.strip_suffix('\n').unwrap_or(encoded);

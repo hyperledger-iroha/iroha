@@ -174,7 +174,7 @@ impl Inputs {
                 "fixed peers disagree on effective genesis parameters"
             );
         }
-        let primary_paths = primary_reader_paths(config)?;
+        let primary_paths = canonical_reader_paths(config)?;
         let bytes = super::encode_genesis_context(&authority)?;
         if self.authority.is_none() {
             self.authority = Some(authority);
@@ -376,28 +376,26 @@ impl Inputs {
     }
 }
 
-/// Derive the reader's primary lane geometry from the final effective native configuration.
+/// Resolve the reader's chain-scoped canonical namespace from final effective config.
 /// The generated Kura root starts empty; these descendants are created by the daemon.
-fn primary_reader_paths(config: &actual::Root) -> Result<(String, String)> {
+fn canonical_reader_paths(config: &actual::Root) -> Result<(String, String)> {
     let root = config.kura.store_dir.value();
-    let primary = config.nexus.lane_config.primary();
-    let blocks = primary.blocks_dir(root);
-    let merge = primary.merge_log_path(root);
+    let (blocks, merge) = iroha_core::kura::Kura::canonical_storage_paths(root);
     let encode = |path: &Path| -> Result<String> {
         ensure!(
             path.is_absolute() && path != root && path.starts_with(root),
-            "fixed primary reader path escapes its original Kura root"
+            "fixed canonical reader path escapes its original Kura root"
         );
         let value = path
             .to_str()
-            .ok_or_else(|| eyre!("fixed primary reader path is not UTF-8"))?;
+            .ok_or_else(|| eyre!("fixed canonical reader path is not UTF-8"))?;
         ensure!(
             value.len() <= 4096,
-            "fixed primary reader path exceeds its bound"
+            "fixed canonical reader path exceeds its bound"
         );
         Ok(value.to_owned())
     };
-    ensure!(blocks != merge, "fixed primary reader paths alias");
+    ensure!(blocks != merge, "fixed canonical reader paths alias");
     Ok((encode(&blocks)?, encode(&merge)?))
 }
 

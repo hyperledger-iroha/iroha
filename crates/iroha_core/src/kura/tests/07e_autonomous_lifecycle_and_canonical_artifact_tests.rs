@@ -10,7 +10,13 @@ fn unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart() {
     let height_context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
         Hash::new(b"kura-unfinalized-carrier-reservation-context"),
     ));
-    let payload = canonical_terminal_payload_for_test(lane, height_context_id, &signer, 0x55);
+    let payload = canonical_terminal_payload_for_test(
+        lane.lane_id,
+        lane.dataspace_id,
+        height_context_id,
+        &signer,
+        0x55,
+    );
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("unfinalized carrier Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
@@ -27,7 +33,8 @@ fn unfinalized_merge_carrier_tip_rebuilds_post_wsv_reservation_on_restart() {
         height_context_id,
         &signer,
     );
-    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
+    let (parent, carrier, merge_entry) =
+        canonical_terminal_merge_carrier_for_test(vec![execution], 1);
     let carrier_height = carrier.header().height().get();
     let entry_hash = crate::merge::merge_ledger_entry_hash(&merge_entry);
     kura.store_block(parent)
@@ -84,6 +91,10 @@ fn autonomous_startup_rejects_a_view_removed_after_pointer_publication() {
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist complete attempt");
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
         lane,
         temp_dir.path(),
@@ -120,6 +131,9 @@ fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
     persist_historical_capacity_payload_fixture(&kura, &first, &signer);
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact successor storage identity");
     {
         let _prune_guard = kura.prune_lock.lock();
         kura.ensure_prune_recovery_not_required()
@@ -134,7 +148,7 @@ fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
         let state = AutonomousLaneBlockViewState::from_artifact(&artifact);
         kura.write_autonomous_lane_block_attempt_locked(
             pending_canonical_bytes,
-            lane,
+            &lane,
             &artifact,
             &state,
             network_id,
@@ -143,11 +157,16 @@ fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
         .expect("stage a crash-orphaned successor attempt");
     }
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("defer secondary artifact recovery until geometry is authenticated");
-    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &first).expect_err(
-        "startup must not select a successor until the prior attempt is durably retired",
+    let before = snapshot_regular_test_tree(temp_dir.path());
+    let error = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect_err("journal-authenticated startup must reject an unowned successor before State");
+    assert!(
+        error
+            .to_string()
+            .contains("lacks its exact lifecycle cursor"),
+        "{error}"
     );
+    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before);
 }
 #[test]
 fn autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace() {
@@ -156,6 +175,10 @@ fn autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("exact initial identity");
+    let lane = &lane;
     let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
     fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
     drop(kura);
@@ -233,6 +256,10 @@ fn finalized_release_allows_a_later_proposal_attempt_at_the_same_lane_height() {
             .is_err(),
         "the delayed old payload must not reclaim the current attempt",
     );
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let route_latest_path =
         Kura::autonomous_lane_route_latest_attempt_path_for_entry(lane, temp_dir.path());
     drop(kura);
@@ -519,6 +546,10 @@ fn autonomous_route_latest_snapshot_rejects_runtime_index_corruption() {
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload");
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let route_latest_path =
         Kura::autonomous_lane_route_latest_attempt_path_for_entry(lane, temp_dir.path());
     fs::write(&route_latest_path, [0xFF, 0x00, 0xAA])
@@ -753,12 +784,12 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
     let (recovered, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("open the staged-claim crash boundary");
     assert!(
-        !claim_path.exists(),
-        "unrestored geometry cannot promote a staged owner"
+        recovered.lane_storage_entries.lock().is_empty(),
+        "journal-owned claim recovery cannot publish active geometry"
     );
     assert!(
-        claim_temp.exists(),
-        "the exact staged claim must survive deferred recovery"
+        claim_path.exists() && !claim_temp.exists(),
+        "the retained instance authenticates promotion of its exact staged claim"
     );
     restore_autonomous_lane_fixture_geometry(&recovered, &lane_config, &payload)
         .expect("recover the exact durable owner after geometry restoration");
@@ -792,9 +823,10 @@ fn autonomous_entrypoint_claim_rejects_replay_after_restart_and_recovers_temp() 
         !orphan_path.exists(),
         "unknown geometry must not mint a permanent orphan owner"
     );
+    assert!(recovered.lane_storage_entries.lock().is_empty());
     assert!(
-        orphan_temp.exists(),
-        "orphan removal awaits authoritative geometry"
+        !orphan_temp.exists(),
+        "retained journal authority removes the exact unpublished claim without admitting live geometry"
     );
     restore_autonomous_lane_fixture_geometry(&recovered, &lane_config, &payload)
         .expect("discard the proven orphan after geometry restoration");
@@ -885,8 +917,11 @@ fn autonomous_payload_marker_substitution_keeps_execution_evidence_fail_closed()
         "an executable payload must not define an uninitialized storage incarnation"
     );
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
-    kura.install_lane_incarnation_marker_for_test(
-        lane_entry,
+    let original_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("exact original instance");
+    kura.substitute_lane_marker_identity_for_test(
+        &original_entry,
         first.origin_proposal.descriptor.lane_incarnation,
         first.origin_proposal.descriptor.proposal_height,
     )
@@ -940,7 +975,13 @@ fn autonomous_payload_marker_substitution_keeps_execution_evidence_fail_closed()
         b"kura-autonomous-recreated-incarnation",
         &signer,
     );
-    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &recreated);
+    kura.substitute_lane_marker_identity_for_test(
+        &original_entry,
+        recreated.origin_proposal.descriptor.lane_incarnation,
+        0,
+    )
+    .expect("substitute a foreign marker without changing the retained catalog identity");
+    let before = snapshot_regular_test_tree(temp_dir.path());
     assert!(
         kura.read_lane_block_execution_input(lane_entry.lane_id, 1)
             .is_none(),
@@ -957,21 +998,25 @@ fn autonomous_payload_marker_substitution_keeps_execution_evidence_fail_closed()
         "switching the marker must hide a retired execution preflight",
     );
     kura.persist_lane_executable_payload(&recreated, network_id, epoch)
-        .expect("the authoritative fresh marker admits the recreated incarnation");
-    let recreated_execution_input = kura
-        .recover_autonomous_lane_block_payload(&recreated.origin_proposal, network_id, epoch)
-        .expect("recover recreated marker-bound execution input");
-    let before = snapshot_regular_test_tree(temp_dir.path());
+        .expect_err("a substituted marker cannot authorize a fresh immutable instance");
+    assert!(
+        kura.recover_autonomous_lane_block_payload(&recreated.origin_proposal, network_id, epoch,)
+            .is_err()
+    );
+    let recreated_execution_input = Kura::recover_autonomous_lane_block_payload_from_artifact(
+        &recreated.origin_proposal,
+        &AutonomousLaneBlockArtifact::new(recreated.clone()),
+        network_id,
+        epoch,
+    )
+    .expect("validate an exact candidate without granting storage authority");
     kura.persist_lane_block_execution_input(&recreated_execution_input)
         .expect_err("a marker replacement alone cannot retire occupied execution evidence");
     let (recreated_session, recreated_signer_pops) =
         committed_lane_block_session_for_kura_proposal(&recreated.origin_proposal, &signer);
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before);
     kura.persist_committed_lane_block_session(&recreated_session, &recreated_signer_pops)
-        .expect("a valid certificate is independently bound to the active incarnation");
-    let recreated_certified =
-        CertifiedLaneBlockArtifact::new(recreated_session, recreated_signer_pops);
-    let before = snapshot_regular_test_tree(temp_dir.path());
+        .expect_err("a valid certificate cannot replace the exact admitted instance identity");
     kura.persist_lane_block_execution_preflight(
         &LaneBlockExecutionInputArtifact::new(recreated_execution_input),
         8,
@@ -1005,24 +1050,39 @@ fn autonomous_payload_marker_substitution_keeps_execution_evidence_fail_closed()
         kura.read_lane_block_execution_input(lane_entry.lane_id, 1)
             .is_none()
     );
-    assert_eq!(
-        kura.read_certified_lane_block_artifact(lane_entry.lane_id, 1),
-        Some(recreated_certified)
+    assert!(
+        kura.read_certified_lane_block_artifact(lane_entry.lane_id, 1)
+            .is_none()
     );
     assert!(
         kura.read_lane_block_execution_preflight(lane_entry.lane_id, 1)
             .is_none()
     );
+    assert!(
+        kura.read_autonomous_lane_block_artifact(lane_entry.lane_id, 1, network_id, epoch,)
+            .is_none()
+    );
+    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before);
+    kura.substitute_lane_marker_identity_for_test(
+        &original_entry,
+        original_entry.incarnation,
+        original_entry.activation_height,
+    )
+    .expect("restore the original exact marker after the fault");
     assert_eq!(
-        kura.read_autonomous_lane_block_artifact(lane_entry.lane_id, 1, network_id, epoch)
-            .expect("the separately owned payload is bound to the fresh marker")
-            .executable_payload,
-        recreated,
+        kura.read_lane_block_execution_input(lane_entry.lane_id, 1)
+            .unwrap(),
+        first_input
+    );
+    assert_eq!(
+        kura.read_lane_block_execution_preflight(lane_entry.lane_id, 1)
+            .unwrap(),
+        first_preflight
     );
 }
 
 fn assert_lane_artifact_files_absent_or_empty(
-    lane_entry: &LaneConfigEntry,
+    lane_entry: &LaneStorageEntry,
     store_root: &std::path::Path,
 ) {
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, store_root);
@@ -1066,6 +1126,10 @@ fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
     assert_eq!(artifact.format_label(), "lane.block_artifact");
     assert_eq!(artifact.proposal_block_hash, block_hash);
     assert_eq!(artifact.ownership, expected_ownership);
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     assert!(data_path.is_file(), "lane artifact data file missing");
     assert!(index_path.is_file(), "lane artifact index file missing");
@@ -1075,9 +1139,13 @@ fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
         .map(|entry| {
             (
                 entry.lane_id,
-                kura.active_lane_incarnation_marker(entry)
-                    .expect("exact active marker")
-                    .0,
+                kura.active_lane_incarnation_marker(
+                    &kura
+                        .lane_storage_entry(entry.lane_id)
+                        .expect("exact active identity"),
+                )
+                .expect("exact active marker")
+                .0,
             )
         })
         .collect();
@@ -1086,6 +1154,7 @@ fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
         .iter()
         .map(|entry| (entry.lane_id, 0))
         .collect();
+    let original_network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen kura");
@@ -1095,6 +1164,9 @@ fn lane_block_artifact_persists_under_lane_segment_and_reloads() {
             .is_none(),
         "configured secondary storage becomes active only after authoritative geometry recovery"
     );
+    reloaded
+        .bind_lane_storage_network(original_network_id)
+        .unwrap();
     reloaded
         .recover_lane_geometry_journal(&lane_config, &incarnations, &activations)
         .expect("restore the exact fixture catalog before reading its active secondary artifacts");
@@ -1120,6 +1192,10 @@ fn latest_lane_block_artifact_rejects_malformed_slots_at_any_scan_position() {
     let malformed_high = active
         .encode_framed()
         .expect("encode mismatched-height lane artifact");
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     let boundary_height =
         u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET).expect("scan budget fits u64");
@@ -1223,9 +1299,13 @@ fn lane_block_artifact_recreation_repairs_absence_and_preserves_occupied_corrupt
         &lane_config,
         &BTreeMap::from([(lane_id, first_incarnation)]),
     );
-    kura.replace_lane_storage_entries_for_test(&lane_config);
-    kura.install_lane_incarnation_marker_for_test(
-        lane_entry,
+    kura.restore_published_lane_geometry_for_test(&lane_config)
+        .expect("restore exact published fixture instances");
+    let first_storage_entry = kura
+        .lane_storage_entry(lane_id)
+        .expect("exact original instance");
+    kura.substitute_lane_marker_identity_for_test(
+        &first_storage_entry,
         first_incarnation,
         first_artifact.ownership.proposal_height,
     )
@@ -1234,7 +1314,7 @@ fn lane_block_artifact_recreation_repairs_absence_and_preserves_occupied_corrupt
         kura.store_block(Arc::clone(&first)).is_err(),
         "proposal height equal to activation must be rejected"
     );
-    kura.install_lane_incarnation_marker_for_test(lane_entry, first_incarnation, 0)
+    kura.substitute_lane_marker_identity_for_test(&first_storage_entry, first_incarnation, 0)
         .expect("install first active marker");
     kura.store_block(Arc::clone(&first))
         .expect("store first-incarnation ownership");
@@ -1247,7 +1327,11 @@ fn lane_block_artifact_recreation_repairs_absence_and_preserves_occupied_corrupt
     let mut activations = BTreeMap::new();
     for entry in lane_config.entries() {
         let (incarnation, activation) = kura
-            .active_lane_incarnation_marker(entry)
+            .active_lane_incarnation_marker(
+                &kura
+                    .lane_storage_entry(entry.lane_id)
+                    .expect("exact active identity"),
+            )
             .expect("capture the exact pre-retirement geometry");
         incarnations.insert(entry.lane_id, incarnation);
         activations.insert(entry.lane_id, activation);
@@ -1314,6 +1398,10 @@ fn lane_block_artifact_recreation_repairs_absence_and_preserves_occupied_corrupt
         kura.store_block(first).is_err(),
         "a delayed old-incarnation block replay must fail closed"
     );
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     fs::remove_file(&data_path).expect("remove missing-pair fixture data");
     fs::remove_file(&index_path).expect("remove missing-pair fixture index");
@@ -1429,9 +1517,13 @@ fn lane_block_artifact_recreation_repairs_absence_and_preserves_occupied_corrupt
         vec![second_artifact.clone()],
         "all-artifact replay must exclude retired incarnation history"
     );
+    let original_network_id = kura.bound_lane_storage_network().unwrap();
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    reopened
+        .bind_lane_storage_network(original_network_id)
+        .unwrap();
     reopened
         .recover_lane_geometry_journal(
             &lane_config,
@@ -1638,6 +1730,10 @@ fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canoni
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     std::fs::remove_file(&data_path).expect("remove lane artifact data sidecar");
     std::fs::remove_file(&index_path).expect("remove lane artifact index sidecar");
@@ -1700,6 +1796,10 @@ fn canonical_height_projection_is_read_only_and_explicit_recovery_publishes_abse
         NonZeroUsize::new(usize::try_from(proposal_height).expect("height fits"))
             .expect("positive height"),
     );
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane_entry = &lane_entry;
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     std::fs::remove_file(&data_path).expect("remove lane artifact data sidecar");
     std::fs::remove_file(&index_path).expect("remove lane artifact index sidecar");

@@ -4332,7 +4332,6 @@ mod tests {
             height.try_into().expect("nonzero fixture block height"),
             None,
             None,
-            None,
             now_unix * 1_000,
             0,
         )

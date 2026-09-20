@@ -5,7 +5,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
-    query::error::CanonicalHistoryError,
+    query::error::{CanonicalHistoryError, QueryExecutionFail},
 };
 use iroha_logger::prelude::*;
 
@@ -96,11 +96,7 @@ impl<'a> CanonicalHistorySource<'a> {
             })
     }
 
-    fn load(
-        self,
-        height: NonZeroUsize,
-        without_merge_sidecar: bool,
-    ) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
+    fn load(self, height: NonZeroUsize) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
         let expected_hash = self.expected_hash(height)?;
         if self.kura.is_hash_only_block_height(height) {
             return Err(CanonicalHistoryError::HashOnlyBodyUnavailable {
@@ -109,15 +105,14 @@ impl<'a> CanonicalHistorySource<'a> {
                 expected_hash,
             });
         }
-        let block = if without_merge_sidecar {
-            self.kura.get_block_without_merge_sidecar(height)
-        } else {
-            self.kura.get_block(height)
-        };
+        let block = self.kura.get_block(height);
         authenticate_canonical_block(height, expected_hash, block)
     }
 
-    /// Load and authenticate the canonical block body at `height`.
+    /// Load a body whose header hash and height agree with this snapshot.
+    ///
+    /// Output readers must use `executed_block` to bind attached outputs to
+    /// exact finalized bytes; the proposal header does not commit those bytes.
     ///
     /// # Errors
     ///
@@ -125,18 +120,74 @@ impl<'a> CanonicalHistorySource<'a> {
     /// hash-only body, and a typed corruption error when the Kura body
     /// contradicts the committed WSV hash journal or slot.
     pub fn block(self, height: NonZeroUsize) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
-        self.load(height, false)
+        self.load(height)
     }
 
-    /// Load the canonical body without resolving a merge sidecar.
+    /// Load exact published execution bytes after the caller admits their durable size.
     ///
-    /// This preserves the transaction query's requirement to charge the
-    /// compact carrier declaration before decoding its full sidecar.
-    pub(crate) fn block_without_merge_sidecar(
+    /// Header identity alone does not authenticate attached outputs. This path
+    /// requires Kura's verified finality commitment and rechecks the admitted
+    /// length under its storage guards before allocating or decoding the body.
+    /// The admission callback runs once, including for a later failed read.
+    pub(crate) fn executed_block(
         self,
         height: NonZeroUsize,
-    ) -> Result<Arc<SignedBlock>, CanonicalHistoryError> {
-        self.load(height, true)
+        before_read: impl FnOnce(u64) -> Result<(), QueryExecutionFail>,
+    ) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
+        let expected_hash = self
+            .expected_hash(height)
+            .map_err(QueryExecutionFail::CanonicalHistory)?;
+        let height_u64 =
+            u64::try_from(height.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        if self.kura.is_hash_only_block_height(height) {
+            return Err(QueryExecutionFail::CanonicalHistory(
+                CanonicalHistoryError::HashOnlyBodyUnavailable {
+                    height: height_u64,
+                    expected_hash,
+                },
+            ));
+        }
+        let storage_error = |error: crate::kura::Error| {
+            QueryExecutionFail::Conversion(format!(
+                "canonical executed body at height {height_u64} failed storage authentication: {error}"
+            ))
+        };
+        let (durable_height, wire_len) = self
+            .kura
+            .durable_block_payload_len_by_hash(expected_hash)
+            .map_err(storage_error)?
+            .ok_or(QueryExecutionFail::CanonicalHistory(
+                CanonicalHistoryError::BodyUnavailable {
+                    height: height_u64,
+                    expected_hash,
+                },
+            ))?;
+        if durable_height != height_u64 {
+            return Err(QueryExecutionFail::CanonicalHistory(
+                CanonicalHistoryError::BlockHeightMismatch {
+                    height: height_u64,
+                    actual_height: durable_height,
+                },
+            ));
+        }
+        before_read(wire_len)?;
+        let block = self
+            .kura
+            .read_block_body_with_wire_bound(height, expected_hash, wire_len)
+            .map_err(storage_error)?;
+        authenticate_canonical_block(height, expected_hash, block)
+            .map_err(QueryExecutionFail::CanonicalHistory)
+    }
+
+    /// Exercise the actual executed-body admission boundary with a durable test journal.
+    #[cfg(test)]
+    pub(crate) fn read_executed_for_testing(
+        kura: &'a Kura,
+        hashes: &'a [HashOf<BlockHeader>],
+        height: NonZeroUsize,
+        before_read: impl FnOnce(u64) -> Result<(), QueryExecutionFail>,
+    ) -> Result<Arc<SignedBlock>, QueryExecutionFail> {
+        Self::new(kura, hashes).executed_block(height, before_read)
     }
 
     /// Iterate every committed slot from `start` through this source's tip.

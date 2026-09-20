@@ -158,8 +158,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     let mut wrong_abi = correct_abi;
     wrong_abi[0] ^= 0x5A; // flip a byte to make it wrong
     // Block 1: grant permission and register a manifest with wrong abi_hash under the code_hash
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     // Grant CanRegisterSmartContractCode to the authority
@@ -177,8 +176,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the IVM program; admission should reject due to abi_hash mismatch
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
         network_id,
@@ -235,8 +233,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
     // Block 1: grant permission and register a manifest with correct abi_hash under the code_hash
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     // Grant permission
@@ -277,8 +274,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the IVM program; admission should accept due to matching abi_hash
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
         network_id,
@@ -323,8 +319,7 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
         .code_hash
         .expect("verified contract manifest must bind its artifact hash");
     // Block 1: grant permission and register a manifest with only code_hash (no abi_hash)
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     // Grant permission
@@ -342,8 +337,7 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: a present V1 manifest is incomplete without its ABI binding.
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
         network_id,
@@ -395,8 +389,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
             .expect("derive manifest admission contract address");
     let abi_current = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     // Block 1: grant permission and register manifest with v1 abi_hash
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
@@ -434,8 +427,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit program; admission should accept
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
         network_id,
@@ -484,8 +476,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
         "unknown-syscall artifact must have a distinct content hash"
     );
     // Block 1: grant permission and register the manifest with the correct abi_hash.
-    let header1 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
     let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
@@ -502,8 +493,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the program with an unknown syscall; admission should reject before execution.
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let tx = TransactionBuilder::new(
         network_id,

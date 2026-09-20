@@ -209,11 +209,11 @@ fn validate_registration_transaction(
     query: &MusubiPublicationFinalizedArchiveRegistrationQueryV1,
     block: &SignedBlock,
 ) -> bool {
-    if !block.has_results() || block.entrypoint_hashes().len() != block.results().len() {
+    if block.validate_output_merkle_cache().is_err() {
         return false;
     }
     let mut found = false;
-    for (_, entrypoint, result) in block.entrypoint_results() {
+    for (input_index, entrypoint) in block.network_entrypoints().enumerate() {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
             TransactionEntrypoint::SealedReveal(reveal) => {
@@ -222,15 +222,21 @@ fn validate_registration_transaction(
                 }
                 continue;
             }
-            TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+            TransactionEntrypoint::SealedCommitment(_) => {
                 continue;
             }
         };
         if *transaction.hash().as_ref() != query.transaction_hash {
             continue;
         }
+        let Some((_, output)) = u32::try_from(input_index)
+            .ok()
+            .and_then(|index| block.network_output_at(index))
+        else {
+            return false;
+        };
         if found
-            || result.as_ref().is_err()
+            || output.result.is_err()
             || transaction.verify_signature().is_err()
             || transaction.network_id() != Some(&query.network_id)
             || transaction.authority() != &query.registration.registered_by
@@ -263,10 +269,11 @@ fn validate_registration_transaction(
 mod tests {
     use super::*;
     use iroha_core::{
-        block::BlockBuilder,
+        block::{BlockBuilder, ValidBlock},
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
+        sumeragi::network_topology::Topology,
     };
     use iroha_crypto::{
         Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
@@ -281,6 +288,11 @@ mod tests {
                 BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
                 ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
                 QuorumCertificate, ValidatorPower,
+            },
+            execution_output::{
+                ExecutionOutputV1, InvocationCompletionV1, NetworkExecutionOutputV1,
+                PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineInvocationV1,
+                TimeExecutionOutputV1, TimeInvocationV1, TriggerUseV1,
             },
         },
         domain::Domain,
@@ -351,7 +363,12 @@ mod tests {
         }
     }
     fn registration_material() -> RegistrationMaterial {
-        let network_id = network_id(0x15);
+        registration_material_at(network_id(0x15), 1)
+    }
+    fn registration_material_at(
+        network_id: NetworkId,
+        registered_at_height: u64,
+    ) -> RegistrationMaterial {
         let publisher_key = keypair(0x31);
         let publisher = AccountId::new(publisher_key.public_key().clone());
         let broker_key = keypair(0x32);
@@ -390,7 +407,7 @@ mod tests {
             commitment,
             staging_receipt: receipt,
             registered_by: publisher,
-            registered_at_height: 1,
+            registered_at_height,
             location_revision: 2,
             location_ids: Vec::new(),
         };
@@ -430,42 +447,158 @@ mod tests {
             vec![registration_instruction(&material.archive).into()],
         )
     }
-    fn signed_block_with_results(
-        transactions: Vec<SignedTransaction>,
-        rejected_index: Option<usize>,
-    ) -> SignedBlock {
-        let entrypoint_hashes = transactions
-            .iter()
-            .map(SignedTransaction::hash_as_entrypoint)
-            .collect::<Vec<_>>();
+    fn signed_proposal(transactions: Vec<SignedTransaction>) -> SignedBlock {
         let accepted = transactions
             .into_iter()
             .map(|transaction| {
                 iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
             })
             .collect();
-        let mut block: SignedBlock = BlockBuilder::new(accepted)
+        let block: SignedBlock = BlockBuilder::new(accepted)
             .chain(0, None)
             .sign(keypair(0x41).private_key())
             .unpack(|_| {})
             .into();
-        let results = entrypoint_hashes
-            .iter()
+        block
+            .validate_proposal_commitments()
+            .expect("fixture proposal commits its actual inputs");
+        block
+    }
+
+    fn network_outputs(
+        block: &SignedBlock,
+        rejected_index: Option<usize>,
+    ) -> Vec<ExecutionOutputV1> {
+        block
+            .network_entrypoints()
             .enumerate()
             .map(|(index, _)| {
-                if rejected_index == Some(index) {
-                    TransactionResultInner::Err(TransactionRejectionReason::Validation(
-                        ValidationFail::NotPermitted("rejected registration fixture".to_owned()),
-                    ))
-                } else {
-                    TransactionResultInner::Ok(DataTriggerSequence::default())
-                }
+                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: u32::try_from(index).expect("bounded fixture input index"),
+                    result: (if rejected_index == Some(index) {
+                        TransactionResultInner::Err(TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(
+                                "rejected registration fixture".to_owned(),
+                            ),
+                        ))
+                    } else {
+                        TransactionResultInner::Ok(DataTriggerSequence::default())
+                    })
+                    .into(),
+                    completions: Vec::new(),
+                })
             })
-            .collect();
+            .collect()
+    }
+
+    // This helper installs structural negative-test evidence, not execution authority.
+    // Positive finalized-reader fixtures below still execute the real registration.
+    fn install_fixture_outputs(
+        block: &mut SignedBlock,
+        outputs: Vec<ExecutionOutputV1>,
+        committed_fragments: u64,
+    ) -> Result<(), iroha_data_model::block::SetExecutionOutputsError> {
+        let header = block.header();
+        let signatures = block.signatures().cloned().collect::<Vec<_>>();
+        let installed = block.set_execution_outputs(
+            outputs,
+            committed_fragments,
+            if block.has_results() {
+                block.fastpq_transcripts().clone()
+            } else {
+                Default::default()
+            },
+            block.axt_envelopes().unwrap_or_default().to_vec(),
+            block.axt_policy_snapshot().cloned().unwrap_or_default(),
+            block
+                .axt_transitioned_dataspaces()
+                .cloned()
+                .unwrap_or_default(),
+            block.lane_finality_statements().to_vec(),
+            &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
+        );
+        assert_eq!(
+            block.header(),
+            header,
+            "outputs cannot rewrite proposal commitments"
+        );
+        assert_eq!(block.signatures().cloned().collect::<Vec<_>>(), signatures);
+        installed
+    }
+
+    fn signed_block_with_results(
+        transactions: Vec<SignedTransaction>,
+        rejected_index: Option<usize>,
+    ) -> SignedBlock {
+        let mut block = signed_proposal(transactions);
+        let outputs = network_outputs(&block, rejected_index);
+        // Every successful fixture input has exactly one structural execution fragment.
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        install_fixture_outputs(&mut block, outputs, fragments)
+            .expect("fixture typed Network outputs match their immutable inputs");
         block
-            .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
-            .expect("fixture result hashes match entrypoints");
-        block
+    }
+
+    fn structural_registration_callbacks(
+        archive: &MusubiArchiveRecordV1,
+    ) -> Vec<ExecutionOutputV1> {
+        use iroha_data_model::{
+            events::{
+                time::{TimeEvent, TimeInterval},
+                trigger_completed::TriggerCompletedOutcome,
+            },
+            transaction::signed::ExecutionStep,
+            trigger::DataTriggerStep,
+        };
+        let callback = |name: &str| {
+            let trigger = TriggerUseV1 {
+                trigger_id: name.parse().unwrap(),
+                registered_at_height: 0,
+                action_hash: Hash::new(name.as_bytes()),
+            };
+            let result = Ok(vec![DataTriggerStep {
+                id: trigger.trigger_id.clone(),
+                instructions: ExecutionStep(vec![registration_instruction(archive).into()].into()),
+            }])
+            .into();
+            let completions = vec![InvocationCompletionV1 {
+                callback_index: 0,
+                trigger_id: trigger.trigger_id.clone(),
+                outcome: TriggerCompletedOutcome::Success,
+            }];
+            (trigger, result, completions)
+        };
+        // Public descriptors only establish distinct structural owners here.
+        // Exact executed-wire finality remains mandatory in the production reader.
+        let (trigger, result, completions) = callback("registration-pipeline");
+        let pipeline = ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
+            invocation: PipelineInvocationV1 {
+                event: PipelineEventPositionV1::BlockApproved,
+                candidate_index: 0,
+                trigger,
+            },
+            result,
+            failure_root: None,
+            completions,
+        });
+        let (trigger, result, completions) = callback("registration-time");
+        let time = ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+            invocation: TimeInvocationV1 {
+                schedule_index: 0,
+                event: TimeEvent {
+                    interval: TimeInterval {
+                        since_ms: 0,
+                        length_ms: 1,
+                    },
+                },
+                trigger,
+            },
+            result,
+            failure_root: None,
+            completions,
+        });
+        vec![pipeline, time]
     }
     fn finality_keypairs() -> Vec<KeyPair> {
         let mut keypairs = (0_u8..4)
@@ -482,7 +615,67 @@ mod tests {
         });
         keypairs
     }
-    fn finality_artifact(block: &SignedBlock, network_id: NetworkId) -> V2FinalityArtifact {
+    fn genesis_proposal(
+        parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+    ) -> SignedBlock {
+        use iroha_data_model::isi::kagemusha_v1::{
+            KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+        };
+        use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+
+        iroha_genesis::init_instruction_registry();
+        let topology = finality_keypairs()
+            .iter()
+            .map(|key| {
+                GenesisTopologyEntry::new(
+                    PeerId::new(key.public_key().clone()),
+                    bls_normal_pop_prove(key.private_key()).expect("genesis validator PoP"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let validators = topology
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let seed = 0xC0_u8 + u8::try_from(index).unwrap();
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[seed; 32],
+                    0,
+                    entry.peer.clone(),
+                )
+                .expect("genesis mint-finality validator keys")
+            })
+            .collect();
+        GenesisBuilder::new_without_executor(ChainId::from("musubi-finality-reader-test"), ".")
+            .set_topology(topology)
+            .with_sumeragi_v2_context_parameters(parameters)
+            .with_kagemusha_mint_finality_genesis_parameters(
+                KagemushaMintFinalityGenesisParametersV1 {
+                    epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+                        version: KAGEMUSHA_CHAIN_VERSION_V1,
+                        epoch: 0,
+                        validators,
+                    },
+                    next_epoch_roster: None,
+                },
+            )
+            .build_raw()
+            .expect("complete genesis with exact four-validator authority")
+            .with_consensus_meta()
+            .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
+                &keypair(0x42),
+                None,
+                None,
+                100,
+            )
+            .expect("sign deterministic genesis proposal")
+            .0
+    }
+    fn finality_artifact(
+        block: &SignedBlock,
+        network_id: NetworkId,
+        parent: Option<&V2FinalityArtifact>,
+    ) -> V2FinalityArtifact {
         let keypairs = finality_keypairs();
         let roster = keypairs
             .iter()
@@ -527,7 +720,7 @@ mod tests {
             epoch_end_height: 100,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
+            parent_commit_qc: parent.map(|parent| parent.commit_qc.clone()),
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid finality fixture quorum"),
             roster,
@@ -545,6 +738,8 @@ mod tests {
             },
             leader_seed: [0x42; 32],
         };
+        // This helper belongs only to structural finality/output join controls.
+        // Stateful fixtures below derive their commitment from actual execution.
         let executed_wire = block.encode_wire().expect("canonical executed block wire");
         let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
             Hash::new(b"Musubi finality fixture parent state"),
@@ -556,6 +751,15 @@ mod tests {
             Hash::new(&executed_wire),
         )
         .expect("canonical finality fixture execution commitment");
+        sign_finality_artifact(block, context, execution_commitment)
+    }
+    fn sign_finality_artifact(
+        block: &SignedBlock,
+        context: HeightContext,
+        execution_commitment: ExecutionCommitment,
+    ) -> V2FinalityArtifact {
+        let keypairs = finality_keypairs();
+        let height = block.header().height().get();
         let subject = BlockSubject {
             parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
@@ -613,9 +817,13 @@ mod tests {
     fn seeded_world(material: &RegistrationMaterial) -> World {
         let publisher = material.archive.registered_by.clone();
         let account = Account::new(publisher.clone()).build(&publisher);
+        let genesis_account = AccountId::new(keypair(0x42).public_key().clone());
         let mut world = World::with(
-            std::iter::empty::<Domain>(),
-            [account],
+            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account)],
+            [
+                account,
+                Account::new(genesis_account.clone()).build(&genesis_account),
+            ],
             std::iter::empty::<AssetDefinition>(),
         );
         let binding = &material.archive.staging_receipt.payload.binding;
@@ -627,18 +835,119 @@ mod tests {
     fn reader_fixture() -> ReaderFixture {
         reader_fixture_with_finality(true)
     }
-    fn reader_fixture_with_finality(store_finality: bool) -> ReaderFixture {
-        let material = registration_material();
-        let registration_transaction = successful_registration_transaction(&material);
-        let transaction_hash = *registration_transaction.hash().as_ref();
+    fn fixture_state(material: &RegistrationMaterial) -> (Arc<State>, Arc<Kura>) {
         let kura = Kura::blank_kura_for_testing();
         let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            seeded_world(&material),
+            seeded_world(material),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
             ChainId::from("musubi-finality-reader-test"),
             material.network_id,
         ));
+        let nexus = state.nexus_snapshot();
+        state.install_lane_manifests(&Arc::new(
+            iroha_core::governance::manifest::LaneManifestRegistry::empty()
+                .rebind(&nexus.lane_catalog, &nexus.governance),
+        ));
+        (state, kura)
+    }
+    fn stage_genesis<'state>(
+        state: &'state State,
+        genesis: SignedBlock,
+        topology: &Topology,
+    ) -> (ValidBlock, Box<iroha_core::state::StateBlock<'state>>) {
+        let genesis_account = AccountId::new(keypair(0x42).public_key().clone());
+        let (_validation_clock, validation_time) =
+            TimeSource::new_mock(Duration::from_millis(1_500));
+        ValidBlock::validate_signed_genesis_keep_voting_block(
+            genesis,
+            topology,
+            &genesis_account,
+            &validation_time,
+            state,
+            &mut None,
+            ConsensusMode::Permissioned,
+        )
+        .unpack(|_| {})
+        .unwrap_or_else(|(block, error)| {
+            panic!(
+                "fixture genesis admission failed: {error}; outputs={:?}",
+                block.execution_outputs()
+            )
+        })
+    }
+    fn reader_fixture_with_finality(store_finality: bool) -> ReaderFixture {
+        let topology = Topology::new(
+            finality_keypairs()
+                .iter()
+                .map(|key| PeerId::new(key.public_key().clone())),
+        );
+        let mut parameters =
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            );
+        {
+            // Signing binds the policy computed by actual genesis execution;
+            // the provisional overlay is dropped without State or Kura publication.
+            let provisional = genesis_proposal(parameters);
+            let material =
+                registration_material_at(NetworkId::from_genesis_hash(provisional.hash()), 2);
+            let (state, _) = fixture_state(&material);
+            let (_, staged) = stage_genesis(&state, provisional, &topology);
+            parameters.nexus_amx_context_hash =
+                *iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged).as_ref();
+            parameters.execution_policy_hash =
+                *iroha_core::sumeragi::staged_genesis_execution_policy_hash(&staged)
+                    .expect("staged genesis execution policy")
+                    .as_ref();
+        }
+        let genesis = genesis_proposal(parameters);
+        let material = registration_material_at(NetworkId::from_genesis_hash(genesis.hash()), 2);
+        let registration_transaction = successful_registration_transaction(&material);
+        let transaction_hash = *registration_transaction.hash().as_ref();
+        let (state, kura) = fixture_state(&material);
+        let (genesis, genesis_finality) = {
+            let signed_genesis = iroha_genesis::GenesisBlock(genesis.clone());
+            let (valid_genesis, mut genesis_state) = stage_genesis(&state, genesis, &topology);
+            let bootstrap = iroha_core::sumeragi::freeze_staged_genesis_v2(
+                &signed_genesis,
+                &genesis_state,
+                ConsensusMode::Permissioned,
+            )
+            .expect("genesis context derives from exact signed and staged policy");
+            let genesis_execution = genesis_state
+                .execution_commitment_for_testing(&valid_genesis)
+                .expect(
+                    "genesis commitment derives from the exact retained witness and output seal",
+                );
+            let genesis = valid_genesis
+                .commit(&topology)
+                .unpack(|_| {})
+                .expect("authenticated genesis commit");
+            let genesis_finality = sign_finality_artifact(
+                genesis.as_ref(),
+                bootstrap.context().clone(),
+                genesis_execution,
+            );
+            iroha_core::sumeragi::validate_signed_genesis_v2_authority(
+                &signed_genesis,
+                &genesis_finality.height_context,
+                &genesis_finality.validator_set_pops,
+            )
+            .expect("finality preserves signed genesis authority");
+            kura.store_block(Arc::new(genesis.as_ref().clone()))
+                .expect("store executed genesis");
+            let _ = kura
+                .store_v2_finality_artifact(&genesis_finality)
+                .expect("store exact genesis finality");
+            let _ = genesis_state.apply_without_execution(&genesis, topology.as_ref().to_vec());
+            // TODO: complete the canonical State publication owner. The output seal
+            // intentionally keeps this commit gated; this positive fixture must fail
+            // until real publication authority exists, rather than clearing its guard.
+            (*genesis_state)
+                .commit()
+                .expect("publish authenticated genesis through the complete State owner");
+            (genesis, genesis_finality)
+        };
         let (_block_time_handle, block_time_source) =
             TimeSource::new_mock(Duration::from_millis(1_500));
         let new_block = BlockBuilder::new_with_time_source(
@@ -647,27 +956,49 @@ mod tests {
             )],
             block_time_source,
         )
-        .chain(0, None)
-        .sign(keypair(0x42).private_key())
+        .chain(0, Some(genesis.as_ref()))
+        .sign(finality_keypairs()[0].private_key())
         .unpack(|_| {});
-        let mut state_block = state.block(new_block.header());
-        let valid = new_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        assert!(committed.as_ref().error(0).is_none());
+        let mut proposal = SignedBlock::from(new_block);
+        for (index, key) in finality_keypairs().iter().enumerate().take(3).skip(1) {
+            proposal
+                .add_signature(iroha_data_model::block::BlockSignature::new(
+                    u64::try_from(index).unwrap(),
+                    SignatureOf::from_hash(key.private_key(), proposal.hash()),
+                ))
+                .expect("attach validator signatures before the exact output wire is sealed");
+        }
+        let mut state_block = state.block(proposal.header());
+        let valid = ValidBlock::validate_unchecked(proposal, &mut state_block).unpack(|_| {});
+        let execution = state_block
+            .execution_commitment_for_testing(&valid)
+            .expect("registration commitment derives from exact sealed execution");
+        let committed = valid
+            .commit(&topology)
+            .unpack(|_| {})
+            .expect("registration block signature quorum");
+        assert!(
+            committed
+                .as_ref()
+                .network_output_at(0)
+                .is_some_and(|(_, output)| output.result.is_ok())
+        );
         let canonical_block = committed.as_ref().clone();
         kura.store_block(Arc::new(canonical_block.clone()))
             .expect("store fixture Kura block");
         if store_finality {
+            let mut context = genesis_finality.height_context.clone();
+            context.height = canonical_block.header().height().get();
+            context.parent_commit_qc = Some(genesis_finality.commit_qc.clone());
             let _ = kura
-                .store_v2_finality_artifact(&finality_artifact(
+                .store_v2_finality_artifact(&sign_finality_artifact(
                     &canonical_block,
-                    material.network_id,
+                    context,
+                    execution,
                 ))
                 .expect("store fixture V2 finality artifact");
         }
-        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        let _ = state_block.apply_without_execution(&committed, topology.as_ref().to_vec());
         state_block.commit().expect("commit fixture state block");
         let registered = state
             .query_view()
@@ -687,7 +1018,7 @@ mod tests {
             network_id: material.network_id,
             transaction_hash,
             snapshot: MusubiRegistrySnapshotV1 {
-                finalized_height: 1,
+                finalized_height: material.archive.registered_at_height,
                 finalized_block_hash: *canonical_block.hash().as_ref(),
                 index_revision: 1,
             },
@@ -712,11 +1043,10 @@ mod tests {
         archive: &MusubiArchiveRecordV1,
     ) {
         let header = BlockHeader::new(
-            NonZeroU64::new(2).expect("nonzero fixture height"),
+            NonZeroU64::new(archive.registered_at_height + 1).expect("nonzero fixture height"),
             Some(HashOf::from_untyped_unchecked(Hash::prehashed(
                 canonical_hash,
             ))),
-            None,
             None,
             2_000,
             0,
@@ -764,20 +1094,106 @@ mod tests {
             .read_current_archive(&missing)
             .expect_err("missing transaction must fail closed");
         assert_eq!(error, invalid());
-        let material = registration_material();
+        let material = registration_material_at(
+            fixture.query.network_id,
+            fixture.archive.registered_at_height,
+        );
         let transaction = successful_registration_transaction(&material);
         let mut query = fixture.query.clone();
         query.transaction_hash = *transaction.hash().as_ref();
-        let duplicate =
-            signed_block_with_results(vec![transaction.clone(), transaction.clone()], None);
+        let mut duplicate = signed_proposal(vec![transaction.clone(), transaction.clone()]);
+        let duplicate_before = duplicate.canonical_resultless_proposal();
+        let duplicate_outputs = network_outputs(&duplicate, None);
+        assert!(install_fixture_outputs(&mut duplicate, duplicate_outputs, 2).is_err());
+        assert_eq!(duplicate.canonical_resultless_proposal(), duplicate_before);
+        assert!(
+            !duplicate.has_results(),
+            "duplicate execution calls cannot acquire outputs"
+        );
         assert!(!validate_registration_transaction(&query, &duplicate));
         let rejected = signed_block_with_results(vec![transaction], Some(0));
         assert!(!validate_registration_transaction(&query, &rejected));
     }
     #[test]
+    fn registration_joins_only_network_success_with_pipeline_and_time_outputs() {
+        let material = registration_material();
+        let transaction = successful_registration_transaction(&material);
+        let mut block = signed_block_with_results(vec![transaction.clone()], None);
+        let query = MusubiPublicationFinalizedArchiveRegistrationQueryV1 {
+            version: 1,
+            network_id: material.network_id,
+            transaction_hash: *transaction.hash().as_ref(),
+            snapshot: MusubiRegistrySnapshotV1 {
+                finalized_height: 1,
+                finalized_block_hash: *block.hash().as_ref(),
+                index_revision: 1,
+            },
+            registration: material.archive.registration_projection(),
+            expected_policy_revision: 1,
+        };
+        let original_finality = finality_artifact(&block, material.network_id, None);
+        let mut outputs = block.execution_outputs().to_vec();
+        outputs.extend(structural_registration_callbacks(&material.archive));
+        install_fixture_outputs(&mut block, outputs, 3).unwrap();
+        assert_eq!(block.network_entrypoint_count(), 1);
+        assert_eq!(block.execution_outputs().len(), 3);
+        assert!(block.network_output_at(1).is_none());
+        assert!(validate_registration_transaction(&query, &block));
+        assert!(
+            !validate_finalized_block_wire(
+                &material.network_id,
+                1,
+                block.hash(),
+                &block,
+                &original_finality,
+            ),
+            "adding internal outputs must invalidate the old exact-wire finality"
+        );
+
+        let mut rejected = signed_block_with_results(vec![transaction], Some(0));
+        let mut outputs = rejected.execution_outputs().to_vec();
+        outputs.extend(structural_registration_callbacks(&material.archive));
+        install_fixture_outputs(&mut rejected, outputs, 2).unwrap();
+        assert!(
+            !validate_registration_transaction(&query, &rejected),
+            "successful internal registration traces cannot replace rejected Network execution"
+        );
+
+        let mut missing = signed_block_with_results(
+            vec![signed_transaction(
+                material.network_id,
+                &material.publisher_key,
+                Vec::new(),
+            )],
+            None,
+        );
+        let mut outputs = missing.execution_outputs().to_vec();
+        outputs.extend(structural_registration_callbacks(&material.archive));
+        install_fixture_outputs(&mut missing, outputs, 3).unwrap();
+        assert!(
+            !validate_registration_transaction(&query, &missing),
+            "internal registration traces cannot supply a missing signed Network registration"
+        );
+
+        let before = block.encode_wire().unwrap();
+        assert!(
+            install_fixture_outputs(
+                &mut block,
+                structural_registration_callbacks(&material.archive),
+                2,
+            )
+            .is_err(),
+            "internal outputs cannot replace the required Network owner"
+        );
+        assert_eq!(block.encode_wire().unwrap(), before);
+    }
+    #[test]
     fn multi_instruction_registration_is_invalid() {
         let fixture = reader_fixture();
-        let material = registration_material();
+        let material = registration_material_at(
+            fixture.query.network_id,
+            fixture.archive.registered_at_height,
+        );
         let register = registration_instruction(&material.archive);
         let transaction = signed_transaction(
             material.network_id,
@@ -792,7 +1208,10 @@ mod tests {
     #[test]
     fn wrong_authority_registration_is_invalid() {
         let fixture = reader_fixture();
-        let material = registration_material();
+        let material = registration_material_at(
+            fixture.query.network_id,
+            fixture.archive.registered_at_height,
+        );
         let transaction = signed_transaction(
             material.network_id,
             &keypair(0x51),
@@ -806,7 +1225,10 @@ mod tests {
     #[test]
     fn wrong_network_registration_is_invalid() {
         let fixture = reader_fixture();
-        let material = registration_material();
+        let material = registration_material_at(
+            fixture.query.network_id,
+            fixture.archive.registered_at_height,
+        );
         let transaction = signed_transaction(
             network_id(0x25),
             &material.publisher_key,
@@ -830,40 +1252,44 @@ mod tests {
             invalid()
         );
         let view = fixture.state.query_view();
+        let height = fixture.archive.registered_at_height;
         let block = view
             .kura()
-            .get_block(NonZeroUsize::new(1).expect("nonzero fixture height"))
+            .get_block(
+                NonZeroUsize::new(usize::try_from(height).unwrap())
+                    .expect("nonzero fixture height"),
+            )
             .expect("fixture Kura block");
         let finality = view
             .kura()
-            .v2_finality_artifact(1)
+            .v2_finality_artifact(height)
             .expect("read fixture finality")
             .expect("fixture finality exists");
         let canonical_hash = block.hash();
         assert!(validate_finalized_block_wire(
             &fixture.query.network_id,
-            1,
+            height,
             canonical_hash,
             &block,
             &finality,
         ));
         let mut substituted = block.as_ref().clone();
-        let entrypoint_hashes = substituted.entrypoint_hashes().collect::<Vec<_>>();
-        substituted
-            .set_transaction_results(
-                Vec::new(),
-                &entrypoint_hashes,
-                vec![TransactionResultInner::Err(
-                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                        "substituted Kura result".to_owned(),
-                    )),
-                )],
-            )
+        let mut outputs = substituted.execution_outputs().to_vec();
+        let ExecutionOutputV1::Network(output) = &mut outputs[0] else {
+            panic!("registration fixture owns Network output zero");
+        };
+        assert_eq!(output.input_index, 0);
+        output.result = TransactionResultInner::Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("substituted Kura result".to_owned()),
+        ))
+        .into();
+        output.completions.clear();
+        install_fixture_outputs(&mut substituted, outputs, 0)
             .expect("replace the result while retaining the consensus header hash");
         assert_eq!(substituted.hash(), canonical_hash);
         assert!(!validate_finalized_block_wire(
             &fixture.query.network_id,
-            1,
+            height,
             canonical_hash,
             &substituted,
             &finality,
@@ -901,7 +1327,7 @@ mod tests {
         assert_eq!(wrong_reader_error, invalid());
         assert!(!wrong_reader_error.is_retryable());
         let mut height_ahead = fixture.query.clone();
-        height_ahead.snapshot.finalized_height = 2;
+        height_ahead.snapshot.finalized_height = fixture.query.snapshot.finalized_height + 1;
         height_ahead.snapshot.finalized_block_hash = [0x63; 32];
         let height_error = fixture
             .reader

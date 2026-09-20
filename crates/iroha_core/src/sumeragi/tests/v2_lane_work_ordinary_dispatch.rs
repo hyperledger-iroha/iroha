@@ -131,9 +131,12 @@ impl OrdinaryLaneDispatchFixture {
             NonZeroUsize::new(actor_capacity).expect("positive actor capacity"),
         );
         crate::sumeragi::v2_worker::tests::install_network_for_test(&mut services, network);
+        let ingress_capacity =
+            crate::sumeragi::fair_v2_ingress_required_capacity(context.roster.len(), None)
+                .expect("fixture roster ingress capacity fits usize");
         let ingress = Arc::new(
             crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-                16,
+                ingress_capacity,
                 512 * 1024 * 1024,
                 64 * 1024 * 1024,
                 crate::sumeragi::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
@@ -153,6 +156,9 @@ impl OrdinaryLaneDispatchFixture {
                 context.da_layout,
             )
             .expect("exact roster and lane ingress ownership");
+        ingress
+            .open()
+            .expect("open configured ordinary lane ingress");
         let sender_key = keys
             .iter()
             .find(|key| key.public_key() != lane_work.key_pair.public_key())

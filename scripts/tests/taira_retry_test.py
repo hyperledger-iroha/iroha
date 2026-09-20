@@ -22,7 +22,91 @@ CAPACITY = SCRIPT.with_name("taira_disk_capacity.py")
 SPEC_CAPACITY = importlib.util.spec_from_file_location("retry_capacity_test", CAPACITY)
 capacity = importlib.util.module_from_spec(SPEC_CAPACITY)
 SPEC_CAPACITY.loader.exec_module(capacity)
+UNIT_RENDERER_PATH = SCRIPT.with_name("taira_validator_unit.py")
+UNIT_RENDERER = {"__name__": "reviewed_unit_fixture", "__file__": str(UNIT_RENDERER_PATH)}
+exec(compile(UNIT_RENDERER_PATH.read_bytes(), str(UNIT_RENDERER_PATH), "exec"), UNIT_RENDERER)
 OPERATOR_PUBLIC_KEY = "ed0120D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"
+
+
+def beacon_input_fixture(draft):
+    return {
+        "schema": "iroha.taira.public-reset.beacon-inputs.v1",
+        "authorization_nonce": draft["authorization_nonce"],
+        "request": {"native_public_request": "opaque to Python"},
+        "final_units": [{
+            "validator": row["slug"], "signer_index": seat,
+            "credential_path": f"/var/lib/taira/.public-reset-control-v1/beacon/{draft['authorization_nonce']}/ceremony/seat-{seat}/iroha-global-beacon-partial-signer-v1.norito",
+            "config_file": "beacon.toml",
+        } for row, seat in zip(draft["validators"], [3, 1, 4, 2])],
+    }
+
+
+def supervisor_intent_fixture():
+    return {"host_slug":"taira-validator-1","authorization":"until_stopped", "payment_asset":"xor#sora", "transaction_fee_maximum":"1", "first_epoch":2, "batch_epochs":2, "operation_timeout_ms":1000,"provision_timeout_ms":1000,"timeout_ms":5000,"prior_state":"absent","prior_plan":None}
+
+
+def complete_previous_fixture(value=None):
+    """Public synthetic retained inventory with real-shaped intent and stale computed fields."""
+    value=copy.deepcopy(value or {})
+    value.setdefault("schema","iroha.taira.public-reset.inventory.v1")
+    value.setdefault("qualification_scope","core_testnet")
+    value.setdefault("deployment_id","retained")
+    value.setdefault("authorization_nonce","0"*32)
+    value.setdefault("previous_genesis_hash","8"*64)
+    value.setdefault("next_genesis_hash","c"*64)
+    value.setdefault("chain_id","fc56984b-2be7-431d-840e-21514d1883f0")
+    value.setdefault("chain_discriminant",369)
+    value.setdefault("operator_public_key",OPERATOR_PUBLIC_KEY)
+    value.setdefault("inrou_canary",None)
+    value.setdefault("inrou_stage_tree_sha256",None)
+    revision=value.setdefault("revision",{})
+    revision.setdefault("commit","a"*40)
+    revision.setdefault("source_root","/source")
+    revision.setdefault("source_manifest_path","/source/source-manifest.json")
+    revision.update(tree="c"*40,cargo_lock_sha256="d"*64,source_manifest_sha256="e"*64,source_closure_sha256="f"*64)
+    value.setdefault("validators",[{"slug":f"taira-validator-{i}"} for i in range(1,5)])
+    for i,row in enumerate(value["validators"],1):
+        role=f"taira-validator-{i}"
+        row.setdefault("slug",role)
+        row.setdefault("endpoint",{"hostname":role+".example","host_identity_sha256":"a"*64,"known_host_line_sha256":"b"*64})
+        row.setdefault("platform",{"os":"linux","architecture":"aarch64"})
+        row.setdefault("service_root","/srv/taira/"+role)
+        row.setdefault("state_root","/var/lib/taira/"+role)
+        row.setdefault("reset_guard","/var/lib/taira/"+role+"/.reset-guard")
+        row.setdefault("systemd_unit","iroha3d-"+role+".service")
+        row.setdefault("systemd_unit_sha256","d"*64)
+        row.setdefault("initial_state",{"kind":"vacant"})
+        row.update(node_fingerprint="node-stale",build_fingerprint="build-stale",config_fingerprint="config-stale")
+        row.setdefault("artifacts",[{"role":"iroha_cli","local_path":"/runtime/artifacts/bin/iroha","sha256":"b"*64}])
+        for a in row["artifacts"]:
+            a.setdefault("remote_path",row["service_root"]+"/releases/"+revision["commit"]+"/bin/iroha")
+            a.update(size=10,mode=493,source_commit=revision["commit"],target="aarch64-unknown-linux-gnu")
+    value.setdefault("validator_clients",[{"slug":f"taira-validator-{i}","probe_origin":f"http://127.0.0.1:{18080+i}/"} for i in range(1,5)])
+    edge=value.setdefault("edge",{})
+    edge.setdefault("slug","taira-edge");edge.setdefault("endpoint",{"hostname":"edge.example"});edge.setdefault("platform",{"os":"linux","architecture":"aarch64"})
+    edge.setdefault("service_root","/srv/taira/edge");edge.setdefault("state_root","/var/lib/taira/edge");edge.setdefault("reset_guard","/var/lib/taira/edge/.guard");edge.setdefault("nginx_config","/etc/nginx/taira.conf");edge.setdefault("initial_state",{"kind":"vacant"});edge.setdefault("artifacts",copy.deepcopy(value["validators"][0]["artifacts"]))
+    for a in edge["artifacts"]:a.setdefault("remote_path","/srv/taira/edge/releases/"+revision["commit"]+"/bin/iroha")
+    for key in ("faucet_policy","fee_intent","canary_onboarding_request","cleanup","timeouts"):value.setdefault(key,{"synthetic_selected_intent":True})
+    value.setdefault("beacon_bootstrap",{"old_signed_session":"must not enter topology"})
+    value.setdefault("epoch_supervisor",{"schema":"iroha.taira.public-reset.epoch-supervisor-plan.v1","host_slug":"taira-validator-1","prior_state":"absent","prior":None,"original_seed_sources":[{"validator":f"peer-{i}","path":f"/public-fixture/epoch-seed-sources-{i}"} for i in range(4)],"policy_sha256":"7"*64})
+    value.setdefault("maintenance_admin_identity",{"old_identity":"must not enter topology"})
+    for key in ("maintenance_admin_config_sha256","runtime_client_config_sha256","onboarding_token_sha256","validator_client_configs_sha256","artifact_closure_sha256"):value.setdefault(key,"9"*64)
+    return value
+
+
+def expected_topology(previous,attempt,nonce):
+    # Independent field-list oracle: a predecessor computed pin must never leak through.
+    top=("qualification_scope","previous_genesis_hash","validator_clients","faucet_policy","fee_intent","canary_onboarding_request","cleanup","timeouts")
+    out={k:copy.deepcopy(previous[k]) for k in top}
+    out.update(schema="iroha.taira.public-reset.topology-intent.v1",deployment_id="taira-"+attempt,authorization_nonce=nonce,revision={k:previous["revision"][k] for k in ("source_root","source_manifest_path")})
+    fields=("slug","endpoint","platform","service_root","state_root","reset_guard","initial_state")
+    def node(v,extra):
+        r={k:copy.deepcopy(v[k]) for k in (*fields,extra)}
+        r["artifacts"]=[{k:a[k] for k in ("role","local_path","remote_path")} for a in v["artifacts"]]
+        return r
+    out["validators"]=[node(v,"systemd_unit") for v in previous["validators"]]
+    out["edge"]=node(previous["edge"],"nginx_config")
+    return out
 
 
 def artifact_receipts():
@@ -300,37 +384,17 @@ class RetryTests(unittest.TestCase):
         with self.assertRaises(retry.RetryError):
             retry.public_record(fifo)
 
-    def test_fresh_inventory_changes_only_attempt_and_nonce(self):
-        previous = {
-            "deployment_id": "retained",
-            "qualification_scope": "core_testnet",
-            "inrou_canary": None, "inrou_stage_tree_sha256": None,
-            "operator_public_key": OPERATOR_PUBLIC_KEY,
-            "authorization_nonce": "0" * 32,
-            "revision": {"commit": "a" * 40},
-            "validators": [{"artifact": "same-config"}],
-            "validator_clients": [
-                {"slug": f"taira-validator-{index}",
-                 "probe_origin": f"http://127.0.0.1:{18080 + index}/"}
-                for index in range(1, 5)
-            ],
-        }
-        expected = copy.deepcopy(previous)
-        actual = retry.fresh_inventory(
-            previous, "retry-1788850000000000000-1234abcd", "1" * 32
-        )
-        expected.update(
-            deployment_id="taira-retry-1788850000000000000-1234abcd",
-            authorization_nonce="1" * 32,
-        )
-        self.assertEqual(actual, expected)
-        self.assertEqual(previous["deployment_id"], "retained")
-        actual["validators"][0]["artifact"] = "changed"
-        self.assertEqual(previous["validators"][0]["artifact"], "same-config")
-        with self.assertRaises(retry.RetryError):
-            retry.fresh_inventory(
-                previous, "retry-1788850000000000000-1234abcd", "0" * 32
-            )
+    def test_fresh_inventory_projects_intent_without_computed_pins_or_old_plans(self):
+        previous=complete_previous_fixture()
+        before=copy.deepcopy(previous)
+        attempt="retry-1788850000000000000-1234abcd"
+        actual=retry.fresh_inventory(previous,attempt,"1"*32)
+        self.assertEqual(actual,expected_topology(previous,attempt,"1"*32))
+        self.assertEqual(previous,before)
+        actual["validators"][0]["artifacts"][0]["local_path"]="changed"
+        self.assertEqual(previous,before)
+        with self.assertRaises(retry.RetryError):retry.fresh_inventory(previous,attempt,"0"*32)
+
 
     def test_candidate_probe_inventory_rejects_obsolete_or_ambiguous_drafts(self):
         valid = {"qualification_scope": "core_testnet",
@@ -393,6 +457,33 @@ class RetryTests(unittest.TestCase):
                 b["exit_code"] = 0
             with self.assertRaises(retry.RetryError):
                 retry.validate_artifact_receipts(b, a, s)
+
+    def test_kagami_transfer_is_required_and_bound_to_preparation(self):
+        for receipt_index in (0, 1):
+            receipts = list(copy.deepcopy(artifact_receipts()))
+            receipts[receipt_index]["artifacts"] = [
+                row for row in receipts[receipt_index]["artifacts"]
+                if row["name"] != "kagami"
+            ]
+            with self.subTest(receipt=receipt_index), self.assertRaises(retry.RetryError):
+                retry.validate_artifact_receipts(*receipts)
+        build, binary, source = artifact_receipts()
+        next(row for row in binary["artifacts"] if row["name"] == "kagami")["sha256"] = "c" * 64
+        with self.assertRaisesRegex(retry.RetryError, "transfer differs"):
+            retry.validate_artifact_receipts(build, binary, source)
+
+    def test_kagami_inventory_path_and_digest_cannot_be_substituted(self):
+        build, binary, source = artifact_receipts()
+        artifact = {"role": "kagami", "sha256": "b" * 64,
+                    "local_path": "/runtime/artifacts/bin/kagami"}
+        inventory = {"revision": {"commit": build["commit"], "source_root": "/source"},
+                     "validators": [{"artifacts": [artifact]}], "edge": {"artifacts": []}}
+        retry.require_same_inventory_artifacts(inventory, binary, source)
+        for field, wrong in (("sha256", "c" * 64), ("local_path", "/unadmitted/bin/kagami")):
+            changed = copy.deepcopy(inventory)
+            changed["validators"][0]["artifacts"][0][field] = wrong
+            with self.subTest(field=field), self.assertRaises(retry.RetryError):
+                retry.require_same_inventory_artifacts(changed, binary, source)
 
     def test_config_paths_remain_exact_for_same_artifact_retry(self):
         build, binary, source = artifact_receipts()
@@ -975,6 +1066,9 @@ class RetryTests(unittest.TestCase):
         flags = (
             ("--public-inputs", 1),
             ("--runtime-client-config", 1),
+            ("--maintenance-admin-config", 1),
+            ("--epoch-seed-sources", 4),
+            ("--epoch-supervisor-plan", 1),
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
@@ -997,6 +1091,11 @@ class RetryTests(unittest.TestCase):
         del missing_key[offset:offset + 2]
         with self.assertRaises(retry.RetryError):
             retry.local_arguments(json.dumps(missing_key).encode(), "full_inrou")
+        for flag,count in (("--maintenance-admin-config",1),("--epoch-seed-sources",4),("--epoch-supervisor-plan",1)):
+            incomplete=list(args);at=incomplete.index(flag);del incomplete[at:at+count+1]
+            with self.subTest(flag=flag),self.assertRaises(retry.RetryError):retry.local_arguments(json.dumps(incomplete).encode(),"full_inrou")
+        bad=list(args);bad.insert(0,"--http-operator-key-sha256");bad.insert(1,"a"*64)
+        with self.assertRaises(retry.RetryError):retry.local_arguments(json.dumps(bad).encode(),"full_inrou")
         args[0] = "--private-key"
         with self.assertRaises(retry.RetryError):
             retry.local_arguments(json.dumps(args).encode(), "full_inrou")
@@ -1014,21 +1113,413 @@ class RetryTests(unittest.TestCase):
         )
 
 
+class EpochRetirementLockTests(unittest.TestCase):
+    """Real file descriptors/flocks; only Linux-root metadata is modeled on macOS."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(dir=SCRIPT.parent)
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name).resolve()
+        self.state = self.base / "epoch-state"
+        self.state.mkdir(mode=0o700)
+        self.lock = self.state / ".deployment.lock"
+        self.lock.write_bytes(b"")
+        self.lock.chmod(0o600)
+        self.real_lstat, self.real_fstat = Path.lstat, os.fstat
+        self.real_open, self.real_close = os.open, os.close
+        self.real_flock = retry.fcntl.flock
+        self.overrides = {}
+        self.opened, self.closed = [], []
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(mock.patch.object(retry, "RETIRE_EPOCH_STATE", self.state))
+
+        def metadata(info):
+            values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+            values.update(st_uid=0, st_gid=0)
+            values.update(self.overrides.get((info.st_dev, info.st_ino), {}))
+            return SimpleNamespace(**values)
+
+        def lstat(path, *args, **kwargs):
+            return metadata(self.real_lstat(path, *args, **kwargs))
+
+        def opened(path, flags, *args, **kwargs):
+            fd = self.real_open(path, flags, *args, **kwargs)
+            self.opened.append((Path(path), fd, flags))
+            return fd
+
+        def closed(fd):
+            self.closed.append(fd)
+            return self.real_close(fd)
+
+        self.stack.enter_context(mock.patch.object(Path, "lstat", lstat))
+        self.stack.enter_context(mock.patch.object(retry.os, "fstat", side_effect=lambda fd: metadata(self.real_fstat(fd))))
+        self.stack.enter_context(mock.patch.object(retry.os, "open", side_effect=opened))
+        self.stack.enter_context(mock.patch.object(retry.os, "close", side_effect=closed))
+
+    def override(self, path, **fields):
+        info = self.real_lstat(path)
+        self.overrides[(info.st_dev, info.st_ino)] = fields
+
+    def assert_all_closed(self):
+        for _, fd, _ in self.opened:
+            with self.assertRaises(OSError):
+                self.real_fstat(fd)
+
+    def test_existing_lock_is_held_exclusively_without_creation_or_private_reads(self):
+        with mock.patch.object(retry.os, "read", side_effect=AssertionError("unexpected body read")):
+            fd = retry._retire_epoch_lock()
+        try:
+            flags = self.opened[-1][2]
+            self.assertEqual(flags & os.O_ACCMODE, os.O_RDONLY)
+            self.assertFalse(flags & os.O_CREAT)
+            self.assertTrue(flags & os.O_NOFOLLOW)
+            self.assertTrue(flags & os.O_CLOEXEC)
+            self.assertTrue(flags & os.O_NONBLOCK)
+            competing = self.real_open(self.lock, os.O_RDONLY)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    self.real_flock(competing, retry.fcntl.LOCK_EX | retry.fcntl.LOCK_NB)
+            finally:
+                self.real_close(competing)
+        finally:
+            retry.os.close(fd)
+        self.assert_all_closed()
+
+    def test_contended_existing_lock_fails_without_wait_or_descriptor_leak(self):
+        held = self.real_open(self.lock, os.O_RDONLY)
+        self.real_flock(held, retry.fcntl.LOCK_EX | retry.fcntl.LOCK_NB)
+        try:
+            with self.assertRaises(BlockingIOError):
+                retry._retire_epoch_lock()
+            self.assert_all_closed()
+        finally:
+            self.real_close(held)
+
+    def test_missing_or_symlinked_lock_is_never_recreated_or_followed(self):
+        self.lock.unlink()
+        with self.assertRaises(FileNotFoundError):
+            retry._retire_epoch_lock()
+        self.assertFalse(self.lock.exists())
+        target = self.state / "unadmitted-lock"
+        target.write_bytes(b"")
+        target.chmod(0o600)
+        self.lock.symlink_to(target)
+        with self.assertRaises(OSError):
+            retry._retire_epoch_lock()
+        self.assertTrue(self.lock.is_symlink())
+        self.assert_all_closed()
+
+    def test_root_and_lock_custody_and_active_owner_reject(self):
+        for path, field, wrong in (
+            (self.state, "st_uid", 1), (self.state, "st_gid", 1),
+            (self.state, "st_mode", retry.stat.S_IFDIR | 0o755),
+            (self.lock, "st_uid", 1), (self.lock, "st_gid", 1),
+            (self.lock, "st_nlink", 2), (self.lock, "st_size", 1),
+            (self.lock, "st_mode", retry.stat.S_IFREG | 0o644),
+        ):
+            with self.subTest(path=path.name, field=field):
+                self.override(path, **{field: wrong})
+                with self.assertRaises(retry._retire_RebindError):
+                    retry._retire_epoch_lock()
+                self.assert_all_closed()
+                self.overrides.clear()
+        owner = self.state / ".reset-owner.json"
+        owner.write_bytes(b"PUBLIC-OWNER-MARKER-FIXTURE")
+        with self.assertRaisesRegex(retry._retire_RebindError, "active reset owner"):
+            retry._retire_epoch_lock()
+        self.assert_all_closed()
+
+    def test_named_lock_replacement_during_acquisition_rejects(self):
+        def changed(fd, flags):
+            self.real_flock(fd, flags)
+            self.lock.rename(self.state / "retained-lock")
+            self.lock.write_bytes(b"")
+            self.lock.chmod(0o600)
+        with mock.patch.object(retry.fcntl, "flock", side_effect=changed):
+            with self.assertRaisesRegex(retry._retire_RebindError, "changed during acquisition"):
+                retry._retire_epoch_lock()
+        self.assert_all_closed()
+
+    def prepare_retirement_locks(self):
+        runtime, control, work = self.base / "runtime", self.base / "control", self.base / "work"
+        paths = [runtime / "journal-v1/public-reset.lock", control / "hosts/fixture/action.lock", self.lock]
+        for path in paths[:2]:
+            path.parent.mkdir(parents=True, mode=0o700)
+            path.write_bytes(b"")
+            path.chmod(0o600)
+        for name, value in (("RETIRE_RUNTIME", runtime), ("RETIRE_CONTROL", control), ("RETIRE_WORK", work)):
+            self.stack.enter_context(mock.patch.object(retry, name, value))
+        return paths
+
+    def test_retirement_holds_native_lock_order_and_releases_in_reverse(self):
+        paths = self.prepare_retirement_locks()
+        guard = {"inspect_file": lambda info, **kwargs: self.assertEqual(info.st_size, 0)}
+        with retry._retire_locks(guard, {"coordination_relative": "hosts/fixture"}):
+            self.assertEqual([path for path, _, _ in self.opened], paths)
+            for path in paths:
+                competing = self.real_open(path, os.O_RDONLY)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        self.real_flock(competing, retry.fcntl.LOCK_EX | retry.fcntl.LOCK_NB)
+                finally:
+                    self.real_close(competing)
+        self.assertEqual(self.closed, [fd for _, fd, _ in reversed(self.opened)])
+        self.assert_all_closed()
+
+    def test_epoch_failure_releases_preceding_retirement_locks(self):
+        paths = self.prepare_retirement_locks()
+        (self.state / ".reset-owner.json").write_bytes(b"PUBLIC-OWNER-MARKER-FIXTURE")
+        with self.assertRaisesRegex(retry._retire_RebindError, "active reset owner"):
+            with retry._retire_locks({"inspect_file": lambda *_args, **_kwargs: None},
+                                     {"coordination_relative": "hosts/fixture"}):
+                self.fail("retirement entered while reset owns the lifecycle")
+        self.assertEqual([path for path, _, _ in self.opened], paths)
+        self.assertEqual(self.closed, [fd for _, fd, _ in reversed(self.opened)])
+        self.assert_all_closed()
+
+
+class SupervisorIntentTests(unittest.TestCase):
+    def test_explicit_ongoing_intent_is_closed_and_bounded(self):
+        value=supervisor_intent_fixture()
+        retry.validate_supervisor_intent(value)
+        invalid=[]
+        for key in value:
+            changed=copy.deepcopy(value);del changed[key];invalid.append(changed)
+        for field,bad in (("authorization","finite_lease"),("batch_epochs",1),("batch_epochs",257),("first_epoch",0),("first_epoch",True),("operation_timeout_ms",0),("provision_timeout_ms",False),("timeout_ms",0),("host_slug","foreign"),("prior_state","unknown"),("prior_plan",{"path":"/old/plan.json","sha256":"a"*64})):
+            changed=copy.deepcopy(value);changed[field]=bad;invalid.append(changed)
+        invalid.append(dict(value,private_key="forbidden"))
+        for changed in invalid:
+            with self.subTest(changed=changed),self.assertRaises(retry.RetryError):retry.validate_supervisor_intent(changed)
+
+    def test_running_or_stopped_requires_exact_public_prior_plan(self):
+        for state in ("running","stopped"):
+            value=dict(supervisor_intent_fixture(),prior_state=state)
+            with self.assertRaises(retry.RetryError):retry.validate_supervisor_intent(value)
+            value["prior_plan"]={"path":"/retained/previous-plan.json","sha256":"a"*64}
+            retry.validate_supervisor_intent(value)
+            for prior in ({"path":"relative","sha256":"a"*64},{"path":"/retained/prior","sha256":"bad"},{"path":"/retained/prior","sha256":"a"*64,"extra":True}):
+                with self.subTest(prior=prior),self.assertRaises(retry.RetryError):retry.validate_supervisor_intent(dict(value,prior_plan=prior))
+
+
+class BeaconArgumentTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.reads = []
+        self.counter = 0
+        self.renderer = self.root / "renderer.py"
+        self.renderer.write_bytes(UNIT_RENDERER_PATH.read_bytes())
+        self.renderer.chmod(0o644)
+        self.plan = {"unit_renderer": {"path": str(self.renderer), "sha256": retry.hashlib.sha256(self.renderer.read_bytes()).hexdigest()}}
+        self.draft = {"authorization_nonce": "1" * 32, "validators": []}
+        self.arguments = {"--validator-unit": []}
+        for index in range(1, 5):
+            role = f"taira-validator-{index}"
+            path = self.root / ("iroha3d-" + role + ".service")
+            raw = UNIT_RENDERER["render"](role, f"/unread/{index}.key", f"/unread/{index}.seed").encode()
+            path.write_bytes(raw)
+            path.chmod(0o644)
+            self.arguments["--validator-unit"].append(str(path))
+            self.draft["validators"].append({"slug": role, "systemd_unit": path.name, "systemd_unit_sha256": retry.hashlib.sha256(raw).hexdigest()})
+        self.static = ["--public-inputs", "/retained/public-inputs", "--validator-unit", *self.arguments["--validator-unit"]]
+        real_read = retry.public_record
+        def public_read(path, expected=None, **kwargs):
+            self.reads.append(Path(path))
+            kwargs.pop("owner", None)  # Fixture files belong to the local test runner.
+            return real_read(path, expected, **kwargs)
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(mock.patch.object(retry, "public_record", side_effect=public_read))
+        self.stack.enter_context(mock.patch.object(retry, "_continuity_read", side_effect=lambda path, limit=1024*1024, expected=None: public_read(path, expected, limit=limit)))
+
+    def prepare(self, change=None):
+        self.counter += 1
+        assembly = self.root / str(self.counter)
+        assembly.mkdir(mode=0o700)
+        value = beacon_input_fixture(self.draft)
+        if change:
+            change(value)
+        def native(argv, directory, *, phase):
+            self.assertEqual(phase, "prepare-beacon-inputs")
+            self.assertEqual(argv[3], "prepare-beacon-inputs")
+            self.assertEqual(argv[argv.index("--public-inputs") + 1], assembly / "public-inputs")
+            retry.write_public(Path(argv[argv.index("--output") + 1]), value)
+        with mock.patch.object(retry, "run_native", side_effect=native):
+            derived = retry.prepare_beacon_arguments(["/native/iroha", "taira", "public-reset"], assembly, self.plan, self.static, self.arguments, self.draft, self.draft, assembly / "native")
+        return assembly, derived, value
+
+    def test_native_nonce_seat_map_renders_exact_four_units_without_private_reads(self):
+        original = list(self.static)
+        assembly, derived, value = self.prepare()
+        self.assertEqual(self.static, original)
+        self.assertEqual(derived[1], str(assembly / "public-inputs"))
+        self.assertFalse((assembly / "native-assembly-args.json").exists(),"cannot publish final assembly args before native supervisor preparation")
+        paths = derived[derived.index("--beacon-validator-unit") + 1:]
+        self.assertEqual(len(paths), 4)
+        for index, (path, row) in enumerate(zip(paths, value["final_units"]), 1):
+            expected = UNIT_RENDERER["render"](row["validator"], f"/unread/{index}.key", f"/unread/{index}.seed", row["credential_path"], config_file="beacon.toml")
+            self.assertEqual(Path(path).read_text(), expected)
+            self.assertEqual(Path(path).stat().st_mode & 0o777, 0o644)
+        self.assertEqual(set(self.reads), {self.renderer, assembly / "beacon-inputs.json", *(Path(p) for p in self.arguments["--validator-unit"])})
+        self.assertFalse(any(str(path).startswith("/unread/") for path in self.reads))
+
+    def test_native_output_rejects_wrong_nonce_duplicate_seat_role_path_and_config(self):
+        mutations = [
+            lambda v: v.update(authorization_nonce="2" * 32),
+            lambda v: v.update(schema="old"),
+            lambda v: v.update(extra="ambiguous"),
+            lambda v: v["final_units"].pop(),
+            lambda v: v["final_units"][0].update(signer_index=True),
+            lambda v: v["final_units"][0].update(signer_index=v["final_units"][1]["signer_index"]),
+            lambda v: v["final_units"][0].update(validator="taira-validator-2"),
+            lambda v: v["final_units"][0].update(credential_path="/foreign/credential"),
+            lambda v: v["final_units"][0].update(config_file="../config.toml"),
+        ]
+        for change in mutations:
+            with self.subTest(change=change), self.assertRaises(retry.RetryError):
+                self.prepare(change)
+            self.assertFalse((self.root / str(self.counter) / "beacon-units").exists())
+
+    def test_initial_unit_and_renderer_bytes_must_match_pins(self):
+        self.plan["unit_renderer"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(retry.RetryError, "digest"):
+            self.prepare()
+        self.plan["unit_renderer"]["sha256"] = retry.hashlib.sha256(self.renderer.read_bytes()).hexdigest()
+        initial = Path(self.arguments["--validator-unit"][0])
+        initial.write_bytes(initial.read_bytes() + b"# unexpected edit\n")
+        with self.assertRaisesRegex(retry.RetryError, "digest"):
+            self.prepare()
+        self.draft["validators"][0]["systemd_unit_sha256"] = retry.hashlib.sha256(initial.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(RuntimeError, "exact reviewed"):
+            self.prepare()
+
+    def test_apply_arguments_exclude_all_assembly_only_inputs_in_both_scopes(self):
+        inputs = {flag: ["/path/" + flag[2:]] for flag in (
+            "--runtime-client-config", "--maintenance-admin-config", "--epoch-seed-sources", "--epoch-supervisor-plan", "--validator-client-config", "--validator-operator-key",
+            "--onboarding-token", "--inrou-stage-dir", "--public-inputs", "--validator-unit",
+            "--edge-unit", "--beacon-inputs", "--beacon-validator-unit")}
+        inputs["--epoch-seed-sources"]=[f"/path/seed-{i}" for i in range(4)]
+        for scope in ("core_testnet", "full_inrou"):
+            result = retry.apply_arguments(inputs, scope)
+            self.assertIn("--maintenance-admin-config",result)
+            self.assertNotIn("--epoch-seed-sources",result)
+            self.assertNotIn("--epoch-supervisor-plan",result)
+            self.assertEqual(result[result.index("--epoch-seed-source")+1:result.index("--epoch-seed-source")+5],inputs["--epoch-seed-sources"])
+            self.assertEqual("--inrou-stage-dir" in result, scope == "full_inrou")
+            for flag in ("--public-inputs", "--validator-unit", "--edge-unit", "--beacon-inputs", "--beacon-validator-unit"):
+                self.assertNotIn(flag, result)
+
+
+class BeaconCompletionTests(unittest.TestCase):
+    def setUp(self):
+        self.assembly = Path("/runtime/retry-v1/attempt/assembly")
+        self.before = {"inventory_sha256": "a" * 64, "nodes": []}
+        self.frontier = {"inventory_sha256": "a" * 64, "authorization_sha256": "b" * 64}
+        self.inventory = {"authorization_nonce": "1" * 32, "validators": [], "validator_clients": [],
+                          "beacon_bootstrap": {"request": {"dkg_session": {"session_id": [7] * 32}}, "final_units": []}}
+        self.markers = {}
+        for index in range(1, 5):
+            role = f"taira-validator-{index}"
+            unit = f"iroha3d-{role}.service"
+            original = f"/srv/taira/{role}/releases/commit/config/config.toml"
+            argv = [f"/srv/taira/{role}/current/bin/iroha3d_taira", "--config", f"/srv/taira/{role}/current/config/config.toml", "--sora"]
+            self.inventory["validators"].append({"slug": role, "systemd_unit": unit,
+                "artifacts": [{"role": "config", "remote_path": original, "sha256": "c" * 64}]})
+            self.inventory["validator_clients"].append({"slug": role, "peer_id": f"peer-{index}"})
+            self.inventory["beacon_bootstrap"]["final_units"].append({"validator": role, "sha256": "d" * 64})
+            self.before["nodes"].append({"peer_id": f"peer-{index}", "systemd_unit": unit,
+                "unit_sha256": "e" * 64, "config_sha256": "c" * 64, "seed_file": {"inode": index},
+                "seed_fd": 199, "node_fingerprint": f"node-{index}",
+                "binding": {"config_path": original, "config_sha256": "c" * 64,
+                            "config_files": [{"path": original, "sha256": "c" * 64}], "argv": argv}})
+            self.markers[role] = {"schema": "iroha.taira.public-reset.beacon-provider-active.v1",
+                "authorization_sha256": "b" * 64, "bundle_sha256": "f" * 64,
+                "validator": role, "session_id": [7] * 32, "config_sha256": "9" * 64, "unit_sha256": "d" * 64}
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.completed = self.stack.enter_context(mock.patch.object(retry, "completed_attempt", return_value={"inventory": self.inventory}))
+        self.reads = []
+        def public_read(path, *args, **kwargs):
+            self.reads.append(str(path))
+            if Path(path).name == "apply-started.json":
+                return json.dumps(self.frontier).encode()
+            self.assertEqual(Path(path).parent, Path("/var/lib/taira/.public-reset-control-v1/beacon") / ("1" * 32))
+            role = Path(path).name.removesuffix(".active.json")
+            return json.dumps(self.markers[role]).encode()
+        self.stack.enter_context(mock.patch.object(retry, "public_record", side_effect=public_read))
+
+    def test_completed_native_activation_changes_only_authenticated_process_binding(self):
+        original = copy.deepcopy(self.before)
+        rows = retry.beacon_completed_rows(Path("/runtime"), self.assembly, self.before)
+        self.completed.assert_called_once_with({"runtime_root": "/runtime"}, self.assembly.parent, required=True)
+        self.assertEqual(self.before, original)
+        for old, row in zip(original["nodes"], rows):
+            self.assertEqual(row["seed_file"], old["seed_file"])
+            self.assertEqual(row["seed_fd"], 199)
+            self.assertEqual(row["node_fingerprint"], old["node_fingerprint"])
+            self.assertEqual(row["unit_sha256"], "d" * 64)
+            self.assertEqual(row["config_sha256"], "9" * 64)
+            self.assertTrue(row["binding"]["config_path"].endswith("/beacon.toml"))
+            self.assertTrue(row["binding"]["argv"][2].endswith("/beacon.toml"))
+        self.assertFalse(any(path.endswith(".toml") for path in self.reads))
+
+    def test_marker_cannot_authorize_without_exact_native_completion(self):
+        self.completed.side_effect = retry.RetryError("exact native completed receipt is missing")
+        with self.assertRaisesRegex(retry.RetryError, "completed receipt"):
+            retry.beacon_completed_rows(Path("/runtime"), self.assembly, self.before)
+        self.assertEqual(self.reads, [])
+
+    def test_projection_rejects_foreign_authorization_session_unit_bundle_and_inventory(self):
+        for field, value in (("authorization_sha256", "0" * 64), ("session_id", [8] * 32),
+                             ("unit_sha256", "0" * 64), ("bundle_sha256", "0" * 64),
+                             ("validator", "foreign"), ("config_sha256", "invalid")):
+            with self.subTest(field=field):
+                saved = copy.deepcopy(self.markers)
+                self.markers["taira-validator-2"][field] = value
+                with self.assertRaises(retry.RetryError):
+                    retry.beacon_completed_rows(Path("/runtime"), self.assembly, self.before)
+                self.markers = saved
+        self.frontier["inventory_sha256"] = "0" * 64
+        with self.assertRaisesRegex(retry.RetryError, "pre-start inventory"):
+            retry.beacon_completed_rows(Path("/runtime"), self.assembly, self.before)
+
+
 class CoreScopeTests(unittest.TestCase):
     def test_scope_steps_match_native_preseed_and_seal_boundaries(self):
         core = retry.qualification_steps("core_testnet")
         full = retry.qualification_steps("full_inrou")
-        self.assertEqual((len(core), len(full)), (14, 15))
+        self.assertEqual((len(core), len(full)), (15, 16))
         self.assertEqual(core, tuple(step for step in full if step != "preseed"))
-        self.assertEqual((core[5], full[5], full[6]), ("start", "preseed", "start"))
-        self.assertEqual((core[12], full[13]), ("seal", "seal"))
+        self.assertEqual((core[2], full[2]), ("epoch_supervisor_pause", "epoch_supervisor_pause"))
+        self.assertEqual((core[6], full[6], full[7]), ("start", "preseed", "start"))
+        self.assertEqual((core[13], full[14]), ("seal", "seal"))
+        self.assertEqual(core[7:10], ("canary", "convergence", "restart_proof"))
+        self.assertEqual(full[8:11], core[7:10])
         for scope in (None, "inrou", "basic", "full", ""):
             with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
                 retry.qualification_steps(scope)
 
+    def test_journal_order_matches_native_execution_arrays_and_serialized_labels(self):
+        # This is a cross-language journal cursor contract: consume the native
+        # arrays and label mapping, so changing either producer fails here.
+        source = (SCRIPT.parents[1] / "crates/iroha_cli/src/taira_public_reset.rs").read_text()
+        label_start = source.index("impl ExecutionStep {")
+        label_end = source.index("\n    }", label_start)
+        labels = dict(retry.re.findall(r'Self::(\w+)\s*=>\s*"([a-z_]+)"', source[label_start:label_end]))
+        for scope, name in (("core_testnet", "CORE_TESTNET_EXECUTION_STEPS"), ("full_inrou", "FULL_INROU_EXECUTION_STEPS")):
+            match = retry.re.search(r"const " + name + r": \[ExecutionStep; (\d+)\] = \[(.*?)\];", source, retry.re.S)
+            self.assertIsNotNone(match, name)
+            variants = retry.re.findall(r"ExecutionStep::(\w+)", match.group(2))
+            self.assertEqual(len(variants), int(match.group(1)))
+            self.assertEqual(len(set(variants)), len(variants))
+            self.assertEqual(retry.qualification_steps(scope), tuple(labels[variant] for variant in variants))
+
     def test_local_arguments_require_public_bundle_and_forbid_core_stage(self):
         args = []
         for flag, count in (("--public-inputs", 1), ("--runtime-client-config", 1),
+                            ("--maintenance-admin-config", 1), ("--epoch-seed-sources", 4), ("--epoch-supervisor-plan", 1),
                             ("--validator-client-config", 4), ("--validator-operator-key", 1),
                             ("--onboarding-token", 1), ("--validator-unit", 4),
                             ("--edge-unit", 1), ("--known-hosts", 1)):
@@ -1089,10 +1580,10 @@ class CoreScopeTests(unittest.TestCase):
     def test_core_rollback_cursor_cannot_cross_seal_or_change_scope(self):
         inventory = {"qualification_scope": "core_testnet", "revision": {"commit": "a" * 40}, "deployment_id": "core"}
         value = {"qualification_scope": "core_testnet", "deployment_id": "core", "status": "rolled_back", "phase": "rolled_back",
-                 "next_step": 11, "touched_validators": list(retry.RETIRE_SLUGS[:-1]), "edge_touched": True,
+                 "next_step": 12, "touched_validators": list(retry.RETIRE_SLUGS[:-1]), "edge_touched": True,
                  "edge_rollback_complete": True, "rollback_next_validator": 4, "rollback_failures": [], "recovery_intent": None}
         retry._retire_validate_terminal(inventory, value, expected_commit="a" * 40, expected_deployment="core")
-        for field, wrong in (("next_step", 12), ("qualification_scope", "full_inrou"), ("qualification_scope", "inrou")):
+        for field, wrong in (("next_step", 13), ("qualification_scope", "full_inrou"), ("qualification_scope", "inrou")):
             with self.subTest(field=field, wrong=wrong), self.assertRaises(retry._retire_RebindError):
                 retry._retire_validate_terminal(inventory, dict(value, **{field: wrong}), expected_commit="a" * 40, expected_deployment="core")
 
@@ -1139,6 +1630,8 @@ class WorkflowTests(unittest.TestCase):
             "artifacts": [dict(self.inventory["validators"][0]["artifacts"][0])],
         }
 
+        self.inventory=complete_previous_fixture(self.inventory)
+
         def record(name, value):
             path = self.root / name
             path.write_text(json.dumps(value))
@@ -1148,6 +1641,9 @@ class WorkflowTests(unittest.TestCase):
         for flag, count in (
             ("--public-inputs", 1),
             ("--runtime-client-config", 1),
+            ("--maintenance-admin-config", 1),
+            ("--epoch-seed-sources", 4),
+            ("--epoch-supervisor-plan", 1),
             ("--validator-client-config", 4),
             ("--validator-operator-key", 1),
             ("--onboarding-token", 1),
@@ -1158,17 +1654,25 @@ class WorkflowTests(unittest.TestCase):
             paths = [
                 f"/public-fixture/{flag.removeprefix('--')}-{i}" for i in range(count)
             ]
+            if flag == "--epoch-supervisor-plan":
+                paths=[record("retained-supervisor.json",self.inventory["epoch_supervisor"])]
             if flag == "--validator-unit":
-                paths = [
-                    f"/units/{row['systemd_unit']}"
-                    for row in self.inventory["validators"]
-                ]
+                unit_root = self.root / "initial-units"
+                unit_root.mkdir(mode=0o700)
+                paths = []
+                for row in self.inventory["validators"]:
+                    path = unit_root / row["systemd_unit"]
+                    unit = UNIT_RENDERER["render"](row["slug"], "/private-fixture/" + row["slug"] + ".key", "/private-fixture/" + row["slug"] + ".seed").encode()
+                    path.write_bytes(unit)
+                    row["systemd_unit_sha256"] = retry.hashlib.sha256(unit).hexdigest()
+                    paths.append(str(path))
             if flag == "--known-hosts":
                 paths = ["/public-fixture/known_hosts"]
             args.extend([flag, *paths])
         reference = {"path": "/public-fixture/helper.py", "sha256": "f" * 64}
         self.plan = {
             "qualification_scope": "core_testnet",
+            "epoch_supervisor":supervisor_intent_fixture(),
             "runtime_root": str(self.root),
             "retired_public_imports": [],
             "attempts_root": str(self.attempts),
@@ -1190,6 +1694,7 @@ class WorkflowTests(unittest.TestCase):
             "expected_mac": "00:00:00:00:00:00",
             "capacity_plan": core_plan(),
         }
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
         self.request = {
             "intent": "deployment",
             "plan": self.plan,
@@ -1200,6 +1705,7 @@ class WorkflowTests(unittest.TestCase):
         }
         self.calls = []
         self.fail_phase = None
+        self.mutate_supervisor = None
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(
@@ -1230,6 +1736,7 @@ class WorkflowTests(unittest.TestCase):
             )
         )
         self.stack.enter_context(mock.patch.object(retry, "emit"))
+        self.stack.enter_context(mock.patch.object(retry, "_continuity_load_public_module", return_value=UNIT_RENDERER))
         self.stack.enter_context(
             mock.patch.object(retry, "run_native", side_effect=self.native)
         )
@@ -1265,7 +1772,17 @@ class WorkflowTests(unittest.TestCase):
         self, argv, directory, *, phase, pass_fds=(), env=None, journal_path=None
     ):
         self.calls.append(phase)
+        if phase == "apply":
+            for forbidden in ("--beacon-inputs", "--beacon-validator-unit", "--beacon-genesis-manifest", "--public-inputs", "--validator-unit", "--edge-unit"):
+                self.assertNotIn(forbidden, argv)
+        self.assertNotIn("--inventory-draft",argv)
+        self.assertNotIn("--http-operator-key-sha256",argv)
+        self.assertNotIn("--observation-trust",argv)
         if phase in ("assemble", "apply"):
+            self.assertIn("--maintenance-admin-config",argv)
+            self.assertEqual("--epoch-supervisor-plan" in argv,phase=="assemble")
+            self.assertEqual("--epoch-seed-sources" in argv,phase=="assemble")
+            self.assertEqual("--epoch-seed-source" in argv,phase=="apply")
             self.assertEqual("--public-inputs" in argv, phase == "assemble")
             self.assertEqual("--inrou-stage-dir" in argv, self.inventory["qualification_scope"] == "full_inrou")
             self.assertIn("--validator-operator-key", argv)
@@ -1277,11 +1794,63 @@ class WorkflowTests(unittest.TestCase):
         if phase == self.fail_phase:
             self.fail_phase = None
             raise retry.RetryError("public injected native failure")
+        if phase == "prepare-public-inputs":
+            self.assertEqual(argv[argv.index("--localnet-dir") + 1], Path("/public-fixture/prep/network"))
+            self.assertNotIn("--canary-public-key", argv)
+            draft_path = Path(argv[argv.index("--intent") + 1])
+            self.assertEqual(draft_path.parent.name, "assembly")
+            self.assertNotIn("beacon_bootstrap", json.loads(draft_path.read_bytes()))
+            output = Path(argv[argv.index("--output-dir") + 1])
+            self.assertEqual(output.parent.name, "assembly")
+            self.assertFalse(output.exists())
+            output.mkdir(mode=0o700)
+        if phase == "prepare-beacon-inputs":
+            draft = json.loads(Path(argv[argv.index("--intent") + 1]).read_bytes())
+            self.assertNotIn("beacon_bootstrap", draft)
+            retry.write_public(Path(argv[argv.index("--output") + 1]), beacon_input_fixture(draft))
+        if phase == "prepare-epoch-supervisor-plan":
+            self.assertIn("--intent",argv)
+            topology=json.loads(Path(argv[argv.index("--intent")+1]).read_bytes())
+            self.assertEqual(topology,expected_topology(self.inventory,directory.parent.parent.name,topology["authorization_nonce"]))
+            for flag in ("--maintenance-admin-config","--runtime-client-config","--validator-client-config","--validator-operator-key","--onboarding-token","--validator-unit","--edge-unit","--known-hosts","--epoch-seed-source"):
+                self.assertIn(flag,argv)
+            for flag in ("--beacon-inputs","--beacon-validator-unit","--epoch-supervisor-plan","--epoch-seed-sources"):
+                self.assertNotIn(flag,argv)
+            self.assertEqual(argv[argv.index("--authorization")+1],"until-stopped")
+            policy = self.plan["epoch_supervisor"]
+            for key in ("host_slug", "payment_asset", "transaction_fee_maximum", "first_epoch",
+                        "batch_epochs", "operation_timeout_ms", "provision_timeout_ms",
+                        "timeout_ms", "prior_state"):
+                self.assertEqual(argv[argv.index("--" + key.replace("_", "-")) + 1], str(policy[key]))
+            self.assertEqual("--prior-plan" in argv, policy["prior_plan"] is not None)
+            if policy["prior_plan"] is not None:
+                self.assertEqual(argv[argv.index("--prior-plan") + 1], policy["prior_plan"]["path"])
+            self.assertEqual(argv[argv.index("--maintenance-admin-config") + 1],
+                             "/public-fixture/maintenance-admin-config-0")
+            self.assertEqual(argv[argv.index("--epoch-seed-source")+1:argv.index("--epoch-seed-source")+5],[r["path"] for r in self.inventory["epoch_supervisor"]["original_seed_sources"]])
+            out=Path(argv[argv.index("--output-dir")+1]);out.mkdir(mode=0o700)
+            self.assertFalse((out.parent/"native-local-args.json").exists())
+            self.assertFalse((out.parent/"native-assembly-args.json").exists())
+            generated=copy.deepcopy(self.inventory["epoch_supervisor"]);generated["policy_sha256"]="6"*64
+            if self.mutate_supervisor:self.mutate_supervisor(generated)
+            retry.write_public(out/"supervisor-plan.json",generated)
+            retry.write_public(out/"supervisor-binding.json",{"synthetic_public_native_binding":True})
+            retry.write_public(out/"observation-trust.json",{"synthetic_public_native_trust":True})
         if phase == "assemble":
+            self.assertIn("--beacon-inputs", argv)
+            self.assertIn("--beacon-validator-unit", argv)
             draft = json.loads(
-                Path(argv[argv.index("--inventory-draft") + 1]).read_bytes()
+                Path(argv[argv.index("--intent") + 1]).read_bytes()
             )
-            retry.write_public(Path(argv[argv.index("--output") + 1]), draft)
+            self.assertEqual(draft,expected_topology(self.inventory,directory.parent.parent.name,draft["authorization_nonce"]))
+            selected=Path(argv[argv.index("--epoch-supervisor-plan")+1])
+            self.assertEqual(selected,directory.parent.parent/"assembly/epoch-supervisor/supervisor-plan.json")
+            self.assertTrue(selected.is_file())
+            assembled=copy.deepcopy(self.inventory)
+            assembled["deployment_id"]=draft["deployment_id"]
+            assembled["authorization_nonce"]=draft["authorization_nonce"]
+            assembled["epoch_supervisor"]=json.loads(selected.read_bytes())
+            retry.write_public(Path(argv[argv.index("--output") + 1]),assembled)
         if phase == "preflight":
             inventory_path = Path(argv[argv.index("--inventory") + 1])
             inventory = json.loads(inventory_path.read_bytes())
@@ -1336,6 +1905,8 @@ class WorkflowTests(unittest.TestCase):
 
     def authorize(self, cli, assembly, args, plan, directory):
         self.calls.append("authorize")
+        self.assertEqual(args, json.loads((assembly / "native-assembly-args.json").read_bytes()))
+        self.assertNotIn("--beacon-inputs", json.loads((assembly / "native-local-args.json").read_bytes()))
         retry.write_public(
             assembly / "authorization.json", {"public_signature_fixture": True}
         )
@@ -1384,9 +1955,139 @@ class WorkflowTests(unittest.TestCase):
         attempt = Path(result["private_attempt"])
         self.assertTrue(result["passed"])
         self.assertTrue((attempt / "apply-started.json").exists())
-        self.assertEqual(self.calls, ["assemble", "authorize", "preflight", "apply"])
+        self.assertEqual(self.calls, ["prepare-public-inputs", "prepare-beacon-inputs", "prepare-epoch-supervisor-plan", "assemble", "authorize", "preflight", "apply"])
+        static=json.loads((attempt/"assembly/native-local-args.json").read_bytes())
+        retained=json.loads((attempt/"assembly/native-retained-args.json").read_bytes())
+        self.assertNotEqual(static[static.index("--epoch-supervisor-plan")+1],retained[retained.index("--epoch-supervisor-plan")+1])
+        self.assertEqual(static[static.index("--epoch-seed-sources")+1:static.index("--epoch-seed-sources")+5],retained[retained.index("--epoch-seed-sources")+1:retained.index("--epoch-seed-sources")+5])
         self.assertEqual(result["completed"], list(retry.PHASES))
         self.assertEqual(result["qualification_scope"], "core_testnet")
+
+    def test_beacon_preparation_failure_stops_before_authorization_and_keeps_same_nonce(self):
+        self.fail_phase = "prepare-beacon-inputs"
+        with self.assertRaises(retry.RetryError):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        pointer = json.loads((self.attempts / "latest.json").read_bytes())
+        attempt = self.attempts / pointer["attempt_id"]
+        operation = (attempt / "operation.json").read_bytes()
+        self.assertEqual(json.loads((attempt / "failure.json").read_bytes())["phase"], "prepare-beacon-inputs")
+        self.assertEqual(self.calls, ["prepare-public-inputs", "prepare-beacon-inputs"])
+        self.assertFalse((attempt / "apply-started.json").exists())
+        result = retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(result["attempt_id"], pointer["attempt_id"])
+        self.assertEqual((attempt / "operation.json").read_bytes(), operation)
+        self.assertEqual(self.calls.count("apply"), 1)
+        self.assertEqual(len(list(attempt.glob("preapply-evidence-*"))), 1)
+
+    def test_supervisor_preparation_failure_stops_before_assembly_signing_or_apply(self):
+        self.fail_phase="prepare-epoch-supervisor-plan"
+        with self.assertRaises(retry.RetryError):retry.guest_locked(self.request,self.capacity,self.attempts)
+        self.assertEqual(self.calls,["prepare-public-inputs","prepare-beacon-inputs","prepare-epoch-supervisor-plan"])
+        pointer=json.loads((self.attempts/"latest.json").read_bytes());attempt=self.attempts/pointer["attempt_id"]
+        identity=(attempt/"operation.json").read_bytes()
+        self.assertFalse((attempt/"assembly/authorization.json").exists())
+        self.assertFalse((attempt/"apply-started.json").exists())
+        self.assertEqual(json.loads((attempt/"failure.json").read_bytes())["phase"],"prepare-epoch-supervisor-plan")
+        result=retry.guest_locked(self.request,self.capacity,self.attempts)
+        self.assertEqual(result["attempt_id"],pointer["attempt_id"])
+        self.assertEqual((attempt/"operation.json").read_bytes(),identity)
+        self.assertEqual(self.calls.count("apply"),1)
+
+    def test_substituted_native_supervisor_output_stops_before_assembly(self):
+        self.mutate_supervisor=lambda value:value.update(host_slug="taira-validator-4")
+        with self.assertRaises(retry.RetryError):retry.guest_locked(self.request,self.capacity,self.attempts)
+        self.assertEqual(self.calls,["prepare-public-inputs","prepare-beacon-inputs","prepare-epoch-supervisor-plan"])
+        pointer=json.loads((self.attempts/"latest.json").read_bytes());attempt=self.attempts/pointer["attempt_id"]
+        self.assertFalse((attempt/"assembly/native-local-args.json").exists())
+        self.assertFalse((attempt/"assembly/native-assembly-args.json").exists())
+        self.assertFalse((attempt/"apply-started.json").exists())
+
+    def test_original_seed_mapping_mismatch_rejects_before_retirement(self):
+        args=json.loads(Path(self.plan["local_args_path"]).read_bytes())
+        args[args.index("--epoch-seed-sources")+1]="/unselected/seed"
+        Path(self.plan["local_args_path"]).write_text(json.dumps(args))
+        with self.assertRaisesRegex(retry.RetryError,"seed paths"):
+            retry.guest_locked(self.request,self.capacity,self.attempts)
+        retry._retire_retained_state.assert_not_called();retry._retire_apply.assert_not_called();self.assertEqual(self.calls,[])
+
+    def occupied_supervisor(self, state):
+        raw = b'{"schema":"public-original-predecessor","operation":"retained"}'
+        prior = self.root / "prior-plan.json"
+        prior.write_bytes(raw)
+        digest = retry.hashlib.sha256(raw).hexdigest()
+        self.plan["epoch_supervisor"].update(
+            prior_state=state, prior_plan={"path": str(prior), "sha256": digest})
+        self.inventory["epoch_supervisor"].update(
+            prior_state=state, prior={"plan_sha256": digest, "plan_bytes": list(raw)})
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
+        args = json.loads(Path(self.plan["local_args_path"]).read_bytes())
+        retained = Path(args[args.index("--epoch-supervisor-plan") + 1])
+        retained.write_text(json.dumps(self.inventory["epoch_supervisor"]))
+        return prior, raw
+
+    def test_running_original_supervisor_uses_exact_prior_plan(self):
+        prior, raw = self.occupied_supervisor("running")
+        result = retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertTrue(result["passed"])
+        self.assertEqual(prior.read_bytes(), raw)
+        self.assertEqual(self.calls.count("apply"), 1)
+
+    def test_stopped_original_supervisor_keeps_original_state_and_custody(self):
+        prior, raw = self.occupied_supervisor("stopped")
+        result = retry.guest_locked(self.request, self.capacity, self.attempts)
+        assembled = json.loads((Path(result["private_attempt"]) / "assembly/inventory.json").read_bytes())
+        self.assertEqual(assembled["epoch_supervisor"]["prior_state"], "stopped")
+        self.assertEqual(assembled["epoch_supervisor"]["prior"]["plan_bytes"], list(raw))
+        self.assertEqual(prior.read_bytes(), raw)
+
+    def test_original_supervisor_prior_bytes_drift_stops_before_retirement(self):
+        prior, _ = self.occupied_supervisor("running")
+        prior.write_bytes(b'{"changed":"must fail before retirement"}')
+        with self.assertRaisesRegex(retry.RetryError, "predecessor plan bytes differ"):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        retry._retire_retained_state.assert_not_called()
+        retry._retire_apply.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    def test_python_preparation_never_opens_private_runtime_inputs(self):
+        retry.guest_locked(self.request, self.capacity, self.attempts)
+        args = json.loads(Path(self.plan["local_args_path"]).read_bytes())
+        _, grouped = retry.local_arguments(json.dumps(args).encode(), "core_testnet")
+        private_paths = {path for flag in (
+            "--runtime-client-config", "--maintenance-admin-config", "--epoch-seed-sources",
+            "--validator-client-config", "--validator-operator-key", "--onboarding-token")
+            for path in grouped[flag]}
+        reads = {str(call.args[0]) for call in retry.public_record.call_args_list}
+        self.assertTrue(reads)
+        self.assertFalse(reads & private_paths)
+
+    def test_prior_plan_pin_mismatch_rejects_before_retirement(self):
+        original=b'{"public":"predecessor"}'
+        prior=self.root/"prior-plan.json";prior.write_bytes(original)
+        self.plan["epoch_supervisor"].update(prior_state="stopped",prior_plan={"path":str(prior),"sha256":"a"*64})
+        self.inventory["epoch_supervisor"].update(prior_state="stopped",prior={"plan_sha256":"b"*64,"plan_bytes":list(original)})
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
+        args=json.loads(Path(self.plan["local_args_path"]).read_bytes());Path(args[args.index("--epoch-supervisor-plan")+1]).write_text(json.dumps(self.inventory["epoch_supervisor"]))
+        with self.assertRaisesRegex(retry.RetryError,"predecessor"):
+            retry.guest_locked(self.request,self.capacity,self.attempts)
+        retry._retire_retained_state.assert_not_called();retry._retire_apply.assert_not_called();self.assertEqual(self.calls,[])
+
+    def test_missing_supervisor_intent_stops_before_retirement_and_native_calls(self):
+        del self.plan["epoch_supervisor"]
+        with self.assertRaises(retry.RetryError):retry.guest_locked(self.request,self.capacity,self.attempts)
+        retry._retire_retained_state.assert_not_called()
+        retry._retire_apply.assert_not_called()
+        self.assertEqual(self.calls,[])
+
+    def test_fresh_native_public_bundle_failure_cannot_reuse_retained_bundle(self):
+        self.fail_phase = "prepare-public-inputs"
+        with self.assertRaises(retry.RetryError):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(self.calls, ["prepare-public-inputs"])
+        pointer = json.loads((self.attempts / "latest.json").read_bytes())
+        attempt = self.attempts / pointer["attempt_id"]
+        self.assertFalse((attempt / "assembly/native-assembly-args.json").exists())
+        self.assertFalse((attempt / "apply-started.json").exists())
 
     def test_missing_scope_stops_before_retirement_or_native_calls(self):
         del self.inventory["qualification_scope"]
@@ -1781,7 +2482,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
                         'nonce': self.nonce, 'uploads': [],
                         'coordination_relative': 'hosts/' + 'e' * 64}
         roles = [('iroha_cli', 'iroha'), ('iroha3d', 'iroha3d_taira'),
-                 ('sorafs_node', 'sorafs-node')]
+                 ('sorafs_node', 'sorafs-node'), ('kagami', 'kagami')]
         for _, name in roles:
             self.file(self.bins / name, b'public executable', 0o755)
         self.inventory = {'qualification_scope': 'full_inrou', 'validators': [], 'inrou_canary': {}}
@@ -1805,7 +2506,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
                 staged_name = 'iroha' if role == 'iroha_cli' else 'artifact-' + role
                 for path, mode in [(upload / staged_name, 0o755),
                     (self.runtime / 'journal-v1/staged-artifacts-v1' / ('b' * 64) /
-                     slug / self.nonce / staged_name, 0o500 if role == 'iroha_cli' else 0o400)]:
+                     slug / self.nonce / staged_name, 0o500 if role in ('iroha_cli', 'iroha3d') else 0o400)]:
                     self.file(path, b'public executable', mode); self.targets.append(path)
                 if slug != 'taira-edge':
                     release = self.work / 'retired-control' / slug / 'rollback' / self.nonce / 'first-release.after'
@@ -1912,7 +2613,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
              mock.patch.object(retry.os.path, "lexists", side_effect=lexists):
             exact, chunks, protected, stores = retry._retire_prune_scopes(self.guard, self.context, inventory)
         self.assertEqual((chunks, stores), (set(), []))
-        self.assertEqual(len(exact), 38)
+        self.assertEqual(len(exact), 50)
         for path in (*exact, *protected):
             admitted(path)
 
@@ -1923,7 +2624,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
         keep = {path: path.read_bytes() for path in root.rglob('*')
                 if path.is_file() and path not in expected}
         first = self.prune()
-        self.assertEqual(first['file_count'], 56)
+        self.assertEqual(first['file_count'], 68)
         self.assertEqual(first, self.prune())
         self.assertTrue(all(not path.exists() for path in expected))
         self.assertTrue(all(path.read_bytes() == raw for path, raw in keep.items()))
@@ -1969,7 +2670,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
             self.prune()
         self.assertTrue((self.work / 'public-prune-intent.json').exists())
         self.assertFalse((root / 'payloads/guest/aarch64/initrd.img').exists())
-        self.assertEqual(self.prune()['file_count'], 56)
+        self.assertEqual(self.prune()['file_count'], 68)
         self.assertTrue((root / 'payloads/guest/aarch64/private-config').exists())
 
     def test_closed_public_prune_preserves_private_siblings_and_is_idempotent(self):
@@ -1977,7 +2678,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
                      if path.is_file() and path not in self.targets}
         directory_ids = {path: path.stat().st_ino for path in self.root.rglob('*') if path.is_dir()}
         first = self.prune(); second = self.prune()
-        self.assertEqual(first, second); self.assertEqual(first['file_count'], 53)
+        self.assertEqual(first, second); self.assertEqual(first['file_count'], 65)
         self.assertTrue(all(not path.exists() for path in self.targets))
         self.assertTrue(all(path.read_bytes() == data for path,data in preserved.items()))
         self.assertTrue(all(path.stat().st_ino == inode for path,inode in directory_ids.items()))
@@ -2008,7 +2709,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
         self.assertTrue(all(not path.exists() for path in self.targets))
         self.reclaim.reset_mock()
         self.reclaim.return_value = SimpleNamespace(returncode=0)
-        self.assertEqual(self.prune()['file_count'], 53)
+        self.assertEqual(self.prune()['file_count'], 65)
         self.assertEqual([call.args[0][0] for call in self.reclaim.call_args_list],
                          ['/usr/bin/sync', '/usr/sbin/fstrim'])
 
@@ -2034,7 +2735,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
             returncode=1 if argv[0] == '/usr/sbin/fstrim' else 0)
         with self.assertRaisesRegex(retry._retire_RebindError, 'trim failed'): self.prune()
         self.reclaim.side_effect = None
-        self.assertEqual(self.prune()['file_count'], 53)
+        self.assertEqual(self.prune()['file_count'], 65)
 
     def test_closed_public_prune_rejects_forged_manifest_and_unpublished_retirement(self):
         self.result['published'] = False
@@ -2049,7 +2750,7 @@ class RetiredPublicPruneTests(unittest.TestCase):
         for index, path in enumerate(manifests):
             path.chmod(0o444 if index % 2 else 0o644)
         before = {path: retry.identity(path.stat()) for path in manifests}
-        self.assertEqual(self.prune()['file_count'], 53)
+        self.assertEqual(self.prune()['file_count'], 65)
         self.assertEqual(before, {path: retry.identity(path.stat()) for path in manifests})
 
     def test_closed_public_prune_rejects_public_manifest_write_permissions_and_links(self):
@@ -2123,7 +2824,9 @@ class SupersededImportTests(unittest.TestCase):
 
     def setUp(self):
         self.addCleanup(os.umask, os.umask(0o022))
-        self.tmp = tempfile.TemporaryDirectory(dir=SCRIPT.parent)
+        # Use native symlink metadata and owner-controlled ancestry. A shared
+        # checkout projects macOS symlink modes; /tmp has writable ancestors.
+        self.tmp = tempfile.TemporaryDirectory(dir=Path.home())
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
         self.runtime = self.root / 'runtime'
@@ -2172,7 +2875,7 @@ class SupersededImportTests(unittest.TestCase):
             self.file(self.bins / name, b'public binary', 0o755)
             self.file(self.current_bins / name, b'current binary', 0o755)
             self.artifacts.append({'name': name, 'size': len(b'public binary'), 'sha256': 'f' * 64})
-        roles = [('iroha_cli', 'iroha'), ('iroha3d', 'iroha3d_taira'), ('sorafs_node', 'sorafs-node')]
+        roles = [('iroha_cli', 'iroha'), ('iroha3d', 'iroha3d_taira'), ('sorafs_node', 'sorafs-node'), ('kagami', 'kagami')]
         for index in range(5):
             host = {'slug': retry.RETIRE_SLUGS[index], 'artifacts': [
                 {'role': role, 'local_path': str(self.bins / name), 'size': len(b'public binary'), 'sha256': 'f' * 64}
@@ -2345,6 +3048,167 @@ class SupersededImportTests(unittest.TestCase):
         self.assertEqual(extra['guest_plan']['allocations'][0]['bytes'] - base['guest_plan']['allocations'][0]['bytes'],
                          2 * (retry.RETIRE_IMPORT_MAX_INTENT_BYTES + 1024 * 1024))
         with self.assertRaises(retry.RetryError): retry.retirement_capacity_plans(str(self.runtime), '/backing', self.binary, 5)
+
+
+class RetireLiveReferenceTests(unittest.TestCase):
+    """Synthetic proc metadata exercises aliases without mounts or live mutation."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="taira-live-reference-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.binary = self.root / "release/bin/iroha"
+        self.binary.parent.mkdir(parents=True)
+        self.binary.write_bytes(b"selected public bytes")
+        self.stamp = list(retry.identity(self.binary.stat()))
+        self.device = self.stamp[0]
+        self.proc = self.root / "proc"
+        (self.proc / "self/ns").mkdir(parents=True)
+        (self.proc / "self/root").symlink_to("/")
+        (self.proc / "self/ns/mnt").symlink_to("mnt:[123]")
+        self.mounts = self.mount("/", "/")
+        (self.proc / "self/mountinfo").write_text(self.mounts)
+
+    def mount(self, root, target):
+        escape = lambda value: str(value).replace("\\", "\\134").replace(" ", "\\040")
+        return f"1 0 {os.major(self.device)}:{os.minor(self.device)} {escape(root)} {escape(target)} rw - ext4 /dev/root rw\n"
+
+    def process(self, pid=987654321, *, mounts=None, maps=""):
+        path = self.proc / str(pid)
+        (path / "fd").mkdir(parents=True)
+        (path / "ns").mkdir()
+        (path / "ns/mnt").symlink_to("mnt:[123]")
+        (path / "maps").write_text(maps)
+        (path / "mountinfo").write_text(self.mounts if mounts is None else mounts)
+        (path / "root").symlink_to("/")
+        return path
+
+    def observe(self, roots=None, **kwargs):
+        return retry._retire_live_references(roots or [self.binary], proc_root=self.proc, **kwargs)
+
+    def admitted(self):
+        return [{"path": str(self.binary), "identity": self.stamp}]
+
+    def mapped(self, pathname="/unrelated/alias (deleted)"):
+        return f"1000-2000 r-xp 00000000 {os.major(self.device):x}:{os.minor(self.device):x} {self.stamp[1]} {pathname}\n"
+
+    def test_ordinary_filesystem_mount_is_not_an_alias(self):
+        self.process()
+        result = self.observe()
+        self.assertTrue(result["passed"])
+        self.assertFalse(result["argv_or_environment_read"])
+
+    def test_parent_directory_bind_alias_is_detected_for_files_and_directories(self):
+        self.process(mounts=self.mounts + self.mount(self.binary.parent, "/alias"))
+        for root in (self.binary, self.binary.parent):
+            with self.subTest(root=root):
+                result = self.observe([root])
+                self.assertFalse(result["passed"])
+                self.assertTrue(any(row["kind"] == "mount_alias" for row in result["references"]))
+
+    def test_ancestor_and_whole_filesystem_aliases_are_detected(self):
+        for root in (self.root, Path("/")):
+            with self.subTest(root=root):
+                (self.proc / "self/mountinfo").write_text(self.mounts + self.mount(root, "/alias"))
+                self.assertFalse(self.observe()["passed"])
+
+    def test_selected_directory_subtree_bind_alias_is_detected(self):
+        self.process(mounts=self.mounts + self.mount(self.binary.parent, "/alias"))
+        self.assertFalse(self.observe([self.root / "release"])["passed"])
+
+    def test_nonroot_filesystem_mount_uses_filesystem_relative_coordinates(self):
+        self.mounts = self.mount("/subvolume", self.root)
+        (self.proc / "self/mountinfo").write_text(self.mounts)
+        self.process()
+        self.assertTrue(self.observe()["passed"])
+        alias = self.mount("/subvolume/release", "/alias")
+        (self.proc / "987654321/mountinfo").write_text(self.mounts + alias)
+        self.assertFalse(self.observe()["passed"])
+
+    def test_aliased_fd_and_executable_are_detected_by_inode(self):
+        process = self.process()
+        alias = self.root / "outside-alias"
+        os.link(self.binary, alias)
+        (process / "fd/8").symlink_to(alias)
+        (process / "exe").symlink_to(alias)
+        result = self.observe()
+        self.assertEqual({row["kind"] for row in result["references"]}, {"fd", "exe"})
+
+    def test_mapping_inode_survives_original_name_deletion(self):
+        self.process(maps=self.mapped())
+        self.binary.unlink()
+        result = self.observe(file_identities=self.admitted())
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["references"][0]["kind"], "maps")
+
+    def test_closed_directory_file_census_detects_aliased_mapping(self):
+        self.process(maps=self.mapped())
+        result = self.observe([self.binary.parent], file_identities=self.admitted())
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["references"][0]["kind"], "maps")
+
+    def test_only_explicit_own_custody_descriptor_is_admitted(self):
+        process = self.process(os.getpid())
+        (process / "fd/8").symlink_to(self.binary)
+        self.assertTrue(self.observe(own_fds=[8])["passed"])
+        self.assertFalse(self.observe(own_fds=[])["passed"])
+        (process / "exe").symlink_to(self.binary)
+        self.assertFalse(self.observe(own_fds=[8])["passed"])
+
+    def test_own_mapping_is_never_a_custody_descriptor(self):
+        self.process(os.getpid(), maps=self.mapped())
+        self.assertFalse(self.observe(own_fds=[8])["passed"])
+
+    def test_same_mount_namespace_with_distinct_chroot_views_is_rechecked(self):
+        self.process(987654320)
+        process = self.process(987654321, mounts=self.mounts + self.mount(self.root, "/alias"))
+        (process / "root").unlink()
+        (process / "root").symlink_to(self.root)
+        self.assertFalse(self.observe()["passed"])
+
+    def test_malformed_or_oversized_metadata_fails_closed(self):
+        process = self.process(maps="not a map\n")
+        with self.assertRaisesRegex(retry._retire_RebindError, "mapping identity"):
+            self.observe()
+        (process / "maps").write_text("")
+        for raw in (b"not a mount\n", b"x" * (4 * 1024 * 1024 + 1)):
+            with self.subTest(size=len(raw)):
+                (process / "mountinfo").write_bytes(raw)
+                with self.assertRaises(retry._retire_RebindError):
+                    self.observe()
+
+    def test_kernel_thread_without_filesystem_root_has_no_mount_view(self):
+        process = self.process(mounts="")
+        (process / "root").unlink()
+        self.assertTrue(self.observe()["passed"])
+
+    def test_chroot_without_visible_mounts_uses_full_namespace_view(self):
+        process = self.process(mounts="")
+        (process / "root").unlink()
+        (process / "root").symlink_to(self.root)
+        self.assertTrue(self.observe()["passed"])
+
+    def test_unobserved_chroot_namespace_with_empty_view_fails_closed(self):
+        process = self.process(mounts="")
+        (process / "ns/mnt").unlink()
+        (process / "ns/mnt").symlink_to("mnt:[456]")
+        with self.assertRaisesRegex(retry._retire_RebindError, "empty chroot mount view"):
+            self.observe()
+
+    def test_later_full_namespace_view_covers_earlier_empty_chroot(self):
+        process = self.process(987654320, mounts="")
+        (process / "root").unlink()
+        (process / "root").symlink_to(self.root)
+        (process / "ns/mnt").unlink()
+        (process / "ns/mnt").symlink_to("mnt:[456]")
+        later = self.process(987654321)
+        (later / "ns/mnt").unlink()
+        (later / "ns/mnt").symlink_to("mnt:[456]")
+        self.assertTrue(self.observe()["passed"])
+
+    def test_identity_outside_selected_scope_is_rejected(self):
+        with self.assertRaisesRegex(retry._retire_RebindError, "escaped"):
+            self.observe([self.root / "unrelated"], file_identities=self.admitted())
 
 
 if __name__ == "__main__":

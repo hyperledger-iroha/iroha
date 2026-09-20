@@ -9,9 +9,15 @@ fn runtime_catalog_invalid(reason: impl std::fmt::Display) -> LaneLifecycleError
 pub(crate) fn runtime_catalog_from_world(
     world: &impl WorldReadOnly,
 ) -> Result<Option<iroha_data_model::nexus::NexusRuntimeCatalogV1>, LaneLifecycleError> {
+    runtime_catalog_from_parameters(world.parameters())
+}
+
+/// Decode the protected catalog from an explicitly owned parameter version.
+fn runtime_catalog_from_parameters(
+    parameters: &Parameters,
+) -> Result<Option<iroha_data_model::nexus::NexusRuntimeCatalogV1>, LaneLifecycleError> {
     use iroha_data_model::nexus::NexusRuntimeCatalogV1;
-    let Some(custom) = world
-        .parameters()
+    let Some(custom) = parameters
         .custom()
         .get(&NexusRuntimeCatalogV1::parameter_id())
     else {
@@ -151,6 +157,23 @@ pub(crate) fn runtime_catalog_transition_dataspaces(
     pending: &iroha_data_model::nexus::NexusRuntimeCatalogV1,
     plan: &iroha_data_model::nexus::LaneLifecyclePlan,
 ) -> Result<DataSpaceCatalog, LaneLifecycleError> {
+    runtime_catalog_transition_dataspaces_from_parameters(
+        old_nexus,
+        old_registry,
+        old_world.parameters(),
+        pending,
+        plan,
+    )
+}
+
+/// Validate against the retained parameter preimage, including a replaced tip's undo.
+fn runtime_catalog_transition_dataspaces_from_parameters(
+    old_nexus: &iroha_config::parameters::actual::Nexus,
+    old_registry: &LaneManifestRegistry,
+    original_parameters: &Parameters,
+    pending: &iroha_data_model::nexus::NexusRuntimeCatalogV1,
+    plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+) -> Result<DataSpaceCatalog, LaneLifecycleError> {
     pending
         .validate_structure()
         .map_err(runtime_catalog_invalid)?;
@@ -159,7 +182,7 @@ pub(crate) fn runtime_catalog_transition_dataspaces(
             "runtime catalog transition must add lanes without retiring existing lanes",
         ));
     }
-    let previous = runtime_catalog_from_world(old_world)?;
+    let previous = runtime_catalog_from_parameters(original_parameters)?;
     let baseline_dataspaces_hash =
         iroha_data_model::nexus::dataspace_catalog_hash(&old_nexus.configured_dataspace_catalog);
     let baseline_manifests_hash = Hash::prehashed(old_registry.baseline_consensus_policy_digest());
@@ -468,6 +491,7 @@ impl StateTransaction<'_, '_> {
             expected_incarnation_root: payload.expected_incarnation_root,
             runtime_catalog: Some(runtime),
         });
+        self.refresh_canonical_runtime();
         Ok(())
     }
 }

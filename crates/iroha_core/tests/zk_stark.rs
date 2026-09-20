@@ -652,7 +652,6 @@ seiyaku StarkProofRejection {
         core::num::NonZeroU64::new(1).expect("nonzero fixture height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -843,14 +842,7 @@ fn create_election_rejects_generic_stark_vote_role_labels() {
     state.zk.verify_timeout = std::time::Duration::ZERO;
     state.gov.citizenship_bond_amount = 0_u64.into();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -963,14 +955,7 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = false;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -1076,14 +1061,7 @@ fn create_election_rejects_generic_stark_ballot_before_tally_resolution() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = false;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
@@ -1194,14 +1172,7 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     state.zk.verify_timeout = std::time::Duration::ZERO;
     state.gov.citizenship_bond_amount = 0_u64.into();
     state.gov.min_bond_amount = 0_u64.into();
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));

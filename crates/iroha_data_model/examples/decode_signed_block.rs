@@ -6,12 +6,19 @@ use iroha_data_model::{
         deframe_versioned_signed_block_bytes,
     },
     prelude::SetParameter,
-    transaction::{ExecutableBatchItem, executable::Executable},
+    transaction::{ExecutableBatchItem, executable::Executable, signed::TransactionResult},
 };
 use nonzero_ext::nonzero;
 use std::{collections::BTreeSet, convert::TryFrom, env, error::Error, fs};
 fn reference_signer() -> Result<KeyPair, iroha_crypto::Error> {
     KeyPair::try_random()
+}
+fn execution_result_description(result: Option<&TransactionResult>) -> String {
+    match result.map(|result| result.as_ref()) {
+        Some(Err(err)) => format!("execution error: {err:?}"),
+        Some(Ok(_)) => "execution result: Ok (details not printed)".into(),
+        None => "execution result: not attached".into(),
+    }
 }
 fn read_varint(bytes: &[u8], mut pos: usize) -> Result<(u64, usize), Box<dyn Error>> {
     let mut value = 0u64;
@@ -56,7 +63,7 @@ fn extract_first_btreeset_element(payload: &[u8]) -> Result<&[u8], Box<dyn Error
 }
 fn dump_reference_encoding() -> Result<(), Box<dyn Error>> {
     let kp = reference_signer()?;
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let sig = SignatureOf::<BlockHeader>::from_hash(kp.private_key(), header.hash());
     let block_sig = BlockSignature::new(0, sig);
     let mut set = BTreeSet::new();
@@ -172,7 +179,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     })
                     .collect::<Vec<_>>()
             );
-            for (idx, tx) in block.external_transactions().enumerate() {
+            for idx in 0..block.external_entrypoint_count() {
+                let Some(tx) = block.external_signed_transaction_ref_at(idx) else {
+                    continue;
+                };
                 println!("tx[{idx}] authority={}", tx.authority());
                 match tx.instructions() {
                     Executable::Instructions(instrs) => {
@@ -224,13 +234,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                 }
-                if let Some(err) = block.error(idx) {
-                    println!("  tx[{idx}] execution error: {err:?}");
-                } else if block.has_results() {
-                    println!("  tx[{idx}] execution result: Ok (details not printed)");
-                } else {
-                    println!("  tx[{idx}] execution result: not attached");
-                }
+                let result = u32::try_from(idx)
+                    .ok()
+                    .and_then(|index| block.network_output_at(index))
+                    .map(|(_, output)| &output.result);
+                println!("  tx[{idx}] {}", execution_result_description(result));
             }
         }
         Ok(Err(err)) => {
@@ -245,6 +253,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn execution_result_description_distinguishes_missing_success_and_rejection() {
+        use iroha_data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
+
+        assert_eq!(
+            execution_result_description(None),
+            "execution result: not attached"
+        );
+        let success = TransactionResult::new(Ok(Vec::new()));
+        assert_eq!(
+            execution_result_description(Some(&success)),
+            "execution result: Ok (details not printed)"
+        );
+        let rejection = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("example rejection".into()),
+        )));
+        assert_eq!(
+            execution_result_description(Some(&rejection)),
+            format!("execution error: {:?}", rejection.as_ref().unwrap_err())
+        );
+    }
     #[test]
     fn reference_signer_uses_checked_default_key_generation() {
         let key_pair = reference_signer().expect("checked reference signer generation");

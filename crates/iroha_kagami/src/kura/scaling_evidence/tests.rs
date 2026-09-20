@@ -1,33 +1,45 @@
-//! Signed authentication, alignment, budget and complete-cohort adverse controls.
-
+//! Signed Native source, output, authority, budget and complete-cohort controls.
 use super::*;
-use fixture::{Fixture, limits};
+use fixture::{Fixture, Height, limits, mutate_height};
+use iroha_data_model::block::{execution_output::ExecutionOutputV1, lane_consensus::LanePhaseV1};
 use norito::codec::Encode as _;
+
+fn push_with(
+    verifier: &mut ScalingProofVerifier,
+    height: &Height,
+    queries: &[Vec<u8>],
+) -> Result<()> {
+    verifier.push_height(
+        &norito::encode_canonical(&height.proof).unwrap(),
+        &height.block.encode_wire().unwrap(),
+        &height.evidence,
+        &queries.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+}
 
 #[test]
 fn one_and_four_lane_signed_runs_authenticate_every_warmup_and_measurement_effect() {
     for lanes in [1, 4] {
         let fixture = Fixture::new(lanes);
+        assert_eq!(
+            fixture.heights.len(),
+            1 + 8 / lanes,
+            "one input per distinct route and carrier"
+        );
         let mut verifier = fixture.start(fixture.plan(), limits());
         fixture.push(&mut verifier).unwrap();
         let complete = verifier.finish().unwrap();
         assert_eq!(complete.rows().len(), 8);
-        assert_eq!(
-            complete
-                .rows()
-                .iter()
-                .filter(|r| r.phase == WorkloadPhase::Warmup)
-                .count(),
-            4
-        );
-        assert_eq!(
-            complete
-                .rows()
-                .iter()
-                .filter(|r| r.phase == WorkloadPhase::Measurement)
-                .count(),
-            4
-        );
+        for phase in [WorkloadPhase::Warmup, WorkloadPhase::Measurement] {
+            assert_eq!(
+                complete
+                    .rows()
+                    .iter()
+                    .filter(|row| row.phase == phase)
+                    .count(),
+                4
+            );
+        }
         for (row, (logical, tx, route, phase)) in complete.rows().iter().zip(&fixture.requests) {
             assert_eq!(&row.logical_id, logical);
             assert_eq!(row.entrypoint_hash, tx.hash_as_entrypoint());
@@ -37,24 +49,41 @@ fn one_and_four_lane_signed_runs_authenticate_every_warmup_and_measurement_effec
                 (row.lane_id, row.dataspace_id),
                 (route.lane_id, route.dataspace_id)
             );
-            assert_eq!(row.carrier_height, 2);
-            assert_eq!(row.carrier_hash, fixture.carrier.hash());
-            assert_eq!(row.merge_entry_hash, fixture.entry.canonical_hash());
+            let carrier = &fixture.heights[row.carrier_height as usize - 1].block;
+            assert_eq!(row.carrier_hash, carrier.hash());
+            assert_eq!(row.admission_carrier_hash, fixture.heights[0].block.hash());
+            let group = &carrier
+                .execution_context()
+                .unwrap()
+                .native_lane_decisions
+                .as_ref()
+                .unwrap()
+                .groups[row.leaf_index as usize];
+            assert_eq!(
+                row.input_descriptor_hash,
+                group.payload.descriptor.canonical_hash().unwrap()
+            );
+            assert_eq!(
+                row.instance_id,
+                group.payload.descriptor.slots[0].instance_id
+            );
             assert!(norito::encode_canonical(row).unwrap().len() as u64 <= ROW_RESERVATION);
         }
-        for binding in &fixture.entry.active_lanes {
+        for binding in &fixture.plan().active_lanes {
             assert_eq!(
                 complete
                     .rows()
                     .iter()
-                    .filter(|r| r.lane_id == binding.lane_id)
+                    .filter(|row| row.lane_id == binding.lane_id)
                     .count(),
                 8 / lanes
             );
         }
         let decoded: Vec<AuthenticatedRequest> = canonical(complete.canonical_rows()).unwrap();
         assert_eq!(decoded.len(), 8);
-        assert!(complete.input_bytes() > fixture.carrier.encode_wire().unwrap().len() as u64);
+        assert!(
+            complete.input_bytes() > fixture.heights[1].block.encode_wire().unwrap().len() as u64
+        );
     }
 }
 
@@ -84,29 +113,16 @@ fn independent_network_context_interval_and_required_budget_fail_before_evidence
         let mut plan = fixture.plan();
         if change == 0 {
             plan.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
-                Hash::new(b"wrong independent network"),
+                Hash::new(b"wrong network"),
             ));
         } else {
-            plan.first_context = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"wrong independent context",
-            )));
+            plan.first_context =
+                HeightContextId(HashOf::from_untyped_unchecked(Hash::new(b"wrong context")));
         }
         match ScalingProofVerifier::new(plan, limits()) {
-            Err(_) => assert_eq!(
-                change, 0,
-                "wrong network may fail at signed request validation"
-            ),
+            Err(_) => assert_eq!(change, 0),
             Ok(mut verifier) => {
-                assert!(
-                    verifier
-                        .push_height(
-                            &norito::encode_canonical(&fixture.first).unwrap(),
-                            &fixture.genesis.encode_wire().unwrap(),
-                            None,
-                            &[]
-                        )
-                        .is_err()
-                );
+                assert!(fixture.heights[0].push(&mut verifier).is_err());
                 assert!(verifier.finish().is_err());
             }
         }
@@ -122,44 +138,22 @@ fn no_missing_reordered_duplicate_or_unsigned_finality_prefix_can_finish() {
     let mut missing = ScalingProofVerifier::new(fixture.plan(), limits()).unwrap();
     assert!(fixture.push(&mut missing).is_err());
     assert!(missing.finish().is_err());
-    let prefix = fixture.start(fixture.plan(), limits());
-    assert!(prefix.finish().is_err());
+    assert!(fixture.start(fixture.plan(), limits()).finish().is_err());
     let mut duplicate = fixture.start(fixture.plan(), limits());
-    assert!(
-        duplicate
-            .push_height(
-                &norito::encode_canonical(&fixture.first).unwrap(),
-                &fixture.genesis.encode_wire().unwrap(),
-                None,
-                &[]
-            )
-            .is_err()
-    );
+    assert!(fixture.heights[0].push(&mut duplicate).is_err());
     assert!(duplicate.finish().is_err());
-    let mut unsigned = fixture.second.clone();
+    let mut unsigned = fixture.heights[1].clone();
     unsigned
+        .proof
         .finality_artifact
         .commit_qc
         .aggregate_signature
         .clear();
     let mut verifier = fixture.start(fixture.plan(), limits());
-    assert!(
-        verifier
-            .push_height(
-                &norito::encode_canonical(&unsigned).unwrap(),
-                &fixture.carrier.encode_wire().unwrap(),
-                Some(&fixture.entry.canonical_bytes()),
-                &fixture
-                    .queries()
-                    .iter()
-                    .map(Vec::as_slice)
-                    .collect::<Vec<_>>()
-            )
-            .is_err()
-    );
+    assert!(unsigned.push(&mut verifier).is_err());
     assert!(
         fixture.push(&mut verifier).is_err(),
-        "a caught invalid signature permanently poisons the owner"
+        "invalid signature permanently poisons owner"
     );
     assert!(verifier.finish().is_err());
 }
@@ -167,238 +161,220 @@ fn no_missing_reordered_duplicate_or_unsigned_finality_prefix_can_finish() {
 #[test]
 fn canonical_decoders_reject_headerless_trailing_and_oversized_inputs() {
     let fixture = Fixture::new(1);
-    let mut baseline = fixture.start(fixture.plan(), limits());
-    fixture.push(&mut baseline).unwrap();
-    assert_eq!(baseline.finish().unwrap().rows().len(), 8);
-    let finality = norito::encode_canonical(&fixture.first).unwrap();
-    let block = fixture.genesis.encode_wire().unwrap();
+    let height = &fixture.heights[0];
+    let finality = norito::encode_canonical(&height.proof).unwrap();
+    let block = height.block.encode_wire().unwrap();
     for invalid in [
-        fixture.first.encode(),
+        height.proof.encode(),
         [finality.clone(), vec![0]].concat(),
         vec![0; MAX_FINALITY_BYTES + 1],
     ] {
         let mut verifier = ScalingProofVerifier::new(fixture.plan(), limits()).unwrap();
-        assert!(verifier.push_height(&invalid, &block, None, &[]).is_err());
+        assert!(
+            verifier
+                .push_height(&invalid, &block, &height.evidence, &[])
+                .is_err()
+        );
         assert!(verifier.finish().is_err());
     }
-    let mut carrier = block.clone();
-    carrier.push(0);
+    let mut extra = block.clone();
+    extra.push(0);
     let mut verifier = ScalingProofVerifier::new(fixture.plan(), limits()).unwrap();
     assert!(
         verifier
-            .push_height(&finality, &carrier, None, &[])
+            .push_height(&finality, &extra, &height.evidence, &[])
             .is_err()
     );
-    let mut verifier = fixture.start(fixture.plan(), limits());
-    assert!(
-        verifier
-            .push_height(
-                &norito::encode_canonical(&fixture.second).unwrap(),
-                &fixture.carrier.encode_wire().unwrap(),
-                Some(&fixture.entry.encode()),
-                &fixture
-                    .queries()
-                    .iter()
-                    .map(Vec::as_slice)
-                    .collect::<Vec<_>>()
-            )
-            .is_err()
-    );
+    for contexts in [
+        Vec::new(),
+        height.evidence[norito::core::Header::SIZE..].to_vec(),
+        [height.evidence.clone(), vec![0]].concat(),
+        vec![0; MAX_FINALITY_BYTES + 1],
+    ] {
+        let mut verifier = ScalingProofVerifier::new(fixture.plan(), limits()).unwrap();
+        assert!(
+            verifier
+                .push_height(&finality, &block, &contexts, &[])
+                .is_err()
+        );
+        assert!(verifier.finish().is_err());
+    }
 }
 
 #[test]
 fn same_header_does_not_authenticate_substituted_result_bearing_wire() {
     let mut fixture = Fixture::new(1);
     let mut verifier = fixture.start(fixture.plan(), limits());
-    // Block signatures are part of the canonical executed wire but not header hash.
-    let old_header = fixture.carrier.header();
-    let changed = iroha_data_model::block::BlockSignature::new(
-        1,
-        iroha_crypto::SignatureOf::try_from_hash(fixture.keys[1].private_key(), old_header.hash())
-            .unwrap(),
-    );
-    fixture.carrier.add_signature(changed).unwrap();
-    assert_eq!(fixture.carrier.header(), old_header);
+    let old = fixture.heights[1].block.header();
+    fixture.heights[1]
+        .block
+        .add_signature(iroha_data_model::block::BlockSignature::new(
+            1,
+            iroha_crypto::SignatureOf::try_from_hash(fixture.keys[1].private_key(), old.hash())
+                .unwrap(),
+        ))
+        .unwrap();
+    assert_eq!(fixture.heights[1].block.header(), old);
     assert!(fixture.push(&mut verifier).is_err());
     assert!(verifier.finish().is_err());
 }
 
 #[test]
-fn complete_full_entry_reference_and_commitqc_merge_identity_are_both_required() {
+fn exact_first_admission_context_witness_and_decision_joins_are_required() {
     for change in 0..9 {
         let mut fixture = Fixture::new(1);
-        let mut baseline = fixture.start(fixture.plan(), limits());
-        fixture.push(&mut baseline).unwrap();
-        assert_eq!(baseline.finish().unwrap().rows().len(), 8);
         let mut verifier = fixture.start(fixture.plan(), limits());
         if change == 0 {
-            // Authenticate the changed commitment with actual three-of-four
-            // signatures so the exact merge binding, not a stale signature, rejects it.
-            fixture.resign_carrier_with_merge(None);
-            assert!(fixture.push(&mut verifier).is_err());
+            fixture.heights[1].evidence.clear();
         } else if change == 1 {
-            assert!(
-                verifier
-                    .push_height(
-                        &norito::encode_canonical(&fixture.second).unwrap(),
-                        &fixture.carrier.encode_wire().unwrap(),
-                        None,
-                        &fixture
-                            .queries()
-                            .iter()
-                            .map(Vec::as_slice)
-                            .collect::<Vec<_>>()
-                    )
-                    .is_err()
-            );
+            fixture.heights[1].evidence = fixture.heights[0].evidence.clone();
         } else {
-            let mut context = fixture.carrier.execution_context().unwrap().clone();
-            let reference = context.merge_entry.as_mut().unwrap();
-            match change {
-                2 => reference.encoded_len += 1,
-                3 => reference.epoch_id += 1,
-                4 => {
-                    reference.entry_hash =
-                        HashOf::from_untyped_unchecked(Hash::new(b"wrong entry hash"))
+            mutate_height(&mut fixture.heights[1], &fixture.keys, |raw| {
+                let group = &mut raw
+                    .payload
+                    .execution_context
+                    .as_mut()
+                    .unwrap()
+                    .native_lane_decisions
+                    .as_mut()
+                    .unwrap()
+                    .groups[0];
+                match change {
+                    2 => {
+                        group.payload.descriptor.admission_carrier_hash =
+                            HashOf::from_untyped_unchecked(Hash::new(b"other source carrier"))
+                    }
+                    3 => {
+                        group.payload.descriptor.admitted_input_hash =
+                            Hash::new(b"other complete input")
+                    }
+                    4 => group.payload.descriptor.admission_priority.admission_index += 1,
+                    5 => {
+                        group.payload.descriptor.slots[0].instance_id = Hash::new(b"other opening")
+                    }
+                    6 => group.decisions[0].commit_qc.shares[0].signature[0] ^= 1,
+                    7 => {
+                        group.decisions[0].manifest.value.origin_producer =
+                            (group.decisions[0].manifest.value.origin_producer + 1) % 4
+                    }
+                    _ => group.decisions[0].manifest.value.origin_view += 1,
                 }
-                5 => reference.execution_batch_hash = None,
-                6 => reference.base_state_height = None,
-                7 => reference.merge_qc.aggregate_signature[0] ^= 1,
-                _ => reference.entrypoint_count = Some(9),
-            }
-            fixture.carrier.set_execution_context(Some(context));
-            fixture.resign_carrier();
-            assert!(
-                fixture.push(&mut verifier).is_err(),
-                "fully globally re-signed mismatched reference {change}"
-            );
+            });
         }
+        assert!(
+            fixture.push(&mut verifier).is_err(),
+            "exact source/context/Decision control {change}"
+        );
         assert!(verifier.finish().is_err());
     }
 }
 
 #[test]
-fn rehashed_and_resigned_entry_cannot_change_independent_route_or_authority() {
-    for change in 0..8 {
-        let mut fixture = Fixture::new(4);
-        let mut verifier = fixture.start(fixture.plan(), limits());
-        match change {
-            0 => fixture.entry.lane_catalog_hash = Hash::new(b"other catalog"),
-            1 => fixture.entry.active_lanes[0].dataspace_id = DataSpaceId::new(99),
-            2 => fixture.entry.active_lanes[0].incarnation = Hash::new(b"other incarnation"),
-            3 => fixture.entry.active_lanes[0].activation_height = 2,
-            4 => fixture.entry.lane_authority_catalog.lane_roster_indices[0] = 1,
-            5 => fixture.entry.merge_qc.carrier_height = 3,
-            6 => {
-                fixture.entry.merge_qc.carrier_parent_hash =
-                    HashOf::from_untyped_unchecked(Hash::new(b"other parent"))
-            }
-            _ => fixture.entry.version = MergeLedgerEntry::VERSION - 1,
-        }
-        fixture.rebuild_carrier();
-        assert!(
-            fixture.push(&mut verifier).is_err(),
-            "outer signatures cannot replace trusted route facts {change}"
-        );
-        assert!(verifier.finish().is_err());
-    }
-
+fn globally_authenticated_native_execution_cannot_replace_independent_route_authority() {
     let fixture = Fixture::new(4);
-    let mut duplicate = fixture.plan();
-    duplicate.active_lanes[3].lane_id = duplicate.active_lanes[2].lane_id;
-    assert_eq!(
-        ScalingProofVerifier::new(duplicate, limits())
-            .err()
-            .unwrap()
-            .to_string(),
-        "invalid active lane geometry"
-    );
-
-    // The original plan remains independent even when the changed entry and
-    // its carrier reference, merge signature and finality proof are re-signed.
-    for change in 0..3 {
-        let mut fixture = Fixture::new(4);
-        let original_hash = fixture.entry.canonical_hash();
-        let mut verifier = fixture.start(fixture.plan(), limits());
+    for change in 0..8 {
+        let mut plan = fixture.plan();
         match change {
-            0 => {
-                fixture.entry.active_lanes.pop();
+            0 => plan.nexus_amx_context_hash = Hash::new(b"other context"),
+            1 => plan.active_lanes[0].dataspace_id = DataSpaceId::new(99),
+            2 => plan.active_lanes[0].incarnation = Hash::new(b"other incarnation"),
+            3 => plan.active_lanes[0].activation_height = 2,
+            4 => plan.lane_authorities.rosters[0].validators.swap(0, 1),
+            5 => plan.execution_policy_hash = Hash::new(b"other policy"),
+            6 => {
+                plan.lane_authorities.rosters[0].validator_set_hash =
+                    HashOf::from_untyped_unchecked(Hash::new(b"other committee"))
             }
-            1 => fixture.entry.active_lanes[3].lane_id = fixture.entry.active_lanes[2].lane_id,
-            _ => fixture.entry.active_lanes[3].lane_id = LaneId::new(4),
+            _ => plan.lane_authorities.rosters[0].validator_set_hash_version = 2,
         }
-        fixture.rebuild_carrier();
-        assert_ne!(fixture.entry.canonical_hash(), original_hash);
-        assert_eq!(
-            fixture.push(&mut verifier).unwrap_err().to_string(),
-            "historical route authority differs from launch plan",
-            "re-signed active lane mutation {change}"
-        );
-        assert!(verifier.finish().is_err());
+        match ScalingProofVerifier::new(plan, limits()) {
+            Err(_) => {}
+            Ok(mut verifier) => {
+                fixture.heights[0].push(&mut verifier).unwrap();
+                assert!(
+                    fixture.push(&mut verifier).is_err(),
+                    "authority control {change}"
+                );
+                assert!(verifier.finish().is_err());
+            }
+        }
     }
 }
 
 #[test]
-fn rehashed_signed_batch_still_requires_every_aligned_transcript_vector() {
+fn globally_signed_native_batch_requires_complete_source_and_output_alignment() {
     for change in 0..10 {
-        let mut fixture = Fixture::new(1);
+        let mut fixture = Fixture::new(4);
         let mut verifier = fixture.start(fixture.plan(), limits());
-        let batch = fixture.entry.execution_batch.as_mut().unwrap();
-        let lane = &mut batch.lanes[0];
-        match change {
-            0 => {
-                lane.entrypoint_hashes.pop();
-            }
-            1 => {
-                lane.result_hashes.pop();
-            }
-            2 => {
-                lane.routing_plans.pop();
-            }
-            3 => {
-                lane.reservation_keys.pop();
-            }
-            4 => {
-                lane.native_amx_receipts.pop();
-            }
-            5 => {
-                lane.authenticated_signed_replay_aliases.pop();
-            }
-            6 => lane.authenticated_signed_replay_aliases[0] = Some(Hash::new(b"sealed alias")),
-            7 => {
-                lane.routing_plans[0] = norito::encode_canonical(&RoutingPlan::single(
-                    RoutingDecision::new(LaneId::new(99), DataSpaceId::new(99)),
-                ))
+        let original_queries = fixture.heights[1].queries();
+        mutate_height(&mut fixture.heights[1], &fixture.keys, |raw| {
+            let batch = raw
+                .payload
+                .execution_context
+                .as_mut()
                 .unwrap()
+                .native_lane_decisions
+                .as_mut()
+                .unwrap();
+            let group = &mut batch.groups[0];
+            match change {
+                0 => {
+                    group.payload.descriptor.slots.pop();
+                }
+                1 => {
+                    group.decisions.pop();
+                }
+                2 => {
+                    raw.result.as_mut().unwrap().outputs.pop();
+                }
+                3 => {
+                    let row = raw.result.as_mut().unwrap().outputs[0].clone();
+                    raw.result.as_mut().unwrap().outputs.push(row);
+                }
+                4 => {
+                    if let ExecutionOutputV1::Network(row) =
+                        &mut raw.result.as_mut().unwrap().outputs[0]
+                    {
+                        row.input_index = 1;
+                    }
+                }
+                5 => {
+                    group.payload.input.certificate.attestations.pop();
+                }
+                6 => {
+                    group.payload.input.certificate.binding.entrypoint_hash =
+                        HashOf::from_untyped_unchecked(Hash::new(b"other entrypoint"))
+                }
+                7 => group.payload.descriptor.slots[0].route.lane_id = LaneId::new(99),
+                8 => group.decisions[0].commit_qc.statement.phase = LanePhaseV1::Prepare,
+                _ => {
+                    batch.groups.swap(0, 1);
+                }
             }
-            8 => {
-                let mut key: LaneQueueReservationKeyV1 =
-                    canonical(&lane.reservation_keys[0]).unwrap();
-                key.entrypoint_hash =
-                    HashOf::from_untyped_unchecked(Hash::new(b"another reservation"));
-                lane.reservation_keys[0] = norito::encode_canonical(&key).unwrap();
-            }
-            _ => {
-                lane.commit_qc.payload_availability_qc =
-                    lane.prepare_qc.payload_availability_qc.clone()
-            }
-        }
-        fixture::rehash_batch(batch);
-        fixture.rebuild_carrier();
+            raw.result.as_mut().unwrap().output_merkle = raw
+                .result
+                .as_ref()
+                .unwrap()
+                .outputs
+                .iter()
+                .map(HashOf::new)
+                .collect();
+        });
         assert!(
-            fixture.push(&mut verifier).is_err(),
-            "aligned-vector control {change}"
+            push_with(&mut verifier, &fixture.heights[1], &original_queries).is_err(),
+            "source/output alignment control {change}"
         );
         assert!(verifier.finish().is_err());
     }
 }
 
 #[test]
-fn compact_query_proofs_must_match_the_full_merge_leaf_and_same_index() {
+fn compact_query_proofs_must_match_full_network_output_and_same_input_index() {
     for change in 0..7 {
         let fixture = Fixture::new(4);
+        let height = &fixture.heights[1];
         let mut verifier = fixture.start(fixture.plan(), limits());
-        let mut queries = fixture.queries();
+        let mut queries = height.queries();
         if change == 0 {
             queries.swap(0, 1);
         } else if change == 1 {
@@ -409,23 +385,20 @@ fn compact_query_proofs_must_match_the_full_merge_leaf_and_same_index() {
             let mut q: CommittedTransaction = canonical(&queries[0]).unwrap();
             let other: CommittedTransaction = canonical(&queries[1]).unwrap();
             match change {
-                3 => q.merge_inclusion = None,
-                4 => q.result_proof = other.result_proof,
+                3 => {
+                    if let ExecutionOutputV1::Network(row) = &mut q.output {
+                        row.input_index = 1;
+                    }
+                }
+                4 => q.output_proof = other.output_proof,
                 5 => q.entrypoint = other.entrypoint,
-                _ => q.merge_inclusion.as_mut().unwrap().entrypoint_count += 1,
+                _ => q.output_hash = other.output_hash,
             }
             queries[0] = norito::encode_canonical(&q).unwrap();
         }
         assert!(
-            verifier
-                .push_height(
-                    &norito::encode_canonical(&fixture.second).unwrap(),
-                    &fixture.carrier.encode_wire().unwrap(),
-                    Some(&fixture.entry.canonical_bytes()),
-                    &queries.iter().map(Vec::as_slice).collect::<Vec<_>>()
-                )
-                .is_err(),
-            "query control {change}"
+            push_with(&mut verifier, height, &queries).is_err(),
+            "typed query control {change}"
         );
         assert!(verifier.finish().is_err());
     }
@@ -434,51 +407,32 @@ fn compact_query_proofs_must_match_the_full_merge_leaf_and_same_index() {
 #[test]
 fn ordinary_inclusion_never_substitutes_for_scheduled_lane_execution() {
     let mut fixture = Fixture::new(1);
-    let header = BlockHeader::new(
-        std::num::NonZeroU64::new(2).unwrap(),
-        Some(fixture.genesis.hash()),
-        None,
-        None,
-        100,
-        0,
-    );
-    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+    let mut builder =
+        iroha_data_model::block::builder::BlockBuilder::new(fixture.heights[1].block.header());
     builder.push_transaction(fixture.requests[0].1.clone());
-    builder.push_result(Ok(iroha_data_model::trigger::DataTriggerSequence::default()));
-    fixture.carrier = builder.build_with_signature(0, fixture.keys[0].private_key());
-    fixture.resign_carrier_with_merge(None);
-    assert!(fixture.carrier.execution_context().is_none());
+    let mut block = builder.build(BTreeSet::new());
+    let outputs = fixture::successful_outputs(&block);
+    fixture::attach_outputs(&mut block, outputs, &fixture.keys);
+    fixture.heights[1].block = block;
+    fixture.heights[1].contexts = Default::default();
+    fixture.heights[1].resign(&fixture.keys);
+    assert!(fixture.heights[1].block.execution_context().is_none());
     assert!(
-        fixture
-            .second
+        fixture.heights[1]
+            .proof
             .finality_artifact
             .commit_qc
             .execution_commitment
             .merge_carrier
             .is_none()
     );
-    // The exact ordinary carrier is structurally authentic when this transaction
-    // is outside the requested cohort. Other missing rows still prevent finish.
     let mut unrelated = fixture.plan();
     unrelated.scheduled.remove(0);
     let mut baseline = fixture.start(unrelated, limits());
-    baseline
-        .push_height(
-            &norito::encode_canonical(&fixture.second).unwrap(),
-            &fixture.carrier.encode_wire().unwrap(),
-            None,
-            &[],
-        )
-        .unwrap();
+    fixture.heights[1].push(&mut baseline).unwrap();
     assert!(baseline.finish().is_err());
     let mut verifier = fixture.start(fixture.plan(), limits());
-    let rejected = verifier.push_height(
-        &norito::encode_canonical(&fixture.second).unwrap(),
-        &fixture.carrier.encode_wire().unwrap(),
-        None,
-        &[],
-    );
-    assert!(rejected.is_err());
+    let rejected = fixture.heights[1].push(&mut verifier);
     assert_eq!(
         rejected.unwrap_err().to_string(),
         "scheduled transaction used ordinary fallback"
@@ -512,28 +466,33 @@ fn missing_schedule_rows_and_duplicate_execution_cannot_be_hidden_at_finish() {
     let mut missing = fixture.plan();
     missing.scheduled.pop();
     let mut verifier = fixture.start(missing, limits());
-    assert!(
-        fixture.push(&mut verifier).is_err(),
-        "full entry contains an extra unscheduled transaction"
-    );
+    assert!(fixture.push(&mut verifier).is_err());
     assert!(verifier.finish().is_err());
     let mut extended = fixture.plan();
-    extended.last_height = 3;
+    extended.last_height += 1;
     let mut verifier = fixture.start(extended, limits());
     fixture.push(&mut verifier).unwrap();
     assert!(
         verifier.finish().is_err(),
-        "all rows do not erase an incomplete finality interval"
+        "all rows do not erase incomplete finality interval"
     );
-    let mut reordered = Fixture::new(4);
-    let mut verifier = reordered.start(reordered.plan(), limits());
-    let batch = reordered.entry.execution_batch.as_mut().unwrap();
-    batch.lanes.swap(0, 1);
-    fixture::rehash_batch(batch);
-    reordered.rebuild_carrier();
+    let mut duplicate = Fixture::new(4);
+    let mut verifier = duplicate.start(duplicate.plan(), limits());
+    mutate_height(&mut duplicate.heights[1], &duplicate.keys, |raw| {
+        let groups = &mut raw
+            .payload
+            .execution_context
+            .as_mut()
+            .unwrap()
+            .native_lane_decisions
+            .as_mut()
+            .unwrap()
+            .groups;
+        groups[1] = groups[0].clone();
+    });
     assert!(
-        reordered.push(&mut verifier).is_err(),
-        "globally signed reordered lane transcript is not canonical"
+        duplicate.push(&mut verifier).is_err(),
+        "duplicate route/input cannot execute twice"
     );
 }
 
@@ -559,21 +518,22 @@ fn exact_total_input_allocation_accepts_and_one_byte_short_poisons() {
 fn globally_resigned_execution_rejection_is_not_an_admission_exemption() {
     let mut fixture = Fixture::new(4);
     let mut verifier = fixture.start(fixture.plan(), limits());
-    let batch = fixture.entry.execution_batch.as_mut().unwrap();
-    let lane = &mut batch.lanes[0];
-    lane.results[0].0 = Err(
-        iroha_data_model::transaction::error::TransactionRejectionReason::IvmExecution(
-            iroha_data_model::transaction::error::IvmExecutionFail {
-                reason: "fixture rejection".to_owned(),
-            },
-        ),
-    );
-    lane.result_hashes[0] = lane.results[0].hash().into();
-    fixture::rehash_batch(batch);
-    fixture.rebuild_carrier();
+    mutate_height(&mut fixture.heights[1], &fixture.keys, |raw| {
+        let result = raw.result.as_mut().unwrap();
+        if let ExecutionOutputV1::Network(row) = &mut result.outputs[0] {
+            row.result.0 = Err(
+                iroha_data_model::transaction::error::TransactionRejectionReason::IvmExecution(
+                    iroha_data_model::transaction::error::IvmExecutionFail {
+                        reason: "fixture rejection".into(),
+                    },
+                ),
+            );
+        }
+        result.output_merkle = result.outputs.iter().map(HashOf::new).collect();
+    });
     assert!(
         fixture.push(&mut verifier).is_err(),
-        "even a globally authenticated rejection fails the complete useful cohort"
+        "authenticated rejected output fails complete useful cohort"
     );
     assert!(verifier.finish().is_err());
 }
@@ -582,11 +542,9 @@ fn globally_resigned_execution_rejection_is_not_an_admission_exemption() {
 fn exact_three_of_four_global_signatures_pops_and_parent_are_mandatory() {
     for change in 0..5 {
         let fixture = Fixture::new(1);
-        let mut baseline = fixture.start(fixture.plan(), limits());
-        fixture.push(&mut baseline).unwrap();
-        assert_eq!(baseline.finish().unwrap().rows().len(), 8);
         let mut verifier = fixture.start(fixture.plan(), limits());
-        let mut proof = fixture.second.clone();
+        let mut height = fixture.heights[1].clone();
+        let proof = &mut height.proof;
         match change {
             0 => {
                 proof.finality_artifact.commit_qc.signers.pop();
@@ -597,19 +555,8 @@ fn exact_three_of_four_global_signatures_pops_and_parent_are_mandatory() {
             _ => proof.finality_artifact.commit_qc.aggregate_signature[0] ^= 1,
         }
         assert!(
-            verifier
-                .push_height(
-                    &norito::encode_canonical(&proof).unwrap(),
-                    &fixture.carrier.encode_wire().unwrap(),
-                    Some(&fixture.entry.canonical_bytes()),
-                    &fixture
-                        .queries()
-                        .iter()
-                        .map(Vec::as_slice)
-                        .collect::<Vec<_>>()
-                )
-                .is_err(),
-            "exact finality authority control {change}"
+            height.push(&mut verifier).is_err(),
+            "finality authority control {change}"
         );
         assert!(verifier.finish().is_err());
     }
@@ -622,36 +569,28 @@ fn unsigned_summary_and_observed_accounts_have_no_proof_input_path() {
     assert!(
         verifier
             .push_height(
-                b"{\"verified\":true,\"lanes\":[0]}",
-                &fixture.carrier.encode_wire().unwrap(),
-                Some(&fixture.entry.canonical_bytes()),
-                &fixture
-                    .queries()
-                    .iter()
-                    .map(Vec::as_slice)
-                    .collect::<Vec<_>>()
+                b"{\"verified\":true}",
+                &fixture.heights[1].block.encode_wire().unwrap(),
+                &fixture.heights[1].evidence,
+                &[]
             )
             .is_err()
     );
     assert!(verifier.finish().is_err());
     let mut no_work = Fixture::new(1);
     let mut verifier = no_work.start(no_work.plan(), limits());
-    no_work.entry.execution_batch = None;
-    no_work.rebuild_carrier();
-    verifier
-        .push_height(
-            &norito::encode_canonical(&no_work.second).unwrap(),
-            &no_work.carrier.encode_wire().unwrap(),
-            Some(&no_work.entry.canonical_bytes()),
-            &[],
-        )
-        .unwrap();
+    let mut block =
+        iroha_data_model::block::builder::BlockBuilder::new(no_work.heights[1].block.header())
+            .build(BTreeSet::new());
+    fixture::attach_outputs(&mut block, Vec::new(), &no_work.keys);
+    no_work.heights[1].block = block;
+    no_work.heights[1].contexts = Default::default();
+    no_work.heights[1].resign(&no_work.keys);
+    no_work.heights[1].push(&mut verifier).unwrap();
     assert!(
         verifier.finish().is_err(),
-        "a certified snapshot without actual scheduled work is insufficient"
+        "authenticated no-work carrier cannot finish cohort"
     );
-    // Observed Account query bytes remain solely with the separate postcondition
-    // owner; neither the API nor AuthenticatedRun declares state membership.
     assert!(std::mem::size_of::<AuthenticatedRequest>() < ROW_RESERVATION as usize);
 }
 
@@ -758,5 +697,349 @@ fn authenticated_request_and_vector_declare_distinct_v1_canonical_frames() {
             norito::encode_canonical(&decoded).unwrap(),
             complete.canonical_rows()
         );
+    }
+}
+
+fn native_owner(fixture: &Fixture) -> NativeExecutionEvidenceVerifier {
+    NativeExecutionEvidenceVerifier::new(
+        fixture.plan().network_id,
+        fixture.plan().first_context,
+        NativeExecutionEvidenceLimits {
+            max_carriers: 1025,
+            max_carrier_bytes: MAX_CARRIER_BYTES as u64,
+            max_proof_bytes: MAX_FINALITY_BYTES as u64,
+            max_retained_bytes: 128 * 1024 * 1024,
+        },
+    )
+    .unwrap()
+}
+fn native_push(
+    owner: &mut NativeExecutionEvidenceVerifier,
+    height: &Height,
+) -> std::result::Result<VerifiedNativeExecutionCarrier, String> {
+    owner.push_height(&height.proof, height.block.clone(), &height.evidence)
+}
+
+#[test]
+fn canonical_signed_wire_measurement_matches_actual_full_encoding() {
+    for lanes in [1, 4] {
+        let fixture = Fixture::new(lanes);
+        for height in &fixture.heights {
+            assert_eq!(
+                norito::canonical_frame_len(&height.block)
+                    .unwrap()
+                    .checked_add(1)
+                    .unwrap(),
+                height.block.encode_wire().unwrap().len()
+            );
+            assert_eq!(
+                height
+                    .proof
+                    .finality_artifact
+                    .commit_qc
+                    .execution_commitment
+                    .executed_block_wire_len,
+                height.block.encode_wire().unwrap().len() as u64
+            );
+        }
+        let mut changed = fixture.heights[1].block.clone();
+        changed
+            .add_signature(iroha_data_model::block::BlockSignature::new(
+                1,
+                iroha_crypto::SignatureOf::try_from_hash(
+                    fixture.keys[1].private_key(),
+                    changed.hash(),
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            norito::canonical_frame_len(&changed).unwrap() + 1,
+            changed.encode_wire().unwrap().len()
+        );
+    }
+}
+
+#[test]
+fn repeated_admission_retains_the_first_exact_carrier_and_control_position() {
+    let fixture = Fixture::new(1);
+    let first = &fixture.heights[0];
+    let repeat = fixture::successor(
+        &fixture.keys,
+        first,
+        first.block.execution_context().cloned(),
+        first.contexts.clone(),
+    );
+    let mut context = fixture.heights[1]
+        .block
+        .execution_context()
+        .unwrap()
+        .clone();
+    context
+        .native_lane_decisions
+        .as_mut()
+        .unwrap()
+        .base_state_height = 2;
+    let execution = fixture::successor(&fixture.keys, &repeat, Some(context), Default::default());
+    let mut owner = native_owner(&fixture);
+    native_push(&mut owner, first).unwrap();
+    native_push(&mut owner, &repeat).unwrap();
+    let authenticated = native_push(&mut owner, &execution).unwrap();
+    assert_eq!(
+        authenticated
+            .block()
+            .execution_context()
+            .unwrap()
+            .native_lane_decisions
+            .as_ref()
+            .unwrap()
+            .groups[0]
+            .payload
+            .descriptor
+            .admission_priority
+            .carrier_height,
+        1
+    );
+    // Fully re-open and re-sign the later-source claim so the earliest-source
+    // rule, rather than stale signatures or malformed manifest shape, rejects it.
+    let mut reopened = repeat;
+    reopened.contexts.contexts[0].opening_global_height = 2;
+    reopened.contexts.contexts[0].opening_global_context_id =
+        reopened.proof.finality_artifact.context_id();
+    reopened.contexts.contexts[0]
+        .admission_priority
+        .carrier_height = 2;
+    reopened.resign(&fixture.keys);
+    let frozen = &reopened.contexts.contexts[0];
+    let mut context = execution.block.execution_context().unwrap().clone();
+    let group = &mut context.native_lane_decisions.as_mut().unwrap().groups[0];
+    group.payload.descriptor.admission_priority.carrier_height = 2;
+    group.payload.descriptor.admission_carrier_hash = reopened.block.hash();
+    group.payload.descriptor.slots[0].instance_id =
+        iroha_core::state::native_lane_instance_for_testing(
+            frozen.clone(),
+            &reopened.proof.finality_artifact,
+        )
+        .unwrap();
+    fixture::resign_group(
+        group,
+        frozen,
+        &reopened.proof.finality_artifact,
+        &fixture.keys,
+    );
+    group.validate_structure().unwrap();
+    let substituted =
+        fixture::successor(&fixture.keys, &reopened, Some(context), Default::default());
+    let mut owner = native_owner(&fixture);
+    native_push(&mut owner, first).unwrap();
+    native_push(&mut owner, &reopened).unwrap();
+    let error = native_push(&mut owner, &substituted).unwrap_err();
+    assert!(error.contains("exact first finalized admission"), "{error}");
+}
+
+#[test]
+fn retired_context_cannot_reappear_under_its_old_opening_proof() {
+    let fixture = Fixture::new(1);
+    let first = &fixture.heights[0];
+    let retired = fixture::successor(&fixture.keys, first, None, Default::default());
+    let resurrected = fixture::successor(&fixture.keys, &retired, None, first.contexts.clone());
+    let mut owner = native_owner(&fixture);
+    native_push(&mut owner, first).unwrap();
+    native_push(&mut owner, &retired).unwrap();
+    let error = native_push(&mut owner, &resurrected).unwrap_err();
+    assert!(error.contains("resurrects"), "{error}");
+    assert!(
+        native_push(&mut owner, &fixture.heights[1])
+            .unwrap_err()
+            .contains("poisoned")
+    );
+}
+
+#[test]
+fn context_root_and_finality_failures_permanently_poison_the_offline_owner() {
+    let fixture = Fixture::new(1);
+    for change in 0..3 {
+        let mut owner = native_owner(&fixture);
+        let mut first = fixture.heights[0].clone();
+        match change {
+            0 => {
+                first.evidence = iroha_core::state::native_context_evidence_for_testing(
+                    fixture.plan().network_id,
+                    1,
+                    Default::default(),
+                )
+                .unwrap()
+                .0;
+            }
+            1 => first.proof.finality_artifact.commit_qc.aggregate_signature[0] ^= 1,
+            _ => {
+                first.contexts.contexts[0].opening_global_context_id = HeightContextId(
+                    HashOf::from_untyped_unchecked(Hash::new(b"different opening context")),
+                );
+                first.resign(&fixture.keys);
+            }
+        }
+        assert!(
+            native_push(&mut owner, &first).is_err(),
+            "authority failure {change}"
+        );
+        assert!(
+            native_push(&mut owner, &fixture.heights[0])
+                .unwrap_err()
+                .contains("poisoned"),
+            "no reuse after signature failure or later context join failure"
+        );
+    }
+}
+
+#[test]
+fn globally_resigned_foreign_proposal_cannot_substitute_for_exact_executed_wire() {
+    let fixture = Fixture::new(1);
+    let mut height = fixture.heights[0].clone();
+    height.proof.finality_artifact.subject.payload_hash = Hash::new(b"other resultless proposal");
+    fixture::resign_claimed_subject(&mut height, &fixture.keys);
+    let mut owner = native_owner(&fixture);
+    assert!(
+        native_push(&mut owner, &height)
+            .unwrap_err()
+            .contains("exact current Network carrier")
+    );
+}
+
+#[test]
+fn native_interval_admission_bounds_carrier_proof_count_and_retained_bytes() {
+    let fixture = Fixture::new(1);
+    let first = &fixture.heights[0];
+    let body = first.block.encode_wire().unwrap().len() as u64;
+    let proof = norito::encode_canonical(&first.proof).unwrap().len() as u64;
+    let contexts = first.evidence.len() as u64;
+    for change in 0..4 {
+        let mut cap = NativeExecutionEvidenceLimits {
+            max_carriers: 1025,
+            max_carrier_bytes: body,
+            max_proof_bytes: proof.max(contexts),
+            max_retained_bytes: 128 * 1024 * 1024,
+        };
+        match change {
+            0 => cap.max_carrier_bytes = body - 1,
+            1 => cap.max_proof_bytes = proof.max(contexts) - 1,
+            2 => cap.max_retained_bytes = body + proof + contexts - 1,
+            _ => cap.max_carriers = 1,
+        }
+        let mut owner = NativeExecutionEvidenceVerifier::new(
+            fixture.plan().network_id,
+            fixture.plan().first_context,
+            cap,
+        )
+        .unwrap();
+        if change == 3 {
+            native_push(&mut owner, first).unwrap();
+            assert!(native_push(&mut owner, &fixture.heights[1]).is_err());
+        } else {
+            assert!(
+                native_push(&mut owner, first).is_err(),
+                "bounded before retention {change}"
+            );
+        }
+        assert!(
+            native_push(&mut owner, first)
+                .unwrap_err()
+                .contains("poisoned")
+        );
+    }
+}
+
+#[test]
+fn authentic_pipeline_and_time_outputs_cannot_replace_network_query_owners() {
+    use iroha_data_model::{
+        block::execution_output::{
+            PipelineEventPositionV1, PipelineExecutionOutputV1, PipelineInvocationV1,
+            TimeExecutionOutputV1, TimeInvocationV1, TriggerUseV1,
+        },
+        events::time::{TimeEvent, TimeInterval},
+        transaction::signed::{ExecutionStep, TransactionResult},
+        trigger::{DataTriggerStep, TriggerId},
+    };
+    let mut fixture = Fixture::new(4);
+    let last = fixture.heights.len() - 1;
+    let height = &mut fixture.heights[last];
+    let mut outputs = height.block.execution_outputs().to_vec();
+    let network_count = outputs.len();
+    for time in [false, true] {
+        let id: TriggerId = if time {
+            "offline_timer"
+        } else {
+            "offline_pipeline"
+        }
+        .parse()
+        .unwrap();
+        let trigger = TriggerUseV1 {
+            trigger_id: id.clone(),
+            registered_at_height: 1,
+            action_hash: Hash::new(if time {
+                b"timer action".as_slice()
+            } else {
+                b"pipeline action".as_slice()
+            }),
+        };
+        let result = TransactionResult::new(Ok(vec![DataTriggerStep {
+            id,
+            instructions: ExecutionStep(Vec::new().into()),
+        }]));
+        outputs.push(if time {
+            ExecutionOutputV1::Time(TimeExecutionOutputV1 {
+                invocation: TimeInvocationV1 {
+                    schedule_index: 0,
+                    event: TimeEvent {
+                        interval: TimeInterval {
+                            since_ms: 0,
+                            length_ms: 1,
+                        },
+                    },
+                    trigger,
+                },
+                result,
+                failure_root: None,
+                completions: Vec::new(),
+            })
+        } else {
+            ExecutionOutputV1::Pipeline(PipelineExecutionOutputV1 {
+                invocation: PipelineInvocationV1 {
+                    event: PipelineEventPositionV1::BlockApproved,
+                    candidate_index: 0,
+                    trigger,
+                },
+                result,
+                failure_root: None,
+                completions: Vec::new(),
+            })
+        });
+    }
+    fixture::attach_outputs(&mut height.block, outputs, &fixture.keys);
+    height.resign(&fixture.keys);
+    let mut baseline = fixture.start(fixture.plan(), limits());
+    fixture.push(&mut baseline).unwrap();
+    assert_eq!(baseline.finish().unwrap().rows().len(), 8);
+    for index in network_count..network_count + 2 {
+        let height = &fixture.heights[last];
+        let mut queries = height.queries();
+        let mut query: CommittedTransaction = canonical(&queries[0]).unwrap();
+        query.output = height.block.execution_outputs()[index].clone();
+        query.output_hash = HashOf::new(&query.output);
+        query.output_proof = height.block.output_proof(index as u32).unwrap();
+        assert!(query.output_proof.verify(
+            &query.output_hash,
+            &height.block.output_merkle_commitment().unwrap()
+        ));
+        queries[0] = norito::encode_canonical(&query).unwrap();
+        let mut verifier = fixture.start(fixture.plan(), limits());
+        for earlier in &fixture.heights[1..last] {
+            earlier.push(&mut verifier).unwrap();
+        }
+        assert!(
+            push_with(&mut verifier, height, &queries).is_err(),
+            "authentic internal output is not a Network receipt"
+        );
+        assert!(verifier.finish().is_err());
     }
 }

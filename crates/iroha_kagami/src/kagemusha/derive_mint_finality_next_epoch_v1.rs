@@ -17,10 +17,12 @@ use iroha_core::zk::kagemusha_v1_recursion::{
 };
 use iroha_data_model::{
     NetworkId,
+    asset::AssetDefinitionId,
     isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
     parameter::{Parameter, system::KagemushaMintFinalityNextEpochParameterV1},
 };
 use iroha_model_base::peer::PeerId;
+use iroha_primitives::numeric::Quantity;
 use zeroize::Zeroize;
 
 use crate::{Outcome, secure_fs::take_seed_pipe};
@@ -49,6 +51,89 @@ pub(super) struct Args {
     /// Transferred pipe read FD (>=3): exactly 128 raw seed bytes, then EOF; no file paths.
     #[arg(long, value_name = "FD", value_parser = clap::value_parser!(i32).range(3..))]
     seed_fd: i32,
+}
+
+/// Derive a bounded public maintenance schedule with one consumption of the private pipe.
+#[derive(Debug, ClapArgs)]
+pub(super) struct ScheduleArgs {
+    /// Network, first target epoch, ordered voters and the transferred seed pipe.
+    #[command(flatten)]
+    context: Args,
+    /// Number of consecutive target epochs, starting with --epoch.
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..=256))]
+    epoch_count: u16,
+    /// Sole asset authorized for each maintenance transaction's quoted fee.
+    #[arg(long)]
+    payment_asset: AssetDefinitionId,
+    /// Positive maximum fee per maintenance transaction in the selected asset.
+    #[arg(long)]
+    transaction_fee_maximum: Quantity,
+}
+
+/// Public input consumed by the native Taira epoch maintainer; contains no seed material.
+#[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ScheduleV1 {
+    schema_version: u8,
+    network_id: NetworkId,
+    genesis_roster: KagemushaMintFinalityEpochRosterV1,
+    parameters: Vec<Parameter>,
+    payment_asset: AssetDefinitionId,
+    transaction_fee_maximum: Quantity,
+}
+
+/// Emit the complete public schedule only after closing and wiping its private input.
+pub(super) fn run_schedule<T: Write>(args: ScheduleArgs, writer: &mut BufWriter<T>) -> Outcome {
+    let input = take_seed_pipe(args.context.seed_fd)?;
+    let (network_id, validators) = validate_public_context(&args.context)?;
+    validate_schedule_bounds(&args)?;
+    let mut scratch = [0_u8; INPUT_BYTES + 1];
+    let schedule = with_seed_input(input, &mut scratch, |seeds| {
+        derive_schedule(&args, network_id, &validators, seeds)
+    })?;
+    let json = norito::json::to_string(&schedule)
+        .map_err(|_| eyre!("cannot encode the public epoch schedule"))?;
+    writer.write_all(json.as_bytes())?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn validate_schedule_bounds(args: &ScheduleArgs) -> color_eyre::Result<()> {
+    if !(1..=256).contains(&args.epoch_count)
+        || args.context.epoch == 0
+        || args
+            .context
+            .epoch
+            .checked_add(u64::from(args.epoch_count) - 1)
+            .is_none()
+        || args.transaction_fee_maximum.is_zero()
+    {
+        bail!(
+            "epoch schedule requires 1..=256 nonzero consecutive epochs and a positive fee maximum"
+        );
+    }
+    Ok(())
+}
+
+fn derive_schedule(
+    args: &ScheduleArgs,
+    network_id: NetworkId,
+    validators: &[PeerId],
+    seeds: &[u8; INPUT_BYTES],
+) -> color_eyre::Result<ScheduleV1> {
+    validate_schedule_bounds(args)?;
+    let parameters = (0..u64::from(args.epoch_count))
+        .map(|offset| derive_parameter(network_id, args.context.epoch + offset, validators, seeds))
+        .collect::<color_eyre::Result<Vec<_>>>()?;
+    Ok(ScheduleV1 {
+        schema_version: 1,
+        network_id,
+        genesis_roster: derive_roster(network_id, 0, validators, seeds)?,
+        parameters,
+        payment_asset: args.payment_asset.clone(),
+        transaction_fee_maximum: args.transaction_fee_maximum.clone(),
+    })
 }
 
 /// Emit only the canonical typed Parameter JSON and one trailing newline.
@@ -156,8 +241,28 @@ fn derive_parameter(
     validators: &[PeerId],
     seeds: &[u8; INPUT_BYTES],
 ) -> color_eyre::Result<Parameter> {
-    if epoch == 0 || validators.len() != VALIDATORS {
+    if epoch == 0 {
         bail!("invalid next-epoch derivation context");
+    }
+    let typed = KagemushaMintFinalityNextEpochParameterV1 {
+        roster: derive_roster(network_id, epoch, validators, seeds)?,
+    };
+    typed
+        .validate()
+        .map_err(|_| eyre!("derived next-epoch roster is structurally invalid"))?;
+    Ok(Parameter::Custom(typed.into_custom_parameter()))
+}
+
+// The same consumed seed input supplies both the epoch-zero custody comparison
+// and future keys. Epoch zero is public evidence, never a next-epoch parameter.
+fn derive_roster(
+    network_id: NetworkId,
+    epoch: u64,
+    validators: &[PeerId],
+    seeds: &[u8; INPUT_BYTES],
+) -> color_eyre::Result<KagemushaMintFinalityEpochRosterV1> {
+    if validators.len() != VALIDATORS {
+        bail!("invalid mint-finality derivation context");
     }
     let validators = validators
         .iter()
@@ -170,20 +275,18 @@ fn derive_parameter(
                 .map_err(|_| eyre!("mint-finality public key derivation failed"))
         })
         .collect::<color_eyre::Result<Vec<_>>>()?;
-    let typed = KagemushaMintFinalityNextEpochParameterV1 {
-        roster: KagemushaMintFinalityEpochRosterV1 {
-            version: KAGEMUSHA_CHAIN_VERSION_V1,
-            network_id,
-            epoch,
-            validators,
-        },
+    let roster = KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators,
     };
-    typed
+    roster
         .validate()
-        .map_err(|_| eyre!("derived next-epoch roster is structurally invalid"))?;
-    validate_kagemusha_mint_finality_roster_keys_v1(&typed.roster)
-        .map_err(|_| eyre!("derived next-epoch roster contains invalid public points"))?;
-    Ok(Parameter::Custom(typed.into_custom_parameter()))
+        .map_err(|_| eyre!("derived mint-finality roster is structurally invalid"))?;
+    validate_kagemusha_mint_finality_roster_keys_v1(&roster)
+        .map_err(|_| eyre!("derived mint-finality roster contains invalid public points"))?;
+    Ok(roster)
 }
 
 #[cfg(test)]
@@ -235,6 +338,185 @@ mod tests {
         };
         KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(&custom)
             .expect("typed roster parameter")
+    }
+
+    fn schedule_args() -> ScheduleArgs {
+        ScheduleArgs {
+            context: context(),
+            epoch_count: 3,
+            payment_asset: AssetDefinitionId::parse_address_literal("6TEAJqbb8oEPmLncoNiMRbLEK6tw")
+                .expect("canonical asset"),
+            transaction_fee_maximum: Quantity::from(1_u32),
+        }
+    }
+
+    #[test]
+    fn epoch_schedule_matches_native_parameters_and_preserves_exact_public_caps() {
+        let args = schedule_args();
+        let (network_id, validators) = validate_public_context(&args.context).unwrap();
+        let schedule = derive_schedule(&args, network_id, &validators, &seeds()).unwrap();
+        let bytes = norito::json::to_vec(&schedule).unwrap();
+        let decoded: ScheduleV1 = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.schema_version, 1);
+        assert_eq!(decoded.network_id, network_id);
+        assert_eq!(decoded.genesis_roster.network_id, network_id);
+        assert_eq!(decoded.genesis_roster.epoch, 0);
+        for ((entry, peer), seed) in decoded
+            .genesis_roster
+            .validators
+            .iter()
+            .zip(&validators)
+            .zip(seeds().chunks_exact(SEED_BYTES))
+        {
+            assert_eq!(
+                *entry,
+                derive_kagemusha_mint_finality_validator_keys_v1(
+                    seed.try_into().unwrap(),
+                    0,
+                    peer.clone()
+                )
+                .unwrap()
+            );
+        }
+        let mut substituted = seeds();
+        substituted[0] ^= 1;
+        let foreign = derive_schedule(&args, network_id, &validators, &substituted).unwrap();
+        assert_ne!(
+            decoded.genesis_roster, foreign.genesis_roster,
+            "a replaced original seed must change the public genesis custody comparison"
+        );
+        assert!(derive_parameter(network_id, 0, &validators, &seeds()).is_err());
+        let mut missing = norito::json::from_slice::<norito::json::Value>(&bytes).unwrap();
+        missing.as_object_mut().unwrap().remove("genesis_roster");
+        assert!(norito::json::from_value::<ScheduleV1>(missing).is_err());
+        assert_eq!(decoded.payment_asset, args.payment_asset);
+        assert_eq!(
+            decoded.transaction_fee_maximum,
+            args.transaction_fee_maximum
+        );
+        assert_eq!(decoded.parameters.len(), 3);
+        for (offset, parameter) in decoded.parameters.into_iter().enumerate() {
+            let epoch = args.context.epoch + u64::try_from(offset).unwrap();
+            assert_eq!(
+                parameter,
+                derive_parameter(network_id, epoch, &validators, &seeds()).unwrap()
+            );
+            assert_eq!(unpack(parameter).roster.epoch, epoch);
+        }
+        let mut object = norito::json::from_slice::<norito::json::Value>(&bytes).unwrap();
+        object
+            .as_object_mut()
+            .unwrap()
+            .insert("private_seed".into(), norito::json::Value::Null);
+        assert!(norito::json::from_value::<ScheduleV1>(object).is_err());
+    }
+
+    #[test]
+    fn epoch_schedule_rejects_empty_unbounded_overflowed_and_zero_fee_ranges() {
+        for count in [0, 257, u16::MAX] {
+            let mut args = schedule_args();
+            args.epoch_count = count;
+            assert!(validate_schedule_bounds(&args).is_err());
+        }
+        let mut args = schedule_args();
+        args.context.epoch = 0;
+        assert!(validate_schedule_bounds(&args).is_err());
+        args.context.epoch = u64::MAX;
+        assert!(validate_schedule_bounds(&args).is_err());
+        args.epoch_count = 1;
+        assert!(validate_schedule_bounds(&args).is_ok());
+        args.transaction_fee_maximum = Quantity::from(0_u32);
+        assert!(validate_schedule_bounds(&args).is_err());
+        let mut args = schedule_args();
+        args.epoch_count = 256;
+        assert!(validate_schedule_bounds(&args).is_ok());
+    }
+
+    #[test]
+    fn epoch_schedule_command_consumes_one_private_pipe_and_emits_only_complete_public_json() {
+        let (read, mut write) = pipe();
+        write.write_all(&seeds()).unwrap();
+        drop(write);
+        let mut args = schedule_args();
+        args.context.seed_fd = read.into_raw_fd();
+        let mut output = BufWriter::new(Vec::new());
+        run_schedule(args, &mut output).unwrap();
+        let bytes = output.into_inner().unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+        let schedule: ScheduleV1 = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(schedule.parameters.len(), 3);
+
+        let (read, write) = pipe();
+        drop(write);
+        let mut args = schedule_args();
+        args.context.seed_fd = read.into_raw_fd();
+        let mut output = BufWriter::new(Vec::new());
+        assert!(run_schedule(args, &mut output).is_err());
+        assert!(output.into_inner().unwrap().is_empty());
+
+        let (read, write) = pipe();
+        drop(write);
+        let mut args = schedule_args();
+        args.context.seed_fd = read.into_raw_fd();
+        args.epoch_count = 0;
+        let mut output = BufWriter::new(Vec::new());
+        assert!(run_schedule(args, &mut output).is_err());
+        assert!(output.into_inner().unwrap().is_empty());
+    }
+
+    #[test]
+    fn epoch_schedule_parser_requires_explicit_bounded_public_range_and_fee_cap() {
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            args: super::super::Args,
+        }
+        let args = schedule_args();
+        let mut argv = vec![
+            "kagemusha".to_owned(),
+            "derive-mint-finality-epoch-schedule-v1".to_owned(),
+            "--network-id".to_owned(),
+            args.context.network_id,
+            "--epoch".to_owned(),
+            "1".to_owned(),
+        ];
+        for peer in args.context.validators {
+            argv.extend(["--validator".to_owned(), peer]);
+        }
+        argv.extend(
+            [
+                "--seed-fd",
+                "3",
+                "--payment-asset",
+                "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+                "--transaction-fee-maximum",
+                "1",
+                "--epoch-count",
+                "8",
+            ]
+            .map(str::to_owned),
+        );
+        assert!(Cli::try_parse_from(&argv).is_ok());
+        for count in ["0", "257", "65536", "-1"] {
+            let mut bad = argv.clone();
+            *bad.last_mut().unwrap() = count.to_owned();
+            assert!(Cli::try_parse_from(bad).is_err());
+        }
+        for flag in [
+            "--epoch-count",
+            "--payment-asset",
+            "--transaction-fee-maximum",
+        ] {
+            let mut bad = argv.clone();
+            let index = bad.iter().position(|item| item == flag).unwrap();
+            bad.drain(index..index + 2);
+            assert!(Cli::try_parse_from(bad).is_err());
+        }
+        for flag in ["--seed-file", "--seed-env", "--private-key", "--output"] {
+            let mut bad = argv.clone();
+            bad.extend([flag.to_owned(), "unsupported".to_owned()]);
+            assert!(Cli::try_parse_from(bad).is_err());
+        }
     }
 
     #[test]
@@ -544,11 +826,11 @@ mod tests {
         })
         .unwrap();
         assert_eq!(scratch, [0; INPUT_BYTES + 1]);
-        for case in 0..3 {
+        for case in 0..6 {
             let (read, mut write) = pipe();
             let seed_bytes = seeds();
             write
-                .write_all(if case == 2 {
+                .write_all(if matches!(case, 2 | 5) {
                     &seed_bytes[..127]
                 } else {
                     &seed_bytes
@@ -562,14 +844,28 @@ mod tests {
                 args.epoch = 0;
             }
             let mut output = BufWriter::new(Vec::new());
-            let result = run(args, &mut output);
+            let result = if case < 3 {
+                run(args, &mut output)
+            } else {
+                let mut schedule = schedule_args();
+                schedule.context = args;
+                if case == 4 {
+                    schedule.epoch_count = 0;
+                }
+                run_schedule(schedule, &mut output)
+            };
             assert_closed(fd);
             let output = output.into_inner().unwrap();
-            if case == 0 {
+            if matches!(case, 0 | 3) {
                 result.unwrap();
                 assert_eq!(output.iter().filter(|byte| **byte == b'\n').count(), 1);
-                let parameter = norito::json::from_slice::<Parameter>(&output).unwrap();
-                assert_eq!(unpack(parameter).roster.epoch, 7);
+                if case == 0 {
+                    let parameter = norito::json::from_slice::<Parameter>(&output).unwrap();
+                    assert_eq!(unpack(parameter).roster.epoch, 7);
+                } else {
+                    let schedule = norito::json::from_slice::<ScheduleV1>(&output).unwrap();
+                    assert_eq!(schedule.parameters.len(), 3);
+                }
             } else {
                 assert!(result.is_err());
                 assert!(output.is_empty());

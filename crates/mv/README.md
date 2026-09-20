@@ -12,3 +12,78 @@ Features:
 The storage layer uses concread's B-tree maps and epoch cells. Its dependency
 enables `maps`, `ebr`, and the existing `foldhash` backend explicitly; unused
 async and adaptive-cache defaults are disabled.
+
+Block and transaction overlays expose borrowed preimages and touched entries for
+State projection. Storage entries are ordered by key; cell and map records keep
+exact before/after values without making another value copy or change list.
+Applied children retain the first block preimage, while dropped children leave
+no block delta. A replacement block starts after reverting the discarded tip.
+
+These APIs report touches, including no-op mutation and absent-to-absent removal.
+Consumers must compare their canonical value projections before committing a
+semantic delta. The storage layer does not choose a serialization, hash, read
+witness, or complete State commitment; a delta alone does not bind untouched data.
+
+`Block::try_detach` consumes the actual Cell or Storage block after a caller
+admission callback. The detached owner retains that callback's resource guard,
+the original ordinary/replacement mode, the published current/undo identity,
+and exact candidate touches. Capture moves the original current and undo
+allocation owners without copying keys or values, then releases the physical
+writers. A detached map retains its original base reader and root owner to keep
+untouched shared nodes alive. Untouched reads remain tied to that original
+owner/version even when no entry was changed.
+
+Identity is private, local and non-serializable. Every actual MV publication,
+including undo-only commits, direct insertion and current-only replacement,
+rotates the opaque token while the current/undo publication is excluded from
+identity observation. Restoring JSON or projecting history creates a new owner
+while preserving the exact serialized values and undo. Equal values after a
+later publication cannot recreate an earlier identity.
+
+`Detached::try_prepare_publication` admits installation before reacquiring either
+writer around the original current and undo owners. Acquisition does not clone
+values or allocate successor generations. It acquires both original writers
+without waiting and checks the exact captured identity under those writers;
+the next publication identity was already allocated during capture.
+A refusal returns the unchanged journal. A prepared publication can be aborted
+back to that journal without changing visible state. Publishing consumes the
+prepared pair and returns both capture and installation reservations to the
+aggregate caller; the caller owns their eventual transfer/release.
+
+These are component operations, not cross-field finality or atomic visibility.
+The aggregate owner must prepare every component and retain all writers before
+publishing any component. Original execution and retained-reader allocation
+custody require admission before those allocations occur; capture or installation
+callbacks cannot fund them retroactively. Scalar controls verify allocation-free
+detach, retry, abort and publication, including the first commit. Arbitrary
+payload destructors may still allocate. Data writers precede the identity lock;
+identity observation never acquires a data writer while holding that lock.
+
+The underlying synchronous linear cell also accepts prepaid charges for its
+exact cursor and reader control-block layouts. The original charges follow
+detached and published allocations until physical free, with refunds outside
+publication locks. Map teardown uses a bounded stack without heap allocation;
+notification mutexes initialize before they can be needed by reclamation. See
+[allocation ownership](ALLOCATION_OWNERSHIP.md) for the allocator controls and
+remaining node, nested payload and aggregate-policy requirements. Production
+maps still use explicit untracked allocation custody until those are complete.
+
+Funded synchronous operations can use an original budget's
+`with_deferred_refund_notifications` scope to return freed credits immediately
+and wake retries after their physical guards are released. Other threads and
+pools keep notifying normally. Notification also preserves the remaining
+original waiters when one callback unwinds, without suppressing its panic.
+
+Writer admission now carries explicit move-only constructor input alongside both
+shell charges. The B+tree's original padded node allocations can retain typed
+charges through clone/split/unwind and actual free, with the untracked map using
+the same implementation. The same cursor now carries fixed charged tracking buffers through retirement
+and checks their complete structural insertion bound before mutation. Closed map
+admission still requires complete payload demand planning, concrete MV payload
+policies and initial/undo ownership. Node payload copies now require an explicit
+funding-provider policy; node credits alone cannot authorize ordinary Clone.
+
+TODO: compose these component publications with exact aggregate State predecessor
+ownership, membership, hash history, archive/resource reservations and finality.
+The production State publisher and its resource policy remain unfinished; no
+State execution, native-output or publication guard is bypassed by these APIs.

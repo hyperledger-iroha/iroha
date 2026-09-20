@@ -82,7 +82,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::{Path, PathBuf},
+    path::PathBuf,
     str::FromStr,
     time::Duration,
 };
@@ -4615,22 +4615,8 @@ impl LaneConfigEntry {
             slug
         }
     }
-    /// Compute the canonical Kura segment directory for this lane.
-    #[must_use]
-    pub fn blocks_dir(&self, root: impl AsRef<Path>) -> PathBuf {
-        root.as_ref().join("blocks").join(&self.kura_segment)
-    }
-    /// Compute the canonical merge-ledger log path for this lane.
-    #[must_use]
-    pub fn merge_log_path(&self, root: impl AsRef<Path>) -> PathBuf {
-        debug_assert!(
-            !self.merge_segment.is_empty(),
-            "lane config entries always carry a stable merge segment label",
-        );
-        root.as_ref()
-            .join("merge_ledger")
-            .join(format!("{}.log", self.merge_segment))
-    }
+    // Lane aliases and cache labels do not identify consensus storage. Core owns
+    // physical addresses derived from authenticated network/route/incarnation/activation.
 }
 /// Lane-fusion tuning parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6225,7 +6211,9 @@ impl LaneValidatorMode {
 pub struct SumeragiBlock {
     /// Maximum transactions selected for one candidate block.
     pub max_transactions: NonZeroUsize,
-    /// Maximum canonical block-body size in bytes.
+    /// Local canonical block-body resource capacity in bytes.
+    /// Authenticated startup requires this to cover the signed RS16 payload
+    /// envelope; a smaller value cannot redefine the network proposal limit.
     pub max_payload_bytes: NonZeroUsize,
     /// Proposal queue scan budget relative to `max_transactions`.
     pub proposal_queue_scan_multiplier: NonZeroUsize,
@@ -7073,7 +7061,8 @@ impl SumeragiV2Config {
 pub struct SumeragiV2Limits {
     /// Maximum transactions selected for one candidate block.
     pub max_transactions: u64,
-    /// Maximum canonical block body size in bytes.
+    /// Validated local body resource capacity, which must cover the authenticated
+    /// signed RS16 envelope before startup or candidate selection.
     pub max_payload_bytes: u64,
     /// Maximum queued transactions inspected for one proposal attempt.
     pub max_queue_scan: u64,

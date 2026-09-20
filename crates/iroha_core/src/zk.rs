@@ -8633,6 +8633,12 @@ mod halo2_ipa_parameter_source_tests {
     }
     #[test]
     fn production_parameter_source_rejects_duplicate_and_mismatched_metadata() {
+        let valid = ivm_vk_metadata(IVM_EXECUTION_V1_IPA_K, IVM_EXECUTION_V1_IPA_K);
+        let warm = zkparse::params_for_circuit_v1(&valid, IVM_EXECUTION_V1_CIRCUIT_ID)
+            .expect("valid fixed metadata warms the production parameter cache");
+        assert_eq!(warm.k(), IVM_EXECUTION_V1_IPA_K);
+        // A warm parameter entry is not authorization for another key envelope.
+        assert!(zkparse::params_for_circuit_v1(&valid, "unregistered-circuit").is_none());
         let mut duplicate = ivm_vk_metadata(IVM_EXECUTION_V1_IPA_K, IVM_EXECUTION_V1_IPA_K);
         zk1::wrap_append_ipa_k(&mut duplicate, IVM_EXECUTION_V1_IPA_K);
         assert!(zkparse::params_for_circuit_v1(&duplicate, IVM_EXECUTION_V1_CIRCUIT_ID).is_none());
@@ -8681,6 +8687,35 @@ mod zkparse {
         convert::TryFrom,
         io::{Cursor, Read},
     };
+    /// Only fixed production domains may retain deterministic public parameters.
+    /// Each slot is initialized once per process; callers receive independent owned clones.
+    struct ProductionParamsCache {
+        slots: [std::sync::OnceLock<PastaParams>; 3],
+        #[cfg(test)]
+        constructions: [std::sync::atomic::AtomicUsize; 3],
+    }
+    impl ProductionParamsCache {
+        const DOMAINS: [u32; 3] = [7, 12, 13];
+
+        const fn new() -> Self {
+            Self {
+                slots: [const { std::sync::OnceLock::new() }; 3],
+                #[cfg(test)]
+                constructions: [const { std::sync::atomic::AtomicUsize::new(0) }; 3],
+            }
+        }
+
+        fn get(&self, k: u32) -> Option<&PastaParams> {
+            let index = Self::DOMAINS.iter().position(|domain| *domain == k)?;
+            Some(self.slots[index].get_or_init(|| {
+                #[cfg(test)]
+                self.constructions[index].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                pasta_params_new(k)
+            }))
+        }
+    }
+    static PRODUCTION_PARAMS: ProductionParamsCache = ProductionParamsCache::new();
+
     fn envelope_cursor(bytes: &[u8]) -> Option<Cursor<&[u8]>> {
         if !super::zk1::is_envelope(bytes) || bytes.len() < 4 {
             return None;
@@ -8756,8 +8791,95 @@ mod zkparse {
         if h2vk_k != expected_k {
             return None;
         }
-        Some(pasta_params_new(expected_k))
+        // Metadata is checked on every call, including a warm cache. The cache
+        // owns only deterministic public parameters, never a key or genesis verdict.
+        Some(PRODUCTION_PARAMS.get(expected_k)?.clone())
     }
+    #[cfg(test)]
+    mod production_parameter_cache_tests {
+        use super::*;
+        use std::sync::{Barrier, atomic::Ordering};
+
+        #[test]
+        fn finite_production_cache_initializes_once_across_threads() {
+            // A fresh instance exercises concurrent cold initialization without
+            // resetting process-global state used by other parallel tests.
+            let cache = ProductionParamsCache::new();
+            let start = Barrier::new(8);
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            start.wait();
+                            cache.get(super::super::IVM_EXECUTION_V1_IPA_K).unwrap()
+                        })
+                    })
+                    .collect();
+                let values: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+                assert!(values.iter().all(|value| std::ptr::eq(*value, values[0])));
+                assert_eq!(values[0].k(), super::super::IVM_EXECUTION_V1_IPA_K);
+            });
+            assert_eq!(cache.constructions[0].load(Ordering::SeqCst), 1);
+            assert_eq!(cache.constructions[1].load(Ordering::SeqCst), 0);
+            assert_eq!(cache.constructions[2].load(Ordering::SeqCst), 0);
+            // The real process owner also returns one immutable object across threads.
+            let first = PRODUCTION_PARAMS
+                .get(super::super::IVM_EXECUTION_V1_IPA_K)
+                .unwrap();
+            std::thread::scope(|scope| {
+                let other = scope.spawn(|| {
+                    PRODUCTION_PARAMS
+                        .get(super::super::IVM_EXECUTION_V1_IPA_K)
+                        .unwrap()
+                });
+                assert!(std::ptr::eq(first, other.join().unwrap()));
+            });
+        }
+
+        #[test]
+        fn finite_production_cache_matches_native_parameter_bytes_and_fingerprint() {
+            let cache = ProductionParamsCache::new();
+            for k in ProductionParamsCache::DOMAINS {
+                let shared = cache.get(k).unwrap();
+                let direct = pasta_params_new(k);
+                let mut actual = Vec::new();
+                let mut expected = Vec::new();
+                shared.write(&mut actual).unwrap();
+                direct.write(&mut expected).unwrap();
+                assert_eq!(actual, expected, "canonical parameter bytes at k={k}");
+                assert_eq!(
+                    super::super::params_fingerprint(shared),
+                    super::super::params_fingerprint(&direct)
+                );
+                // Existing API users own their copy; mutation cannot change the cached source.
+                let mut owned = shared.clone();
+                owned.downsize(k - 1);
+                assert_eq!(shared.k(), k);
+                assert_eq!(cache.get(k).unwrap().k(), k);
+                assert_eq!(owned.k(), k - 1);
+            }
+        }
+
+        #[test]
+        fn finite_production_cache_rejects_unadmitted_domains_without_construction() {
+            let cache = ProductionParamsCache::new();
+            for k in [0, 6, 8, 11, 14, 31, 32, u32::MAX] {
+                assert!(cache.get(k).is_none());
+            }
+            assert!(
+                cache
+                    .constructions
+                    .iter()
+                    .all(|n| n.load(Ordering::SeqCst) == 0)
+            );
+            for circuit in super::super::HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1 {
+                if let Some(k) = super::super::halo2_ipa_canonical_k_v1(circuit) {
+                    assert!(ProductionParamsCache::DOMAINS.contains(&k), "{circuit}");
+                }
+            }
+        }
+    }
+
     /// Parse bounded Params from a developer/test VK container carrying an `IPAK` TLV.
     ///
     /// Production circuits use [`params_for_circuit_v1`]. This fallback is

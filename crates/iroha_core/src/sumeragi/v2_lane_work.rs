@@ -5120,7 +5120,6 @@ impl V2LaneWorkAdapter {
             || header.view_change_index() != active_view
             || header.creation_time() != logical_time
             || header.merkle_root().is_some()
-            || header.result_merkle_root().is_some()
         {
             return Err(V2LaneWorkError::InvalidContext(
                 "derived merge carrier header differs from the frozen round".to_owned(),
@@ -5280,8 +5279,14 @@ impl V2LaneWorkAdapter {
                         {
                             return None;
                         }
-                        let state_hash = *current_state_hash
-                            .get_or_insert_with(|| self.state.lane_execution_state_hash());
+                        let state_hash = match current_state_hash {
+                            Some(hash) => hash,
+                            None => {
+                                let hash = self.state.lane_execution_state_hash().ok()?;
+                                current_state_hash = Some(hash);
+                                hash
+                            }
+                        };
                         (preflight.preflight_state_hash == Some(state_hash))
                             .then(|| preflight.has_rejections())
                     },
@@ -5941,18 +5946,23 @@ impl V2LaneWorkAdapter {
                 "autonomous reservation release requires the installed live queue".to_owned(),
             )
         })?;
-        let batches = std::mem::take(&mut self.pending_autonomous_reservation_batches);
         let mut released = 0_usize;
-        for batch in batches.into_values() {
-            if batch.reservations.is_empty() {
-                continue;
+        while let Some((&route, batch)) = self
+            .pending_autonomous_reservation_batches
+            .first_key_value()
+        {
+            if !batch.reservations.is_empty() {
+                let context = batch.pre_kura_direct_release_context()?;
+                released = released.saturating_add(
+                    queue
+                        .release_pre_kura_autonomous_reservation_batch(context)
+                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
+                );
             }
-            let context = batch.pre_kura_direct_release_context()?;
-            released = released.saturating_add(
-                queue
-                    .release_pre_kura_autonomous_reservation_batch(context)
-                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
-            );
+            // A refused or indeterminate release retains this original batch
+            // and every unvisited batch. Only Queue's completed transition
+            // discharges the adapter's custody; no reconstructed retry owner.
+            self.pending_autonomous_reservation_batches.remove(&route);
         }
         Ok(released)
     }
@@ -6275,6 +6285,13 @@ impl V2LaneWorkAdapter {
             block_hash,
             payload_hash: Hash::new(&canonical_wire),
         };
+        let empty_merge_body = block.external_entrypoints_cloned().next().is_none()
+            && block.execution_context().is_some_and(|bundle| {
+                bundle.merge_entry.is_some()
+                    && bundle.lane_payload_ownerships.is_empty()
+                    && bundle.autonomous_lane_payloads.is_empty()
+                    && bundle.queue_plan_admissions().is_empty()
+            });
         let canonical_decided = matches!(origin, LockedGlobalBodyOrigin::CanonicalDecided);
         let origin_matches = match origin {
             LockedGlobalBodyOrigin::AuthenticatedHeaderAtOrBeforeLock => {
@@ -6325,6 +6342,19 @@ impl V2LaneWorkAdapter {
             }
         };
         if !origin_matches || block.header().height().get() != self.context.height {
+            if empty_merge_body {
+                iroha_logger::warn!(
+                    context_height = self.context.height,
+                    body_height = block.header().height().get(),
+                    body_view = block.header().view_change_index(),
+                    ?subject,
+                    global_lock = ?self.globally_locked_body,
+                    retained_carrier = ?self.retained_merge_carrier_state,
+                    canonical_decided,
+                    origin_matches,
+                    "rejected empty merge carrier at locked-body origin/header check"
+                );
+            }
             return V2LaneIngressOutcome::Rejected;
         }
         if crate::block::external_queue_plan_synced_entrypoint_index(block).is_some() {
@@ -6349,9 +6379,27 @@ impl V2LaneWorkAdapter {
                     true,
                 )?))
         })();
-        let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery) else {
-            return V2LaneIngressOutcome::Rejected;
+        let canonical_recovery = match self.consensus_storage_read(canonical_recovery) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                if empty_merge_body {
+                    iroha_logger::warn!(
+                        ?subject,
+                        ?error,
+                        "rejected empty merge carrier after canonical Kura read"
+                    );
+                }
+                return V2LaneIngressOutcome::Rejected;
+            }
         };
+        if empty_merge_body {
+            iroha_logger::debug!(
+                ?subject,
+                canonical_recovery,
+                canonical_decided,
+                "checked empty merge carrier canonical recovery"
+            );
+        }
         if canonical_decided && !canonical_recovery {
             return V2LaneIngressOutcome::Rejected;
         }
@@ -6394,6 +6442,13 @@ impl V2LaneWorkAdapter {
             ) {
                 Ok(expected) => expected,
                 Err(error) => {
+                    if empty_merge_body {
+                        iroha_logger::warn!(
+                            ?subject,
+                            ?error,
+                            "rejected empty merge carrier in production lane planning"
+                        );
+                    }
                     if error.is_storage_error() {
                         self.output_guard.close_admission_for_restart();
                     }
@@ -6421,6 +6476,13 @@ impl V2LaneWorkAdapter {
                 ) {
                     Ok(recovered) => recovered,
                     Err(error) => {
+                        if empty_merge_body {
+                            iroha_logger::warn!(
+                                ?subject,
+                                ?error,
+                                "rejected empty merge carrier in validation lane planning"
+                            );
+                        }
                         if error.is_storage_error() {
                             self.output_guard.close_admission_for_restart();
                         }
@@ -6428,6 +6490,15 @@ impl V2LaneWorkAdapter {
                     }
                 };
                 if !recovered.unavailable_indices.is_empty() || recovered.ownerships != ownerships {
+                    if empty_merge_body {
+                        iroha_logger::warn!(
+                            ?subject,
+                            unavailable_count = recovered.unavailable_indices.len(),
+                            expected_ownership_count = recovered.ownerships.len(),
+                            body_ownership_count = ownerships.len(),
+                            "rejected empty merge carrier after validation plan comparison"
+                        );
+                    }
                     return V2LaneIngressOutcome::Rejected;
                 }
             }
@@ -6465,6 +6536,14 @@ impl V2LaneWorkAdapter {
         }
         let local = self.pending_local_lane_proposals.get(&block_hash).cloned();
         if local.as_ref().is_some_and(|planned| planned != &proposals) {
+            if empty_merge_body {
+                iroha_logger::warn!(
+                    ?subject,
+                    local_proposal_count = local.as_ref().map_or(0, Vec::len),
+                    bound_proposal_count = proposals.len(),
+                    "rejected empty merge carrier with conflicting local production plan"
+                );
+            }
             return V2LaneIngressOutcome::Rejected;
         }
         let global_hint = LaneBlockProposalPayloadHintV1 {
@@ -13987,8 +14066,7 @@ impl V2LaneWorkAdapter {
             else {
                 continue;
             };
-            Kura::validate_certified_lane_block_artifact(&artifact)
-                .map_err(|error| V2LaneWorkError::Persistence(error.to_owned()))?;
+            // The strict reader validated both QC aggregates on this owned artifact.
             if artifact.prepare_qc.payload_availability_qc.is_none() {
                 continue;
             }
@@ -15379,8 +15457,9 @@ impl V2LaneWorkAdapter {
                     descriptor.lane_block_height,
                 ))?
             {
+                // The strict completion reader already authenticated this exact certificate.
+                // Keep the independent historical proposal and signer-PoP bindings below.
                 if certified.proposal != *proposal
-                    || Kura::validate_certified_lane_block_artifact(&certified).is_err()
                     || certified.signer_pops.iter().any(|(key, pop)| {
                         descriptor
                             .validator_set
@@ -17737,22 +17816,30 @@ impl V2LaneWorkAdapter {
         let Some(queue) = self.lane_drain_queue.as_ref() else {
             return true;
         };
-        if self.state.lane_has_drain_blocking_evidence(
-            intent.lane_id,
-            intent.dataspace_id,
-            intent.lane_incarnation,
-        ) || queue.lane_has_pending_work(
-            intent.lane_id,
-            intent.dataspace_id,
-            intent.lane_incarnation,
-        ) || self.lane_sessions.has_undrained_work_for_lane(
-            intent.lane_id,
-            intent.dataspace_id,
-            intent.lane_incarnation,
-        ) || self
-            .pending_committed_lanes
-            .iter()
-            .any(|session| proposal_matches(&session.proposal))
+        // A local observation failure suppresses signing; canonical validation
+        // separately retains and propagates the typed storage failure.
+        if self
+            .state
+            .lane_has_drain_blocking_evidence(
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )
+            .unwrap_or(true)
+            || queue.lane_has_pending_work(
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )
+            || self.lane_sessions.has_undrained_work_for_lane(
+                intent.lane_id,
+                intent.dataspace_id,
+                intent.lane_incarnation,
+            )
+            || self
+                .pending_committed_lanes
+                .iter()
+                .any(|session| proposal_matches(&session.proposal))
             || self
                 .historical_recovery_sessions
                 .iter()
@@ -19870,6 +19957,7 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 lane_plan.proposals,
             );
             Ok(PreparedCandidateWork {
+                native_lane_decisions: None,
                 native_amx_receipts: receipts,
                 lane_payload_ownerships: lane_plan.ownerships,
                 autonomous_lane_payloads,
@@ -21069,6 +21157,25 @@ pub(super) mod tests {
         Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
             .expect("initialize isolated authenticated lane-work Kura")
     }
+    /// Authenticate the fresh primary before fixture markers or durable lane work exist.
+    pub(in crate::sumeragi) fn authenticated_lane_work_state_for_testing(
+        world: World,
+        kura: Arc<Kura>,
+        chain_id: ChainId,
+        network_id: iroha_data_model::NetworkId,
+    ) -> State {
+        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+            world,
+            kura,
+            LiveQueryStore::start_test(),
+            chain_id,
+            network_id,
+        )
+        .expect("construct lane-work State before provisioning its primary instance");
+        state.install_pre_genesis_nexus_for_testing(state.nexus_snapshot());
+        state.configure_test_runtime_defaults();
+        state
+    }
     #[test]
     fn completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged() {
         let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Npos);
@@ -21258,6 +21365,7 @@ pub(super) mod tests {
                 alias: "independent-lane".to_owned(),
                 ..LaneConfig::default()
             }),
+            None,
         )
     }
     fn fixture_at_height_inner_with_limits(
@@ -21339,6 +21447,7 @@ pub(super) mod tests {
             voting_enabled,
             da_layout,
             None,
+            None,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -21352,6 +21461,7 @@ pub(super) mod tests {
         voting_enabled: bool,
         da_layout: wire::DataAvailabilityLayout,
         initial_lane: Option<LaneConfig>,
+        initial_lane_keys: Option<Vec<KeyPair>>,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-display-name".into();
         let network_id = crate::sumeragi::synthetic_network_id("v2-lane-work-test");
@@ -21362,6 +21472,8 @@ pub(super) mod tests {
             })
             .collect::<Vec<_>>();
         keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        assert!(initial_lane.is_some() || initial_lane_keys.is_none());
+        let lane_keys = initial_lane_keys.as_deref().unwrap_or(&keys);
         let mut world = World::new();
         let mut peers = crate::Peers::default();
         for (index, key) in keys.iter().enumerate() {
@@ -21385,6 +21497,37 @@ pub(super) mod tests {
                 .consensus_keys_by_pk
                 .insert(record.public_key.to_string(), vec![id]);
         }
+        for (index, key) in lane_keys.iter().enumerate() {
+            if keys
+                .iter()
+                .any(|global| global.public_key() == key.public_key())
+            {
+                continue;
+            }
+            // Lane authority resolves manifest bindings against registered peers.
+            // Register the lane-only peer without adding it to the global roster.
+            let _ = peers.push(PeerId::new(key.public_key().clone()));
+            let id = ConsensusKeyId::new(
+                ConsensusKeyRole::Validator,
+                format!("lane-validator{index}"),
+            );
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("initial lane validator proof of possession"),
+                ),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world.consensus_keys.insert(id.clone(), record.clone());
+            world
+                .consensus_keys_by_pk
+                .insert(record.public_key.to_string(), vec![id]);
+        }
         world.peers = mv::cell::Cell::new(peers);
         if matches!(mode, wire::ConsensusMode::Npos) {
             let parameters = SumeragiNposParameters::default();
@@ -21395,13 +21538,28 @@ pub(super) mod tests {
             block.set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
             block.commit();
         }
-        let mut state = State::new_with_chain_and_network_id_for_testing(
+        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
             world,
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
             chain_id,
             network_id,
-        );
+        )
+        .expect("construct lane-work State without provisioning unauthenticated lane markers");
+        // Canonical-only Kura opens no active lane instance. Follow the same
+        // authenticated H0 anchor and configured-catalog handoff as startup
+        // before constructing parent blocks or freezing the lane context.
+        let startup_nexus = state.nexus_snapshot();
+        state
+            .prepare_configured_primary_geometry_anchor(&startup_nexus.configured_lane_catalog)
+            .expect("authenticate lane-work configured-primary geometry");
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .expect("restore lane-work configured-primary journal reference");
+        state
+            .set_nexus_from_config(startup_nexus)
+            .expect("install lane-work configured Nexus before genesis");
+        state.configure_test_runtime_defaults();
         if let Some(lane) = &initial_lane {
             // Establish State and both physical lane namespaces before freezing
             // the HeightContext or opening any durable signing guard.
@@ -21416,9 +21574,10 @@ pub(super) mod tests {
                 },
             ])
             .expect("Native signing fixture dataspace catalog");
+            nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
             state
-                .set_nexus(nexus)
-                .expect("install dataspace before genesis");
+                .set_nexus_from_config(nexus)
+                .expect("install configured dataspace baseline before genesis");
             state
                 .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
                     additions: vec![lane.clone()],
@@ -21461,7 +21620,7 @@ pub(super) mod tests {
                 dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
-                governance: Some("default-lane-governance".to_owned()),
+                governance: LaneConfig::default().governance,
                 manifest_path: Some(std::path::PathBuf::from(
                     "/tmp/v2-default-lane-manifest.json",
                 )),
@@ -21481,7 +21640,22 @@ pub(super) mod tests {
             status.lane = lane.id;
             status.alias = lane.alias;
             status.dataspace = lane.dataspace_id;
-            status.governance = Some("independent-lane-governance".to_owned());
+            status.governance = lane.governance;
+            status.governance_rules = Some(GovernanceRules {
+                validators: lane_keys
+                    .iter()
+                    .map(|key| AccountId::new(key.public_key().clone()))
+                    .collect(),
+                validator_bindings: lane_keys
+                    .iter()
+                    .map(|key| ManifestValidatorBinding {
+                        validator: AccountId::new(key.public_key().clone()),
+                        peer_id: PeerId::new(key.public_key().clone()),
+                        torii_url: None,
+                    })
+                    .collect(),
+                ..GovernanceRules::default()
+            });
             status.manifest_path = Some(std::path::PathBuf::from(
                 "/tmp/v2-independent-lane-manifest.json",
             ));
@@ -21575,6 +21749,7 @@ pub(super) mod tests {
                         NonZeroU64::new(block_height).expect("non-zero fixture height"),
                     );
                     header.set_prev_block_hash(parent);
+                    header.creation_time_ms = block_height;
                     header.merkle_root = None;
                 },
             );
@@ -21685,6 +21860,7 @@ pub(super) mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.lane_catalog = lane_catalog;
+            nexus.configured_dataspace_catalog = dataspace_catalog.clone();
             nexus.dataspace_catalog = dataspace_catalog;
         }
         adapter.state.reseed_static_lane_incarnations_for_tests();
@@ -21737,14 +21913,14 @@ pub(super) mod tests {
         world_block.commit();
         let_row! { validators = keys .iter() .map(|key| AccountId::new(key.public_key().clone())) .collect::<Vec<_>>() };
         let_row! { validator_bindings = validators .iter() .zip(keys) .map(|(validator, key)| ManifestValidatorBinding { validator: validator.clone(), peer_id: PeerId::new(key.public_key().clone()), torii_url: None, }) .collect::<Vec<_>>() };
-        let_row! { default_status = LaneManifestStatus { lane: LaneId::SINGLE, alias: "default".to_owned(), dataspace: DataSpaceId::UNIVERSAL, visibility: LaneVisibility::Public, storage: LaneStorageProfile::FullReplica, governance: Some("default-lane-governance".to_owned()), manifest_path: Some(std::path::PathBuf::from("/tmp/v2-default-lane-manifest.json")), governance_rules: Some(GovernanceRules { validators: validators.clone(), validator_bindings: validator_bindings.clone(), ..GovernanceRules::default() }), privacy_commitments: Vec::new(), } };
+        let_row! { default_status = LaneManifestStatus { lane: LaneId::SINGLE, alias: "default".to_owned(), dataspace: DataSpaceId::UNIVERSAL, visibility: LaneVisibility::Public, storage: LaneStorageProfile::FullReplica, governance: LaneConfig::default().governance, manifest_path: Some(std::path::PathBuf::from("/tmp/v2-default-lane-manifest.json")), governance_rules: Some(GovernanceRules { validators: validators.clone(), validator_bindings: validator_bindings.clone(), ..GovernanceRules::default() }), privacy_commitments: Vec::new(), } };
         let status = LaneManifestStatus {
             lane: lane_id,
             alias: "independent-lane".to_owned(),
             dataspace: dataspace_id,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
-            governance: Some("independent-lane-governance".to_owned()),
+            governance: LaneConfig::default().governance,
             manifest_path: Some(std::path::PathBuf::from(
                 "/tmp/v2-independent-lane-manifest.json",
             )),
@@ -21793,7 +21969,7 @@ pub(super) mod tests {
         let_row! { lane_count = lane_id .as_u32() .checked_add(1) .and_then(NonZeroU32::new) .expect("custom lane id must fit its non-zero catalog bound") };
         let_row! { lane_catalog = LaneCatalog::new( lane_count, vec![LaneConfig { id: lane_id, dataspace_id, alias: "independent-lane".to_owned(), ..LaneConfig::default() }], ) .expect("single custom-lane test catalog") };
         let_row! { dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata { id: dataspace_id, alias: "independent-dataspace".to_owned(), description: None, fault_tolerance: 1, }]) .expect("single custom-dataspace test catalog") };
-        stmt_row! { { let mut nexus = adapter.state.nexus.write(); nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy { default_lane: lane_id, default_dataspace: dataspace_id, rules: Vec::new(), }; nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog); nexus.lane_catalog = lane_catalog; nexus.dataspace_catalog = dataspace_catalog; } }
+        stmt_row! { { let mut nexus = adapter.state.nexus.write(); nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy { default_lane: lane_id, default_dataspace: dataspace_id, rules: Vec::new(), }; nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog); nexus.lane_catalog = lane_catalog; nexus.configured_dataspace_catalog = dataspace_catalog.clone(); nexus.dataspace_catalog = dataspace_catalog; } }
         adapter.state.reseed_static_lane_incarnations_for_tests();
         stmt_row! { adapter.context.nexus_amx_context_hash = super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref()).expect("valid committed catalog"); }
         stmt_row! { adapter.context.execution_policy_hash = super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref()).expect("derive single custom-lane test execution policy"); }
@@ -21857,6 +22033,7 @@ pub(super) mod tests {
         for mode in [wire::ConsensusMode::Permissioned, wire::ConsensusMode::Npos] {
             let (adapter, _) = fixture_with_durable_parent(mode);
             let mut previous = None;
+            let mut previous_time = Duration::ZERO;
             for height in 1..adapter.context.height {
                 let finality = adapter
                     .kura
@@ -21877,6 +22054,12 @@ pub(super) mod tests {
                     .expect("authenticate complete parent wire")
                     .expect("complete parent body exists");
                 assert_eq!(finality.block_hash, block.hash());
+                let creation_time = block.header().creation_time();
+                assert!(
+                    creation_time > previous_time,
+                    "signed parent timestamps must be positive and strictly increasing for snapshot recovery"
+                );
+                previous_time = creation_time;
                 assert_eq!(
                     finality
                         .commit_qc
@@ -21923,7 +22106,6 @@ pub(super) mod tests {
             .carrier_context_header();
         assert_eq!(view_zero, rebuilt);
         assert_eq!(view_zero.merkle_root(), None);
-        assert_eq!(view_zero.result_merkle_root(), None);
         let view_three = adapter
             .merge_carrier_context_header(3)
             .expect("derive exact higher-view carrier context");
@@ -26369,10 +26551,9 @@ pub(super) mod tests {
         }
         let kura =
             locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY);
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+        let state = Arc::new(authenticated_lane_work_state_for_testing(
             world,
             Arc::clone(&kura),
-            LiveQueryStore::start_test(),
             ChainId::from("v2-lane-work-initially-absent-validator"),
             context.network_id,
         ));
@@ -27010,17 +27191,31 @@ pub(super) mod tests {
             let entrypoint_hash = transaction.hash_as_entrypoint();
             let mut block =
                 SignedBlock::genesis(vec![transaction], transaction_key.private_key(), None, None);
-            block
-                .set_transaction_results(
-                    Vec::new(),
+            {
+                let outputs = crate::execution_output_test_support::structural_network_outputs(
+                    &block,
                     &[entrypoint_hash],
                     vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+                );
+                let fragments =
+                    u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count())
+                        .unwrap();
+                block.set_execution_outputs(
+                    outputs,
+                    fragments,
+                    Default::default(),
+                    Vec::new(),
+                    Default::default(),
+                    Default::default(),
+                    Vec::new(),
+                    &crate::execution_output_test_support::structural_output_limits(),
                 )
-                .expect("attach deterministic genesis transaction result");
+            }
+            .expect("attach deterministic genesis transaction result");
             assert!(block.header().is_genesis());
             assert_eq!(block.external_entrypoint_count(), 1);
             assert!(block.has_results());
-            assert!(block.header().result_merkle_root().is_some());
+            assert!(block.output_merkle_commitment().is_some());
             assert!(block.execution_context().is_none());
             let signature =
                 SignatureOf::try_from_hash(transaction_key.private_key(), block.header().hash())
@@ -27880,10 +28075,12 @@ pub(super) mod tests {
         let (round, subject) = global_lock_for_block(&adapter, &block);
         let artifact = finality_artifact_for_block(&adapter, &keys, &block);
         let verified = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let receipt = adapter
             .kura
             .store_v2_finality_artifact(&verified)
             .expect("canonical finality");
+        assert_eq!(receipt.block_hash(), block.hash());
+        assert_eq!(receipt.subject(), subject);
         let committed = ValidBlock::committed_from_replay_signed_block(block);
         commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
         adapter
@@ -28772,32 +28969,42 @@ pub(super) mod tests {
                 .as_ref()
                 .map(|qc| qc.subject.block_hash),
             None,
-            None,
             1,
             0,
         );
         let leader = usize::try_from(adapter.context.leader(0)).expect("leader index");
-        let signature = SignatureOf::try_from_hash(keys[leader].private_key(), header.hash())
-            .expect("sign restart receipt fixture block");
-        let mut block = SignedBlock::presigned(
-            BlockSignature::new(
-                u64::try_from(leader).expect("leader index fits u64"),
-                signature,
-            ),
-            header,
-            vec![transaction],
-        );
-        block.set_execution_context(Some(
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_execution_context(Some(
             BlockExecutionContextBundle::new(Vec::new())
                 .with_lane_payload_ownerships(vec![ownership.clone()]),
         ));
-        block
-            .set_transaction_results(
-                Vec::new(),
+        let mut block = builder
+            .try_build_with_signature(
+                u64::try_from(leader).expect("leader index fits u64"),
+                keys[leader].private_key(),
+            )
+            .expect("sign canonical restart receipt fixture block");
+        {
+            let outputs = crate::execution_output_test_support::structural_network_outputs(
+                &block,
                 &[entrypoint_hash],
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            );
+            let fragments =
+                u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+            block.set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
             )
-            .expect("attach canonical restart transaction result");
+        }
+        .expect("attach canonical restart transaction result");
         let signature =
             SignatureOf::try_from_hash(keys[leader].private_key(), block.header().hash())
                 .expect("sign complete result-bearing ordinary carrier");
@@ -28863,7 +29070,6 @@ pub(super) mod tests {
             NonZeroU64::new(height).expect("fixture block height is non-zero"),
             parent,
             None,
-            None,
             height,
             0,
         );
@@ -28874,7 +29080,25 @@ pub(super) mod tests {
                     .with_lane_payload_ownerships(vec![ownership]),
             ));
         }
-        builder.build_with_signature(0, signer.private_key())
+        let mut block = builder.build_with_signature(0, signer.private_key());
+        install_empty_lane_work_outputs_for_test(&mut block);
+        block
+    }
+    /// Complete structural control fixtures before their executed-wire finality is signed.
+    fn install_empty_lane_work_outputs_for_test(block: &mut SignedBlock) {
+        assert!(block.external_entrypoints_slice().is_empty());
+        block
+            .set_execution_outputs(
+                Vec::new(),
+                0,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+            .expect("empty control carrier has exact checked output metadata");
     }
     fn planned_lane_candidate_block_at_view(
         adapter: &V2LaneWorkAdapter,
@@ -28978,7 +29202,6 @@ pub(super) mod tests {
                 .parent_commit_qc
                 .as_ref()
                 .map(|qc| qc.subject.block_hash),
-            None,
             None,
             adapter.context.height,
             view,
@@ -30665,7 +30888,6 @@ pub(super) mod tests {
                     .as_ref()
                     .map(|qc| qc.subject.block_hash),
                 None,
-                None,
                 adapter.context.height,
                 0,
             );
@@ -30677,13 +30899,27 @@ pub(super) mod tests {
                 u64::try_from(leader_index).expect("leader index fits u64"),
                 keys[leader_index].private_key(),
             );
-            canonical_block
-                .set_transaction_results(
-                    Vec::new(),
+            {
+                let outputs = crate::execution_output_test_support::structural_network_outputs(
+                    &canonical_block,
                     &[entrypoint_hash],
                     vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+                );
+                let fragments =
+                    u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count())
+                        .unwrap();
+                canonical_block.set_execution_outputs(
+                    outputs,
+                    fragments,
+                    Default::default(),
+                    Vec::new(),
+                    Default::default(),
+                    Default::default(),
+                    Vec::new(),
+                    &crate::execution_output_test_support::structural_output_limits(),
                 )
-                .expect("attach large canonical result");
+            }
+            .expect("attach large canonical result");
             let signature = SignatureOf::try_from_hash(
                 keys[leader_index].private_key(),
                 canonical_block.header().hash(),
@@ -31432,11 +31668,8 @@ pub(super) mod tests {
         };
         let lane_entry = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(proposal.descriptor.lane_id)
-            .expect("fixture lane storage entry")
-            .clone();
+            .lane_storage_identity(proposal.descriptor.lane_id)
+            .expect("fixture lane storage identity");
         let lane_artifact_dir = lane_entry
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts");
@@ -32113,5 +32346,4 @@ pub(super) mod tests {
     include!("v2_lane_work/autonomous_retirement_and_merge_tests.rs");
     include!("v2_lane_work/queue_plan_admission_handoff_tests.rs");
     include!("tests/v2_lane_work_ordinary_dispatch.rs");
-
 }

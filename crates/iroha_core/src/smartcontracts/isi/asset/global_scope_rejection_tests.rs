@@ -20,7 +20,7 @@ fn mint_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -64,7 +64,7 @@ fn burn_global_asset_rejects_explicit_dataspace_scope_on_universal_route() {
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);

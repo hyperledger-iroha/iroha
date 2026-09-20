@@ -41,9 +41,7 @@ fn corrupted_raw_anchor_retains_session_instead_of_using_local_body_hint() {
     let qcs_before = adapter.lane_sessions.qcs_for_incomplete_sessions();
     let source = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(proposal.descriptor.lane_id)
+        .lane_storage_identity(proposal.descriptor.lane_id)
         .expect("configured lane")
         .blocks_dir(adapter.kura.store_root());
     corrupt_durable_file_for_test(&source.join("lane_artifacts/ownerships.norito"));
@@ -127,12 +125,7 @@ fn corrupted_decided_carrier_retains_exact_durable_certificate_reply_owner() {
             .proposal_is_bound_to_decided_carrier(&proposal)
             .expect("authenticate durable decided binding")
     );
-    let blocks = adapter
-        .state
-        .nexus_snapshot()
-        .lane_config
-        .primary()
-        .blocks_dir(adapter.kura.store_root());
+    let blocks = Kura::canonical_storage_paths(&adapter.kura.store_root()).0;
     corrupt_durable_file_for_test(&blocks.join("blocks.data"));
     assert!(
         adapter
@@ -210,12 +203,7 @@ fn corrupted_decided_carrier_retains_autonomous_new_view_clock() {
     let payloads = adapter.autonomous_payloads.clone();
     adapter.globally_locked_body = None;
     adapter.locally_bound_lane_proposals.clear();
-    let blocks = adapter
-        .state
-        .nexus_snapshot()
-        .lane_config
-        .primary()
-        .blocks_dir(adapter.kura.store_root());
+    let blocks = Kura::canonical_storage_paths(&adapter.kura.store_root()).0;
     corrupt_durable_file_for_test(&blocks.join("blocks.data"));
     assert!(
         adapter
@@ -300,12 +288,7 @@ fn corrupted_progress_authority_retains_committed_output_owner_and_cursor() {
             .iter()
             .map(lane_work_effect_key)
             .collect::<Vec<_>>();
-        let blocks = adapter
-            .state
-            .nexus_snapshot()
-            .lane_config
-            .primary()
-            .blocks_dir(adapter.kura.store_root());
+        let blocks = Kura::canonical_storage_paths(&adapter.kura.store_root()).0;
         corrupt_durable_file_for_test(&blocks.join("blocks.data"));
         if effect_preflight {
             assert!(matches!(
@@ -413,9 +396,7 @@ fn late_durable_certificate_read_failure_retains_exact_runner_source() {
     adapter.output_guard = services.lifecycle_output_guard();
     let blocks = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(proposal.descriptor.lane_id)
+        .lane_storage_identity(proposal.descriptor.lane_id)
         .expect("active source lane")
         .blocks_dir(adapter.kura.store_root());
     corrupt_durable_file_for_test(&blocks.join("lane_artifacts/certified_blocks.norito"));
@@ -525,9 +506,7 @@ fn evicted_session_corrupt_raw_anchor_preserves_every_committed_output_cursor() 
     let cursor = adapter.committed_lane_output_cursor;
     let blocks = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(first_proposal.descriptor.lane_id)
+        .lane_storage_identity(first_proposal.descriptor.lane_id)
         .expect("active ordinary lane")
         .blocks_dir(adapter.kura.store_root());
     corrupt_durable_file_for_test(&blocks.join("lane_artifacts/ownerships.norito"));
@@ -658,9 +637,7 @@ fn corrupt_predecessor_receipt_preserves_autonomous_new_view_clock_and_payload_o
         .collect::<Vec<_>>();
     let receipts = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(predecessor.descriptor.lane_id)
+        .lane_storage_identity(predecessor.descriptor.lane_id)
         .expect("actual predecessor lane")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts");
@@ -773,9 +750,7 @@ fn corrupt_historical_application_anchor_preserves_pending_committed_cache_owner
         .collect::<Vec<_>>();
     let ownerships = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(proposal.descriptor.lane_id)
+        .lane_storage_identity(proposal.descriptor.lane_id)
         .expect("actual historical lane")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts/ownerships.norito");
@@ -888,9 +863,7 @@ fn corrupt_planner_frontier_retains_exact_pending_producer_reservations() {
         .expect("authenticate the entire stored carrier");
     let ownerships = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
+        .lane_storage_identity(lane_id)
         .expect("actual producer lane")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts/ownerships.norito");
@@ -930,6 +903,109 @@ fn corrupt_planner_frontier_retains_exact_pending_producer_reservations() {
 }
 
 #[test]
+fn refused_pre_kura_release_retains_original_batch_until_checked_release_succeeds() {
+    let (mut adapter, keys) = autonomous_test_fixture(wire::ConsensusMode::Permissioned, true);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    assert_autonomous_test_role(&adapter, &keys, lane_id, dataspace_id, true);
+    let directory = tempfile::tempdir().expect("real pending release journals");
+    let journal_path = directory.path().join("lane-reservations.norito");
+    let queue = install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 2);
+    let slot = plan_autonomous_lane_reservation_slot(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        lane_id,
+        dataspace_id,
+    )
+    .expect("derive original producer slot");
+    assert_eq!(slot.validator_set.len(), 4);
+    let reservations = queue
+        .reserve_transactions_for_lane_bounded(
+            adapter.state.as_ref(),
+            slot.selection_authorization()
+                .expect("original selection authority"),
+            LaneQueueReservationSelectionLimits {
+                max_transactions: NonZeroUsize::new(2).unwrap(),
+                max_scan: NonZeroUsize::new(2).unwrap(),
+                max_encoded_bytes: NonZeroU64::new(u64::MAX).unwrap(),
+                max_gas: NonZeroU64::new(u64::MAX).unwrap(),
+            },
+            &BTreeSet::new(),
+            LaneQueueReservationRoutingMode::AnyCoordinatorPlan,
+        )
+        .expect("reserve original pending batch");
+    assert_eq!(reservations.len(), 2);
+    let original_allocation = reservations.as_ptr();
+    let ordered_keys = reservations
+        .iter()
+        .map(|reservation| *reservation.key())
+        .collect::<Vec<_>>();
+    let activation = queue
+        .authorize_lane_reservation_kura_activation(
+            slot.selection_authorization()
+                .expect("original activation authority"),
+            &ordered_keys,
+        )
+        .expect("retain the actual competing transition fence");
+    adapter.pending_autonomous_reservation_batches.insert(
+        (lane_id, dataspace_id),
+        PendingAutonomousReservationBatch {
+            slot,
+            reservations,
+            envelope_byte_limit: 4 * 1024 * 1024,
+        },
+    );
+    let live_before = queue.live_lane_reservations();
+    let fifo_before = queue.fifo_snapshot_for_test();
+    let journal_before = std::fs::read(&journal_path).expect("read original journal");
+    assert!(matches!(
+        adapter.release_pending_autonomous_reservation_batches(),
+        Err(V2LaneWorkError::Persistence(_))
+    ));
+    let retained = adapter
+        .pending_autonomous_reservation_batches
+        .get(&(lane_id, dataspace_id))
+        .expect("failed release must retain its actual batch");
+    assert_eq!(retained.reservations.as_ptr(), original_allocation);
+    assert_eq!(
+        retained
+            .reservations
+            .iter()
+            .map(|reservation| *reservation.key())
+            .collect::<Vec<_>>(),
+        ordered_keys
+    );
+    assert_eq!(queue.live_lane_reservations(), live_before);
+    assert_eq!(queue.fifo_snapshot_for_test(), fifo_before);
+    assert_eq!(std::fs::read(&journal_path).unwrap(), journal_before);
+
+    drop(activation);
+    assert_eq!(
+        adapter
+            .release_pending_autonomous_reservation_batches()
+            .expect("retry original batch after fence release"),
+        2
+    );
+    assert!(adapter.pending_autonomous_reservation_batches.is_empty());
+    assert!(queue.live_lane_reservations().is_empty());
+    assert_eq!(
+        queue.fifo_snapshot_for_test(),
+        ordered_keys
+            .iter()
+            .map(|key| key.entrypoint_hash)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        adapter
+            .release_pending_autonomous_reservation_batches()
+            .expect("completed release is empty"),
+        0
+    );
+}
+
+#[test]
 fn corrupt_native_application_receipt_retains_exact_pending_producer_reservations() {
     let (adapter, keys, lane_id, dataspace_id) = native_body_recovery_adapter();
     assert!(
@@ -955,7 +1031,8 @@ fn corrupt_native_application_receipt_retains_exact_pending_producer_reservation
         &ValidBlock::committed_from_replay_signed_block(carrier.clone()),
         &adapter.context,
     );
-    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
     adapter
         .kura
         .store_wsv_checkpoint(carrier.header().height().get(), carrier.hash(), checkpoint)
@@ -1098,9 +1175,7 @@ fn corrupt_native_application_receipt_retains_exact_pending_producer_reservation
     let attempted_before = adapter.autonomous_production_attempted_routes.clone();
     let receipt_path = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
+        .lane_storage_identity(lane_id)
         .expect("actual Native participant storage")
         .blocks_dir(adapter.kura.store_root())
         .join(format!(

@@ -1229,7 +1229,6 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
             NonZeroU64::new(height).expect("height>0"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -1356,7 +1355,6 @@ async fn zk_ivm_prove_job_completes_for_stark_backend() {
             NonZeroU64::new(height).expect("height>0"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -1479,7 +1477,6 @@ async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
             NonZeroU64::new(height).expect("height>0"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -1594,7 +1591,6 @@ async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
             NonZeroU64::new(height).expect("height>0"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -1706,7 +1702,6 @@ async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
         let height = next_block_height(&app);
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("height>0"),
-            None,
             None,
             None,
             0,
@@ -1827,7 +1822,6 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
         let height = next_block_height(&app);
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("height>0"),
-            None,
             None,
             None,
             0,
@@ -2183,7 +2177,6 @@ async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
             NonZeroU64::new(height).expect("height>0"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -2263,7 +2256,6 @@ async fn zk_ivm_prove_rejects_when_queue_full() {
         let height = next_block_height(&app);
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("height>0"),
-            None,
             None,
             None,
             0,
@@ -2348,7 +2340,6 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
         let height = next_block_height(&app);
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("height>0"),
-            None,
             None,
             None,
             0,

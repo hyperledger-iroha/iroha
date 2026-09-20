@@ -633,7 +633,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -872,7 +871,6 @@ mod tests {
             NonZeroU64::new(proof.location.block_height).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -915,7 +913,6 @@ mod tests {
         assert_eq!(bundle.commitments.as_slice(), &[stale_duplicate, later]);
         let mut header = BlockHeader::new(
             NonZeroU64::new(proof.location.block_height).expect("non-zero height"),
-            None,
             None,
             None,
             0,

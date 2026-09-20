@@ -280,6 +280,33 @@ pub(crate) struct SafetyWalServicedCandidateStoreAuthority {
 pub(crate) struct SafetyWalLeaderWireStoreAuthority {
     entry: BoundSafetyWalAdjacentEntry,
 }
+/// Move-only physical owner of the native lane WAL's immutable input sibling.
+/// It grants no consensus, source-finality or body-validation authority.
+#[derive(Debug)]
+pub(crate) struct SafetyWalNativeBodyStoreAuthority {
+    identity: WalFileIdentity,
+    entry: BoundSafetyWalAdjacentEntry,
+}
+impl SafetyWalNativeBodyStoreAuthority {
+    /// Exact protocol/network/instance/height/key identity of the actual parent WAL.
+    pub(crate) fn matches_identity(&self, expected: WalFileIdentity) -> bool {
+        self.identity == expected
+    }
+    /// Read bounded bytes through the actual retained WAL directory descriptor.
+    pub(crate) fn read_bounded(&self, maximum: u64) -> Result<Option<Vec<u8>>, String> {
+        self.entry.read_bounded(maximum, "native lane input")
+    }
+    /// Sync one exact snapshot and its directory before returning.
+    pub(crate) fn publish_atomic(&self, frame: &[u8], maximum: u64) -> Result<(), String> {
+        self.entry
+            .publish_atomic(frame, maximum, "native lane input")
+    }
+    /// Diagnostic fixture path; production callers retain the physical owner.
+    #[cfg(test)]
+    pub(crate) fn path_for_test(&self) -> &Path {
+        &self.entry.display_path
+    }
+}
 impl SafetyWalServicedCandidateStoreAuthority {
     /// Read the complete fixed snapshot through its retained directory owner.
     pub(crate) fn read_bounded(&self, maximum: u64) -> Result<Option<Vec<u8>>, String> {
@@ -1291,6 +1318,8 @@ pub(crate) struct SafetyWal {
     serviced_candidate_authority_minted: AtomicBool,
     #[cfg(all(unix, not(target_os = "espidf")))]
     leader_wire_authority_minted: AtomicBool,
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    native_body_authority_minted: AtomicBool,
 }
 impl SafetyWal {
     /// Open the production WAL through one descriptor-relative Kura authority and exact
@@ -1521,6 +1550,8 @@ impl SafetyWal {
             serviced_candidate_authority_minted: AtomicBool::new(false),
             #[cfg(all(unix, not(target_os = "espidf")))]
             leader_wire_authority_minted: AtomicBool::new(false),
+            #[cfg(all(unix, not(target_os = "espidf")))]
+            native_body_authority_minted: AtomicBool::new(false),
         })
     }
     /// Return all records recovered during open.
@@ -1537,6 +1568,43 @@ impl SafetyWal {
                 .directory
                 .verify_leaf(&self.file, &self.wal_name)
                 .is_ok()
+    }
+    /// Mint one native-body sibling from this exact opened WAL, never a path.
+    pub(crate) fn mint_native_body_store_authority(
+        &self,
+    ) -> Result<SafetyWalNativeBodyStoreAuthority, SafetyWalError> {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            self.verify_expected_binding(&self.path)?;
+            if self
+                .native_body_authority_minted
+                .swap(true, Ordering::AcqRel)
+            {
+                return Err(SafetyWalError::FailedClosed {
+                    path: self.path.clone(),
+                });
+            }
+            let entry = BoundSafetyWalAdjacentEntry::from_wal(
+                Arc::clone(&self.directory),
+                &self.path,
+                ".native-input",
+            )
+            .map_err(|source| SafetyWalError::Io {
+                path: self.path.clone(),
+                source,
+            })?;
+            Ok(SafetyWalNativeBodyStoreAuthority {
+                identity: self.identity,
+                entry,
+            })
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            Err(SafetyWalError::UnsupportedStorageBinding {
+                path: self.path.clone(),
+                reason: "descriptor-relative native input storage is unavailable",
+            })
+        }
     }
     /// Mint the sole fixed serviced-candidate sibling authority.
     pub(crate) fn mint_serviced_candidate_store_authority(

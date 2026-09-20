@@ -37,7 +37,7 @@ fn drained_internal_ignore_uses_exact_durable_tombstone_before_readmission() {
     .expect("one original Fetch predecessor");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(now)
+            .step_and_take_scheduler_ownership_for_test(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("drain the first ownerless completion"),
         RuntimeStep::Advanced(ref effects) if effects.is_empty()
     ));
@@ -1072,7 +1072,10 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
         Err(EnqueueError::FailClosed)
     );
     assert!(matches!(
-        runtime.step(Instant::now()),
+        runtime.step(
+            Instant::now(),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(RuntimeError::FailClosed)
     ));
     let duplicate_directory =
@@ -1215,8 +1218,10 @@ fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late(
         .unwrap();
     }
     for seconds in [2, 4, 6, 8] {
-        let _ = runtime
-            .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(seconds));
+        let _ = runtime.step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(seconds),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        );
     }
     assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
     assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
@@ -1230,11 +1235,17 @@ fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late(
         RuntimeQueueConfig::new(6, 2, 1),
     );
     post_timeout
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(2))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(2),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("drain the first periodic episode");
     assert_eq!(post_timeout.driver.retransmits, vec![initial]);
     post_timeout
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(10),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("emit the one-shot absolute timeout");
     assert_eq!(post_timeout.driver.timeouts, vec![initial]);
     enqueue_fake(
@@ -1245,7 +1256,10 @@ fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late(
     )
     .expect("admit work after the old periodic owner drained");
     post_timeout
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(12))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(12),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the admitted target precedes the fresh periodic episode");
     assert_eq!(post_timeout.driver.delivered, vec![(initial, 9)]);
     assert_eq!(
@@ -1254,7 +1268,10 @@ fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late(
         "a drained timer cannot reacquire its old position ahead of the target"
     );
     post_timeout
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(14))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(14),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the freshly positioned periodic episode follows the target");
     assert_eq!(post_timeout.driver.retransmits, vec![initial, initial]);
 }
@@ -1275,13 +1292,19 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
     )
     .unwrap();
     runtime
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(2))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(2),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("periodic retransmission gets one prompt bounded turn");
     assert!(runtime.driver.delivered.is_empty());
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert!(runtime.driver.timeouts.is_empty());
     let fifo_step = runtime
-        .step(start + Duration::from_secs(2))
+        .step(
+            start + Duration::from_secs(2),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("FIFO debt runs immediately after the periodic turn");
     let RuntimeStep::Advanced(fifo_effects) = fifo_step else {
         panic!("FIFO debt unexpectedly idled")
@@ -1300,7 +1323,10 @@ fn periodic_delay_is_bounded_and_absolute_timeout_has_priority() {
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert!(runtime.driver.timeouts.is_empty());
     runtime
-        .step(start + Duration::from_secs(10))
+        .step(
+            start + Duration::from_secs(10),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("absolute timeout preempts every replenished periodic owner");
     assert_eq!(
         runtime
@@ -1542,7 +1568,10 @@ fn stale_completion_retains_tag_and_precedes_a_later_due_retransmit() {
     )
     .unwrap();
     runtime
-        .step(start + Duration::from_secs(2))
+        .step(
+            start + Duration::from_secs(2),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the older admitted completion owns the first turn");
     assert_eq!(runtime.driver.delivered, vec![(stale, 9)]);
     assert!(runtime.driver.retransmits.is_empty());
@@ -1559,7 +1588,10 @@ fn stale_completion_retains_tag_and_precedes_a_later_due_retransmit() {
     // The retransmit lifecycle was frozen when it first became due, so it
     // owns the next turn after the older completion drains.
     runtime
-        .step(start + Duration::from_secs(4))
+        .step(
+            start + Duration::from_secs(4),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the frozen retransmit owns the next turn");
     assert_eq!(runtime.driver.retransmits, vec![current]);
     assert_eq!(
@@ -1587,7 +1619,10 @@ fn only_enter_view_effect_restarts_both_clocks() {
         FakeCommand::record(1),
     )
     .unwrap();
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(1));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        start + Duration::from_secs(1),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert_eq!(runtime.round_tag(), initial);
     enqueue_fake(
         &mut runtime,
@@ -1599,7 +1634,10 @@ fn only_enter_view_effect_restarts_both_clocks() {
     // The TC-like Progress owner predates the retransmit frozen by this turn,
     // so EnterView runs first and resets both clocks.
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9)),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(9),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(runtime.round_tag(), next);
@@ -1608,20 +1646,35 @@ fn only_enter_view_effect_restarts_both_clocks() {
         .reconcile_active_view_producer(next, false)
         .expect("the nonleader test peer retires the positional view producer");
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9)),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(9),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Idle)
     ));
     assert_eq!(runtime.round_timeout(), Duration::from_secs(20));
     assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(22));
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10)),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(10),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Idle)
     ));
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(11));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        start + Duration::from_secs(11),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert_eq!(runtime.driver.retransmits, vec![next]);
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(19));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        start + Duration::from_secs(19),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert!(runtime.driver.timeouts.is_empty());
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(29));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        start + Duration::from_secs(29),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
 #[test]
@@ -1643,7 +1696,10 @@ fn high_view_enter_effect_rearms_the_bounded_timeout() {
     .expect("admit the TC-like high-view transition");
     let entered_at = start + Duration::from_secs(1);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(entered_at),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            entered_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(runtime.round_tag(), next);
@@ -1652,11 +1708,15 @@ fn high_view_enter_effect_rearms_the_bounded_timeout() {
         .expect("the nonleader test peer retires the positional view producer");
     assert_eq!(runtime.round_timeout(), Duration::from_secs(100));
     assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(102));
-    let _ =
-        runtime.step_and_take_scheduler_ownership_for_test(entered_at + Duration::from_secs(99));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        entered_at + Duration::from_secs(99),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert!(runtime.driver.timeouts.is_empty());
-    let _ =
-        runtime.step_and_take_scheduler_ownership_for_test(entered_at + Duration::from_secs(100));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        entered_at + Duration::from_secs(100),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
 #[test]
@@ -1670,7 +1730,10 @@ fn same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner() {
         RuntimeQueueConfig::new(8, 2, 2),
     );
     runtime
-        .step_and_take_scheduler_ownership_for_test(start + runtime.round_timeout())
+        .step_and_take_scheduler_ownership_for_test(
+            start + runtime.round_timeout(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the first generation emits its timeout");
     assert_eq!(runtime.driver.timeouts, vec![initial]);
 
@@ -1683,7 +1746,10 @@ fn same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner() {
     .expect("admit the same-view generation upgrade");
     let rebound_at = start + runtime.round_timeout();
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(rebound_at),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            rebound_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(runtime.round_tag(), rebound);
@@ -1692,7 +1758,10 @@ fn same_view_generation_upgrade_restarts_timeout_with_a_fresh_owner() {
         .expect("the nonleader test peer retires the rebound producer");
 
     runtime
-        .step_and_take_scheduler_ownership_for_test(rebound_at + runtime.round_timeout())
+        .step_and_take_scheduler_ownership_for_test(
+            rebound_at + runtime.round_timeout(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the rebound generation emits a fresh timeout");
     assert_eq!(runtime.driver.timeouts, vec![initial, rebound]);
     assert!(!runtime.fail_closed);
@@ -1720,7 +1789,10 @@ fn startup_enter_view_effect_restarts_clocks_and_is_returned_unchanged() {
         .take_effect_ownership(effects.len())
         .expect("the startup executor consumes both returned effect owners");
     assert!(matches!(
-        runtime.step(start + Duration::from_secs(100)),
+        runtime.step(
+            start + Duration::from_secs(100),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(RuntimeError::ClocksNotArmed)
     ));
     runtime
@@ -1734,11 +1806,17 @@ fn startup_enter_view_effect_restarts_clocks_and_is_returned_unchanged() {
         Err(RuntimeClockError::AlreadyArmed)
     );
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(119)),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(119),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_)) | Ok(RuntimeStep::Idle)
     ));
     assert!(runtime.driver.timeouts.is_empty());
-    let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(120));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(
+        start + Duration::from_secs(120),
+        &RuntimeExternalLifecycleCensus::empty_for_test(),
+    );
     assert_eq!(runtime.driver.timeouts, vec![next]);
 }
 #[test]
@@ -1751,7 +1829,7 @@ fn interrupted_tip_recovery_is_rejected_after_live_clock_arm() {
         RuntimeQueueConfig::new(8, 2, 2),
     );
     assert!(matches!(
-        runtime.step_recovery(start),
+        runtime.step_recovery(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Err(RuntimeError::RecoveryAfterClocksArmed)
     ));
 }
@@ -1779,7 +1857,11 @@ fn pre_apply_scheduler_owner_rejects_a_different_apply_bound() {
         .expect("the queued predecessor leaves a representable Apply ordinal");
     assert!(matches!(
         runtime
-            .try_step_owed_fifo_predecessor(start, apply_ordinal)
+            .try_step_owed_fifo_predecessor(
+                start,
+                apply_ordinal,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("dispatch the sealed pre-Apply predecessor"),
         Some(RuntimeStep::Advanced(_))
     ));
@@ -1823,7 +1905,11 @@ fn pre_apply_scheduler_drains_every_older_fifo_owner_under_one_exact_bound() {
         .expect("the complete older queue leaves a representable Apply ordinal");
     for value in 1..=2 {
         let Some(RuntimeStep::Advanced(effects)) = runtime
-            .try_step_owed_fifo_predecessor(start, apply_ordinal)
+            .try_step_owed_fifo_predecessor(
+                start,
+                apply_ordinal,
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("dispatch one bounded pre-Apply predecessor")
         else {
             panic!("pre-Apply predecessor {value} unexpectedly idled")
@@ -1855,14 +1941,17 @@ fn adapter_failure_closes_runtime_permanently() {
     )
     .unwrap();
     assert!(matches!(
-        runtime.step(start),
+        runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Err(RuntimeError::Driver(FakeError))
     ));
     assert_eq!(
         runtime.fail_closed_reason.as_deref(),
         Some("runtime driver rejected a serialized transition: fake driver failure")
     );
-    assert!(matches!(runtime.step(start), Err(RuntimeError::FailClosed)));
+    assert!(matches!(
+        runtime.step(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Err(RuntimeError::FailClosed)
+    ));
     assert_eq!(
         runtime.fail_closed_reason.as_deref(),
         Some("runtime driver rejected a serialized transition: fake driver failure"),

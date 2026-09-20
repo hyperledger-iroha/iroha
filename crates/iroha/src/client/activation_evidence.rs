@@ -84,6 +84,8 @@ impl std::error::Error for BridgeFinalityAttestationTipMismatch {}
 impl Client {
     /// Fetch a canonical challenge-bound statement for an exact durable tip.
     ///
+    /// With an explicit request deadline, HTTP 429 reads honor Retry-After within that
+    /// original budget. Other response or verification failures are never retried.
     /// Verifies the reporting node signature and request bindings. Callers must
     /// independently anchor and verify both embedded finality proofs before
     /// treating this statement as chain finality.
@@ -106,9 +108,10 @@ impl Client {
         let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION
             .path()
             .replace("{height}", &height.get().to_string());
-        let response = self.send_builder(
-            self.canonical_norito_get_request(&path, BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES)
-                .header("X-Iroha-Finality-Challenge", &hex::encode(challenge)),
+        let response = self.send_activation_evidence_read(
+            &path,
+            BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES,
+            Some(challenge),
         )?;
         if response.status() != StatusCode::OK {
             let failure = Self::decode_finality_attestation_failure(
@@ -151,6 +154,7 @@ impl Client {
                 "finality attestation differs from exact request bindings"
             ));
         }
+        self.ensure_activation_evidence_deadline()?;
         Ok(attestation)
     }
 
@@ -290,17 +294,80 @@ impl Client {
         builder
     }
 
+    // Only an explicit operation deadline authorizes repeated reads. A one-shot
+    // client still exposes backpressure immediately. Never retry transport,
+    // authentication, codec or proof failures, and never resend a transaction.
+    fn send_activation_evidence_read(
+        &self,
+        path: &str,
+        maximum: usize,
+        challenge: Option<[u8; 32]>,
+    ) -> Result<Response<Vec<u8>>> {
+        loop {
+            self.ensure_activation_evidence_deadline()?;
+            let mut request = self.canonical_norito_get_request(path, maximum);
+            if let Some(challenge) = challenge {
+                request = request.header("X-Iroha-Finality-Challenge", &hex::encode(challenge));
+            }
+            let response = self.send_builder(request)?;
+            if response.status() != StatusCode::TOO_MANY_REQUESTS {
+                return Ok(response);
+            }
+            let Some(deadline) = self.http_transport.deadline() else {
+                return Ok(response);
+            };
+            let minimum_delay = Duration::from_millis(100);
+            let delay = transaction_wait::retry_after_delay(&response)?
+                .unwrap_or(minimum_delay)
+                .max(minimum_delay);
+            if deadline.saturating_duration_since(std::time::Instant::now()) <= delay {
+                return Err(eyre!(
+                    "activation evidence deadline cannot accommodate HTTP 429 Retry-After"
+                ));
+            }
+            std::thread::sleep(delay);
+        }
+    }
+
+    fn ensure_activation_evidence_deadline(&self) -> Result<()> {
+        if self
+            .http_transport
+            .deadline()
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err(eyre!("activation evidence deadline elapsed"));
+        }
+        Ok(())
+    }
+
+    // Verify on a candidate so CPU work that exceeds the caller's deadline cannot
+    // advance its retained chain anchor. The original deadline is never renewed.
+    fn verify_activation_evidence_successor(
+        &self,
+        proof: &BridgeFinalityProof,
+        verifier: &mut BridgeFinalityVerifier,
+    ) -> Result<()> {
+        self.ensure_activation_evidence_deadline()?;
+        let mut candidate = verifier.clone();
+        candidate
+            .verify(proof)
+            .map_err(|error| eyre!("bridge finality proof verification failed: {error}"))?;
+        self.ensure_activation_evidence_deadline()?;
+        *verifier = candidate;
+        Ok(())
+    }
+
     /// Fetch canonical block wire bound to an independently authenticated execution commitment.
     ///
     /// The returned bytes are accepted only when the route yields bounded Norito, the block
     /// round-trips to the byte-identical canonical [`SignedBlock`] wire, its requested height and
-    /// block hash match, its external-entrypoint/result roots and execution context match the
-    /// header commitments, its Merkle caches/counts are consistent, and the supplied successful
-    /// transaction verifies at its exact ordinary index or certified-merge reference.
+    /// block hash match, its proposal inputs and execution context match the header commitments, its full typed output
+    /// cache is consistent, and the supplied successful transaction verifies through its exact
+    /// Network input-index join and separate input/output proofs.
     ///
     /// The required commitment must come from an independently verified, externally anchored
     /// native finality proof for this carrier. Its exact wire hash and length authenticate results
-    /// and time triggers, which the consensus header hash alone does not bind. This reader verifies
+    /// and internal invocation outputs, which the consensus header hash alone does not bind. This reader verifies
     /// that binding; it does not establish finality or trust in a caller-supplied commitment.
     ///
     /// # Errors
@@ -317,10 +384,11 @@ impl Client {
         self.ensure_data_model_compatibility()?;
         let path =
             torii_uri::LEDGER_EXECUTED_BLOCK_WIRE.replace("{height}", &height.get().to_string());
-        let response = self.send_builder(self.canonical_norito_get_request(
+        let response = self.send_activation_evidence_read(
             &path,
             AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
-        ))?;
+            None,
+        )?;
         let body = Self::bounded_norito_response_body(
             &response,
             StatusCode::OK,
@@ -356,11 +424,11 @@ impl Client {
             return Err(eyre!("executed block response has no execution results"));
         }
         block
-            .validate_entrypoint_merkle_cache()
-            .map_err(|error| eyre!("executed block entrypoint Merkle cache is invalid: {error}"))?;
+            .validate_proposal_commitments()
+            .map_err(|error| eyre!("executed block proposal commitments are invalid: {error}"))?;
         block
-            .validate_result_merkle_cache()
-            .map_err(|error| eyre!("executed block result Merkle cache is invalid: {error}"))?;
+            .validate_output_merkle_cache()
+            .map_err(|error| eyre!("executed block output Merkle cache is invalid: {error}"))?;
         if committed.result().is_err() {
             return Err(eyre!(
                 "committed transaction carries a rejected execution result"
@@ -371,6 +439,7 @@ impl Client {
                 "committed transaction does not verify against the authenticated execution commitment"
             ));
         }
+        self.ensure_activation_evidence_deadline()?;
         Ok(canonical)
     }
 
@@ -382,8 +451,10 @@ impl Client {
         let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY
             .path()
             .replace("{height}", &height.get().to_string());
-        let response = self.send_builder(
-            self.canonical_norito_get_request(&path, BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES),
+        let response = self.send_activation_evidence_read(
+            &path,
+            BRIDGE_FINALITY_PROOF_RESPONSE_MAX_BYTES,
+            None,
         )?;
         let proof: BridgeFinalityProof = Self::decode_canonical_norito_response(
             &response,
@@ -562,6 +633,7 @@ impl Client {
         verify_bridge_finality_proof(&proof, &expected_network_id)
             .map_err(|error| eyre!("bridge finality anchor verification failed: {error}"))?;
         let block_hash = proof.block_header.hash();
+        self.ensure_activation_evidence_deadline()?;
         Ok((proof, block_hash))
     }
 
@@ -581,9 +653,7 @@ impl Client {
         verifier: &mut BridgeFinalityVerifier,
     ) -> Result<BridgeFinalityProof> {
         let proof = self.fetch_bridge_finality_proof_at_height(height)?;
-        verifier
-            .verify(&proof)
-            .map_err(|error| eyre!("bridge finality proof verification failed: {error}"))?;
+        self.verify_activation_evidence_successor(&proof, verifier)?;
         Ok(proof)
     }
 
@@ -617,9 +687,7 @@ impl Client {
                 "bridge finality proof does not match the requested block hash"
             ));
         }
-        verifier
-            .verify(&proof)
-            .map_err(|error| eyre!("bridge finality proof verification failed: {error}"))?;
+        self.verify_activation_evidence_successor(&proof, verifier)?;
         Ok(proof)
     }
 }

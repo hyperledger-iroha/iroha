@@ -5,7 +5,7 @@ fn proof_test_helpers_seed_records() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let_row! { proof_id = ProofId { backend: "halo2/test".into(), proof_hash: [0xAA; 32], } };
@@ -542,7 +542,7 @@ state_test! { sync pipeline_trigger_fails_closed_on_missing_bytecode
 }
 state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_healthy_sibling
     use iroha_data_model::events::pipeline::{
-        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        BlockEventFilter, BlockStatus,
     };
     pipeline_trigger_transaction!(state, block1, state_block, stx);
     let bad_trigger_id: TriggerId = "a_pipeline_failure".parse().unwrap();
@@ -594,12 +594,13 @@ state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_heal
         h.set_height(NonZeroU64::new(2).unwrap());
     }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let outcomes = state_block.execute_pipeline_triggers_isolated([
-        PipelineEventBox::from(BlockEvent {
-            header: block2.as_ref().header(),
-            status: BlockStatus::Approved,
-        }),
-    ]);
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block);
+    let outcomes = outputs.iter().map(|output| {
+        let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
+            panic!("only matched Pipeline sources exist in this fixture");
+        };
+        (&row.invocation.trigger.trigger_id, &row.result)
+    }).collect::<Vec<_>>();
     assert_eq!(outcomes.len(), 2);
     assert!(outcomes[0].1.is_err(), "bad trigger must report failure");
     assert!(outcomes[1].1.is_ok(), "healthy sibling must still execute");
@@ -640,7 +641,7 @@ state_test! { sync isolated_pipeline_failure_rolls_back_disables_and_allows_heal
 }
 state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
     use iroha_data_model::events::pipeline::{
-        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        BlockEventFilter, BlockStatus,
     };
     pipeline_trigger_transaction!(state, block1, state_block, stx);
     let trigger_id: TriggerId = "pipeline_self_replacement".parse().unwrap();
@@ -678,12 +679,13 @@ state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
         h.set_height(NonZeroU64::new(2).unwrap());
     }) };
     let mut state_block = state.block(block2.as_ref().header());
-    let outcomes = state_block.execute_pipeline_triggers_isolated([
-        PipelineEventBox::from(BlockEvent {
-            header: block2.as_ref().header(),
-            status: BlockStatus::Approved,
-        }),
-    ]);
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block);
+    let outcomes = outputs.iter().map(|output| {
+        let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
+            panic!("only matched Pipeline sources exist in this fixture");
+        };
+        (&row.invocation.trigger.trigger_id, &row.result)
+    }).collect::<Vec<_>>();
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].1.is_ok());
     state_block.commit_world_overlay_for_testing().unwrap();
@@ -699,7 +701,7 @@ state_test! { sync pipeline_trigger_replacement_keeps_its_own_repeat_budget
 }
 state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matching
     use iroha_data_model::events::pipeline::{
-        BlockEvent, BlockEventFilter, BlockStatus, PipelineEventBox,
+        BlockEventFilter, BlockStatus,
     };
     pipeline_trigger_transaction!(state, block1, state_block, stx);
     let replacer_id: TriggerId = "a_pipeline_sibling_replacer".parse().unwrap();
@@ -756,14 +758,15 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
     }) };
     let mut state_block = state.block(block2.as_ref().header());
     let fragments_before = state_block.committed_fragment_count();
-    let outcomes = state_block.execute_pipeline_triggers_isolated([
-        PipelineEventBox::from(BlockEvent {
-            header: block2.as_ref().header(),
-            status: BlockStatus::Approved,
-        }),
-    ]);
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block);
+    let outcomes = outputs.iter().map(|output| {
+        let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
+            panic!("only matched Pipeline sources exist in this fixture");
+        };
+        (&row.invocation.trigger.trigger_id, &row.result)
+    }).collect::<Vec<_>>();
     assert_eq!(outcomes.len(), 1, "the stale sibling match must be skipped");
-    assert_eq!(outcomes[0].0, replacer_id);
+    assert_eq!(outcomes[0].0, &replacer_id);
     assert!(outcomes[0].1.is_ok());
     assert_eq!(
         state_block.committed_fragment_count(),
@@ -792,12 +795,13 @@ state_test! { sync pipeline_trigger_revalidates_a_sibling_replaced_after_matchin
         h.set_height(NonZeroU64::new(3).unwrap());
     }) };
     let mut state_block = state.block(block3.as_ref().header());
-    let outcomes = state_block.execute_pipeline_triggers_isolated([
-        PipelineEventBox::from(BlockEvent {
-            header: block3.as_ref().header(),
-            status: BlockStatus::Approved,
-        }),
-    ]);
+    let outputs = crate::state::run_empty_network_owner_fixture(&mut state_block);
+    let outcomes = outputs.iter().map(|output| {
+        let iroha_data_model::block::execution_output::ExecutionOutputV1::Pipeline(row) = output else {
+            panic!("only matched Pipeline sources exist in this fixture");
+        };
+        (&row.invocation.trigger.trigger_id, &row.result)
+    }).collect::<Vec<_>>();
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].1.is_ok());
     state_block.commit_world_overlay_for_testing().unwrap();

@@ -39,10 +39,6 @@ impl_canonical_slice_decode! {
 // State and canonical keys derive DecodeFromSlice on their own types.
 // Transaction-related
 // Transaction-related (derive already supplies DecodeFromSlice for these)
-// Trigger entrypoints and related types
-impl_canonical_slice_decode! {
-    crate::trigger::time::TimeTriggerEntrypoint,
-}
 // Block-related
 impl_canonical_slice_decode! {
     crate::block::header::BlockHeader,

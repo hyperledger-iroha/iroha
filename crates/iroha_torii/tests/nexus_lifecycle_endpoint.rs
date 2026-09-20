@@ -10,7 +10,6 @@ use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     EventsSender,
-    kura::Kura,
     query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, Queue, QueueLimits},
     state::State,
@@ -40,14 +39,6 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         cfg.torii.require_api_token = true;
         cfg.torii.api_tokens = vec![api_token.to_owned()].into();
     }
-    // Use the configured-catalog constructor so the primary anchor is authenticated.
-    // It replaces the fixture store path with a directory owned by this Kura instance.
-    let kura = Kura::new_temporary_with_configured_lane_catalog(
-        &cfg.kura,
-        &cfg.nexus.lane_config,
-        &cfg.nexus.configured_lane_catalog,
-    )
-    .expect("open authenticated Nexus endpoint fixture storage");
     let world = iroha_core::prelude::World::with(
         Vec::new(),
         Vec::new(),
@@ -55,22 +46,16 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     );
     // Core and Torii must share the fixture's explicit genesis-derived identity.
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let mut state = State::new_with_chain_and_network_id_for_testing(
+    let (mut state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
         world,
-        kura.clone(),
+        cfg.nexus.clone(),
         LiveQueryStore::start_test(),
         cfg.common.chain.clone(),
         network_id,
     );
     state
-        .prepare_configured_primary_geometry_anchor(&cfg.nexus.configured_lane_catalog)
-        .expect("anchor the authenticated Nexus endpoint primary");
-    state
-        .restore_kura_lane_segments_before_startup_replay()
-        .expect("restore the authenticated Nexus endpoint primary geometry");
-    state
-        .set_nexus_from_config(cfg.nexus.clone())
-        .expect("apply initial Nexus config");
+        .set_nexus(cfg.nexus.clone())
+        .expect("restore the fixture's exact Nexus runtime configuration");
     let state = Arc::new(state);
     let events_sender: EventsSender = tokio::sync::broadcast::channel(64).0;
     let router = Arc::new(ConfigLaneRouter::new(
@@ -206,7 +191,13 @@ async fn lifecycle_get_returns_exact_present_runtime_root_in_both_formats() {
         baseline_dataspaces_hash: iroha_data_model::nexus::dataspace_catalog_hash(
             &harness.state.nexus_snapshot().configured_dataspace_catalog,
         ),
-        baseline_manifests_hash: Hash::new(b"endpoint fixture manifest baseline"),
+        baseline_manifests_hash: Hash::prehashed(
+            harness
+                .state
+                .lane_manifests
+                .read()
+                .baseline_consensus_policy_digest(),
+        ),
         dataspaces: Vec::new(),
         manifests: Vec::new(),
     };
@@ -278,18 +269,27 @@ async fn lifecycle_post_and_normalization_variants_are_unregistered_without_muta
     let before_catalog = harness.state.nexus_snapshot().lane_catalog;
     let before_limits = harness.queue.queue_limits().for_lane(lane);
     let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"forbidden-local","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
-    for (path, expected_status) in [
-        (NEXUS_LANE_LIFECYCLE, StatusCode::METHOD_NOT_ALLOWED),
-        ("/v1/nexus/lifecycle/", StatusCode::NOT_FOUND),
-        ("/v1/Nexus/lifecycle", StatusCode::NOT_FOUND),
-        ("/v1/nexus/lifecycle/arbitrary", StatusCode::NOT_FOUND),
-        ("/v1/nexus//lifecycle", StatusCode::BAD_REQUEST),
-        ("/v1/nexus/lifecycle%2Farbitrary", StatusCode::BAD_REQUEST),
+    for (method, path, expected_status) in [
+        ("POST", NEXUS_LANE_LIFECYCLE, StatusCode::METHOD_NOT_ALLOWED),
+        ("HEAD", NEXUS_LANE_LIFECYCLE, StatusCode::METHOD_NOT_ALLOWED),
+        ("POST", "/v1/nexus/lifecycle/", StatusCode::NOT_FOUND),
+        ("POST", "/v1/Nexus/lifecycle", StatusCode::NOT_FOUND),
+        (
+            "POST",
+            "/v1/nexus/lifecycle/arbitrary",
+            StatusCode::NOT_FOUND,
+        ),
+        ("POST", "/v1/nexus//lifecycle", StatusCode::BAD_REQUEST),
+        (
+            "POST",
+            "/v1/nexus/lifecycle%2Farbitrary",
+            StatusCode::BAD_REQUEST,
+        ),
     ] {
         let response = fixtures::request(
             &harness.app,
             Request::builder()
-                .method("POST")
+                .method(method)
                 .uri(path)
                 .header("accept", "application/json")
                 .header("content-type", "application/json")
@@ -298,15 +298,14 @@ async fn lifecycle_post_and_normalization_variants_are_unregistered_without_muta
         )
         .await
         .expect("response");
-        assert_eq!(response.status(), expected_status, "POST {path}");
+        assert_eq!(response.status(), expected_status, "{method} {path}");
         if path == NEXUS_LANE_LIFECYCLE {
             let allow = response
                 .headers()
                 .get("allow")
                 .and_then(|value| value.to_str().ok())
-                .unwrap_or_default();
-            assert!(allow.contains("GET"));
-            assert!(allow.contains("HEAD"));
+                .expect("registered route must advertise its exact catalog method");
+            assert_eq!(allow, "GET");
         }
         assert_eq!(harness.state.nexus_snapshot().lane_catalog, before_catalog);
         assert_eq!(harness.queue.queue_limits().for_lane(lane), before_limits);

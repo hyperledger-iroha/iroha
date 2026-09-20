@@ -38,10 +38,12 @@ pub(super) struct SuppliedEvidenceBundleV1 {
     pub(super) version: u16,
     pub(super) heights: Vec<SuppliedEvidenceHeightV1>,
 }
-#[derive(norito::Encode, norito::Decode)]
+#[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_kagami::scaling_evidence::SuppliedEvidenceHeightV1")]
 pub(super) struct SuppliedEvidenceHeightV1 {
     pub(super) height: u64,
     pub(super) finality: Vec<u8>,
+    pub(super) contexts: Vec<u8>,
     pub(super) queries: Vec<Vec<u8>>,
 }
 
@@ -291,7 +293,7 @@ pub(in crate::kura::scaling_evidence::export) struct FactsInputBindings {
     pub(in crate::kura::scaling_evidence::export) context: ProofInputBinding,
     /// Complete original physical signed-request event journal.
     pub(in crate::kura::scaling_evidence::export) journal: ProofInputBinding,
-    /// Original canonical finality vector for the entire selected interval.
+    /// Original canonical finality/context-witness vector for the entire selected interval.
     pub(in crate::kura::scaling_evidence::export) finality: ProofInputBinding,
     /// Original canonical committed-query vector in complete merge order.
     pub(in crate::kura::scaling_evidence::export) queries: ProofInputBinding,

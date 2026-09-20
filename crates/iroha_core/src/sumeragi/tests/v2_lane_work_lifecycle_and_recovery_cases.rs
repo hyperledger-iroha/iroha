@@ -887,7 +887,6 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
             .as_ref()
             .map(|qc| qc.subject.block_hash),
         None,
-        None,
         adapter.context.height,
         0,
     );
@@ -1179,8 +1178,14 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
             })
             .expect("durable view-one certificate");
     let mut block = block;
-    block
-        .set_transaction_results(Vec::new(), &[], Vec::new())
+    { let outputs = crate::execution_output_test_support::structural_network_outputs(&block, &[], Vec::new());
+let fragments = u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+block.set_execution_outputs(outputs, fragments, Default::default(),
+Vec::new(),
+Default::default(),
+Default::default(),
+Vec::new(),
+&crate::execution_output_test_support::structural_output_limits()) }
         .expect("attach the carrier's empty deterministic execution result");
     let executed_signature =
         SignatureOf::try_from_hash(keys[leader_index].private_key(), block.header().hash())

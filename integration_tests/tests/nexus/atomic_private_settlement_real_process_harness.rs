@@ -2620,7 +2620,7 @@ fn leakage_carrier_block(
         .query(FindBlocks)
         .execute_all()?
         .into_iter()
-        .filter(|block| block.entrypoint_hashes().any(|hash| hash == entrypoint))
+        .filter(|block| block.network_input_hashes().any(|hash| hash == entrypoint))
         .collect::<Vec<_>>();
     ensure!(
         matching.len() == 1,
@@ -3044,10 +3044,350 @@ fn smoke_evidence_binds_bytes_and_rejects_overwrite_or_path_escape() {
     assert!(write_smoke_evidence(temporary.path(), "unsafe.json", &value).is_err());
 }
 
+/// The final inventory remains a single health observation. Only initial
+/// startup may await readiness, within its already established startup budget.
+#[derive(Clone, Copy)]
+enum SmokeInventoryReadinessV1 {
+    Immediate,
+    StartupUntil(Instant),
+}
+
+fn smoke_inventory_transient_status_v1(error: &iroha::Error) -> bool {
+    matches!(
+        error,
+        iroha::Error::StatusUnavailable {
+            reason: Some(
+                iroha::StatusFailureReason::DeadlineElapsed
+                    | iroha::StatusFailureReason::StateBusy
+                    | iroha::StatusFailureReason::MailboxUnavailable
+                    | iroha::StatusFailureReason::CheckpointChanged
+            ),
+            ..
+        } | iroha::Error::Timeout {
+            operation: "diagnostic.status"
+        }
+    )
+}
+
+fn smoke_inventory_identity_v1(
+    expected_pid: u32,
+    expected_sha: &str,
+    mut process_id: impl FnMut() -> Option<u32>,
+    mut image_sha: impl FnMut(u32) -> Result<String>,
+) -> Result<()> {
+    ensure!(
+        process_id() == Some(expected_pid),
+        "smoke validator live PID changed or disappeared"
+    );
+    ensure!(
+        image_sha(expected_pid)? == expected_sha,
+        "smoke validator executable differs from the launcher-bound image"
+    );
+    ensure!(
+        process_id() == Some(expected_pid),
+        "smoke validator live PID changed during executable verification"
+    );
+    Ok(())
+}
+
+fn smoke_inventory_health_v1(
+    peer_index: usize,
+    readiness: SmokeInventoryReadinessV1,
+    // Outer errors are identity/inventory failures and are never retried. Inner
+    // errors retain the SDK's typed result from the actual status request.
+    mut probe: impl FnMut(Option<Duration>) -> Result<std::result::Result<(), iroha::Error>>,
+) -> Result<()> {
+    let mut last_error: Option<iroha::Error> = None;
+    loop {
+        let remaining = match readiness {
+            SmokeInventoryReadinessV1::Immediate => None,
+            SmokeInventoryReadinessV1::StartupUntil(deadline) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    let error = last_error.map_or_else(
+                        || eyre!("no successful startup status observation"),
+                        eyre::Report::from,
+                    );
+                    return Err(error).wrap_err_with(|| {
+                        format!("smoke peer {peer_index} exceeded the original startup deadline")
+                    });
+                }
+                Some(remaining)
+            }
+        };
+        let status = probe(remaining)
+            .wrap_err_with(|| format!("smoke peer {peer_index} inventory identity check failed"))?;
+        match status {
+            Ok(()) => {
+                if let SmokeInventoryReadinessV1::StartupUntil(deadline) = readiness {
+                    ensure!(
+                        Instant::now() < deadline,
+                        "smoke peer {peer_index} became ready after the original startup deadline"
+                    );
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                let SmokeInventoryReadinessV1::StartupUntil(deadline) = readiness else {
+                    return Err(error).wrap_err_with(|| {
+                        format!("smoke peer {peer_index} final inventory health check failed")
+                    });
+                };
+                if !smoke_inventory_transient_status_v1(&error) {
+                    return Err(error).wrap_err_with(|| {
+                        format!("smoke peer {peer_index} startup status failed permanently")
+                    });
+                }
+                last_error = Some(error);
+                thread::sleep(
+                    POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn smoke_inventory_startup_retries_transient_status_until_ready() {
+    for reason in [
+        iroha::StatusFailureReason::DeadlineElapsed,
+        iroha::StatusFailureReason::StateBusy,
+    ] {
+        let mut polls = 0;
+        smoke_inventory_health_v1(
+            7,
+            SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(2)),
+            |remaining| {
+                assert!(remaining.is_some_and(|value| !value.is_zero()));
+                polls += 1;
+                Ok(if polls == 1 {
+                    Err(iroha::Error::StatusUnavailable {
+                        reason: Some(reason),
+                        retry_after: None,
+                    })
+                } else {
+                    Ok(())
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(polls, 2);
+    }
+}
+
+#[test]
+fn smoke_inventory_startup_deadline_retains_status_error() {
+    for reason in [
+        iroha::StatusFailureReason::DeadlineElapsed,
+        iroha::StatusFailureReason::StateBusy,
+    ] {
+        let mut polls = 0;
+        let error = smoke_inventory_health_v1(
+            7,
+            SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(1)),
+            |remaining| {
+                polls += 1;
+                thread::sleep(remaining.unwrap() + Duration::from_millis(1));
+                Ok(Err(iroha::Error::StatusUnavailable {
+                    reason: Some(reason),
+                    retry_after: None,
+                }))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(polls, 1);
+        let error = format!("{error:?}");
+        assert!(error.contains("smoke peer 7 exceeded the original startup deadline"));
+        assert!(error.contains(reason.code()));
+    }
+}
+
+#[test]
+fn smoke_inventory_startup_rejects_permanent_status_error() {
+    for reason in [
+        iroha::StatusFailureReason::JournalMismatch,
+        iroha::StatusFailureReason::StateUnavailable,
+    ] {
+        let mut polls = 0;
+        let error = smoke_inventory_health_v1(
+            3,
+            SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(2)),
+            |_| {
+                polls += 1;
+                Ok(Err(iroha::Error::StatusUnavailable {
+                    reason: Some(reason),
+                    retry_after: None,
+                }))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(polls, 1);
+        let error = format!("{error:?}");
+        assert!(error.contains("smoke peer 3 startup status failed permanently"));
+        assert!(error.contains(reason.code()));
+    }
+}
+
+#[test]
+fn smoke_inventory_startup_rejects_late_success() {
+    let mut polls = 0;
+    let error = smoke_inventory_health_v1(
+        2,
+        SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(1)),
+        |remaining| {
+            polls += 1;
+            thread::sleep(remaining.unwrap() + Duration::from_millis(1));
+            Ok(Ok(()))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(polls, 1);
+    assert!(format!("{error:?}").contains("became ready after the original startup deadline"));
+}
+
+#[test]
+fn smoke_inventory_identity_rejects_pid_change_during_retry() {
+    let mut polls = 0;
+    let mut image_reads = 0;
+    let error = smoke_inventory_health_v1(
+        4,
+        SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(2)),
+        |_| {
+            polls += 1;
+            smoke_inventory_identity_v1(
+                42,
+                "expected",
+                || Some(if polls == 1 { 42 } else { 43 }),
+                |_| {
+                    image_reads += 1;
+                    Ok("expected".to_owned())
+                },
+            )?;
+            Ok(Err(iroha::Error::Timeout {
+                operation: "diagnostic.status",
+            }))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(polls, 2);
+    assert_eq!(image_reads, 1);
+    assert!(format!("{error:?}").contains("live PID changed or disappeared"));
+}
+
+#[test]
+fn smoke_inventory_identity_rejects_image_change_during_retry() {
+    let mut polls = 0;
+    let error = smoke_inventory_health_v1(
+        5,
+        SmokeInventoryReadinessV1::StartupUntil(Instant::now() + Duration::from_secs(2)),
+        |_| {
+            polls += 1;
+            smoke_inventory_identity_v1(
+                42,
+                "expected",
+                || Some(42),
+                |_| {
+                    Ok(if polls == 1 {
+                        "expected"
+                    } else {
+                        "substituted"
+                    }
+                    .to_owned())
+                },
+            )?;
+            Ok(Err(iroha::Error::Timeout {
+                operation: "diagnostic.status",
+            }))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(polls, 2);
+    assert!(format!("{error:?}").contains("executable differs from the launcher-bound image"));
+}
+
+#[test]
+fn smoke_inventory_final_health_check_remains_single_poll() {
+    for status_error in [
+        iroha::Error::Timeout {
+            operation: "diagnostic.status",
+        },
+        iroha::Error::StatusUnavailable {
+            reason: Some(iroha::StatusFailureReason::StateBusy),
+            retry_after: None,
+        },
+    ] {
+        let mut polls = 0;
+        let mut status_error = Some(status_error);
+        let error =
+            smoke_inventory_health_v1(8, SmokeInventoryReadinessV1::Immediate, |remaining| {
+                assert!(remaining.is_none());
+                polls += 1;
+                Ok(Err(status_error
+                    .take()
+                    .expect("final health must not retry")))
+            })
+            .unwrap_err();
+        assert_eq!(polls, 1);
+        assert!(format!("{error:?}").contains("smoke peer 8 final inventory health check failed"));
+    }
+}
+
+#[test]
+fn smoke_inventory_transient_status_classifier_is_exact() {
+    use iroha::StatusFailureReason as Reason;
+    for reason in [
+        Reason::DeadlineElapsed,
+        Reason::StateBusy,
+        Reason::MailboxUnavailable,
+        Reason::CheckpointChanged,
+    ] {
+        assert!(smoke_inventory_transient_status_v1(
+            &iroha::Error::StatusUnavailable {
+                reason: Some(reason),
+                retry_after: None,
+            }
+        ));
+    }
+    for reason in [
+        None,
+        Some(Reason::Disabled),
+        Some(Reason::ActorClosed),
+        Some(Reason::StateUnavailable),
+        Some(Reason::MissingBlock),
+        Some(Reason::JournalMismatch),
+        Some(Reason::CounterOverflow),
+        Some(Reason::CounterMismatch),
+        Some(Reason::MetricsStale),
+        Some(Reason::ProfileRestricted),
+    ] {
+        assert!(!smoke_inventory_transient_status_v1(
+            &iroha::Error::StatusUnavailable {
+                reason,
+                retry_after: None,
+            }
+        ));
+    }
+    assert!(smoke_inventory_transient_status_v1(
+        &iroha::Error::Timeout {
+            operation: "diagnostic.status"
+        }
+    ));
+    assert!(!smoke_inventory_transient_status_v1(
+        &iroha::Error::Timeout { operation: "other" }
+    ));
+    assert!(!smoke_inventory_transient_status_v1(
+        &iroha::Error::Decode {
+            operation: "diagnostic.status",
+            details: "bad status".to_owned(),
+        }
+    ));
+}
+
 fn smoke_process_inventory(
     network: &Network,
     runtime: &tokio::runtime::Runtime,
     shape: TopologyShape,
+    readiness: SmokeInventoryReadinessV1,
 ) -> Result<Vec<SmokeProcessInventoryRowV1>> {
     let expected_sha = std::env::var(HARNESS_VALIDATOR_SHA_ENV)
         .wrap_err("missing smoke validator executable digest")?;
@@ -3062,13 +3402,41 @@ fn smoke_process_inventory(
         let pid = runtime
             .block_on(peer.process_id())
             .ok_or_else(|| eyre!("smoke peer has no PID"))?;
+        ensure!(pids.insert(pid), "smoke peer {index} duplicates PID {pid}");
         ensure!(
-            pids.insert(pid)
-                && peers.insert(peer.id().clone())
-                && peer.client().status().get().is_ok()
-                && sha256_regular_file(&executable_for_pid(pid)?)? == expected_sha,
-            "smoke process inventory has duplicate, unhealthy or substituted validators"
+            peers.insert(peer.id().clone()),
+            "smoke peer {index} duplicates validator identity {}",
+            peer.id()
         );
+        let client = peer.client();
+        smoke_inventory_health_v1(index, readiness, |_| {
+            let check_identity = || {
+                smoke_inventory_identity_v1(
+                    pid,
+                    &expected_sha,
+                    || runtime.block_on(peer.process_id()),
+                    |live_pid| sha256_regular_file(&executable_for_pid(live_pid)?),
+                )
+            };
+            check_identity()?;
+            let status = match readiness {
+                SmokeInventoryReadinessV1::Immediate => client.status().get(),
+                SmokeInventoryReadinessV1::StartupUntil(deadline) => {
+                    // Recompute after image verification; the HTTP request may
+                    // consume only the original startup budget that remains.
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    runtime.block_on(async {
+                        tokio::time::timeout(remaining, client.client().status().get())
+                            .await
+                            .unwrap_or(Err(iroha::Error::Timeout {
+                                operation: "diagnostic.status",
+                            }))
+                    })
+                }
+            };
+            check_identity()?;
+            Ok(status.map(|_| ()))
+        })?;
         // Retain only a commitment to the complete ordered input layers: they
         // contain runtime private keys and must not enter a research artifact.
         let layers = network
@@ -8110,7 +8478,7 @@ fn canonical_carrier_header(
         .into_iter()
         .filter(|block| {
             block
-                .entrypoint_hashes()
+                .network_input_hashes()
                 .any(|observed| observed == entrypoint_hash)
         })
         .map(|block| block.header())

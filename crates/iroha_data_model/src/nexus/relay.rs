@@ -1580,7 +1580,6 @@ mod tests {
             NonZeroU64::new(height).expect("nonzero height"),
             None,
             None,
-            None,
             1_700_000_000_000,
             0,
         );

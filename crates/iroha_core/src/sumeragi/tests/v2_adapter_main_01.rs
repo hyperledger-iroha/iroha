@@ -238,7 +238,6 @@ fn write_decision_startup_with_body_marker(
         NonZeroU64::new(round.height).expect("fixture height is non-zero"),
         None,
         None,
-        None,
         8_000 + u64::from(marker),
         round.view,
     );
@@ -879,7 +878,10 @@ fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
             .arm_live_clocks(started_at)
             .expect("arm the original runtime");
         let owner = runtime
-            .frozen_timeout_owner_for_test(started_at + Duration::from_secs(4))
+            .frozen_timeout_owner_for_test(
+                started_at + Duration::from_secs(4),
+                &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("freeze the deterministic original timeout owner");
         causal_key = owner.causal_origin().lifecycle_key;
         assert_eq!(owner.lifecycle_ordinal(), 1);
@@ -971,14 +973,20 @@ fn restored_producer_reuses_runtime_key_and_ordinal_and_does_not_resurrect() {
     let retransmit_due = started_at + runtime.retransmit_interval();
     assert!(
         runtime
-            .try_step_pacemaker_escape(retransmit_due)
+            .try_step_pacemaker_escape(
+                retransmit_due,
+                &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("freeze the newer post-restart retransmit")
             .is_none(),
         "a periodic timer alone is not a pacemaker escape"
     );
     let timeout_due = started_at + runtime.round_timeout();
     let step = runtime
-        .try_step_pacemaker_escape(timeout_due)
+        .try_step_pacemaker_escape(
+            timeout_due,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("replayed timeout supersedes the newer frozen retransmit")
         .expect("the due absolute timeout owns the pacemaker step");
     let super::super::v2_runtime::RuntimeStep::Advanced(effects) = step else {
@@ -1490,7 +1498,10 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
         .expect("materialize the reconstructed completion");
     assert_eq!(runtime.queued_commands(), 1);
     let step = runtime
-        .step(started_at)
+        .step(
+            started_at,
+            &crate::sumeragi::v2_runtime::RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("service the restored BodyAvailable handoff");
     let super::super::v2_runtime::RuntimeStep::Advanced(effects) = step else {
         panic!("the restored BodyAvailable completion must dispatch");

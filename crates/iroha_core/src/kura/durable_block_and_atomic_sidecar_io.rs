@@ -406,7 +406,6 @@ impl Kura {
                         actual_height_usize,
                         block,
                         chain_len,
-                        None,
                     );
                 }
                 if let Some(owner) = &native_capacity {
@@ -492,12 +491,7 @@ impl Kura {
                     )
                 })?;
             } else {
-                self.set_transaction_entrypoint_index_entry(
-                    actual_height_usize,
-                    block,
-                    chain_len,
-                    None,
-                );
+                self.set_transaction_entrypoint_index_entry(actual_height_usize, block, chain_len);
             }
             if let Some(owner) = &native_capacity {
                 owner.finish_exact_replacement_retirement(block)?;
@@ -569,11 +563,10 @@ impl Kura {
         );
         let new_len = block_data.len();
         self.set_block_height_index_entry(actual_height_usize, block_hash);
-        // The canonical block is now durable, but its compact merge reference
-        // is not query-complete until the full entry, sparse carrier record,
-        // and exact finality projection are all durable. Passing no entry
-        // records that prepublication frontier.
-        self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len, None);
+        // The append owner retains this exact durable body. Publish only its
+        // complete canonical Network projection; retired merge carriers stay
+        // incomplete regardless of separate physical sidecar publication.
+        self.set_transaction_entrypoint_index_entry(actual_height_usize, block, new_len);
         drop(block_data);
         // Apply associations only after block_data and the durable marker agree. The durable
         // stage remains authoritative across any post-commit association failure.
@@ -630,19 +623,15 @@ impl Kura {
         entry: &MergeLedgerEntry,
         chain_len: usize,
     ) -> Result<()> {
-        let (_, publication) = self.ensure_post_wsv_lane_artifact_budget_reservation_with_publication_under_prune_and_canonical_guards(
+        let _ = self.ensure_post_wsv_lane_artifact_budget_reservation_with_publication_under_prune_and_canonical_guards(
             entry, block,
         )?;
-        let finalized = publication == AuthenticatedMergeCarrierPublication::Finalized;
-        // The returned publication class is derived from the same exact
-        // authenticated carrier that reserved the envelope, so no second
-        // finality/body read or BLS validation is required before indexing.
-        self.set_transaction_entrypoint_index_entry_with_merge(
+        // Preserve the physical publication authorization above. Its retired merge
+        // sidecar cannot promote the replacement Network transaction index.
+        self.set_transaction_entrypoint_index_entry(
             usize::try_from(block.header().height().get())?,
             block,
-            finalized.then_some(entry),
             chain_len,
-            finalized,
         );
         self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
         Ok(())

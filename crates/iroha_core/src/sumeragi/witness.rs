@@ -336,6 +336,41 @@ pub fn exec_witness_guard() -> ExecWitnessGuard {
     EXEC_WITNESS_OWNER.with(|owner| owner.set(true));
     guard
 }
+
+/// Start one capture after the caller has acquired its State writers.
+/// Reentrant or suppressed execution is refused without resetting an existing
+/// recorder or waiting for the caller's own non-reentrant recorder lock.
+pub(crate) fn begin_exec_witness_capture() -> Result<ExecWitnessGuard, String> {
+    ensure_exec_witness_capture_available()?;
+    let guard = exec_witness_guard();
+    start_block();
+    Ok(guard)
+}
+
+/// Check only thread-local capture eligibility, before acquiring State writers.
+/// The caller must still acquire its recorder after those writers. Checking both
+/// boundaries avoids reentrant State/recorder inversion without reserving a lock.
+pub(crate) fn ensure_exec_witness_capture_available() -> Result<(), String> {
+    ensure_state_access_without_exec_witness()?;
+    if witness_recording_suppressed() {
+        return Err("execution witness capture cannot begin in a suppressed scope".into());
+    }
+    if EXEC_WITNESS_OVERLAYS.with(|overlays| !overlays.borrow().is_empty()) {
+        return Err("execution witness capture cannot begin with a pending overlay".into());
+    }
+    Ok(())
+}
+
+/// Refuse a State read or writer acquisition while this thread owns the recorder.
+/// Another execution may already own that State and be waiting for the recorder;
+/// suppression prevents recording but cannot break that lock-order cycle.
+/// This check is thread-local and acquires no lock. Suppression alone is allowed.
+pub(crate) fn ensure_state_access_without_exec_witness() -> Result<(), String> {
+    if owns_exec_witness() {
+        return Err("execution witness capture already belongs to this thread; acquire State before the recorder".into());
+    }
+    Ok(())
+}
 /// Start a new witness capture for the guard-owning thread (clears previous data).
 /// Calls without the exclusive guard leave the recorder untouched.
 pub fn start_block() {
@@ -1139,7 +1174,7 @@ mod tests {
         }
     }
     fn access_key_header() -> BlockHeader {
-        BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
+        BlockHeader::new(nonzero!(1_u64), None, None, 0, 0)
     }
     fn bool_json_bytes(value: bool) -> Vec<u8> {
         Json::new(value).get().as_bytes().to_vec()
@@ -2244,6 +2279,75 @@ mod tests {
         assert!(witness.fastpq_transcripts.is_empty());
         assert!(witness.fastpq_batches.is_empty());
     }
+    #[test]
+    fn begin_capture_refuses_nested_owner_without_resetting_generation() {
+        let guard = begin_exec_witness_capture().unwrap();
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset = AssetId::new(asset_definition, (*ALICE_ID).clone());
+        record_read_asset(&asset, Some(&Quantity::from(11u32)));
+        let held = begin_exec_witness_overlay();
+        record_write_asset(&asset, &Quantity::from(12u32));
+        assert!(
+            begin_exec_witness_capture()
+                .err()
+                .unwrap()
+                .contains("already belongs")
+        );
+        held.commit();
+        let captured = drain_exec_witness_checked(|_| Ok(())).unwrap();
+        assert_eq!(captured.reads.len(), 1);
+        assert_eq!(captured.writes.len(), 1);
+        drop(guard);
+    }
+
+    #[test]
+    fn state_access_refuses_owned_recorder_even_when_suppressed() {
+        ensure_state_access_without_exec_witness().unwrap();
+        let suppression = suppress_recording_for_current_thread();
+        ensure_state_access_without_exec_witness().unwrap();
+        drop(suppression);
+        let guard = begin_exec_witness_capture().unwrap();
+        let held = begin_exec_witness_overlay();
+        assert!(ensure_state_access_without_exec_witness().is_err());
+        let suppression = suppress_recording_for_current_thread();
+        assert!(ensure_state_access_without_exec_witness().is_err());
+        drop(suppression);
+        held.commit();
+        drain_exec_witness_checked(|_| Ok(())).unwrap();
+        drop(guard);
+        ensure_state_access_without_exec_witness().unwrap();
+    }
+
+    #[test]
+    fn begin_capture_refuses_suppression_and_stale_overlay_then_releases_owner() {
+        let suppression = suppress_recording_for_current_thread();
+        assert!(
+            begin_exec_witness_capture()
+                .err()
+                .unwrap()
+                .contains("suppressed")
+        );
+        drop(suppression);
+        let guard = begin_exec_witness_capture().unwrap();
+        let held = begin_exec_witness_overlay();
+        drop(guard);
+        assert!(
+            begin_exec_witness_capture()
+                .err()
+                .unwrap()
+                .contains("pending overlay")
+        );
+        drop(held);
+        let guard = begin_exec_witness_capture().unwrap();
+        let captured = drain_exec_witness_checked(|_| Ok(())).unwrap();
+        assert!(captured.reads.is_empty());
+        assert!(captured.writes.is_empty());
+        drop(guard);
+    }
+
     #[test]
     fn exec_witness_guard_serializes_block_access() {
         let guard = exec_witness_guard();

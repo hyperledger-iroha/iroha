@@ -76,9 +76,7 @@ fn native_coordinator_successor_waits_for_missing_applied_half_without_losing_ow
 
         let artifact_dir = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(lane_id)
+            .lane_storage_identity(lane_id)
             .expect("actual participant storage route")
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts");
@@ -263,9 +261,7 @@ fn shared_lane_predecessor_rejects_corrupt_native_application_evidence() {
         );
         let corrupt_path = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(lane_id)
+            .lane_storage_identity(lane_id)
             .expect("actual participant storage route")
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts")
@@ -313,7 +309,8 @@ fn complete_applied_ordinary_lane_sessions(
     let bundle = block
         .execution_context()
         .expect("applied ownership context");
-    let before = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    let before = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
     assert!(adapter.pending_committed_lanes.is_empty());
     for ownership in &bundle.lane_payload_ownerships {
         let proposal = proposal_from_ownership(ownership, block.hash())
@@ -351,7 +348,8 @@ fn complete_applied_ordinary_lane_sessions(
     );
     assert!(adapter.pending_committed_lanes.is_empty());
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         before,
         "lane completion must not execute the already applied economic effects again"
     );
@@ -406,10 +404,12 @@ fn native_body_recovery_adapter_with_kura(
         )
         .expect("default Native AMX signing limits"),
     );
-    // Freeze the Native body budget before constructing any parent finality or
-    // opening a signing guard. The small lane fixture's 4 KiB DA budget cannot
-    // hold the actual grouped Native receipt and its signed participant controls.
-    let (mut adapter, keys) = fixture_at_height_inner_with_da_layout(
+    // Freeze Native geometry and the body budget before constructing any parent
+    // finality or opening signing journals. Reopening must authenticate those
+    // original journal references without replacing their lane incarnations.
+    let participant_lane = LaneId::new(1);
+    let participant_dataspace = DataSpaceId::new(7);
+    let (adapter, keys) = fixture_at_height_inner_with_initial_lane(
         wire::ConsensusMode::Permissioned,
         4,
         true,
@@ -418,63 +418,14 @@ fn native_body_recovery_adapter_with_kura(
         local_validator_index,
         true,
         wire::recommended_data_availability_layout(),
+        Some(LaneConfig {
+            id: participant_lane,
+            dataspace_id: participant_dataspace,
+            alias: "independent-lane".to_owned(),
+            ..LaneConfig::default()
+        }),
+        None,
     );
-    let participant_lane = LaneId::new(1);
-    let participant_dataspace = DataSpaceId::new(7);
-    enable_multilane_nexus(&mut adapter, &keys, participant_lane, participant_dataspace);
-    // These routes are ungoverned in the fixture catalog. Match the installed
-    // manifest metadata to that catalog so an ordinary Queue rebind preserves
-    // the explicitly seeded validator authority.
-    let nexus = adapter.state.nexus_snapshot();
-    let statuses = adapter
-        .state
-        .lane_manifests
-        .read()
-        .statuses()
-        .into_iter()
-        .map(|mut status| {
-            let lane = nexus
-                .lane_catalog
-                .lanes()
-                .iter()
-                .find(|lane| lane.id == status.lane)
-                .expect("Native fixture manifest has a configured route");
-            status.alias = lane.alias.clone();
-            status.dataspace = lane.dataspace_id;
-            status.visibility = lane.visibility;
-            status.storage = lane.storage;
-            status.governance = lane.governance.clone();
-            (status.lane, status)
-        })
-        .collect();
-    adapter
-        .state
-        .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
-    adapter.context.nexus_amx_context_hash =
-        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
-            .expect("valid committed catalog");
-    adapter.context.execution_policy_hash =
-        super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref())
-            .expect("derive catalog-bound Native fixture policy");
-    let entry = adapter
-        .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(participant_lane)
-        .expect("participant lane storage entry")
-        .clone();
-    adapter
-        .kura
-        .reconcile_lane_segments_for_testing(&[&entry], &[], &[])
-        .expect("provision participant lane storage");
-    let incarnation = adapter
-        .state
-        .lane_incarnation_at_height(participant_lane, adapter.context.height)
-        .expect("participant lane incarnation");
-    adapter
-        .kura
-        .install_lane_incarnation_marker_for_test(&entry, incarnation, 0)
-        .expect("install participant lane incarnation marker");
     (adapter, keys, participant_lane, participant_dataspace)
 }
 struct GroupedNativeCandidateFixture {
@@ -684,7 +635,6 @@ fn native_apply_candidate_body(
     let mut header = BlockHeader::new(
         NonZeroU64::new(adapter.context.height).expect("non-zero candidate height"),
         Some(parent.hash()),
-        None,
         None,
         creation_time_ms,
         0,
@@ -1219,9 +1169,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
             }
             let directory = fixture
                 .state
-                .nexus_snapshot()
-                .lane_config
-                .entry(participant_lane)
+                .lane_storage_identity(participant_lane)
                 .expect("actual Native route")
                 .blocks_dir(fixture.kura.store_root())
                 .join("lane_artifacts");
@@ -1265,7 +1213,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
         assert!(committed.has_results());
         assert_eq!(committed.hash(), body.hash());
         let rejections = committed
-            .errors()
+            .failed_outputs()
             .map(|(index, error)| (index, format!("{error:?}")))
             .collect::<Vec<_>>();
         assert!(
@@ -1406,7 +1354,8 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
                     "producer admission must reject a snapshot behind the retained current tip"
                 )
             );
-            let before = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            let before = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                .expect("stable valid fixture snapshot");
             let exact_history = history
                 .entries()
                 .map(|(height, value)| (height, value.clone()))
@@ -1416,7 +1365,8 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
                 .execute(&context, &mut store, &task)
                 .expect("exact completed Apply replay is idempotent");
             assert_eq!(
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+                    .expect("stable valid fixture snapshot"),
                 before
             );
             assert_eq!(
@@ -1469,9 +1419,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
     assert_eq!(adapter.context.height, 7);
     let directory = fixture
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(participant_lane)
+        .lane_storage_identity(participant_lane)
         .expect("actual future Native route")
         .blocks_dir(fixture.kura.store_root())
         .join("lane_artifacts");
@@ -1500,17 +1448,19 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or_wsv_mutation() {
+fn grouped_native_amx_prevote_local_capacity_refusal_preserves_kura_and_wsv() {
     let positive = grouped_native_candidate_fixture(None);
     let positive_state_hash =
-        crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref());
+        crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref())
+            .expect("stable valid fixture snapshot");
     let commitment = positive
         .service
         .validate_candidate(&positive.context, &positive.body)
         .expect("default evidence budget admits the exact grouped Native candidate");
     assert_eq!(commitment.native_amx_application_manifest_count, 1);
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(positive.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         positive_state_hash,
         "positive pre-vote validation must discard its WSV overlay"
     );
@@ -1527,7 +1477,8 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
             .expect("read exact pre-vote durable height"),
         3
     );
-    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref());
+    let state_hash_before = crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref())
+        .expect("stable valid fixture snapshot");
     let candidate_height = NonZeroUsize::new(
         usize::try_from(negative.context.height).expect("candidate height fits usize"),
     )
@@ -1568,18 +1519,25 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
     let error = negative
         .service
         .validate_candidate(&negative.context, &negative.body)
-        .expect_err("one-byte evidence budget must reject before voting");
+        .expect_err("one-byte local evidence capacity must refuse before voting");
     match &error {
-        crate::sumeragi::v2_apply::V2ApplyError::Validation(message) => {
-            assert!(
-                message.contains("configured shared stable aggregate byte bound")
-                    && message.contains("of 1 bytes"),
-                "unexpected grouped Native byte-budget rejection: {message}"
-            );
+        crate::sumeragi::v2_apply::V2ApplyError::LocalEvidenceCapacity {
+            required_bytes,
+            configured_bytes,
+        } => {
+            assert_eq!(*configured_bytes, 1);
+            assert!(*required_bytes > *configured_bytes);
         }
         other => panic!("unexpected grouped Native pre-vote error: {other}"),
     }
-    assert!(!error.requires_restart_recovery());
+    assert!(error.requires_restart_recovery());
+    assert!(
+        crate::sumeragi::v2_body_store::BodyValidationError::rejection_identity(&error).is_none()
+    );
+    assert!(matches!(
+        crate::sumeragi::v2_body_store::BodyValidationError::local_refusal(&error),
+        Some(crate::sumeragi::v2_body_store::LocalValidationRefusal::RecoveryRequired(_)),
+    ));
     assert_eq!(negative.state.committed_height(), 3);
     assert_eq!(
         negative
@@ -1589,7 +1547,8 @@ fn grouped_native_amx_prevote_rejects_undersized_evidence_budget_without_kura_or
         3
     );
     assert_eq!(
-        crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref()),
+        crate::snapshot::canonical_state_snapshot_hash(negative.state.as_ref())
+            .expect("stable valid fixture snapshot"),
         state_hash_before,
         "undersized pre-vote rejection must discard its WSV overlay"
     );
@@ -1722,24 +1681,14 @@ fn native_body_recovery_carrier(
         NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
         Some(parent_hash),
         None,
-        None,
         adapter.context.height,
         0,
     );
     let leader_index = usize::try_from(adapter.context.leader(0)).expect("leader index fits usize");
-    let initial_signature =
-        SignatureOf::try_from_hash(keys[leader_index].private_key(), header.hash())
-            .expect("sign initial Native carrier");
-    let mut carrier = SignedBlock::presigned(
-        BlockSignature::new(
-            u64::try_from(leader_index).expect("leader index fits u64"),
-            initial_signature,
-        ),
-        header,
-        vec![payload.transaction.clone()],
-    );
+    let mut builder = BlockBuilder::new(header);
+    builder.push_transaction(payload.transaction.clone());
     let coordinator = payload.routing_plan.coordinator_route();
-    carrier.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+    builder.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
         ExternalExecutionContext::with_routing_plan(
             payload.entrypoint_hash,
             coordinator.lane_id,
@@ -1749,13 +1698,30 @@ fn native_body_recovery_carrier(
         )
         .with_native_amx_receipt(payload.receipt.clone()),
     ])));
-    carrier
-        .set_transaction_results(
-            Vec::new(),
+    let mut carrier = builder.build_with_signature(
+        u64::try_from(leader_index).expect("leader index fits u64"),
+        keys[leader_index].private_key(),
+    );
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &carrier,
             &[payload.entrypoint_hash],
             vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        carrier.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
         )
-        .expect("attach exact Native carrier result");
+    }
+    .expect("attach exact Native carrier result");
     let final_signature =
         SignatureOf::try_from_hash(keys[leader_index].private_key(), carrier.header().hash())
             .expect("sign finalized Native carrier");
@@ -1876,7 +1842,8 @@ fn persist_and_evict_native_body(
     assert_eq!(finality_receipt.block_hash(), carrier.hash());
     let committed = ValidBlock::committed_from_replay_signed_block(carrier.clone());
     commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
-    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
     adapter
         .kura
         .store_wsv_checkpoint(carrier.header().height().get(), carrier.hash(), checkpoint)
@@ -1933,13 +1900,16 @@ fn persist_and_evict_native_body(
         adapter
             .kura
             .evict_block_bodies(payload_len)
-            .expect("evict exact Native carrier"),
-        payload_len
+            .expect("pending Native publication remains pinned"),
+        0,
+        "an unfinished Native carrier must remain a local publication recovery source"
     );
+    // Model loss of the pinned local body explicitly. Normal retention must not
+    // manufacture this recovery scenario by evicting unfinished publication work.
     adapter
         .kura
-        .remove_evicted_block_sidecar_for_testing(height)
-        .expect("remove local Native carrier sidecar");
+        .remove_block_body_for_recovery_test(height)
+        .expect("simulate missing local Native carrier");
     assert!(adapter.kura.get_block(height).is_none());
     marker
 }
@@ -2252,9 +2222,26 @@ fn merge_native_projection_entry_and_carrier(
             iroha_data_model::block::CertifiedMergeLedgerReference::new(&entry),
         ),
     ));
-    block
-        .set_transaction_results(Vec::new(), &[], Vec::new())
-        .expect("empty merge carrier has a complete result-bearing execution record");
+    {
+        let outputs = crate::execution_output_test_support::structural_network_outputs(
+            &block,
+            &[],
+            Vec::new(),
+        );
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        block.set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &crate::execution_output_test_support::structural_output_limits(),
+        )
+    }
+    .expect("empty merge carrier has a complete result-bearing execution record");
     assert!(block.has_results());
     (block, entry)
 }
@@ -2275,7 +2262,7 @@ fn merge_native_projection_fixture(
     let entrypoints = ordinary_block
         .external_entrypoints_cloned()
         .collect::<Vec<_>>();
-    let results = ordinary_block.results().cloned().collect::<Vec<_>>();
+    let results = ordinary_block.output_results().cloned().collect::<Vec<_>>();
     let mut receipts = ordinary_block
         .execution_context()
         .expect("ordinary Native projection execution context")
@@ -2300,7 +2287,6 @@ fn merge_native_projection_fixture(
     let application_block_header = BlockHeader::new(
         NonZeroU64::new(application_height).expect("non-zero projection fixture height"),
         Some(parent_hash),
-        None,
         None,
         application_height,
         ordinary_block.header().view_change_index(),
@@ -2785,9 +2771,7 @@ fn shared_lane_first_slot_authenticates_native_publication_before_empty_predeces
         let half = damage.split_once(' ').expect("named fault shape").1;
         let path = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(lane_id)
+            .lane_storage_identity(lane_id)
             .expect("actual Native route")
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts")
@@ -2907,6 +2891,7 @@ struct IndependentlyEncodedSharedLaneFrontierForTest {
     lane_incarnation: Hash,
     lane_block_height: u64,
     lane_block_descriptor_hash: Hash,
+    applied_global_height: u64,
 }
 
 #[test]
@@ -2942,6 +2927,8 @@ fn native_application_rejects_valid_but_contradictory_shared_frontier() {
             lane_incarnation: native.lane_incarnation,
             lane_block_height: native.lane_block_height,
             lane_block_descriptor_hash: native.descriptor_hash,
+            applied_global_height: u64::try_from(adapter.state.committed_height())
+                .expect("actual Native application carrier height fits u64"),
         };
         let original = adapter
             .state
@@ -3048,9 +3035,7 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
     let descriptor = &ordinary.proposal.descriptor;
     let artifact_dir = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(descriptor.lane_id)
+        .lane_storage_identity(descriptor.lane_id)
         .expect("actual historical ordinary route")
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts");
@@ -3059,7 +3044,8 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
         .read_lane_completion_certificate(descriptor.lane_id, descriptor.lane_block_height)
         .expect("read actual historical certificate")
         .expect("retained ordinary certificate");
-    let state_hash = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+    let state_hash = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
     assert!(
         !adapter
             .state
@@ -3131,7 +3117,8 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
             Some(&certificate)
         );
         assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref()),
+            crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+                .expect("stable valid fixture snapshot"),
             state_hash
         );
         assert!(!adapter.output_guard.restart_required());
@@ -3149,6 +3136,360 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
                 .is_empty()
         );
     }
+}
+
+include!("v2_lane_work_native_repair_admission.rs");
+
+fn native_coordinator_with_pending_publication_fixture(
+    local_validator_index: Option<usize>,
+) -> (
+    V2LaneWorkAdapter,
+    Vec<KeyPair>,
+    LaneId,
+    DataSpaceId,
+    NativeBodyRecoveryPayload,
+) {
+    let (adapter, keys, lane_id, dataspace_id) = native_body_recovery_adapter_with_kura(
+        locked_lane_work_test_kura(NonZeroUsize::new(1).unwrap()),
+        local_validator_index,
+    );
+    assert!(
+        adapter
+            .state
+            .native_amx_participant_application_tips_snapshot()
+            .expect("empty Native authority is readable")
+            .is_empty()
+    );
+    let payload = native_body_recovery_payload(&adapter, &keys, lane_id, dataspace_id);
+    let carrier = native_body_recovery_carrier(&adapter, &keys, &payload);
+    let (_, finality) = native_body_recovery_finality(&adapter, &keys, &carrier);
+    adapter
+        .kura
+        .store_block(carrier.clone())
+        .expect("store actual Native carrier");
+    let _ = adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish actual Native manifest and complete wire authority");
+    let _prepublication = adapter
+        .kura
+        .prepublish_native_amx_participant_application_evidence(&carrier, None)
+        .expect("publish the actual predecessor pair under its canonical append owner");
+    commit_test_block_to_state(
+        adapter.state.as_ref(),
+        &ValidBlock::committed_from_replay_signed_block(carrier.clone()),
+        &adapter.context,
+    );
+    let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref())
+        .expect("stable valid fixture snapshot");
+    adapter
+        .kura
+        .store_wsv_checkpoint(carrier.header().height().get(), carrier.hash(), checkpoint)
+        .expect("publish exact committed Native checkpoint");
+    adapter
+        .kura
+        .store_commit_manifest(
+            crate::kura::CommitManifest::new(
+                carrier.header().height().get(),
+                carrier.hash(),
+                None,
+                None,
+                checkpoint,
+                None,
+            )
+            .with_authenticated_v2_commit_authority(&finality),
+        )
+        .expect("publish exact Native commit metadata");
+    assert!(
+        adapter
+            .state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+            .expect("read the fully prepublished Native predecessor")
+            .is_empty()
+    );
+    assert_eq!(
+        adapter
+            .state
+            .native_amx_participant_application_tips_snapshot()
+            .expect("read the exact prepublished Native tip")
+            .len(),
+        1
+    );
+    // Stop before post-WSV retention cleanup. The canonical append's real
+    // publication index must own recovery if an artifact is lost here.
+    let index_directory = adapter
+        .kura
+        .store_root()
+        .join("native_amx_publication_index");
+    let retained_index = std::fs::read_dir(&index_directory)
+        .expect("canonical append publishes its Native recovery owner")
+        .map(|entry| {
+            let path = entry.expect("read the retained publication owner").path();
+            let bytes = std::fs::read(&path).expect("read exact owner bytes");
+            (path, bytes)
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(retained_index.len(), 1);
+
+    let mut context = adapter.context.clone();
+    context.height += 1;
+    context.parent_commit_qc = Some(finality.commit_qc.clone());
+    context.snapshot_bootstrap = None;
+    context.nexus_amx_context_hash =
+        super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref())
+            .expect("valid committed catalog");
+    let restart = LaneAdapterRestartParts::capture(&adapter);
+    drop(adapter);
+    let adapter = restart
+        .reopen_isolated(context, true)
+        .expect("reopen successor under exact signed Native application authority");
+    for (path, bytes) in retained_index {
+        assert_eq!(
+            std::fs::read(path).expect("reopening the adapter retains the unfinished owner"),
+            bytes
+        );
+    }
+    (adapter, keys, lane_id, dataspace_id, payload)
+}
+
+// Restart only the stopped storage/consensus fixture. Queue keeps its unique
+// successor reservation owner; no live Kura publication capability crosses
+// into the independently locked cold store.
+fn cold_restart_native_predecessor_publication_fixture(
+    mut adapter: V2LaneWorkAdapter,
+    queue: &Arc<Queue>,
+    active_view: u64,
+    application_block: &SignedBlock,
+    pending: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+) -> (tempfile::TempDir, V2LaneWorkAdapter) {
+    fn copy_permissions(source: &std::path::Path, destination: &std::path::Path) {
+        let permissions = std::fs::metadata(source).unwrap().permissions();
+        std::fs::set_permissions(destination, permissions.clone()).unwrap();
+        let copied = std::fs::metadata(destination).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            assert_eq!(
+                copied.mode(),
+                permissions.mode(),
+                "cold recovery must preserve the original journal and directory permissions"
+            );
+        }
+        #[cfg(not(unix))]
+        assert_eq!(copied.readonly(), permissions.readonly());
+    }
+    fn copy_store(source: &std::path::Path, destination: &std::path::Path) {
+        std::fs::create_dir_all(destination).unwrap();
+        for entry in std::fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let target = destination.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_store(&entry.path(), &target);
+            } else {
+                assert!(entry.file_type().unwrap().is_file());
+                let bytes = std::fs::read(entry.path()).unwrap();
+                std::fs::write(&target, &bytes).unwrap();
+                copy_permissions(&entry.path(), &target);
+                assert_eq!(std::fs::read(target).unwrap(), bytes);
+                assert_eq!(std::fs::read(entry.path()).unwrap(), bytes);
+            }
+        }
+        // Apply the source mode after copying children so read-only directories
+        // can be reproduced without changing the original store's permissions.
+        copy_permissions(source, destination);
+    }
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        adapter
+            .state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+            .unwrap(),
+        pending
+    );
+    assert_eq!(
+        pending[0].application_block_height,
+        application_block.header().height().get()
+    );
+    assert_eq!(pending[0].application_block_hash, application_block.hash());
+    let application_wire = application_block.encode_wire().unwrap();
+    let application_height =
+        NonZeroUsize::new(usize::try_from(application_block.header().height().get()).unwrap())
+            .unwrap();
+    let owned = queue.live_lane_reservations();
+    let batches = std::mem::take(&mut adapter.pending_autonomous_reservation_batches);
+    assert_eq!(batches.len(), 1);
+    assert!(adapter.native_requests.is_empty());
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+    let snapshot = norito::json::to_value(adapter.state.as_ref()).unwrap();
+    let nexus = adapter.state.nexus_snapshot();
+    let lane_manifests = adapter.state.lane_manifests.read().clone();
+    let compliance = adapter.state.lane_compliance_engine();
+    let policy = adapter.state.execution_policy_digest_v1().unwrap();
+    let snapshot_hash =
+        crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref()).unwrap();
+    let context = adapter.context.clone();
+    let local_peer = adapter.local_peer.clone();
+    let key_pair = adapter.key_pair.clone();
+    let limits = adapter.limits;
+    let cold_root = tempfile::tempdir().unwrap();
+    copy_store(&adapter.kura.store_root(), cold_root.path());
+    let index_directory = cold_root.path().join("native_amx_publication_index");
+    let retained_index = std::fs::read_dir(&index_directory)
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let bytes = std::fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(retained_index.len(), 1);
+    // The copied journal is byte-identical, but the old adapter and all its
+    // storage capabilities are gone before cold construction reconstructs any
+    // missing-component credit from the exact canonical pending record.
+    drop(adapter);
+    let config = iroha_config::parameters::actual::Kura {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: iroha_config::base::WithOrigin::inline(cold_root.path().to_path_buf()),
+        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: NonZeroUsize::new(1).unwrap(),
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity:
+            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: iroha_config::kura::FsyncMode::Batched,
+        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
+        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
+    };
+    let lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.configured_lane_catalog);
+    let (kura, _) = Kura::new_with_configured_lane_catalog(
+        &config,
+        &lane_config,
+        &nexus.configured_lane_catalog,
+    )
+    .expect("cold Kura reconstructs the original unfinished canonical publication owner");
+    let mut state = crate::state::deserialize::KuraSeed {
+        kura: Arc::clone(&kura),
+        lane_manifests,
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }
+    .into_state_from_json(snapshot)
+    .expect("restore exact committed Native predecessor State");
+    kura.bind_lane_storage_network(state.network_id).unwrap();
+    state
+        .prepare_restored_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+        .unwrap();
+    state
+        .restore_kura_lane_segments_from_nexus()
+        .expect("authenticate the copied geometry before reconstructing route publication custody");
+    state.configure_test_runtime_defaults();
+    state.set_nexus_from_config(nexus).unwrap();
+    state.install_lane_compliance_engine(compliance);
+    assert_eq!(state.execution_policy_digest_v1().unwrap(), policy);
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        snapshot_hash
+    );
+    for (path, bytes) in retained_index {
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            bytes,
+            "cold recovery retains the original exact pending publication index"
+        );
+    }
+    assert_eq!(
+        state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+            .unwrap(),
+        pending,
+        "cold restoration must retain the original incomplete State-owned repair targets"
+    );
+    assert_eq!(
+        queue.live_lane_reservations(),
+        owned,
+        "the unique successor Queue batch remains owned before startup repair"
+    );
+    assert_eq!(
+        kura.read_block_body(application_height)
+            .unwrap()
+            .unwrap()
+            .encode_wire()
+            .unwrap(),
+        application_wire,
+        "startup repair must authenticate the original complete Native carrier"
+    );
+    // The runner completes this authenticated repair boundary before opening
+    // signing guards or activating an adapter. Keep the successor Queue batch
+    // outside the stopped adapter until every original repair target is durable.
+    let LaneApplicationEvidenceRepairPlanning::Ready(plan) =
+        plan_lane_application_evidence_repair(&context, &state, &kura, limits)
+            .expect("preflight every cold startup evidence obligation")
+    else {
+        panic!("the exact retained Native carrier must be locally available");
+    };
+    assert_eq!(plan.item_count(), 1);
+    let summary = apply_lane_application_evidence_repair(&state, &kura, plan)
+        .expect("complete the authenticated startup repair before adapter construction");
+    assert_eq!(summary.native_carriers, 1);
+    assert_eq!(summary.native_routes, pending.len());
+    assert_eq!(summary.ordinary_pairs, 0);
+    assert_eq!(summary.ordinary_receipts, 0);
+    assert_eq!(summary.merge_carriers, 0);
+    assert!(
+        state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&state).unwrap(),
+        snapshot_hash,
+        "startup evidence repair must not reapply the committed State transition"
+    );
+    assert_eq!(
+        queue.live_lane_reservations(),
+        owned,
+        "startup repair must not release or reacquire the successor Queue owner"
+    );
+    assert_eq!(
+        kura.read_block_body(application_height)
+            .unwrap()
+            .unwrap()
+            .encode_wire()
+            .unwrap(),
+        application_wire
+    );
+    let mut reopened = V2LaneWorkAdapter::new_with_output_guard(
+        context,
+        local_peer,
+        key_pair,
+        true,
+        Arc::from(state),
+        kura,
+        limits,
+        None,
+        None,
+        ConsensusOutputGuard::isolated(),
+    )
+    .expect("restart the same authenticated successor context after startup repair");
+    reopened
+        .retain_merge_sidecars_for_global_view(active_view, None, None)
+        .unwrap();
+    reopened
+        .install_lane_drain_queue(Arc::clone(queue))
+        .unwrap();
+    assert!(reopened.pending_autonomous_reservation_batches.is_empty());
+    reopened.pending_autonomous_reservation_batches = batches;
+    assert_eq!(
+        queue.live_lane_reservations(),
+        owned,
+        "storage reconstruction cannot release or reacquire the retained Queue owner"
+    );
+    (cold_root, reopened)
 }
 
 #[test]
@@ -3185,40 +3526,12 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
 
     for missing_half in ["receipt", "manifest"] {
         let (mut previous_adapter, keys, participant_lane, participant_dataspace, previous) =
-            native_coordinator_after_applied_participant_fixture(Some(0));
+            native_coordinator_with_pending_publication_fixture(Some(0));
         let parent_height = NonZeroUsize::new(previous_adapter.state.committed_height()).unwrap();
         let parent = previous_adapter.kura.get_block(parent_height).unwrap();
         complete_applied_ordinary_lane_sessions(&mut previous_adapter, &keys, &parent);
         let route = previous.routing_plan.coordinator_route();
-        let slot = plan_autonomous_lane_reservation_slot(
-            previous_adapter.state.as_ref(),
-            previous_adapter.kura.as_ref(),
-            &previous_adapter.context,
-            route.lane_id,
-            route.dataspace_id,
-        )
-        .expect("coordinator predecessor is fully applied before participant interruption");
-        assert_eq!(
-            slot.lane_block_height, 1,
-            "the coordinator has not yet produced a lane block"
-        );
-        assert_eq!(
-            slot.author, previous_adapter.local_peer,
-            "the storage owner must be the deterministic first-slot author from initial construction"
-        );
         let mut adapter = previous_adapter;
-        let active_view = (0..2 * adapter
-            .state
-            .consensus_lane_routes_at_height(adapter.context.height)
-            .len() as u64)
-            .find(|view| {
-                adapter.autonomous_native_coordinator_for_view(*view)
-                    == Some((route.lane_id, route.dataspace_id))
-            })
-            .expect("the deterministic Native coordinator rotation selects this route");
-        adapter
-            .retain_merge_sidecars_for_global_view(active_view, None, None)
-            .expect("install the selected global view before owning a production batch");
         let queue = Arc::new(Queue::test_with_router_for_routes(
             iroha_config::parameters::actual::Queue::default(),
             &iroha_primitives::time::TimeSource::new_system(),
@@ -3256,13 +3569,41 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
         adapter
             .install_lane_drain_queue(Arc::clone(&queue))
             .unwrap();
-        enqueue_autonomous_test_transactions(
-            &adapter,
+        let mut adapter = enqueue_native_retry_with_canonical_admission(
+            adapter,
+            &keys,
             &queue,
             route.lane_id,
             route.dataspace_id,
-            1,
         );
+        let slot = plan_autonomous_lane_reservation_slot(
+            adapter.state.as_ref(),
+            adapter.kura.as_ref(),
+            &adapter.context,
+            route.lane_id,
+            route.dataspace_id,
+        )
+        .expect("coordinator predecessor is fully applied before participant interruption");
+        assert_eq!(
+            slot.lane_block_height, 1,
+            "the coordinator has not yet produced a lane block"
+        );
+        assert_eq!(
+            slot.author, adapter.local_peer,
+            "the storage owner must be the deterministic first-slot author from initial construction"
+        );
+        let active_view = (0..2 * adapter
+            .state
+            .consensus_lane_routes_at_height(adapter.context.height)
+            .len() as u64)
+            .find(|view| {
+                adapter.autonomous_native_coordinator_for_view(*view)
+                    == Some((route.lane_id, route.dataspace_id))
+            })
+            .expect("the deterministic Native coordinator rotation selects this route");
+        adapter
+            .retain_merge_sidecars_for_global_view(active_view, None, None)
+            .expect("install the selected global view before owning a production batch");
         let reservations = queue
             .reserve_transactions_for_lane_bounded(
                 adapter.state.as_ref(),
@@ -3293,9 +3634,7 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
         );
         let artifact_path = adapter
             .state
-            .nexus_snapshot()
-            .lane_config
-            .entry(participant_lane)
+            .lane_storage_identity(participant_lane)
             .unwrap()
             .blocks_dir(adapter.kura.store_root())
             .join("lane_artifacts")
@@ -3333,10 +3672,29 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
             .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
             .expect("exact incomplete participant marker remains repairable");
         assert_eq!(pending.len(), 1);
-        adapter
-            .kura
-            .repair_native_amx_participant_application_evidence_for_markers(&parent, &pending)
-            .expect("the production repair owner completes the exact missing half");
+        let (_cold_root, mut adapter) = cold_restart_native_predecessor_publication_fixture(
+            adapter,
+            &queue,
+            active_view,
+            &parent,
+            &pending,
+        );
+        let artifact_path = adapter
+            .state
+            .lane_storage_identity(participant_lane)
+            .unwrap()
+            .blocks_dir(adapter.kura.store_root())
+            .join("lane_artifacts")
+            .join(format!(
+                "native_amx_{missing_half}_v1_00000000000000000001.norito"
+            ));
+        assert!(
+            adapter
+                .state
+                .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(std::fs::read(&artifact_path).unwrap(), artifact);
         adapter.next_autonomous_producer_tick = Instant::now();
         adapter
@@ -3403,10 +3761,24 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
 #[test]
 fn autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repair() {
     let (mut adapter, keys, lane_id, dataspace_id, _) =
-        native_coordinator_after_applied_participant_fixture(Some(1));
+        native_coordinator_with_pending_publication_fixture(Some(1));
     let parent_height = NonZeroUsize::new(adapter.state.committed_height()).unwrap();
     let parent = adapter.kura.get_block(parent_height).unwrap();
     complete_applied_ordinary_lane_sessions(&mut adapter, &keys, &parent);
+    let journals = tempfile::tempdir().unwrap();
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &journals.path().join("reservations.norito"),
+    );
+    let mut adapter = enqueue_native_retry_with_canonical_admission(
+        adapter,
+        &keys,
+        &queue,
+        lane_id,
+        dataspace_id,
+    );
     let slot = plan_autonomous_lane_reservation_slot(
         adapter.state.as_ref(),
         adapter.kura.as_ref(),
@@ -3420,14 +3792,6 @@ fn autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repa
     adapter
         .retain_merge_sidecars_for_global_view(0, None, None)
         .expect("bind the active view before reserving the producer batch");
-    let journals = tempfile::tempdir().unwrap();
-    let queue = install_autonomous_test_queue(
-        &mut adapter,
-        lane_id,
-        dataspace_id,
-        &journals.path().join("reservations.norito"),
-    );
-    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
     let reservations = queue
         .reserve_transactions_for_lane_bounded(
             adapter.state.as_ref(),
@@ -3460,9 +3824,7 @@ fn autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repa
     );
     let receipt_path = adapter
         .state
-        .nexus_snapshot()
-        .lane_config
-        .entry(lane_id)
+        .lane_storage_identity(lane_id)
         .unwrap()
         .blocks_dir(adapter.kura.store_root())
         .join("lane_artifacts")
@@ -3505,10 +3867,22 @@ fn autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repa
         .expect("the exact coordinator predecessor has a repair owner");
     assert_eq!(pending.len(), 1);
     assert_eq!((pending[0].lane_id, pending[0].dataspace_id), route);
-    adapter
-        .kura
-        .repair_native_amx_participant_application_evidence_for_markers(&parent, &pending)
-        .expect("the production owner restores the exact coordinator predecessor");
+    let (_cold_root, mut adapter) =
+        cold_restart_native_predecessor_publication_fixture(adapter, &queue, 0, &parent, &pending);
+    let receipt_path = adapter
+        .state
+        .lane_storage_identity(lane_id)
+        .unwrap()
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts")
+        .join("native_amx_receipt_v1_00000000000000000001.norito");
+    assert!(
+        adapter
+            .state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(std::fs::read(&receipt_path).unwrap(), receipt);
     adapter.next_autonomous_producer_tick = Instant::now();
     adapter

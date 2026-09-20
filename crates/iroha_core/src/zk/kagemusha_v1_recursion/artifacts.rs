@@ -42,6 +42,8 @@ use super::{
 
 const ARTIFACT_STREAM_BUFFER_BYTES_V1: usize = 64 * 1024;
 
+// The capture/indexed-loader prototype is exercised by tests until prover integration.
+#[cfg(test)]
 mod stored_capture;
 
 #[cfg(feature = "zk-halo2-ipa")]

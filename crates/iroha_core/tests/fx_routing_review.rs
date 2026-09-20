@@ -258,7 +258,6 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
         NonZeroU64::new(1).expect("nonzero block height"),
         None,
         None,
-        None,
         LEDGER_TIME_MS,
         0,
     );

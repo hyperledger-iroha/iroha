@@ -1,32 +1,23 @@
 //! Implementations for transaction queries.
 use crate::{
     kura::{KaigiSignalCandidateIndexError, KaigiSignalCandidatePosition},
-    smartcontracts::ValidQuery,
     state::StateReadOnly,
 };
 use eyre::Result;
-use iroha_crypto::{Hash, HashOf, MerkleTree};
+use iroha_crypto::{HashOf, MerkleTree};
 use iroha_data_model::{
     AccountId,
-    block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock},
+    block::{BlockHeader, SignedBlock},
     kaigi::KaigiId,
-    merge::MergeLedgerEntry,
-    prelude::*,
     query::{
-        CertifiedMergeTransactionInclusion, CommittedTransaction, CommittedTxFilters,
-        dsl::CompoundPredicate, error::QueryExecutionFail, json::PredicateJson,
+        CommittedTransaction, CommittedTxFilters, dsl::CompoundPredicate,
+        error::QueryExecutionFail, json::PredicateJson,
     },
     transaction::{TransactionResult, signed::TransactionEntrypoint},
 };
-use iroha_telemetry::metrics;
-use nonzero_ext::nonzero;
 use norito::json::Value;
 use norito::{Decode, Encode};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroUsize,
-    ops::ControlFlow,
-};
+use std::{collections::BTreeSet, num::NonZeroUsize, ops::ControlFlow};
 fn block_hash_from_value(value: &Value) -> Option<HashOf<BlockHeader>> {
     norito::json::from_value(value.clone()).ok()
 }
@@ -393,7 +384,7 @@ fn transaction_field_equals(
     }
     if transaction_result_status_field(field) {
         return result_status_from_value(expected)
-            .is_some_and(|result_status| tx.result.as_ref().is_ok() == result_status);
+            .is_some_and(|result_status| tx.result().is_ok() == result_status);
     }
     tx_value.and_then(|value| predicate_value_at_path(value, field)) == Some(expected)
 }
@@ -461,303 +452,253 @@ fn transaction_filter_applies(
         |predicate| transaction_predicate_json_applies(predicate, tx),
     )
 }
-fn block_committed_transactions(block: &SignedBlock) -> Vec<CommittedTransaction> {
-    let block_hash = block.hash();
-    let entrypoint_hashes = block.entrypoint_hashes().rev();
-    let entrypoint_proofs = block.entrypoint_proofs().rev();
-    let entrypoints = block.entrypoints_cloned().rev();
-    let result_hashes = block.result_hashes().rev();
-    let result_proofs = block.result_proofs().rev();
-    let results = block.results().cloned().rev();
-    entrypoint_hashes
-        .zip(entrypoint_proofs)
-        .zip(entrypoints)
-        .zip(result_hashes)
-        .zip(result_proofs)
-        .zip(results)
-        .map(
-            |(
-                ((((entrypoint_hash, entrypoint_proof), entrypoint), result_hash), result_proof),
-                result,
-            )| {
-                CommittedTransaction {
-                    block_hash,
-                    entrypoint_hash,
-                    entrypoint_proof,
-                    entrypoint,
-                    result_hash,
-                    result_proof,
-                    result,
-                    merge_inclusion: None,
-                }
-            },
-        )
-        .collect()
-}
-fn merge_query_corruption(message: impl std::fmt::Display) -> QueryExecutionFail {
+fn canonical_transaction_history_error(message: impl std::fmt::Display) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(format!(
-        "certified merge transaction history is inconsistent: {message}"
+        "canonical Network transaction history is inconsistent: {message}"
     ))
 }
+
 #[cfg(test)]
-std::thread_local! {
-    static CERTIFIED_MERGE_PROJECTION_CALLS: std::cell::Cell<usize> = const {
-        std::cell::Cell::new(0)
-    };
-}
+thread_local! { static CANONICAL_NETWORK_PROJECTION_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 #[cfg(test)]
-/// Reset the thread-local eager merge projection counter used by query gas tests.
-pub(crate) fn reset_certified_merge_projection_calls_for_test() {
-    CERTIFIED_MERGE_PROJECTION_CALLS.set(0);
+pub(crate) fn reset_canonical_network_projection_calls_for_test() {
+    CANONICAL_NETWORK_PROJECTION_CALLS.set(0);
 }
 #[cfg(test)]
-/// Return eager merge projection calls observed on the current test thread.
-pub(crate) fn certified_merge_projection_calls_for_test() -> usize {
-    CERTIFIED_MERGE_PROJECTION_CALLS.get()
-}
-/// Project the authenticated transaction/result pairs carried by a certified merge entry.
-///
-/// The compact carrier reference, execution-batch commitments, transcript hashes, and Merkle
-/// roots are all revalidated before any transaction is returned.  Consumers outside the query
-/// executor use this projection so transaction lifecycle status never trusts an unauthenticated
-/// merge sidecar or reimplements only a subset of these checks.
-pub fn certified_merge_committed_transactions(
-    carrier_hash: HashOf<BlockHeader>,
-    reference: &CertifiedMergeLedgerReference,
-    entry: &MergeLedgerEntry,
-) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
-    #[cfg(test)]
-    CERTIFIED_MERGE_PROJECTION_CALLS.set(CERTIFIED_MERGE_PROJECTION_CALLS.get().saturating_add(1));
-    if !reference.matches_entry(entry) {
-        return Err(merge_query_corruption(
-            "carrier compact reference does not identify its full sidecar",
-        ));
-    }
-    let batch = entry.execution_batch.as_ref().ok_or_else(|| {
-        merge_query_corruption("execution carrier references an entry without an execution batch")
-    })?;
-    if batch.version != 1 || !crate::merge::merge_execution_batch_commitments_match(batch) {
-        return Err(merge_query_corruption(
-            "merge execution batch commitments are not canonical",
-        ));
-    }
-    let entrypoint_count = usize::try_from(batch.entrypoint_count)
-        .map_err(|_| merge_query_corruption("entrypoint count does not fit this platform"))?;
-    if entrypoint_count == 0 || u32::try_from(entrypoint_count).is_err() {
-        return Err(merge_query_corruption(
-            "entrypoint count is outside the supported Merkle proof range",
-        ));
-    }
-    let mut entrypoints = Vec::with_capacity(entrypoint_count);
-    let mut results = Vec::with_capacity(entrypoint_count);
-    for execution in &batch.lanes {
-        let lane_len = execution.entrypoints.len();
-        if lane_len == 0
-            || execution.entrypoint_hashes.len() != lane_len
-            || execution.results.len() != lane_len
-            || execution.result_hashes.len() != lane_len
-        {
-            return Err(merge_query_corruption(
-                "lane transcript arrays are empty or not aligned",
-            ));
-        }
-        if execution
-            .entrypoints
-            .iter()
-            .zip(&execution.entrypoint_hashes)
-            .any(|(entrypoint, expected)| Hash::from(entrypoint.hash()) != *expected)
-            || execution
-                .results
-                .iter()
-                .zip(&execution.result_hashes)
-                .any(|(result, expected)| Hash::from(result.hash()) != *expected)
-        {
-            return Err(merge_query_corruption(
-                "lane transcript content differs from its authenticated hashes",
-            ));
-        }
-        entrypoints.extend(execution.entrypoints.iter().cloned());
-        results.extend(execution.results.iter().cloned());
-    }
-    if entrypoints.len() != entrypoint_count || results.len() != entrypoint_count {
-        return Err(merge_query_corruption(
-            "flattened lane transcript differs from the certified entrypoint count",
-        ));
-    }
-    let entrypoint_hashes = entrypoints
-        .iter()
-        .map(TransactionEntrypoint::hash)
-        .collect::<Vec<_>>();
-    let result_hashes = results
-        .iter()
-        .map(TransactionResult::hash)
-        .collect::<Vec<_>>();
-    let entrypoint_tree = entrypoint_hashes
-        .iter()
-        .copied()
-        .collect::<MerkleTree<TransactionEntrypoint>>();
-    let result_tree = result_hashes
-        .iter()
-        .copied()
-        .collect::<MerkleTree<TransactionResult>>();
-    if entrypoint_tree.root() != Some(batch.entrypoint_merkle_root)
-        || result_tree.root() != Some(batch.result_merkle_root)
-    {
-        return Err(merge_query_corruption(
-            "reconstructed transaction proof roots differ from the certified batch",
-        ));
-    }
-    let inclusion = CertifiedMergeTransactionInclusion {
-        version: 1,
-        merge_entry_hash: entry.canonical_hash(),
-        merge_epoch_id: entry.epoch_id,
-        execution_batch_hash: batch.batch_hash,
-        entrypoint_count: batch.entrypoint_count,
-        entrypoint_merkle_root: batch.entrypoint_merkle_root,
-        result_merkle_root: batch.result_merkle_root,
-    };
-    let mut committed = Vec::with_capacity(entrypoint_count);
-    for index in (0..entrypoint_count).rev() {
-        let proof_index = u32::try_from(index)
-            .map_err(|_| merge_query_corruption("Merkle proof index exceeds u32"))?;
-        let entrypoint_proof = entrypoint_tree.get_proof(proof_index).ok_or_else(|| {
-            merge_query_corruption("entrypoint Merkle tree did not yield a required proof")
-        })?;
-        let result_proof = result_tree.get_proof(proof_index).ok_or_else(|| {
-            merge_query_corruption("result Merkle tree did not yield a required proof")
-        })?;
-        committed.push(CommittedTransaction {
-            block_hash: carrier_hash,
-            entrypoint_hash: entrypoint_hashes[index],
-            entrypoint_proof,
-            entrypoint: entrypoints[index].clone(),
-            result_hash: result_hashes[index],
-            result_proof,
-            result: results[index].clone(),
-            merge_inclusion: Some(inclusion.clone()),
-        });
-    }
-    Ok(committed)
-}
-fn certified_merge_projection_work(entry: &MergeLedgerEntry) -> usize {
-    let Some(batch) = entry.execution_batch.as_ref() else {
-        return 0;
-    };
-    let declared = usize::try_from(batch.entrypoint_count).unwrap_or(usize::MAX);
-    let observed = batch.lanes.iter().fold(0_usize, |total, execution| {
-        total.saturating_add(
-            execution
-                .entrypoints
-                .len()
-                .max(execution.entrypoint_hashes.len())
-                .max(execution.results.len())
-                .max(execution.result_hashes.len()),
-        )
-    });
-    declared.max(observed)
-}
-fn committed_merge_transactions_by_height(
-    state_ro: &impl StateReadOnly,
-    candidate_heights: Option<&BTreeSet<NonZeroUsize>>,
-) -> Result<BTreeMap<NonZeroUsize, Vec<CommittedTransaction>>, QueryExecutionFail> {
-    if let Some(candidate_heights) = candidate_heights {
-        let mut by_height = BTreeMap::new();
-        for &height in candidate_heights
-            .iter()
-            .filter(|height| height.get() <= state_ro.height())
-        {
-            let block = state_ro
-                .canonical_block_by_height(height)
-                .map_err(QueryExecutionFail::CanonicalHistory)?;
-            let Some(reference) = block
-                .execution_context()
-                .and_then(|context| context.merge_entry.as_ref())
-            else {
-                continue;
-            };
-            let carrier_height = u64::try_from(height.get()).map_err(|_| {
-                merge_query_corruption("indexed carrier height does not fit the canonical range")
-            })?;
-            let entry = state_ro
-                .kura()
-                .merge_entry_for_carrier(carrier_height, block.hash())
-                .map_err(merge_query_corruption)?
-                .ok_or_else(|| {
-                    merge_query_corruption(format!(
-                        "indexed carrier block {} has no matching durable merge entry",
-                        height.get()
-                    ))
-                })?;
-            if entry.execution_batch.is_none() {
-                continue;
-            }
-            let transactions =
-                certified_merge_committed_transactions(block.hash(), reference, &entry)?;
-            if by_height.insert(height, transactions).is_some() {
-                return Err(merge_query_corruption(format!(
-                    "indexed carrier height {} was selected more than once",
-                    height.get()
-                )));
-            }
-        }
-        return Ok(by_height);
-    }
-    let carried_entries = state_ro
-        .kura()
-        .committed_merge_execution_entries()
-        .map_err(merge_query_corruption)?;
-    let mut by_height = BTreeMap::new();
-    for (carrier, entry) in carried_entries {
-        let height = usize::try_from(carrier.block_height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .ok_or_else(|| merge_query_corruption("carrier height is zero or out of range"))?;
-        let block = state_ro
-            .canonical_block_by_height(height)
-            .map_err(QueryExecutionFail::CanonicalHistory)?;
-        if block.hash() != carrier.block_hash {
-            return Err(merge_query_corruption(format!(
-                "carrier record at height {} does not match the canonical block hash",
-                carrier.block_height
-            )));
-        }
-        let reference = block
-            .execution_context()
-            .and_then(|context| context.merge_entry.as_ref())
-            .ok_or_else(|| {
-                merge_query_corruption(format!(
-                    "carrier block {} has no certified merge reference",
-                    carrier.block_height
-                ))
-            })?;
-        let transactions =
-            certified_merge_committed_transactions(carrier.block_hash, reference, &entry)?;
-        if by_height.insert(height, transactions).is_some() {
-            return Err(merge_query_corruption(format!(
-                "multiple execution entries claim carrier height {}",
-                carrier.block_height
-            )));
-        }
-    }
-    Ok(by_height)
-}
-fn block_committed_transactions_with_merge(
-    block: &SignedBlock,
-    merge_by_height: &BTreeMap<NonZeroUsize, Vec<CommittedTransaction>>,
-) -> Vec<CommittedTransaction> {
-    let mut committed = block_committed_transactions(block);
-    if let Some(merge) = usize::try_from(block.header().height().get())
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .and_then(|height| merge_by_height.get(&height))
-    {
-        // Merge execution precedes ordinary block transactions. Both groups are
-        // individually reversed so query order remains newest-first.
-        committed.extend(merge.iter().cloned());
-    }
-    committed
+pub(crate) fn canonical_network_projection_calls_for_test() -> usize {
+    CANONICAL_NETWORK_PROJECTION_CALLS.get()
 }
 
+/// Validated source/output structure and one input proof tree for a single carrier.
+/// Finality and physical byte admission belong to the caller's canonical reader.
+struct NetworkCarrierProjection {
+    block: std::sync::Arc<SignedBlock>,
+    inputs: MerkleTree<TransactionEntrypoint>,
+    count: u32,
+}
+impl NetworkCarrierProjection {
+    fn new(block: std::sync::Arc<SignedBlock>) -> Result<Self, QueryExecutionFail> {
+        #[cfg(test)]
+        CANONICAL_NETWORK_PROJECTION_CALLS.set(CANONICAL_NETWORK_PROJECTION_CALLS.get() + 1);
+        if block
+            .execution_context()
+            .is_some_and(|context| !context.has_current_version() || context.merge_entry.is_some())
+        {
+            return Err(canonical_transaction_history_error(
+                "retired merge carrier is not a Network source",
+            ));
+        }
+        block
+            .validate_output_merkle_cache()
+            .map_err(canonical_transaction_history_error)?;
+        let count = u32::try_from(block.network_entrypoint_count()).map_err(|_| {
+            canonical_transaction_history_error("Network count exceeds proof index space")
+        })?;
+        Ok(Self {
+            inputs: block.network_input_merkle_tree(),
+            block,
+            count,
+        })
+    }
+
+    fn transaction_at(
+        &self,
+        input_index: u32,
+        before_clone: impl FnOnce(u64) -> Result<(), QueryExecutionFail>,
+    ) -> Result<CommittedTransaction, QueryExecutionFail> {
+        use norito::core::SerializePayload as _;
+        let block = self.block.as_ref();
+        let entrypoint = block
+            .network_entrypoint_at(input_index as usize)
+            .ok_or_else(|| canonical_transaction_history_error("Network source is missing"))?;
+        let (output_index, _) = block.network_output_at(input_index).ok_or_else(|| {
+            canonical_transaction_history_error("Network input has no exact output")
+        })?;
+        let output = block
+            .execution_outputs()
+            .get(output_index as usize)
+            .ok_or_else(|| canonical_transaction_history_error("joined output is missing"))?;
+        let entrypoint_proof = self
+            .inputs
+            .get_proof(input_index)
+            .ok_or_else(|| canonical_transaction_history_error("input proof is missing"))?;
+        let output_proof = block
+            .output_proof(output_index)
+            .ok_or_else(|| canonical_transaction_history_error("output proof is missing"))?;
+        let block_hash = block.hash();
+        let entrypoint_hash = entrypoint.hash();
+        let output_hash = HashOf::new(output);
+        // Measure the same seven fields without first cloning either large value.
+        // Canonical flags and the shared borrowed-struct encoder fix the layout.
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let fields: [&dyn norito::core::SerializePayload; 7] = [
+            &block_hash,
+            &entrypoint_hash,
+            &entrypoint_proof,
+            entrypoint,
+            &output_hash,
+            &output_proof,
+            output,
+        ];
+        let borrowed = super::query::BorrowedSingularStruct::new(fields);
+        let measured = borrowed
+            .encoded_len_exact()
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+        before_clone(measured)?;
+        // A real counting serialization confirms the borrowed layout without an
+        // encoded buffer or source-sized clone; a length hint alone is not admission.
+        if super::query::bounded_bare_encoded_len(&borrowed, measured)? != measured {
+            return Err(canonical_transaction_history_error(
+                "projected row length changed",
+            ));
+        }
+        Ok(CommittedTransaction {
+            block_hash,
+            entrypoint_hash,
+            entrypoint_proof,
+            entrypoint: entrypoint.clone(),
+            output_hash,
+            output_proof,
+            output: output.clone(),
+        })
+    }
+}
+
+/// One exact finalized carrier and the work/bytes admitted by its reader.
+///
+/// This immutable read result carries no authority to mutate or publish State.
+/// Limits bound wire I/O and source/output validation, not the complete decoder heap.
+#[derive(Debug)]
+pub struct FinalizedExecutionCarrier {
+    block: std::sync::Arc<SignedBlock>,
+    wire_bytes: u64,
+    work_items: u64,
+}
+impl FinalizedExecutionCarrier {
+    /// Borrow the exact authenticated complete carrier.
+    pub fn block(&self) -> &std::sync::Arc<SignedBlock> {
+        &self.block
+    }
+    /// Exact QC-authenticated wire bytes charged before body I/O.
+    pub fn wire_bytes(&self) -> u64 {
+        self.wire_bytes
+    }
+    /// Complete source/output work, with one unit for an empty carrier.
+    pub fn work_items(&self) -> u64 {
+        self.work_items
+    }
+    /// Consume the read result and retain its immutable authenticated body.
+    pub fn into_block(self) -> std::sync::Arc<SignedBlock> {
+        self.block
+    }
+}
+
+/// Read one exact finalized carrier within explicit finite work and wire limits.
+///
+/// Full source/output/cache validation finishes before returning any row. The
+/// expected height/hash must come from the caller's canonical history owner.
+/// # Errors
+/// Rejects zero/exceeded bounds, absent/corrupt finality or wire, retired context,
+/// and invalid complete source/output ownership or cache.
+pub fn read_finalized_execution_carrier(
+    kura: &crate::kura::Kura,
+    height: NonZeroUsize,
+    expected_hash: HashOf<BlockHeader>,
+    max_work: u64,
+    max_bytes: u64,
+) -> Result<FinalizedExecutionCarrier, QueryExecutionFail> {
+    if max_work == 0 || max_bytes == 0 {
+        return Err(QueryExecutionFail::GasBudgetExceeded);
+    }
+    let (durable_height, wire_len) = kura
+        .durable_block_payload_len_by_hash(expected_hash)
+        .map_err(canonical_transaction_history_error)?
+        .ok_or_else(|| canonical_transaction_history_error("finalized carrier is unavailable"))?;
+    if usize::try_from(durable_height).ok() != Some(height.get()) {
+        return Err(canonical_transaction_history_error(
+            "carrier height differs from its canonical binding",
+        ));
+    }
+    if wire_len > max_bytes {
+        return Err(QueryExecutionFail::GasBudgetExceeded);
+    }
+    let block = kura
+        .read_block_body_with_wire_bound(height, expected_hash, wire_len)
+        .map_err(canonical_transaction_history_error)?
+        .ok_or_else(|| {
+            canonical_transaction_history_error("finalized carrier body is unavailable")
+        })?;
+    let work = u64::try_from(
+        block
+            .network_entrypoint_count()
+            .max(block.execution_outputs().len())
+            .max(1),
+    )
+    .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+    if work > max_work {
+        return Err(QueryExecutionFail::GasBudgetExceeded);
+    }
+    if block
+        .execution_context()
+        .is_some_and(|context| !context.has_current_version() || context.merge_entry.is_some())
+    {
+        return Err(canonical_transaction_history_error(
+            "retired merge carrier is not a Network source",
+        ));
+    }
+    block
+        .validate_output_merkle_cache()
+        .map_err(canonical_transaction_history_error)?;
+    Ok(FinalizedExecutionCarrier {
+        block,
+        wire_bytes: wire_len,
+        work_items: work,
+    })
+}
+
+/// Visit borrowed Network results from one exact finalized carrier.
+///
+/// Internal outputs never become transactions. No State read guard is needed
+/// while Kura authenticates durable finality.
+/// # Errors
+/// Propagates complete finalized-carrier admission and validation failures.
+pub fn visit_finalized_network_transactions(
+    kura: &crate::kura::Kura,
+    height: NonZeroUsize,
+    expected_hash: HashOf<BlockHeader>,
+    max_work: u64,
+    max_bytes: u64,
+    mut visitor: impl FnMut(&TransactionEntrypoint, &TransactionResult),
+) -> Result<BlockHeader, QueryExecutionFail> {
+    let carrier =
+        read_finalized_execution_carrier(kura, height, expected_hash, max_work, max_bytes)?;
+    let block = carrier.block();
+    for index in 0..block.network_entrypoint_count() {
+        let entrypoint = block
+            .network_entrypoint_at(index)
+            .ok_or_else(|| canonical_transaction_history_error("validated source disappeared"))?;
+        let index = u32::try_from(index).map_err(|_| {
+            canonical_transaction_history_error("Network count exceeds index space")
+        })?;
+        let (_, output) = block
+            .network_output_at(index)
+            .ok_or_else(|| canonical_transaction_history_error("validated output disappeared"))?;
+        visitor(entrypoint, &output.result);
+    }
+    Ok(block.header())
+}
+
+#[cfg(test)]
+fn block_committed_transactions(
+    block: &SignedBlock,
+) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    let projection = NetworkCarrierProjection::new(std::sync::Arc::new(block.clone()))?;
+    (0..projection.count)
+        .rev()
+        .map(|index| projection.transaction_at(index, |_| Ok(())))
+        .collect()
+}
 /// Immutable canonical prefix bound to a Kaigi signal-history cursor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::tx::KaigiSignalHistoryAnchor")]
@@ -857,8 +798,35 @@ pub struct IndexedKaigiSignalCandidatePage {
     has_more: bool,
 }
 
-const KAIGI_SIGNAL_CARRIER_BYTES_PER_WORK_UNIT: u64 = 64 * 1024;
-const KAIGI_SIGNAL_MAX_CARRIER_BYTES: u64 = 64 * 1024 * 1024;
+const TRANSACTION_HISTORY_BYTES_PER_WORK_UNIT: u64 = 64 * 1024;
+const TRANSACTION_HISTORY_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Derive the bounded history-byte allowance from configured query work.
+///
+/// This includes physical carrier reads and projected row copies. The hard
+/// ceiling also applies to callers whose weighted policy does not price bytes.
+#[must_use]
+pub const fn transaction_history_byte_limit(work_cap: u64) -> u64 {
+    let scaled = work_cap.saturating_mul(TRANSACTION_HISTORY_BYTES_PER_WORK_UNIT);
+    if scaled < TRANSACTION_HISTORY_MAX_BYTES {
+        scaled
+    } else {
+        TRANSACTION_HISTORY_MAX_BYTES
+    }
+}
+
+/// Explicit scan work limits, independent of retained response rows and bytes.
+/// Every carrier reserves an item and its exact finalized wire before reading;
+/// remaining complete output rows and selected DTO bytes are charged before projection.
+#[derive(Clone, Copy, Debug)]
+pub struct TransactionHistoryWorkLimits {
+    /// Maximum complete source/output work in one carrier.
+    pub max_carrier_work: u64,
+    /// Maximum cumulative work across all scanned carriers, including empty ones.
+    pub max_total_work: u64,
+    /// Maximum cumulative exact carrier and projected DTO bytes.
+    pub max_bytes: u64,
+}
 
 /// Independent hard limits for one indexed Kaigi signal-history page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -866,7 +834,7 @@ pub struct KaigiSignalCandidateWorkLimits {
     max_candidates: u64,
     max_carrier_bytes: u64,
     max_projected_transactions: u64,
-    max_merge_work: u64,
+    max_output_work: u64,
 }
 
 impl KaigiSignalCandidateWorkLimits {
@@ -879,10 +847,10 @@ impl KaigiSignalCandidateWorkLimits {
         Some(Self {
             max_candidates: work_cap,
             max_carrier_bytes: work_cap
-                .saturating_mul(KAIGI_SIGNAL_CARRIER_BYTES_PER_WORK_UNIT)
-                .min(KAIGI_SIGNAL_MAX_CARRIER_BYTES),
+                .saturating_mul(TRANSACTION_HISTORY_BYTES_PER_WORK_UNIT)
+                .min(TRANSACTION_HISTORY_MAX_BYTES),
             max_projected_transactions: work_cap,
-            max_merge_work: work_cap,
+            max_output_work: work_cap,
         })
     }
 
@@ -891,13 +859,13 @@ impl KaigiSignalCandidateWorkLimits {
         max_candidates: u64,
         max_carrier_bytes: u64,
         max_projected_transactions: u64,
-        max_merge_work: u64,
+        max_output_work: u64,
     ) -> Self {
         Self {
             max_candidates,
             max_carrier_bytes,
             max_projected_transactions,
-            max_merge_work,
+            max_output_work,
         }
     }
 }
@@ -906,7 +874,7 @@ impl KaigiSignalCandidateWorkLimits {
 struct KaigiSignalCandidateWork {
     carrier_bytes: u64,
     projected_transactions: u64,
-    merge_work: u64,
+    output_work: u64,
 }
 
 impl KaigiSignalCandidateWork {
@@ -915,7 +883,7 @@ impl KaigiSignalCandidateWork {
         limits: KaigiSignalCandidateWorkLimits,
         carrier_bytes: u64,
         projected_transactions: u64,
-        merge_work: u64,
+        output_work: u64,
     ) -> bool {
         let Some(next_carrier_bytes) = self.carrier_bytes.checked_add(carrier_bytes) else {
             return false;
@@ -926,18 +894,18 @@ impl KaigiSignalCandidateWork {
         else {
             return false;
         };
-        let Some(next_merge_work) = self.merge_work.checked_add(merge_work) else {
+        let Some(next_output_work) = self.output_work.checked_add(output_work) else {
             return false;
         };
         if next_carrier_bytes > limits.max_carrier_bytes
             || next_projected_transactions > limits.max_projected_transactions
-            || next_merge_work > limits.max_merge_work
+            || next_output_work > limits.max_output_work
         {
             return false;
         }
         self.carrier_bytes = next_carrier_bytes;
         self.projected_transactions = next_projected_transactions;
-        self.merge_work = next_merge_work;
+        self.output_work = next_output_work;
         true
     }
 }
@@ -977,210 +945,6 @@ fn kaigi_signal_index_error(error: KaigiSignalCandidateIndexError) -> QueryExecu
     }
 }
 
-fn ordinary_committed_transaction_at(
-    block: &SignedBlock,
-    transaction_index: usize,
-) -> Result<CommittedTransaction, QueryExecutionFail> {
-    let proof_index =
-        u32::try_from(transaction_index).map_err(|_| QueryExecutionFail::CursorMismatch)?;
-    let entrypoint = block
-        .entrypoint_cloned_at(transaction_index)
-        .ok_or(QueryExecutionFail::CursorMismatch)?;
-    let result = block
-        .results()
-        .nth(transaction_index)
-        .cloned()
-        .ok_or(QueryExecutionFail::CursorMismatch)?;
-    let entrypoint_proof = block
-        .entrypoint_proof(proof_index)
-        .ok_or(QueryExecutionFail::CursorMismatch)?;
-    let result_proof = block
-        .result_proof(proof_index)
-        .ok_or(QueryExecutionFail::CursorMismatch)?;
-    Ok(CommittedTransaction {
-        block_hash: block.hash(),
-        entrypoint_hash: entrypoint.hash(),
-        entrypoint_proof,
-        entrypoint,
-        result_hash: result.hash(),
-        result_proof,
-        result,
-        merge_inclusion: None,
-    })
-}
-
-struct CertifiedMergeProjectionContext {
-    carrier_hash: HashOf<BlockHeader>,
-    entry: MergeLedgerEntry,
-    entrypoint_hashes: Vec<HashOf<TransactionEntrypoint>>,
-    result_hashes: Vec<HashOf<TransactionResult>>,
-    entrypoint_tree: MerkleTree<TransactionEntrypoint>,
-    result_tree: MerkleTree<TransactionResult>,
-    inclusion: CertifiedMergeTransactionInclusion,
-}
-
-impl CertifiedMergeProjectionContext {
-    fn transaction_at(
-        &self,
-        transaction_index: usize,
-    ) -> Result<CommittedTransaction, QueryExecutionFail> {
-        if transaction_index >= self.entrypoint_hashes.len() {
-            return Err(QueryExecutionFail::CursorMismatch);
-        }
-        let mut remaining = transaction_index;
-        let mut target = None;
-        for execution in self
-            .entry
-            .execution_batch
-            .as_ref()
-            .expect("validated merge context has an execution batch")
-            .lanes
-            .iter()
-        {
-            if remaining < execution.entrypoints.len() {
-                target = Some((
-                    execution.entrypoints[remaining].clone(),
-                    execution.results[remaining].clone(),
-                ));
-                break;
-            }
-            remaining = remaining.saturating_sub(execution.entrypoints.len());
-        }
-        let (entrypoint, result) = target.ok_or(QueryExecutionFail::CursorMismatch)?;
-        let proof_index = u32::try_from(transaction_index)
-            .map_err(|_| merge_query_corruption("Merkle proof index exceeds u32"))?;
-        let entrypoint_proof = self.entrypoint_tree.get_proof(proof_index).ok_or_else(|| {
-            merge_query_corruption("entrypoint Merkle tree did not yield a required proof")
-        })?;
-        let result_proof = self.result_tree.get_proof(proof_index).ok_or_else(|| {
-            merge_query_corruption("result Merkle tree did not yield a required proof")
-        })?;
-        Ok(CommittedTransaction {
-            block_hash: self.carrier_hash,
-            entrypoint_hash: self.entrypoint_hashes[transaction_index],
-            entrypoint_proof,
-            entrypoint,
-            result_hash: self.result_hashes[transaction_index],
-            result_proof,
-            result,
-            merge_inclusion: Some(self.inclusion.clone()),
-        })
-    }
-}
-
-fn certified_merge_projection_context(
-    carrier_hash: HashOf<BlockHeader>,
-    reference: CertifiedMergeLedgerReference,
-    entry: MergeLedgerEntry,
-) -> Result<CertifiedMergeProjectionContext, QueryExecutionFail> {
-    if !reference.matches_entry(&entry) {
-        return Err(merge_query_corruption(
-            "carrier compact reference does not identify its full sidecar",
-        ));
-    }
-    let batch = entry.execution_batch.as_ref().ok_or_else(|| {
-        merge_query_corruption("execution carrier references an entry without an execution batch")
-    })?;
-    if batch.version != 1 || !crate::merge::merge_execution_batch_commitments_match(batch) {
-        return Err(merge_query_corruption(
-            "merge execution batch commitments are not canonical",
-        ));
-    }
-    let entrypoint_count = usize::try_from(batch.entrypoint_count)
-        .map_err(|_| merge_query_corruption("entrypoint count does not fit this platform"))?;
-    if entrypoint_count == 0 || u32::try_from(entrypoint_count).is_err() {
-        return Err(merge_query_corruption(
-            "entrypoint count is outside the supported Merkle proof range",
-        ));
-    }
-
-    let mut observed_count = 0_usize;
-    let mut entrypoint_hashes = Vec::with_capacity(entrypoint_count);
-    let mut result_hashes = Vec::with_capacity(entrypoint_count);
-    for execution in &batch.lanes {
-        let lane_len = execution.entrypoints.len();
-        if lane_len == 0
-            || execution.entrypoint_hashes.len() != lane_len
-            || execution.results.len() != lane_len
-            || execution.result_hashes.len() != lane_len
-        {
-            return Err(merge_query_corruption(
-                "lane transcript arrays are empty or not aligned",
-            ));
-        }
-        for (entrypoint, (expected_entrypoint_hash, (result, expected_result_hash))) in
-            execution.entrypoints.iter().zip(
-                execution
-                    .entrypoint_hashes
-                    .iter()
-                    .zip(execution.results.iter().zip(&execution.result_hashes)),
-            )
-        {
-            let entrypoint_hash = entrypoint.hash();
-            let result_hash = result.hash();
-            if Hash::from(entrypoint_hash) != *expected_entrypoint_hash
-                || Hash::from(result_hash) != *expected_result_hash
-            {
-                return Err(merge_query_corruption(
-                    "lane transcript content differs from its authenticated hashes",
-                ));
-            }
-            entrypoint_hashes.push(entrypoint_hash);
-            result_hashes.push(result_hash);
-            observed_count = observed_count.saturating_add(1);
-        }
-    }
-    if observed_count != entrypoint_count {
-        return Err(merge_query_corruption(
-            "flattened lane transcript differs from the certified entrypoint count",
-        ));
-    }
-    let entrypoint_tree = entrypoint_hashes
-        .iter()
-        .copied()
-        .collect::<MerkleTree<TransactionEntrypoint>>();
-    let result_tree = result_hashes
-        .iter()
-        .copied()
-        .collect::<MerkleTree<TransactionResult>>();
-    if entrypoint_tree.root() != Some(batch.entrypoint_merkle_root)
-        || result_tree.root() != Some(batch.result_merkle_root)
-    {
-        return Err(merge_query_corruption(
-            "reconstructed transaction proof roots differ from the certified batch",
-        ));
-    }
-    let inclusion = CertifiedMergeTransactionInclusion {
-        version: 1,
-        merge_entry_hash: entry.canonical_hash(),
-        merge_epoch_id: entry.epoch_id,
-        execution_batch_hash: batch.batch_hash,
-        entrypoint_count: batch.entrypoint_count,
-        entrypoint_merkle_root: batch.entrypoint_merkle_root,
-        result_merkle_root: batch.result_merkle_root,
-    };
-    Ok(CertifiedMergeProjectionContext {
-        carrier_hash,
-        entry,
-        entrypoint_hashes,
-        result_hashes,
-        entrypoint_tree,
-        result_tree,
-        inclusion,
-    })
-}
-
-#[cfg(test)]
-fn certified_merge_committed_transaction_at(
-    carrier_hash: HashOf<BlockHeader>,
-    reference: &CertifiedMergeLedgerReference,
-    entry: &MergeLedgerEntry,
-    transaction_index: usize,
-) -> Result<CommittedTransaction, QueryExecutionFail> {
-    certified_merge_projection_context(carrier_hash, reference.clone(), entry.clone())?
-        .transaction_at(transaction_index)
-}
-
 /// Read a bounded, anchored page of exact-schema Kaigi signal candidates.
 ///
 /// This path never falls back to a full transaction-history walk. Every
@@ -1205,7 +969,7 @@ pub fn indexed_kaigi_signal_candidates_page(
         || limits.max_candidates > iroha_data_model::query::parameters::MAX_FETCH_SIZE.get()
         || limits.max_carrier_bytes == 0
         || limits.max_projected_transactions == 0
-        || limits.max_merge_work == 0
+        || limits.max_output_work == 0
     {
         return Err(QueryExecutionFail::FetchSizeTooBig);
     }
@@ -1236,12 +1000,7 @@ pub fn indexed_kaigi_signal_candidates_page(
     let locator_count = locator_page.candidates.len();
     let mut processed_locators = 0_usize;
     let mut work = KaigiSignalCandidateWork::default();
-    let mut cached_carrier: Option<(
-        u64,
-        u64,
-        std::sync::Arc<SignedBlock>,
-        Option<CertifiedMergeProjectionContext>,
-    )> = None;
+    let mut cached_carrier: Option<(u64, u64, NetworkCarrierProjection)> = None;
     for locator in locator_page.candidates {
         let position = locator.position;
         if cached_carrier.as_ref().map(|cached| cached.0) != Some(position.block_height()) {
@@ -1249,117 +1008,57 @@ pub fn indexed_kaigi_signal_candidates_page(
                 .ok()
                 .and_then(NonZeroUsize::new)
                 .ok_or(QueryExecutionFail::CursorMismatch)?;
-            let (_, block_wire_bytes) = state_ro
-                .kura()
-                .durable_block_payload_len_by_hash(position.block_hash())
-                .map_err(|error| {
-                    QueryExecutionFail::Conversion(format!(
-                        "indexed Kaigi signal carrier storage is unreadable: {error}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    QueryExecutionFail::Conversion(
-                        "indexed Kaigi signal carrier has no exact durable byte bound".to_owned(),
-                    )
-                })?;
-            let block = state_ro
-                .canonical_block_by_height(height)
-                .map_err(QueryExecutionFail::CanonicalHistory)?;
-            if block.hash() != position.block_hash() {
-                return Err(QueryExecutionFail::Expired);
-            }
-            let carrier_timestamp_ms = u64::try_from(block.header().creation_time().as_millis())
-                .map_err(|_| {
-                    QueryExecutionFail::Conversion(
-                        "Kaigi signal carrier timestamp exceeds u64 milliseconds".to_owned(),
-                    )
-                })?;
-            let ordinary_count = u64::try_from(block.entrypoint_hashes().len())
+            let loaded = (|| {
+                let block = state_ro
+                    .canonical_history()
+                    .executed_block(height, |wire_bytes| {
+                        if work.try_charge(limits, wire_bytes, 0, 1) {
+                            Ok(())
+                        } else {
+                            Err(QueryExecutionFail::GasBudgetExceeded)
+                        }
+                    })?;
+                if block.hash() != position.block_hash() {
+                    return Err(QueryExecutionFail::Expired);
+                }
+                let rows = u64::try_from(
+                    block
+                        .execution_outputs()
+                        .len()
+                        .max(block.network_entrypoint_count())
+                        .max(1),
+                )
                 .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
-            let merge_reference = block
-                .execution_context()
-                .and_then(|context| context.merge_entry.as_ref())
-                .cloned();
-            let declared_merge_work = merge_reference
-                .as_ref()
-                .and_then(|reference| reference.entrypoint_count)
-                .unwrap_or(0);
-            let merge_sidecar_bytes = merge_reference
-                .as_ref()
-                .map_or(0, |reference| reference.encoded_len);
-            let declared_carrier_bytes = block_wire_bytes
-                .checked_add(merge_sidecar_bytes)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-            let declared_projected_transactions = ordinary_count
-                .checked_add(declared_merge_work)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-            let mut declared_charge = work;
-            if !declared_charge.try_charge(
-                limits,
-                declared_carrier_bytes,
-                declared_projected_transactions,
-                declared_merge_work,
-            ) {
-                if candidates.is_empty() {
+                if !work.try_charge(limits, 0, 0, rows - 1) {
                     return Err(QueryExecutionFail::GasBudgetExceeded);
                 }
-                break;
+                let projection = NetworkCarrierProjection::new(block)?;
+                let timestamp =
+                    u64::try_from(projection.block.header().creation_time().as_millis()).map_err(
+                        |_| canonical_transaction_history_error("carrier timestamp exceeds u64"),
+                    )?;
+                Ok((position.block_height(), timestamp, projection))
+            })();
+            match loaded {
+                Ok(carrier) => cached_carrier = Some(carrier),
+                Err(QueryExecutionFail::GasBudgetExceeded) if !candidates.is_empty() => break,
+                Err(error) => return Err(error),
             }
-            let merge = match merge_reference {
-                None => None,
-                Some(reference) => {
-                    let entry = state_ro
-                        .kura()
-                        .merge_entry_for_carrier(position.block_height(), block.hash())
-                        .map_err(merge_query_corruption)?
-                        .ok_or_else(|| {
-                            merge_query_corruption(format!(
-                                "indexed carrier block {} has no matching durable merge entry",
-                                position.block_height()
-                            ))
-                        })?;
-                    let actual_merge_work = u64::try_from(certified_merge_projection_work(&entry))
-                        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
-                    let actual_projected_transactions = ordinary_count
-                        .checked_add(actual_merge_work)
-                        .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-                    let mut actual_charge = work;
-                    if !actual_charge.try_charge(
-                        limits,
-                        declared_carrier_bytes,
-                        actual_projected_transactions,
-                        actual_merge_work,
-                    ) {
-                        if candidates.is_empty() {
-                            return Err(QueryExecutionFail::GasBudgetExceeded);
-                        }
-                        break;
-                    }
-                    work = actual_charge;
-                    Some(certified_merge_projection_context(
-                        block.hash(),
-                        reference,
-                        entry,
-                    )?)
-                }
-            };
-            if merge.is_none() {
-                work = declared_charge;
-            }
-            cached_carrier = Some((position.block_height(), carrier_timestamp_ms, block, merge));
         }
-        let (_, carrier_timestamp_ms, block, merge) = cached_carrier
+        let (_, carrier_timestamp_ms, projection) = cached_carrier
             .as_ref()
-            .expect("Kaigi signal carrier was populated above");
-        let transaction_index = usize::try_from(position.transaction_index())
-            .map_err(|_| QueryExecutionFail::CursorMismatch)?;
-        let transaction = match position.execution_phase() {
-            0 => merge
-                .as_ref()
-                .ok_or(QueryExecutionFail::CursorMismatch)?
-                .transaction_at(transaction_index)?,
-            1 => ordinary_committed_transaction_at(block, transaction_index)?,
-            _ => return Err(QueryExecutionFail::CursorMismatch),
+            .ok_or_else(|| canonical_transaction_history_error("admitted carrier is missing"))?;
+        let projected = projection.transaction_at(position.network_input_index(), |bytes| {
+            if work.try_charge(limits, bytes, 1, 0) {
+                Ok(())
+            } else {
+                Err(QueryExecutionFail::GasBudgetExceeded)
+            }
+        });
+        let transaction = match projected {
+            Ok(transaction) => transaction,
+            Err(QueryExecutionFail::GasBudgetExceeded) if !candidates.is_empty() => break,
+            Err(error) => return Err(error),
         };
         if transaction.block_hash() != &position.block_hash()
             || transaction.entrypoint_hash() != &position.entrypoint_hash()
@@ -1427,32 +1126,18 @@ pub(crate) struct TransactionHistoryCursor {
     height: usize,
     transaction_offset: usize,
 }
-/// Visit committed transactions in canonical newest-first query order.
+/// Visit exact finalized Network history with admission before reading and cloning.
 ///
-/// Unlike [`ValidQuery`] execution, this path is fallible while walking Kura. It resolves and drops
-/// one certified merge sidecar at a time, allowing query pagination to retain only its current page
-/// (or bounded sorted prefix). `before_project` first receives the ordinary count plus the compact
-/// reference's authenticated merge count before the full sidecar is resolved. If decoded transcript
-/// arrays exceed that declaration, it receives only the reconciliation delta before merge Merkle
-/// trees/proofs or predicates are materialized. The visitor then receives every projected
-/// transaction together with whether the query predicate matched it and a compact cursor pointing
-/// after it.
-///
-/// Returns `true` when the selected history was exhausted and `false` when the
-/// visitor requested an early stop.
-///
-/// # Errors
-///
-/// Returns [`QueryExecutionFail::Expired`] if an anchored canonical prefix is
-/// no longer current, [`QueryExecutionFail::CanonicalHistory`] when a touched
-/// block body is unavailable or corrupt, or [`QueryExecutionFail::Conversion`]
-/// when carrier or certified merge-sidecar evidence is inconsistent.
+/// `before_project` admits item work and canonical bytes cumulatively. Every
+/// carrier costs one item before I/O, remaining source/output rows are charged
+/// before complete validation, and each selected row is measured before cloning.
+/// Only the current carrier and one projected row are owned by this walker.
 pub(crate) fn visit_committed_transactions(
     state_ro: &impl StateReadOnly,
     filter: &CompoundPredicate<CommittedTransaction>,
     anchor: TransactionHistoryAnchor,
     resume: Option<TransactionHistoryCursor>,
-    mut before_project: impl FnMut(u64) -> Result<(), QueryExecutionFail>,
+    mut before_project: impl FnMut(u64, u64) -> Result<(), QueryExecutionFail>,
     mut visitor: impl FnMut(
         CommittedTransaction,
         bool,
@@ -1473,115 +1158,38 @@ pub(crate) fn visit_committed_transactions(
         None => Box::new((1..=maximum_height).rev().filter_map(NonZeroUsize::new)),
     };
     for height in heights {
-        let expected_hash = height
-            .get()
-            .checked_sub(1)
-            .and_then(|index| state_ro.block_hashes().get(index))
-            .copied()
-            .ok_or_else(|| {
-                merge_query_corruption(format!(
-                    "canonical block hash {} is unavailable in the query anchor",
-                    height.get()
-                ))
-            })?;
-        let carrier_height = u64::try_from(height.get()).map_err(|_| {
-            merge_query_corruption("carrier height does not fit the canonical range")
-        })?;
-        // Read only the canonical block and its compact reference first. The
-        // full sidecar may be large, so its authenticated declared work must be
-        // charged before Kura resolves or decodes it.
         let block = state_ro
             .canonical_history()
-            .block_without_merge_sidecar(height)
-            .map_err(QueryExecutionFail::CanonicalHistory)?;
-        let reference = block
-            .execution_context()
-            .and_then(|context| context.merge_entry.as_ref());
-        let declared_merge_work = match reference.map(|reference| {
-            (
-                reference.execution_batch_hash.is_some(),
-                reference.entrypoint_count,
-            )
-        }) {
-            None | Some((false, None)) => 0,
-            Some((true, Some(count))) if count > 0 => count,
-            Some(_) => {
-                return Err(merge_query_corruption(format!(
-                    "carrier block {} has an inconsistent compact execution count",
-                    height.get()
-                )));
-            }
-        };
-        let ordinary_work = u64::try_from(block.entrypoint_hashes().count()).unwrap_or(u64::MAX);
-        before_project(ordinary_work.saturating_add(declared_merge_work))?;
-        // Resolve only after the compact declaration has passed budget
-        // admission. This preserves fail-closed sidecar validation without
-        // allowing a false predicate to force uncharged sidecar I/O.
-        let merge_entry = state_ro
-            .kura()
-            .merge_entry_for_carrier(carrier_height, expected_hash)
-            .map_err(merge_query_corruption)?;
-        let merge_projection = match (reference, merge_entry.as_ref()) {
-            (None, None) => None,
-            (Some(reference), Some(entry)) => Some((reference, entry)),
-            (Some(_), None) => {
-                return Err(merge_query_corruption(format!(
-                    "carrier block {} has no matching durable merge entry",
-                    height.get()
-                )));
-            }
-            (None, Some(_)) => {
-                return Err(merge_query_corruption(format!(
-                    "sparse carrier record at block {} has no compact reference",
-                    height.get()
-                )));
-            }
-        };
-        let observed_merge_work =
-            merge_projection.map_or(0, |(_, entry)| certified_merge_projection_work(entry));
-        let declared_merge_work = usize::try_from(declared_merge_work).unwrap_or(usize::MAX);
-        let reconciliation_work = observed_merge_work.saturating_sub(declared_merge_work);
-        if reconciliation_work > 0 {
-            before_project(u64::try_from(reconciliation_work).unwrap_or(u64::MAX))?;
-        }
-        if merge_projection.is_some_and(|(reference, entry)| !reference.matches_entry(entry)) {
-            return Err(merge_query_corruption(format!(
-                "carrier block {} compact reference differs from its durable entry",
-                height.get()
-            )));
-        }
-        let merge_transactions = merge_projection
-            .and_then(|(reference, entry)| {
-                entry.execution_batch.as_ref().map(|_| (reference, entry))
-            })
-            .map(|(reference, entry)| {
-                certified_merge_committed_transactions(block.hash(), reference, entry)
-            })
-            .transpose()?;
-        // Merge execution precedes ordinary execution in the same global block,
-        // so newest-first query order emits ordinary transactions first.
+            .executed_block(height, |wire_len| before_project(1, wire_len))?;
+        let work = block
+            .network_entrypoint_count()
+            .max(block.execution_outputs().len())
+            .max(1);
+        before_project(
+            u64::try_from(work - 1).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?,
+            0,
+        )?;
+        let projection = NetworkCarrierProjection::new(block)?;
         let transaction_offset = resume
             .filter(|cursor| cursor.height == height.get())
             .map_or(0, |cursor| cursor.transaction_offset);
-        let ordinary_transactions = block_committed_transactions(&block);
-        let transaction_count = ordinary_transactions
-            .len()
-            .saturating_add(merge_transactions.as_ref().map_or(0, std::vec::Vec::len));
-        for (index, transaction) in ordinary_transactions
-            .into_iter()
-            .chain(merge_transactions.into_iter().flatten())
-            .enumerate()
-            .skip(transaction_offset)
-        {
+        let transaction_count = projection.count as usize;
+        if transaction_offset > transaction_count {
+            return Err(QueryExecutionFail::CursorMismatch);
+        }
+        for index in transaction_offset..transaction_count {
+            let input_index = projection.count - 1 - index as u32;
+            let transaction =
+                projection.transaction_at(input_index, |bytes| before_project(0, bytes))?;
             let matches = transaction_filter_applies(filter, predicate_json.as_ref(), &transaction);
-            let next_cursor = if index.saturating_add(1) < transaction_count {
+            let next_cursor = if index + 1 < transaction_count {
                 TransactionHistoryCursor {
                     height: height.get(),
-                    transaction_offset: index.saturating_add(1),
+                    transaction_offset: index + 1,
                 }
             } else {
                 TransactionHistoryCursor {
-                    height: height.get().saturating_sub(1),
+                    height: height.get() - 1,
                     transaction_offset: 0,
                 }
             };
@@ -1592,61 +1200,41 @@ pub(crate) fn visit_committed_transactions(
     }
     Ok(true)
 }
-/// Visit committed transactions without materializing the complete ledger history.
+/// Visit history within cumulative source/output work and byte limits.
 ///
-/// `max_carrier_projection_work` is checked independently for each compact carrier before its
-/// full merge sidecar is resolved. The visitor can stop as soon as its bounded page or heap is
-/// complete; sparse and non-matching history therefore does not consume a global retention
-/// budget merely because the chain is old.
+/// Bytes include each exact finalized carrier and every projected row, charged
+/// before reading or cloning. Empty and nonmatching carriers consume work too.
+/// The visitor can stop early without cloning subsequent rows.
 ///
 /// # Errors
-///
-/// Returns [`QueryExecutionFail::GasBudgetExceeded`] before resolving a carrier whose declared
-/// projection exceeds `max_carrier_projection_work`, or propagates durable carrier/sidecar
-/// validation failures.
+/// Rejects zero limits, exceeded work or bytes, unavailable history and corrupt bodies.
 pub fn visit_committed_transactions_bounded(
     state_ro: &impl StateReadOnly,
     filter: CompoundPredicate<CommittedTransaction>,
-    max_carrier_projection_work: u64,
-    mut visitor: impl FnMut(CommittedTransaction, bool) -> Result<ControlFlow<()>, QueryExecutionFail>,
+    max_projection_work: u64,
+    max_history_bytes: u64,
+    visitor: impl FnMut(CommittedTransaction, bool) -> Result<ControlFlow<()>, QueryExecutionFail>,
 ) -> Result<bool, QueryExecutionFail> {
-    if max_carrier_projection_work == 0
-        || max_carrier_projection_work > iroha_data_model::query::parameters::MAX_FETCH_SIZE.get()
-    {
-        return Err(QueryExecutionFail::FetchSizeTooBig);
-    }
-    visit_committed_transactions(
+    visit_committed_transactions_with_work_budget(
         state_ro,
-        &filter,
-        TransactionHistoryAnchor::capture(state_ro),
-        None,
-        |work| {
-            if work > max_carrier_projection_work {
-                return Err(QueryExecutionFail::GasBudgetExceeded);
-            }
-            Ok(())
-        },
-        |transaction, matches, _| visitor(transaction, matches),
+        filter,
+        max_projection_work,
+        max_projection_work,
+        max_history_bytes,
+        visitor,
     )
 }
-/// Visit committed transactions with both per-carrier and cumulative physical-work bounds.
-///
-/// Every touched carrier consumes at least one unit even when it contains no
-/// transactions. Declared and reconciled merge work consumes its actual unit
-/// count. This variant is intended for endpoints whose predicate cannot use a
-/// positive Kura index and whose visitor must otherwise inspect the complete
-/// selected history.
+
+/// Visit history with explicit per-carrier, cumulative work and cumulative byte limits.
 ///
 /// # Errors
-///
-/// Returns [`QueryExecutionFail::GasBudgetExceeded`] before resolving a carrier
-/// that exceeds either work bound, [`QueryExecutionFail::FetchSizeTooBig`] for
-/// zero or non-canonical limits, or propagates durable history failures.
+/// Rejects invalid limits before scanning and exceeded limits before dependent work.
 pub fn visit_committed_transactions_with_work_budget(
     state_ro: &impl StateReadOnly,
     filter: CompoundPredicate<CommittedTransaction>,
     max_carrier_projection_work: u64,
     max_total_projection_work: u64,
+    max_history_bytes: u64,
     mut visitor: impl FnMut(CommittedTransaction, bool) -> Result<ControlFlow<()>, QueryExecutionFail>,
 ) -> Result<bool, QueryExecutionFail> {
     let canonical_max = iroha_data_model::query::parameters::MAX_FETCH_SIZE.get();
@@ -1654,22 +1242,30 @@ pub fn visit_committed_transactions_with_work_budget(
         || max_carrier_projection_work > canonical_max
         || max_total_projection_work == 0
         || max_total_projection_work > canonical_max
+        || max_history_bytes == 0
     {
         return Err(QueryExecutionFail::FetchSizeTooBig);
     }
-    let mut total_projection_work = 0_u64;
+    let mut total_work = 0_u64;
+    let mut total_bytes = 0_u64;
     visit_committed_transactions(
         state_ro,
         &filter,
         TransactionHistoryAnchor::capture(state_ro),
         None,
-        |work| {
-            if work > max_carrier_projection_work {
+        |items, bytes| {
+            // A carrier's first item is reserved before its row count is known.
+            // The second charge contains exactly the remaining rows.
+            if items > max_carrier_projection_work.saturating_sub(1) && bytes == 0 {
                 return Err(QueryExecutionFail::GasBudgetExceeded);
             }
-            total_projection_work = total_projection_work
-                .checked_add(work.max(1))
-                .filter(|total| *total <= max_total_projection_work)
+            total_work = total_work
+                .checked_add(items)
+                .filter(|n| *n <= max_total_projection_work)
+                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+            total_bytes = total_bytes
+                .checked_add(bytes)
+                .filter(|n| *n <= max_history_bytes)
                 .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
             Ok(())
         },
@@ -1678,7 +1274,7 @@ pub fn visit_committed_transactions_with_work_budget(
 }
 /// Collect a small committed-transaction snapshot within explicit retention bounds.
 ///
-/// Carrier work is bounded independently before sidecar resolution. Transactions are visited
+/// Carrier work is bounded independently before source/output validation and proof construction. Transactions are visited
 /// newest first and only predicate matches are retained. The function rejects a result set that
 /// exceeds `max_projected_transactions` instead of returning a silently truncated snapshot, and
 /// charges canonical retained bytes before every push.
@@ -1692,6 +1288,7 @@ pub fn visit_committed_transactions_with_work_budget(
 pub fn committed_transactions_bounded_snapshot(
     state_ro: &impl StateReadOnly,
     filter: CompoundPredicate<CommittedTransaction>,
+    work_limits: TransactionHistoryWorkLimits,
     max_projected_transactions: u64,
     max_retained_bytes: u64,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
@@ -1707,10 +1304,12 @@ pub fn committed_transactions_bounded_snapshot(
     transactions
         .try_reserve_exact(capacity)
         .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
-    visit_committed_transactions_bounded(
+    visit_committed_transactions_with_work_budget(
         state_ro,
         filter,
-        max_projected_transactions,
+        work_limits.max_carrier_work,
+        work_limits.max_total_work,
+        work_limits.max_bytes,
         |transaction, matches| {
             if matches {
                 if transactions.len() == capacity {
@@ -1730,136 +1329,81 @@ pub fn committed_transactions_bounded_snapshot(
     )?;
     Ok(transactions)
 }
-/// Materialize complete canonical transaction history in newest-first order.
-///
-/// This includes transactions executed by globally ordered certified merge sidecars. The durable
-/// sparse carrier index and every full sidecar are revalidated before any history is returned, so
-/// callers never receive a cache-truncated or partially fabricated view.
+/// Collect a finite snapshot selected by a complete positive index.
 ///
 /// # Errors
-///
-/// Returns [`QueryExecutionFail::CanonicalHistory`] when a canonical block
-/// body is unavailable or corrupt, or [`QueryExecutionFail::Conversion`] when
-/// durable carrier or sidecar evidence is malformed or inconsistent.
-pub fn committed_transactions_snapshot(
-    state_ro: &impl StateReadOnly,
-) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
-    reject_unbounded_emergency_fast_transaction_history(state_ro, None)?;
-    let merge_by_height = committed_merge_transactions_by_height(state_ro, None)?;
-    let blocks = state_ro
-        .all_blocks(nonzero!(1_usize))
-        .rev()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(QueryExecutionFail::CanonicalHistory)?;
-    Ok(blocks
-        .into_iter()
-        .flat_map(|block| block_committed_transactions_with_merge(&block, &merge_by_height))
-        .collect())
-}
-/// Materialize an index-bounded committed-transaction snapshot.
-///
-/// The filter must resolve through Kura's positive transaction indexes. This
-/// keeps app-facing aggregate and projection queries from holding a world-state
-/// view while rebuilding complete transaction history. The authoritative
-/// predicate is still evaluated against every selected transaction.
-///
-/// # Errors
-///
-/// Returns [`QueryExecutionFail::Conversion`] when the filter is not bounded by
-/// a complete sparse index or selected sidecar evidence is inconsistent, and
-/// [`QueryExecutionFail::CanonicalHistory`] when a selected block is
-/// unavailable or corrupt.
+/// Rejects unavailable indexes, corrupt or missing bodies and exceeded explicit
+/// work or retention limits. Partial history is never returned as a snapshot.
 pub fn committed_transactions_indexed_snapshot(
     state_ro: &impl StateReadOnly,
     filter: CompoundPredicate<CommittedTransaction>,
+    work_limits: TransactionHistoryWorkLimits,
+    max_projected_transactions: u64,
+    max_retained_bytes: u64,
 ) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
-    let (_, candidate_heights) = transaction_query_plan(&filter, state_ro);
-    if candidate_heights.is_none() {
+    if transaction_query_plan(&filter, state_ro).1.is_none() {
         return Err(QueryExecutionFail::Conversion(
-            "transaction aggregate/select queries require a positive indexed filter".to_owned(),
+            "transaction aggregate/select queries require a positive indexed filter".into(),
         ));
     }
-    ValidQuery::execute(FindTransactions, filter, state_ro)
-        .map(|transactions| transactions.collect())
+    committed_transactions_bounded_snapshot(
+        state_ro,
+        filter,
+        work_limits,
+        max_projected_transactions,
+        max_retained_bytes,
+    )
 }
-impl ValidQuery for FindTransactions {
-    #[metrics(+"find_transactions")]
-    fn execute(
-        self,
-        filter: CompoundPredicate<CommittedTransaction>,
-        state_ro: &impl StateReadOnly,
-    ) -> Result<impl Iterator<Item = Self::Item>, QueryExecutionFail> {
-        let (predicate_json, candidate_heights) = transaction_query_plan(&filter, state_ro);
-        reject_unbounded_emergency_fast_transaction_history(state_ro, candidate_heights.as_ref())?;
-        // Indexed predicates resolve only the selected sparse carrier entries.
-        // Kura's live store and lazy-load paths publish ordinary and merge-sidecar
-        // fields under one index lock; startup reconciliation finishes before the
-        // Kura handle is returned. Adding every historical carrier here would be
-        // both unnecessary and an unbounded pre-pagination amplification vector.
-        let merge_by_height =
-            committed_merge_transactions_by_height(state_ro, candidate_heights.as_ref())?;
-        let iter: Box<dyn Iterator<Item = CommittedTransaction> + '_> =
-            if let Some(candidate_heights) = candidate_heights {
-                let blocks = candidate_heights
-                    .into_iter()
-                    .filter(|height| height.get() <= state_ro.height())
-                    .rev()
-                    .map(|height| state_ro.canonical_block_by_height(height))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(QueryExecutionFail::CanonicalHistory)?;
-                Box::new(blocks.into_iter().flat_map(move |block| {
-                    block_committed_transactions_with_merge(&block, &merge_by_height)
-                }))
-            } else {
-                let blocks = state_ro
-                    .all_blocks(nonzero!(1_usize))
-                    .rev()
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(QueryExecutionFail::CanonicalHistory)?;
-                Box::new(
-                    blocks
-                        .into_iter()
-                        // Iterate over blocks in descending order (most recent first).
-                        .flat_map(move |block| {
-                            block_committed_transactions_with_merge(&block, &merge_by_height)
-                        }),
-                )
-            };
-        Ok(iter.filter(move |tx| transaction_filter_applies(&filter, predicate_json.as_ref(), tx)))
-    }
+
+/// Bounded fixture-only baseline; production uses the fallible page owner.
+#[cfg(test)]
+pub(crate) fn execute_transactions_fixture(
+    filter: CompoundPredicate<CommittedTransaction>,
+    state: &impl StateReadOnly,
+) -> Result<std::vec::IntoIter<CommittedTransaction>, QueryExecutionFail> {
+    committed_transactions_bounded_snapshot(
+        state,
+        filter,
+        TransactionHistoryWorkLimits {
+            max_carrier_work: iroha_data_model::query::parameters::MAX_FETCH_SIZE.get(),
+            max_total_work: iroha_data_model::query::parameters::MAX_FETCH_SIZE.get(),
+            max_bytes: transaction_history_byte_limit(
+                iroha_data_model::query::parameters::MAX_FETCH_SIZE.get(),
+            ),
+        },
+        iroha_data_model::query::parameters::MAX_FETCH_SIZE.get(),
+        TRANSACTION_HISTORY_MAX_BYTES,
+    )
+    .map(Vec::into_iter)
 }
+
+/// Bounded fixture snapshot used to compare paginated output and corruption handling.
+#[cfg(test)]
+pub(crate) fn committed_transactions_snapshot(
+    state: &impl StateReadOnly,
+) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    execute_transactions_fixture(CompoundPredicate::PASS, state).map(Iterator::collect)
+}
+
 #[cfg(test)]
 /// Transaction-history regression fixtures and tests.
 pub(crate) mod tests {
     use super::*;
-    use crate::{
-        block::BlockBuilder,
-        tx::{AcceptedTransaction, tests::*},
-    };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
+    use crate::tx::tests::*;
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ValidationFail,
         block::{
-            BlockExecutionContextBundle, BlockHeader, SignedBlock,
-            consensus::{
-                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
-                SumeragiLanePayloadOwnership,
-            },
-        },
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        merge::{
-            MergeExecutionBatch, MergeLaneExecution, MergeLaneSignerProof, MergeLedgerEntry,
-            MergeQuorumCertificate,
+            BlockHeader, SignedBlock,
+            execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
         },
         prelude::{
-            AccountId, DataTriggerSequence, InstructionBox, NetworkId, TransactionBuilder,
-            TransactionEntrypoint, TransactionResult,
+            AccountId, DataTriggerSequence, InstructionBox, NetworkId, Registrable,
+            TransactionBuilder, TransactionEntrypoint, TransactionResult,
         },
         transaction::error::TransactionRejectionReason,
     };
     use iroha_model_base::metadata::Metadata;
-    use iroha_model_base::peer::PeerId;
-    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::json::Json;
 
     #[test]
@@ -1910,534 +1454,83 @@ pub(crate) mod tests {
         assert!(crate::kura::Kura::kaigi_signal_candidate_identity(&entrypoint, &failed).is_none());
     }
     use std::{
-        collections::BTreeMap,
         num::{NonZeroU64, NonZeroUsize},
         sync::Arc,
         time::Duration,
     };
-    fn sample_certified_merge_execution_entry(
-        epoch: u64,
-        result_ok: bool,
-        previous_lane: Option<&LaneBlockDescriptorV1>,
-        transaction_metadata_bytes: usize,
-    ) -> MergeLedgerEntry {
-        let network_id = NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"merge-query-network")),
-        );
-        let entrypoints = (0..2)
-            .map(|index| {
-                let key_pair = KeyPair::random();
-                let authority = AccountId::new(key_pair.public_key().clone());
-                let mut builder = TransactionBuilder::new(
-                    network_id,
-                    authority,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .with_instructions::<InstructionBox>([])
-                .with_admission_intent(
-                    iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-                );
-                if transaction_metadata_bytes > 0 {
-                    let mut metadata = Metadata::default();
-                    metadata.insert(
-                        "query_padding".parse().expect("valid metadata name"),
-                        Json::new("p".repeat(transaction_metadata_bytes)),
-                    );
-                    builder = builder.with_metadata(metadata);
-                }
-                builder.set_creation_time(Duration::from_millis(
-                    epoch.saturating_mul(10).saturating_add(index),
-                ));
-                TransactionEntrypoint::External(builder.sign(key_pair.private_key()))
-            })
-            .collect::<Vec<_>>();
-        let results = (0..entrypoints.len())
-            .map(|index| {
-                if result_ok {
-                    TransactionResult::from(Ok(DataTriggerSequence::default()))
-                } else {
-                    TransactionResult::from(Err(TransactionRejectionReason::Validation(
-                        ValidationFail::NotPermitted(format!(
-                            "merge query rejection {epoch}:{index}"
-                        )),
-                    )))
-                }
-            })
-            .collect::<Vec<_>>();
-        let entrypoint_hashes = entrypoints
-            .iter()
-            .map(|entrypoint| Hash::from(entrypoint.hash()))
-            .collect::<Vec<_>>();
-        let result_hashes = results
-            .iter()
-            .map(|result| Hash::from(result.hash()))
-            .collect::<Vec<_>>();
-        let mut validator_keypairs = (0_u8..4)
-            .map(|index| {
-                KeyPair::try_from_seed(
-                    vec![0xA0_u8.saturating_add(index); 32],
-                    Algorithm::BlsNormal,
-                )
-                .expect("derive deterministic merge-query lane validator")
-            })
-            .collect::<Vec<_>>();
-        validator_keypairs.sort_by(|left, right| {
-            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
-        });
-        let validator_set = validator_keypairs
-            .iter()
-            .map(|keypair| PeerId::new(keypair.public_key().clone()))
-            .collect::<Vec<_>>();
-        let validator_count =
-            u32::try_from(validator_set.len()).expect("merge-query validator count fits u32");
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            validator_set.len(),
-        ))
-        .expect("merge-query quorum fits u32");
-        assert_eq!((validator_count, min_quorum), (4, 3));
-        let lane_incarnation = Hash::new(b"merge-query-lane-incarnation");
-        let accepted_candidate_indices = vec![0, 1];
-        let qc_mode_tag = "permissioned:merge-query-test".to_owned();
-        let lane_block_height = previous_lane.map_or(1, |descriptor| {
-            descriptor
-                .lane_block_height
-                .checked_add(1)
-                .expect("fixture lane height")
-        });
-        let mut ownership = SumeragiLanePayloadOwnership {
-            proposal_height: previous_lane.map_or(2, |descriptor| {
-                descriptor
-                    .proposal_height
-                    .checked_add(1)
-                    .expect("fixture proposal height")
-            }),
-            proposal_view: 0,
-            lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            lane_incarnation,
-            previous_lane_block_height: previous_lane
-                .map_or(0, |descriptor| descriptor.lane_block_height),
-            previous_lane_block_descriptor_hash: previous_lane
-                .map(|descriptor| descriptor.descriptor_hash),
-            lane_block_height,
-            lane_block_view: 0,
-            subject_hash: Hash::prehashed([0; Hash::LENGTH]),
-            qc_mode_tag: qc_mode_tag.clone(),
-            accepted_candidate_indices: accepted_candidate_indices.clone(),
-            accepted_transaction_hashes: entrypoint_hashes.clone(),
-            lane_block_descriptor_hash: Some(Hash::new(b"merge-query-lane-descriptor-placeholder")),
-            lane_block_descriptor_validator_set: validator_set.clone(),
-            lane_block_descriptor_validator_count: validator_count,
-            lane_block_descriptor_min_quorum: min_quorum,
-            payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
-            rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        let replay_hashes = ownership
-            .compute_replay_hashes()
-            .expect("compute canonical merge-query lane replay hashes");
-        ownership.subject_hash = replay_hashes.subject_hash;
-        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
-        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
-        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
-        ownership
-            .validate_replay_material()
-            .expect("validate canonical merge-query lane replay material");
-        let descriptor = LaneBlockDescriptorV1 {
-            lane_id: ownership.lane_id,
-            dataspace_id: ownership.dataspace_id,
-            lane_incarnation: ownership.lane_incarnation,
-            proposal_height: ownership.proposal_height,
-            previous_lane_block_height: ownership.previous_lane_block_height,
-            previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
-            lane_block_height: ownership.lane_block_height,
-            lane_block_view: ownership.lane_block_view,
-            subject_hash: ownership.subject_hash,
-            payload_ownership_hash: ownership.payload_ownership_hash,
-            rbc_instance_hash: ownership.rbc_instance_hash,
-            accepted_candidate_indices,
-            accepted_transaction_hashes: entrypoint_hashes.clone(),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set: validator_set.clone(),
-            validator_count,
-            min_quorum,
-            qc_mode_tag,
-            descriptor_hash: replay_hashes.lane_block_descriptor_hash,
-        };
-        assert_eq!(
-            descriptor.computed_descriptor_hash(),
-            descriptor.descriptor_hash,
-            "merge-query ownership and descriptor hashes must agree"
-        );
-        let mut proposal = LaneBlockProposalV1 {
-            descriptor,
-            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-            payload_block_hint: None,
-        };
-        proposal.proposal_hash = proposal.computed_proposal_hash();
-        crate::lane_consensus::validate_lane_block_proposal(&proposal)
-            .expect("merge-query lane proposal satisfies current ingress validation");
-        let autonomous_network_id = network_id;
-        let autonomous_epoch = epoch;
-        let routing_plans = entrypoints
-            .iter()
-            .map(|_| {
-                crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-                    LaneId::SINGLE,
-                    DataSpaceId::UNIVERSAL,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let reservation_keys = entrypoints
-            .iter()
-            .zip(&routing_plans)
-            .enumerate()
-            .map(|(index, (entrypoint, routing_plan))| {
-                let index_bytes = u64::try_from(index)
-                    .expect("merge-query reservation index fits u64")
-                    .to_le_bytes();
-                crate::queue::LaneQueueReservationKeyV1 {
-                    version: crate::queue::LaneQueueReservationKeyV1::VERSION,
-                    entrypoint_hash: entrypoint.hash(),
-                    queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
-                        b"merge-query-queue-plan-admission".as_slice(),
-                        epoch.to_le_bytes().as_slice(),
-                        index_bytes.as_slice(),
-                    ]),
-                    routing_plan_digest: routing_plan.digest(),
-                    coordinator_leg: routing_plan.coordinator_leg(),
-                    lane_id: LaneId::SINGLE,
-                    dataspace_id: DataSpaceId::UNIVERSAL,
-                    lane_incarnation,
-                    proposal_height: proposal.descriptor.proposal_height,
-                    lane_block_height: proposal.descriptor.lane_block_height,
-                    lane_block_view: proposal.descriptor.lane_block_view,
-                    reservation_owner_hash: Hash::new_from_chunks(&[
-                        b"merge-query-reservation-owner".as_slice(),
-                        epoch.to_le_bytes().as_slice(),
-                        index_bytes.as_slice(),
-                    ]),
-                    proposal_identity_hash: proposal.proposal_hash,
-                }
-            })
-            .collect::<Vec<_>>();
-        let native_amx_receipts = vec![None; entrypoints.len()];
-        let producer = crate::lane_consensus::deterministic_lane_author(
-            &validator_set,
-            proposal.descriptor.lane_block_height,
-        )
-        .cloned()
-        .expect("merge-query committee has a deterministic lane author");
-        let producer_keypair = validator_keypairs
-            .iter()
-            .find(|keypair| keypair.public_key() == producer.public_key())
-            .expect("merge-query fixture retains the deterministic producer key");
-        let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
-            autonomous_network_id,
-            autonomous_epoch,
-            proposal.clone(),
-            entrypoints.clone(),
-            reservation_keys,
-            routing_plans,
-            native_amx_receipts.clone(),
-            producer,
-            producer_keypair.private_key(),
-        )
-        .expect("construct canonical merge-query autonomous payload");
-        let validator_pops = validator_keypairs
-            .iter()
-            .map(|keypair| {
-                bls_normal_pop_prove(keypair.private_key())
-                    .expect("derive merge-query validator proof of possession")
-            })
-            .collect::<Vec<_>>();
-        let availability_body = crate::lane_consensus::lane_payload_availability_body(
-            &payload,
-            &proposal,
-            autonomous_network_id,
-            autonomous_epoch,
-        )
-        .expect("construct canonical merge-query READY body");
-        let prepare_votes = validator_keypairs
-            .iter()
-            .take(usize::try_from(min_quorum).expect("merge-query quorum fits usize"))
-            .map(|keypair| {
-                let availability_vote =
-                    crate::lane_consensus::LanePayloadAvailabilityVoteV1::new_signed(
-                        availability_body.clone(),
-                        PeerId::new(keypair.public_key().clone()),
-                        validator_pops.clone(),
-                        keypair.private_key(),
-                    )
-                    .expect("sign merge-query payload availability vote");
-                let body = proposal.vote_body(CertPhase::Prepare);
-                let signature =
-                    Signature::try_new(keypair.private_key(), &body.signature_preimage())
-                        .expect("sign merge-query lane Prepare vote");
-                crate::lane_consensus::LaneBlockVoteV1 {
-                    body,
-                    signer: PeerId::new(keypair.public_key().clone()),
-                    bls_signature: signature.payload().to_vec(),
-                    payload_availability_vote: Some(availability_vote),
-                }
-            })
-            .collect::<Vec<_>>();
-        let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
-            proposal.vote_body(CertPhase::Prepare),
-            validator_set.clone(),
-            &prepare_votes,
-        )
-        .expect("aggregate exact merge-query lane PrepareQC");
-        let commit_votes = validator_keypairs
-            .iter()
-            .take(usize::try_from(min_quorum).expect("merge-query quorum fits usize"))
-            .map(|keypair| {
-                let body = proposal.vote_body(CertPhase::Commit);
-                let signature =
-                    Signature::try_new(keypair.private_key(), &body.signature_preimage())
-                        .expect("sign merge-query lane Commit vote");
-                crate::lane_consensus::LaneBlockVoteV1 {
-                    body,
-                    signer: PeerId::new(keypair.public_key().clone()),
-                    bls_signature: signature.payload().to_vec(),
-                    payload_availability_vote: None,
-                }
-            })
-            .collect::<Vec<_>>();
-        let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
-            proposal.vote_body(CertPhase::Commit),
-            validator_set,
-            &commit_votes,
-        )
-        .expect("aggregate exact merge-query lane CommitQC");
-        let mut signer_proofs = validator_keypairs
-            .iter()
-            .take(usize::try_from(min_quorum).expect("merge-query quorum fits usize"))
-            .map(|keypair| MergeLaneSignerProof {
-                public_key: keypair.public_key().clone(),
-                proof_of_possession: bls_normal_pop_prove(keypair.private_key())
-                    .expect("derive merge-query lane signer proof of possession"),
-            })
-            .collect::<Vec<_>>();
-        signer_proofs.sort_by(|left, right| left.public_key.cmp(&right.public_key));
-        let signer_pops = signer_proofs
-            .iter()
-            .map(|proof| (proof.public_key.clone(), proof.proof_of_possession.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let certified = crate::kura::CertifiedLaneBlockArtifact::new(
-            crate::lane_consensus::CommittedLaneBlockSession {
-                proposal: proposal.clone(),
-                prepare_qc: prepare_qc.clone(),
-                commit_qc: commit_qc.clone(),
-            },
-            signer_pops,
-        );
-        let bundle = crate::kura::AutonomousLaneMergeBundleV1 {
-            version: crate::kura::AutonomousLaneMergeBundleV1::VERSION,
-            autonomous: crate::kura::AutonomousLaneBlockArtifact {
-                format: crate::kura::AutonomousLaneBlockArtifactFormat::Current,
-                executable_payload: payload.clone(),
-                availability_certificate: Some(
-                    crate::lane_consensus::DurableLanePayloadAvailabilityCertificateV1 {
-                        certificate: prepare_qc.clone(),
-                    },
-                ),
-                view_checkpoint: None,
-                new_view_certificates: Vec::new(),
-            },
-            certified,
-        };
-        crate::kura::Kura::validate_autonomous_lane_merge_bundle(
-            &bundle,
-            autonomous_network_id,
-            autonomous_epoch,
-        )
-        .expect("validate canonical merge-query autonomous source bundle");
-        let source_bundle = bundle
-            .encode_framed()
-            .expect("encode canonical merge-query autonomous source bundle");
-        let source_bundle_hash = bundle
-            .bundle_hash()
-            .expect("hash canonical merge-query autonomous source bundle");
-        assert_eq!(
-            source_bundle_hash,
-            Hash::new_from_chunks(&[
-                b"iroha:nexus:autonomous-lane-merge-bundle:v1\0",
-                &source_bundle,
-            ]),
-            "merge-query source bytes and domain-separated bundle hash must agree"
-        );
-        let encoded_reservation_keys = payload
-            .reservation_keys
-            .iter()
-            .map(norito::encode_canonical)
-            .collect::<Result<Vec<_>, _>>()
-            .expect("encode canonical merge-query reservation keys");
-        let encoded_routing_plans = payload
-            .routing_plans
-            .iter()
-            .map(norito::encode_canonical)
-            .collect::<Result<Vec<_>, _>>()
-            .expect("encode canonical merge-query routing plans");
-        let settlement_commitment = LaneBlockCommitment {
-            block_height: lane_block_height,
-            lane_id: LaneId::SINGLE,
-            lane_incarnation,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            tx_count: 0,
-            total_local_amount: "0".parse().expect("valid settlement quantity"),
-            total_xor_due: "0".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
-            total_xor_variance: "0".parse().expect("valid settlement quantity"),
-            swap_metadata: None,
-            receipts: Vec::new(),
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let execution = MergeLaneExecution {
-            source_bundle,
-            source_bundle_hash,
-            proposal: proposal.clone(),
-            origin_proposal: proposal,
-            prepare_qc,
-            commit_qc,
-            signer_proofs,
-            autonomous_network_id,
-            autonomous_epoch,
-            autonomous_payload_hash: payload.payload_hash,
-            entrypoint_hashes,
-            authenticated_signed_replay_aliases: vec![None; entrypoints.len()],
-            entrypoints,
-            reservation_keys: encoded_reservation_keys,
-            routing_plans: encoded_routing_plans,
-            native_amx_receipts,
-            result_hashes,
-            results,
-            settlement_hash: iroha_data_model::nexus::compute_settlement_hash(
-                &settlement_commitment,
-            )
-            .expect("test settlement should hash canonically"),
-            settlement_commitment,
-            fastpq_transcripts: Vec::new().into(),
-        };
-        let lanes = vec![execution];
-        let entrypoint_count = 2;
-        let entrypoint_merkle_root = crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
-            .expect("non-empty entrypoint tree");
-        let result_merkle_root = crate::merge::merge_execution_result_merkle_root(&lanes)
-            .expect("non-empty result tree");
-        let write_set_root = Hash::new(b"merge-query-write-set");
-        let base_state_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-query-base-state"));
-        let mut batch = MergeExecutionBatch {
-            version: 1,
-            base_state_height: 1,
-            base_state_hash,
-            application_block_header: BlockHeader::new(
-                NonZeroU64::new(2).expect("non-zero height"),
-                Some(HashOf::from_untyped_unchecked(Hash::new(
-                    b"merge-query-previous-block",
-                ))),
-                None,
-                None,
-                1,
-                0,
-            ),
-            execution_root: crate::merge::merge_execution_root(&lanes),
-            lanes,
-            entrypoint_count,
-            entrypoint_merkle_root,
-            result_merkle_root,
-            application_write_set_root: Hash::new(b"merge-query-application-write-set"),
-            write_set_root,
-            expected_post_state_hash: crate::merge::merge_expected_post_state_hash(
-                1,
-                base_state_hash,
-                write_set_root,
-            ),
-            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-        let merge_validators = Vec::<PeerId>::new();
-        MergeLedgerEntry {
-            version: MergeLedgerEntry::VERSION,
-            epoch_id: epoch,
-            lane_catalog_hash: Hash::new(b"merge-query-catalog"),
-            active_lanes: Vec::new(),
-            lane_authority_catalog: iroha_data_model::merge::MergeLaneAuthorityCatalogV1::default(),
-            incarnation_root: Hash::new(b"merge-query-incarnations"),
-            activation_root: Hash::new(b"merge-query-activations"),
-            lane_snapshots: Vec::new(),
-            global_state_root: Hash::new(b"merge-query-global-state"),
-            merge_qc: MergeQuorumCertificate::new(
-                0,
-                epoch,
-                2,
-                HashOf::from_untyped_unchecked(Hash::new(b"merge-query-previous-block")),
-                NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-                    b"merge-query-chain",
-                ))),
-                VALIDATOR_SET_HASH_VERSION_V1,
-                HashOf::new(&merge_validators),
-                merge_validators,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Hash::new(b"merge-query-message"),
-            ),
-            execution_batch: Some(batch),
-            lane_drain_certificates: Vec::new(),
-        }
+    #[derive(norito::NoritoSchema, norito::codec::Encode, norito::codec::Decode)]
+    #[norito_schema(name = "iroha_core::smartcontracts::isi::tx::tests::MutableQueryBlock")]
+    struct MutableQueryBlock {
+        signatures: BTreeSet<iroha_data_model::block::BlockSignature>,
+        payload: iroha_data_model::block::BlockPayload,
+        result: Option<iroha_data_model::block::BlockResult>,
+    }
+    // Structural codec corruption only: the actual query reader must still
+    // authenticate the original exact wire from its independent CommitQC.
+    fn mutable_query_block(
+        block: &SignedBlock,
+        mutate: impl FnOnce(&mut iroha_data_model::block::BlockResult),
+    ) -> SignedBlock {
+        use norito::codec::{DecodeAll, Encode as _};
+        let mut mutable = MutableQueryBlock::decode_all(&mut block.encode().as_slice()).unwrap();
+        mutate(mutable.result.as_mut().unwrap());
+        SignedBlock::decode_all(&mut mutable.encode().as_slice()).unwrap()
     }
     #[test]
-    fn certified_merge_projection_is_reverse_ordered_and_rejects_tampering() {
-        let entry = sample_certified_merge_execution_entry(1, true, None, 0);
-        let reference = CertifiedMergeLedgerReference::new(&entry);
-        let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-query-carrier-block"));
-        let committed = certified_merge_committed_transactions(carrier_hash, &reference, &entry)
-            .expect("canonical merge projection");
+    fn canonical_network_projection_is_reverse_ordered_and_rejects_tampering() {
+        let parent = empty_query_block(None);
+        let block = canonical_query_carrier(&parent, 1, true, 0);
+        let committed = block_committed_transactions(&block).unwrap();
         assert_eq!(committed.len(), 2);
         assert_eq!(committed[0].entrypoint_proof.leaf_index(), 1);
         assert_eq!(committed[1].entrypoint_proof.leaf_index(), 0);
-        assert!(
-            committed.iter().all(|tx| tx.block_hash == carrier_hash
-                && tx.verify_certified_merge_inclusion(&reference))
+        let inputs = block.network_input_merkle_commitment().unwrap();
+        let outputs = block.output_merkle_commitment().unwrap();
+        assert!(committed.iter().all(|tx| tx.block_hash == block.hash()
+            && tx.entrypoint_proof.verify(&tx.entrypoint_hash, &inputs)
+            && tx.output_proof.verify(&tx.output_hash, &outputs)));
+        let mut changed = block.as_ref().clone();
+        let mut rows = changed.execution_outputs().to_vec();
+        let ExecutionOutputV1::Network(row) = &mut rows[0] else {
+            unreachable!()
+        };
+        row.result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("changed".into()),
+        )));
+        install_query_outputs(&mut changed, rows);
+        assert_eq!(changed.hash(), block.hash());
+        assert_ne!(
+            changed.output_merkle_commitment(),
+            block.output_merkle_commitment()
         );
-        let mut wrong_reference = reference.clone();
-        wrong_reference.encoded_len = wrong_reference.encoded_len.saturating_add(1);
-        assert!(
-            certified_merge_committed_transactions(carrier_hash, &wrong_reference, &entry).is_err()
-        );
-        let mut tampered = entry;
-        tampered
-            .execution_batch
-            .as_mut()
-            .expect("execution batch")
-            .lanes[0]
-            .result_hashes[0] = Hash::new(b"forged-result-hash");
-        let tampered_reference = CertifiedMergeLedgerReference::new(&tampered);
-        assert!(
-            certified_merge_committed_transactions(carrier_hash, &tampered_reference, &tampered)
-                .is_err()
-        );
+        assert!(committed.iter().any(|tx| !tx.output_proof.verify(
+            &tx.output_hash,
+            &changed.output_merkle_commitment().unwrap()
+        )));
+        let bad = mutable_query_block(&block, |result| {
+            result.outputs[0] = changed.execution_outputs()[0].clone();
+        });
+        assert!(block_committed_transactions(&bad).is_err());
     }
     #[test]
-    fn certified_merge_exact_projection_returns_only_requested_canonical_entry() {
-        let entry = sample_certified_merge_execution_entry(2, true, None, 0);
-        let reference = CertifiedMergeLedgerReference::new(&entry);
-        let carrier_hash = HashOf::from_untyped_unchecked(Hash::new(b"exact-merge-carrier"));
-        let full = certified_merge_committed_transactions(carrier_hash, &reference, &entry)
-            .expect("full canonical merge projection");
-        let exact = certified_merge_committed_transaction_at(carrier_hash, &reference, &entry, 0)
-            .expect("exact canonical merge projection");
+    fn canonical_network_exact_projection_returns_only_requested_source() {
+        let block = canonical_query_carrier(&empty_query_block(None), 2, true, 0);
+        let full = block_committed_transactions(&block).unwrap();
+        let projection = NetworkCarrierProjection::new(Arc::clone(&block)).unwrap();
+        let exact = projection.transaction_at(0, |_| Ok(())).unwrap();
         assert_eq!(exact, full[1]);
         assert_eq!(exact.entrypoint_proof.leaf_index(), 0);
-        assert!(exact.verify_certified_merge_inclusion(&reference));
-        assert!(matches!(
-            certified_merge_committed_transaction_at(carrier_hash, &reference, &entry, 2),
-            Err(QueryExecutionFail::CursorMismatch)
+        assert_eq!(exact.output_proof.leaf_index(), 0);
+        assert!(exact.entrypoint_proof.verify(
+            &exact.entrypoint_hash,
+            &block.network_input_merkle_commitment().unwrap()
         ));
+        assert!(exact.output_proof.verify(
+            &exact.output_hash,
+            &block.output_merkle_commitment().unwrap()
+        ));
+        assert!(projection.transaction_at(2, |_| Ok(())).is_err());
     }
-
     #[test]
     fn kaigi_signal_candidate_work_charges_all_dimensions_cumulatively() {
         let limits = KaigiSignalCandidateWorkLimits::new_for_test(4, 100, 6, 3);
@@ -2449,189 +1542,201 @@ pub(crate) mod tests {
         assert!(!work.try_charge(limits, 0, 0, 1));
         assert_eq!(work.carrier_bytes, 100);
         assert_eq!(work.projected_transactions, 6);
-        assert_eq!(work.merge_work, 3);
+        assert_eq!(work.output_work, 3);
     }
-    /// Build an empty canonical block for transaction-query fixtures.
+    /// Empty typed parent used only to bind the physical query history.
     pub(crate) fn empty_query_block(previous: Option<&SignedBlock>) -> SignedBlock {
-        let mut block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
-            .chain(0, previous)
-            .sign(&GENESIS_ACCOUNT.key)
-            .unpack(|_| {})
-            .into();
-        block
-            .set_transaction_results(Vec::new(), &[], Vec::new())
-            .expect("empty query carrier has an exact empty result set");
+        let height = previous.map_or(1, |block| block.header().height().get() + 1);
+        let time = previous.map_or(0, |block| {
+            u64::try_from(block.header().creation_time().as_millis()).unwrap() + 10
+        });
+        let mut block = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(height).unwrap(),
+            previous.map(SignedBlock::hash),
+            None,
+            time,
+            0,
+        ))
+        .build_with_signature(0, &GENESIS_ACCOUNT.key);
+        install_query_outputs(&mut block, Vec::new());
         block
     }
-    /// Build a two-entry certified merge carrier above `previous`.
-    pub(crate) fn certified_query_carrier(
+    fn install_query_outputs(block: &mut SignedBlock, outputs: Vec<ExecutionOutputV1>) {
+        let fragments =
+            u64::try_from(outputs.iter().filter(|row| row.result().is_ok()).count()).unwrap();
+        let proposal = block.canonical_resultless_proposal();
+        block
+            .set_execution_outputs(
+                outputs,
+                fragments,
+                Default::default(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Vec::new(),
+                &crate::execution_output_test_support::structural_output_limits(),
+            )
+            .unwrap();
+        assert_eq!(block.canonical_resultless_proposal(), proposal);
+    }
+    /// Two signed Network inputs with explicit full typed output rows; no merge sidecar.
+    pub(crate) fn canonical_query_carrier(
         previous: &SignedBlock,
         epoch: u64,
         result_ok: bool,
-        previous_lane: Option<&LaneBlockDescriptorV1>,
-    ) -> (Arc<SignedBlock>, MergeLedgerEntry) {
-        certified_query_carrier_with_entry(
-            previous,
-            sample_certified_merge_execution_entry(epoch, result_ok, previous_lane, 0),
-        )
+        metadata_bytes: usize,
+    ) -> Arc<SignedBlock> {
+        let network = crate::kura::tests::canonical_query_network_id();
+        let height = previous.header().height().get() + 1;
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(height).unwrap(),
+            Some(previous.hash()),
+            None,
+            epoch * 10 + 2,
+            0,
+        ));
+        for index in 0..2 {
+            let key = KeyPair::random();
+            let mut tx = TransactionBuilder::new(
+                network,
+                AccountId::new(key.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            );
+            tx.set_creation_time(Duration::from_millis(epoch * 10 + index));
+            if metadata_bytes != 0 {
+                let mut metadata = Metadata::default();
+                metadata.insert(
+                    "query_padding".parse().unwrap(),
+                    Json::new("p".repeat(metadata_bytes)),
+                );
+                tx = tx.with_metadata(metadata);
+            }
+            builder.push_transaction(
+                tx.with_instructions::<InstructionBox>([])
+                    .sign(key.private_key()),
+            );
+        }
+        let mut block = builder.build_with_signature(0, &GENESIS_ACCOUNT.key);
+        let outputs = (0..2)
+            .map(|index| {
+                ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+                    input_index: index,
+                    result: TransactionResult::new(if result_ok {
+                        Ok(DataTriggerSequence::default())
+                    } else {
+                        Err(TransactionRejectionReason::Validation(
+                            ValidationFail::NotPermitted(format!(
+                                "query rejection {epoch}:{index}"
+                            )),
+                        ))
+                    }),
+                    completions: Vec::new(),
+                })
+            })
+            .collect();
+        install_query_outputs(&mut block, outputs);
+        Arc::new(block)
     }
-    fn certified_query_carrier_with_entry(
-        previous: &SignedBlock,
-        mut entry: MergeLedgerEntry,
-    ) -> (Arc<SignedBlock>, MergeLedgerEntry) {
-        let mut block = empty_query_block(Some(previous));
-        entry.merge_qc.view = block.header().view_change_index();
-        entry.merge_qc.carrier_height = block.header().height().get();
-        entry.merge_qc.carrier_parent_hash = block
-            .header()
-            .prev_block_hash()
-            .expect("merge query carrier is not genesis");
-        let context = block
-            .execution_context()
-            .cloned()
-            .unwrap_or_else(|| BlockExecutionContextBundle::new(Vec::new()))
-            .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
-        block.set_execution_context(Some(context));
-        (Arc::new(block), entry)
-    }
-    /// Canonical merge-carrier history shared by transaction query tests.
-    pub(crate) struct MergeQueryFixture {
-        /// State sandbox containing the seeded canonical history.
+    /// Physical finality-backed Network history shared by pagination/index regressions.
+    pub(crate) struct CanonicalQueryFixture {
+        /// Query authority and canonical State history.
         pub(crate) sandbox: Sandbox,
-        /// Exact final lane descriptor for extending the authenticated history.
-        pub(crate) latest_lane_descriptor: LaneBlockDescriptorV1,
-        /// Carrier hash selected by indexed-filter tests.
+        /// Keep physical custody alive, also after State moves into Arc.
+        pub(crate) store: crate::kura::tests::CanonicalQueryStore,
+        /// Carrier selected by index tests.
         pub(crate) target_block_hash: HashOf<BlockHeader>,
-        /// Entrypoint hash selected by indexed-filter tests.
+        /// Exact requested outer input identity.
         pub(crate) target_entrypoint_hash: HashOf<TransactionEntrypoint>,
-        /// Authority selected by indexed-filter tests.
+        /// Authority appearing in precisely one input.
         pub(crate) target_authority: AccountId,
-        /// Creation timestamp selected by indexed-filter tests.
+        /// Timestamp appearing in precisely one input.
         pub(crate) target_timestamp_ms: u64,
-        /// Durable sidecar hash for the selected carrier.
-        pub(crate) target_entry_hash: HashOf<MergeLedgerEntry>,
-        /// Durable sidecar hash for an older, unselected carrier.
-        pub(crate) unrelated_entry_hash: HashOf<MergeLedgerEntry>,
+        /// Selected physical body position.
+        pub(crate) target_height: NonZeroUsize,
+        /// Older unselected physical body position.
+        pub(crate) unrelated_height: NonZeroUsize,
     }
-    /// Seed sixteen two-entry merge carriers above an empty genesis block.
-    pub(crate) fn merge_query_fixture() -> MergeQueryFixture {
-        let mut sandbox = Sandbox::default();
-        {
-            let mut world = sandbox.state.world.block();
-            world.accounts.insert(
-                iroha_test_samples::ALICE_ID.clone(),
-                iroha_data_model::account::AccountValue::new(
-                    iroha_data_model::account::AccountDetails::default(),
-                ),
-            );
-            world.account_permissions.insert(
-                iroha_test_samples::ALICE_ID.clone(),
-                std::collections::BTreeSet::from([
-                    iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
-                ]),
-            );
-            world.commit();
-        }
-        let genesis = Arc::new(empty_query_block(None));
-        sandbox
-            .state
-            .kura()
-            .store_block(Arc::clone(&genesis))
-            .expect("store merge query genesis");
-        sandbox.state.push_block_hash_for_testing(genesis.hash());
-        let target_epoch = 9;
-        let mut previous = genesis;
-        let mut previous_lane = None;
-        let mut target = None;
-        let mut unrelated_entry_hash = None;
+    /// Seed sixteen two-input carriers above an empty genesis: exactly 32 transaction rows.
+    pub(crate) fn canonical_query_fixture() -> CanonicalQueryFixture {
+        let mut blocks = vec![Arc::new(empty_query_block(None))];
         for epoch in 1..=16 {
-            let (carrier, entry) = certified_query_carrier(
-                previous.as_ref(),
+            blocks.push(canonical_query_carrier(
+                blocks.last().unwrap(),
                 epoch,
-                epoch != target_epoch,
-                previous_lane.as_ref(),
-            );
-            previous_lane = Some(
-                entry
-                    .execution_batch
-                    .as_ref()
-                    .expect("execution batch")
-                    .lanes[0]
-                    .proposal
-                    .descriptor
-                    .clone(),
-            );
-            if epoch == 1 {
-                unrelated_entry_hash = Some(entry.canonical_hash());
-            }
-            if epoch == target_epoch {
-                let execution = &entry
-                    .execution_batch
-                    .as_ref()
-                    .expect("query fixture has execution batch")
-                    .lanes[0];
-                target = Some((
-                    carrier.hash(),
-                    execution.entrypoints[0].hash(),
-                    execution.entrypoints[0]
-                        .authority_opt()
-                        .expect("external query fixture has authority")
-                        .clone(),
-                    execution.entrypoints[0]
-                        .creation_time_ms()
-                        .expect("external query fixture has timestamp"),
-                    entry.canonical_hash(),
-                ));
-            }
-            sandbox
-                .state
-                .kura()
-                .store_block_with_merge_entry(Arc::clone(&carrier), &entry)
-                .expect("store certified merge query carrier");
-            sandbox.state.push_block_hash_for_testing(carrier.hash());
-            previous = carrier;
+                epoch != 9,
+                0,
+            ));
         }
-        crate::kura::tests::persist_v2_finality_chain_through(
-            sandbox.state.kura(),
-            NonZeroUsize::new(17).expect("complete query history"),
+        let target = Arc::clone(&blocks[9]);
+        let input = target.network_entrypoint_at(0).unwrap();
+        let target_entrypoint_hash = input.hash();
+        let target_authority = input.authority_opt().unwrap().clone();
+        let target_timestamp_ms = input.creation_time_ms().unwrap();
+        let store = crate::kura::tests::CanonicalQueryStore::new(blocks);
+        let mut world = crate::state::World::with(
+            [],
+            [
+                iroha_data_model::account::Account::new(iroha_test_samples::ALICE_ID.clone())
+                    .build(&iroha_test_samples::ALICE_ID),
+            ],
+            [],
         );
-        let (
-            target_block_hash,
+        world.account_permissions.insert(
+            iroha_test_samples::ALICE_ID.clone(),
+            BTreeSet::from([
+                iroha_executor_data_model::permission::query::CanReadAllLedgerData.into(),
+            ]),
+        );
+        let mut state = crate::state::State::new_with_chain_and_network_id_for_testing(
+            world,
+            Arc::clone(&store.kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            "canonical-query".parse().unwrap(),
+            crate::kura::tests::canonical_query_network_id(),
+        );
+        for block in &store.blocks {
+            state.push_block_hash_for_testing(block.hash());
+        }
+        CanonicalQueryFixture {
+            sandbox: Sandbox {
+                state,
+                transactions: Vec::new(),
+            },
+            store,
+            target_block_hash: target.hash(),
             target_entrypoint_hash,
             target_authority,
             target_timestamp_ms,
-            target_entry_hash,
-        ) = target.expect("target merge query carrier was seeded");
-        MergeQueryFixture {
-            sandbox,
-            latest_lane_descriptor: previous_lane.expect("seeded lane history"),
-            target_block_hash,
-            target_entrypoint_hash,
-            target_authority,
-            target_timestamp_ms,
-            target_entry_hash,
-            unrelated_entry_hash: unrelated_entry_hash
-                .expect("unrelated merge query carrier was seeded"),
+            target_height: NonZeroUsize::new(10).unwrap(),
+            unrelated_height: NonZeroUsize::new(2).unwrap(),
+        }
+    }
+    fn query_work_limits() -> TransactionHistoryWorkLimits {
+        TransactionHistoryWorkLimits {
+            max_carrier_work: 64,
+            max_total_work: 128,
+            max_bytes: TRANSACTION_HISTORY_MAX_BYTES,
         }
     }
     fn execute_single_carrier_query(
         state_ro: &impl StateReadOnly,
         filter: CompoundPredicate<CommittedTransaction>,
     ) -> Vec<CommittedTransaction> {
-        state_ro.kura().reset_merge_query_read_counters_for_test();
-        let transactions = ValidQuery::execute(FindTransactions, filter, state_ro)
-            .expect("indexed merge transaction query succeeds")
-            .collect::<Vec<_>>();
+        state_ro.kura().reset_canonical_query_reads_for_test();
+        let transactions =
+            crate::smartcontracts::isi::tx::execute_transactions_fixture(filter, state_ro)
+                .expect("indexed canonical Network transaction query succeeds")
+                .collect::<Vec<_>>();
         assert_eq!(
-            state_ro.kura().merge_query_read_counters_for_test(),
-            (0, 0, 1),
-            "indexed query must resolve exactly one sidecar and never snapshot complete history"
+            state_ro.kura().canonical_query_reads_for_test().0,
+            1,
+            "indexed query must resolve exactly one physical canonical body"
         );
         transactions
     }
     #[test]
-    fn indexed_merge_queries_resolve_only_selected_carrier_sidecars() {
-        let fixture = merge_query_fixture();
+    fn indexed_network_queries_read_only_selected_canonical_carriers() {
+        let fixture = canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let by_block = execute_single_carrier_query(
             &state_view,
@@ -2695,30 +1800,167 @@ pub(crate) mod tests {
         assert!(
             by_result
                 .iter()
-                .all(|transaction| transaction.result.as_ref().is_err())
+                .all(|transaction| transaction.result().as_ref().is_err())
         );
     }
     #[test]
+    fn finalized_carrier_reader_and_state_wrapper_admit_exact_wire_and_work() {
+        let fixture = canonical_query_fixture();
+        let height = fixture.target_height;
+        let expected = &fixture.store.blocks[height.get() - 1];
+        let bytes = fixture.store.wire_bytes([height.get()]);
+        let work = u64::try_from(
+            expected
+                .network_entrypoint_count()
+                .max(expected.execution_outputs().len())
+                .max(1),
+        )
+        .unwrap();
+        let kura = &fixture.store.kura;
+        kura.reset_canonical_query_reads_for_test();
+        let read = fixture
+            .sandbox
+            .state
+            .read_finalized_execution_carrier(height, work, bytes)
+            .unwrap();
+        assert_eq!(read.wire_bytes(), bytes);
+        assert_eq!(read.work_items(), work);
+        assert_eq!(
+            read.block().canonical_wire().unwrap().as_framed(),
+            expected.canonical_wire().unwrap().as_framed()
+        );
+        assert_eq!(kura.canonical_query_reads_for_test().0, 1);
+        let mut actual = Vec::new();
+        visit_finalized_network_transactions(
+            kura,
+            height,
+            expected.hash(),
+            work,
+            bytes,
+            |source, result| {
+                actual.push((source.hash(), result.is_ok()));
+            },
+        )
+        .unwrap();
+        let expected_rows = (0..expected.network_entrypoint_count())
+            .map(|index| {
+                (
+                    expected.network_entrypoint_at(index).unwrap().hash(),
+                    expected
+                        .network_output_at(u32::try_from(index).unwrap())
+                        .unwrap()
+                        .1
+                        .result
+                        .is_ok(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected_rows);
+        assert_eq!(read.into_block().hash(), expected.hash());
+    }
+
+    #[test]
+    fn finalized_carrier_reader_denies_before_body_io_and_returns_no_partial_rows() {
+        let fixture = canonical_query_fixture();
+        let height = fixture.target_height;
+        let bytes = fixture.store.wire_bytes([height.get()]);
+        let kura = &fixture.store.kura;
+        for (work, limit) in [(0, bytes), (2, 0), (2, bytes - 1)] {
+            kura.reset_canonical_query_reads_for_test();
+            assert!(matches!(
+                fixture
+                    .sandbox
+                    .state
+                    .read_finalized_execution_carrier(height, work, limit),
+                Err(QueryExecutionFail::GasBudgetExceeded)
+            ));
+            assert_eq!(kura.canonical_query_reads_for_test().0, 0);
+        }
+        let mut visits = 0;
+        assert!(matches!(
+            visit_finalized_network_transactions(
+                kura,
+                height,
+                fixture.target_block_hash,
+                1,
+                bytes,
+                |_, _| {
+                    visits += 1;
+                }
+            ),
+            Err(QueryExecutionFail::GasBudgetExceeded)
+        ));
+        assert_eq!(visits, 0);
+        kura.reset_canonical_query_reads_for_test();
+        assert!(
+            fixture
+                .sandbox
+                .state
+                .read_finalized_execution_carrier(NonZeroUsize::new(999).unwrap(), 2, bytes)
+                .is_err()
+        );
+        assert_eq!(kura.canonical_query_reads_for_test().0, 0);
+    }
+
+    #[test]
+    fn finalized_carrier_reader_refuses_corrupt_exact_wire_even_with_warm_body() {
+        let fixture = canonical_query_fixture();
+        let height = fixture.target_height;
+        let bytes = fixture.store.wire_bytes([height.get()]);
+        fixture
+            .sandbox
+            .state
+            .read_finalized_execution_carrier(height, 2, bytes)
+            .unwrap();
+        fixture.store.corrupt_body(height);
+        let mut visits = 0;
+        assert!(
+            visit_finalized_network_transactions(
+                &fixture.store.kura,
+                height,
+                fixture.target_block_hash,
+                2,
+                bytes,
+                |_, _| {
+                    visits += 1;
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(visits, 0);
+        assert!(
+            fixture
+                .sandbox
+                .state
+                .read_finalized_execution_carrier(height, 2, bytes)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn indexed_snapshot_uses_entrypoint_index_and_rejects_unbounded_filters() {
-        let fixture = merge_query_fixture();
+        let fixture = canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
-        state_view.kura().reset_merge_query_read_counters_for_test();
+        state_view.kura().reset_canonical_query_reads_for_test();
         let selected = committed_transactions_indexed_snapshot(
             &state_view,
             CompoundPredicate::from_filters(CommittedTxFilters {
                 entry_eq: Some(fixture.target_entrypoint_hash),
                 ..CommittedTxFilters::default()
             }),
+            query_work_limits(),
+            64,
+            TRANSACTION_HISTORY_MAX_BYTES,
         )
         .expect("indexed transaction snapshot");
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].entrypoint_hash, fixture.target_entrypoint_hash);
         assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 1),
+            state_view.kura().canonical_query_reads_for_test().0,
+            1,
             "indexed materialization must resolve only the selected carrier"
         );
-        state_view.kura().reset_merge_query_read_counters_for_test();
+        state_view.kura().reset_canonical_query_reads_for_test();
         let missing_hash = HashOf::from_untyped_unchecked(Hash::new(b"missing-query-entrypoint"));
         let missing = committed_transactions_indexed_snapshot(
             &state_view,
@@ -2726,16 +1968,25 @@ pub(crate) mod tests {
                 entry_eq: Some(missing_hash),
                 ..CommittedTxFilters::default()
             }),
+            query_work_limits(),
+            64,
+            TRANSACTION_HISTORY_MAX_BYTES,
         )
         .expect("missing indexed transaction snapshot");
         assert!(missing.is_empty());
         assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 0),
-            "a complete sparse-index miss must not read a carrier or merge sidecar"
+            state_view.kura().canonical_query_reads_for_test().0,
+            0,
+            "a complete sparse-index miss must not read a canonical carrier"
         );
-        let error = committed_transactions_indexed_snapshot(&state_view, CompoundPredicate::PASS)
-            .expect_err("unbounded transaction history must be rejected");
+        let error = committed_transactions_indexed_snapshot(
+            &state_view,
+            CompoundPredicate::PASS,
+            query_work_limits(),
+            64,
+            TRANSACTION_HISTORY_MAX_BYTES,
+        )
+        .expect_err("unbounded transaction history must be rejected");
         assert!(
             error
                 .to_string()
@@ -2744,7 +1995,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn indexed_and_unindexed_transaction_history_report_the_same_hash_only_gap() {
-        let fixture = merge_query_fixture();
+        let fixture = canonical_query_fixture();
         let target_height = fixture
             .sandbox
             .state
@@ -2776,18 +2027,23 @@ pub(crate) mod tests {
                 entry_eq: Some(fixture.target_entrypoint_hash),
                 ..CommittedTxFilters::default()
             }),
+            query_work_limits(),
+            64,
+            TRANSACTION_HISTORY_MAX_BYTES,
         )
         .expect_err("indexed history must reject a hash-only selected carrier");
-        let unindexed_error =
-            ValidQuery::execute(FindTransactions, CompoundPredicate::PASS, &state_view)
-                .err()
-                .expect("unindexed history must reject the same hash-only carrier");
+        let unindexed_error = crate::smartcontracts::isi::tx::execute_transactions_fixture(
+            CompoundPredicate::PASS,
+            &state_view,
+        )
+        .err()
+        .expect("unindexed history must reject the same hash-only carrier");
         let paginated_error = visit_committed_transactions(
             &state_view,
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |_, _, _| Ok(ControlFlow::Continue(())),
         )
         .expect_err("paginated history must surface the same hash-only carrier gap");
@@ -2804,13 +2060,9 @@ pub(crate) mod tests {
         assert_eq!(paginated_error, indexed_error);
     }
     #[test]
-    fn indexed_merge_query_ignores_unselected_corruption_and_fails_on_selected_corruption() {
-        let unrelated = merge_query_fixture();
-        unrelated
-            .sandbox
-            .state
-            .kura()
-            .remove_merge_entry_payload_for_test(unrelated.unrelated_entry_hash);
+    fn indexed_network_query_ignores_unselected_corruption_and_fails_on_selected_corruption() {
+        let unrelated = canonical_query_fixture();
+        unrelated.store.corrupt_body(unrelated.unrelated_height);
         let unrelated_view = unrelated.sandbox.state.view();
         let selected = execute_single_carrier_query(
             &unrelated_view,
@@ -2822,34 +2074,26 @@ pub(crate) mod tests {
             }),
         );
         assert_eq!(selected.len(), 1);
-        unrelated_view
-            .kura()
-            .reset_merge_query_read_counters_for_test();
+        unrelated_view.kura().reset_canonical_query_reads_for_test();
         assert!(
-            ValidQuery::execute(
-                FindTransactions,
+            crate::smartcontracts::isi::tx::execute_transactions_fixture(
                 CompoundPredicate::<CommittedTransaction>::PASS,
                 &unrelated_view,
             )
             .is_err(),
-            "unindexed complete history must fail closed on any corrupt sidecar"
+            "unindexed complete history must fail closed on any corrupt canonical body"
         );
-        let (_, complete_execution_scans, _) =
-            unrelated_view.kura().merge_query_read_counters_for_test();
-        assert_eq!(complete_execution_scans, 1);
-        let selected = merge_query_fixture();
-        selected
-            .sandbox
-            .state
-            .kura()
-            .remove_merge_entry_payload_for_test(selected.target_entry_hash);
+        assert_eq!(
+            unrelated_view.kura().canonical_query_reads_for_test().0,
+            16,
+            "descending complete scan reaches the corrupted height-two body"
+        );
+        let selected = canonical_query_fixture();
+        selected.store.corrupt_body(selected.target_height);
         let selected_view = selected.sandbox.state.view();
-        selected_view
-            .kura()
-            .reset_merge_query_read_counters_for_test();
+        selected_view.kura().reset_canonical_query_reads_for_test();
         assert!(
-            ValidQuery::execute(
-                FindTransactions,
+            crate::smartcontracts::isi::tx::execute_transactions_fixture(
                 CompoundPredicate::<CommittedTransaction>::build(|p| {
                     p.equals(
                         "entrypoint_hash",
@@ -2859,25 +2103,62 @@ pub(crate) mod tests {
                 &selected_view,
             )
             .is_err(),
-            "selected corrupt sidecar must fail closed before returning an iterator"
+            "selected corrupt canonical body must fail closed before returning an iterator"
         );
+        assert_eq!(selected_view.kura().canonical_query_reads_for_test().0, 1);
+    }
+    #[test]
+    fn canonical_query_reader_rejects_changed_outputs_under_original_finality() {
+        let fixture = canonical_query_fixture();
+        let original = &fixture.store.blocks[fixture.target_height.get() - 1];
+        let mut changed = original.as_ref().clone();
+        let mut rows = changed.execution_outputs().to_vec();
+        let ExecutionOutputV1::Network(row) = &mut rows[0] else {
+            unreachable!()
+        };
+        row.result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("query rejection 9:9".into()),
+        )));
+        install_query_outputs(&mut changed, rows);
+        changed.validate_output_merkle_cache().unwrap();
+        assert_eq!(changed.hash(), original.hash());
         assert_eq!(
-            selected_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 1)
+            changed.canonical_resultless_proposal(),
+            original.canonical_resultless_proposal()
+        );
+        assert_ne!(
+            changed.output_merkle_commitment(),
+            original.output_merkle_commitment()
+        );
+        let wire = changed.encode_wire().unwrap();
+        assert_eq!(wire.len(), original.encode_wire().unwrap().len());
+        assert_ne!(Hash::new(&wire), Hash::new(original.encode_wire().unwrap()));
+        fixture.store.overwrite_body(fixture.target_height, &wire);
+        let error = execute_transactions_fixture(
+            CompoundPredicate::from_filters(CommittedTxFilters {
+                entry_eq: Some(fixture.target_entrypoint_hash),
+                ..Default::default()
+            }),
+            &fixture.sandbox.state.view(),
+        )
+        .err()
+        .expect("original QC must reject self-consistent changed output");
+        assert!(
+            matches!(error, QueryExecutionFail::Conversion(message) if message.contains("storage authentication"))
         );
     }
     #[test]
     fn fallible_transaction_visitor_reads_only_carriers_needed_by_bounded_page() {
-        let fixture = merge_query_fixture();
+        let fixture = canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
-        state_view.kura().reset_merge_query_read_counters_for_test();
+        state_view.kura().reset_canonical_query_reads_for_test();
         let mut visited = Vec::new();
         let exhausted = visit_committed_transactions(
             &state_view,
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |transaction, matches, _| {
                 assert!(matches);
                 visited.push(transaction);
@@ -2892,35 +2173,40 @@ pub(crate) mod tests {
         assert!(!exhausted);
         assert_eq!(visited.len(), 3);
         assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 2),
+            state_view.kura().canonical_query_reads_for_test().0,
+            2,
             "three newest transactions span exactly two two-entry carriers"
         );
         assert!(visited.iter().all(|transaction| {
-            transaction
-                .merge_inclusion
-                .as_ref()
-                .is_some_and(|inclusion| inclusion.version == 1)
+            let block = fixture
+                .store
+                .blocks
+                .iter()
+                .find(|block| block.hash() == transaction.block_hash)
+                .unwrap();
+            transaction.verify_inclusion_in_block(block)
         }));
     }
     #[test]
     fn bounded_transaction_snapshot_rejects_count_and_byte_amplification() {
-        let fixture = merge_query_fixture();
+        let fixture = canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         assert_eq!(
             committed_transactions_bounded_snapshot(
                 &state_view,
                 CompoundPredicate::PASS,
+                query_work_limits(),
                 1,
-                u64::MAX,
+                TRANSACTION_HISTORY_MAX_BYTES,
             )
-            .expect_err("declared carrier work must be charged before projection"),
-            QueryExecutionFail::GasBudgetExceeded
+            .expect_err("retained row count is independently bounded"),
+            QueryExecutionFail::FetchSizeTooBig
         );
         assert_eq!(
             committed_transactions_bounded_snapshot(
                 &state_view,
                 CompoundPredicate::PASS,
+                query_work_limits(),
                 iroha_data_model::query::parameters::MAX_FETCH_SIZE.get(),
                 1,
             )
@@ -2930,27 +2216,33 @@ pub(crate) mod tests {
     }
     #[test]
     fn bounded_transaction_visitor_does_not_charge_chain_age_as_retained_memory() {
-        let fixture = merge_query_fixture();
+        let fixture = canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
             prototype.equals("field_that_does_not_exist", true)
         });
         let mut visited = 0_usize;
-        let exhausted =
-            visit_committed_transactions_bounded(&state_view, false_filter, 2, |_, matches| {
+        let exhausted = visit_committed_transactions_with_work_budget(
+            &state_view,
+            false_filter,
+            2,
+            33,
+            TRANSACTION_HISTORY_MAX_BYTES,
+            |_, matches| {
                 assert!(!matches);
                 visited = visited.saturating_add(1);
                 Ok(ControlFlow::Continue(()))
-            })
-            .expect("each carrier fits independently within the projection bound");
+            },
+        )
+        .expect("each carrier fits independently within the projection bound");
         assert!(exhausted);
         assert!(visited > 2, "the scan crossed multiple bounded carriers");
     }
     #[test]
     fn cumulative_transaction_visitor_bounds_chain_age_and_projection_work() {
-        let fixture = merge_query_fixture();
+        let fixture = canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
-        state_view.kura().reset_merge_query_read_counters_for_test();
+        state_view.kura().reset_canonical_query_reads_for_test();
         let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
             prototype.equals("field_that_does_not_exist", true)
         });
@@ -2960,6 +2252,7 @@ pub(crate) mod tests {
             false_filter,
             2,
             3,
+            TRANSACTION_HISTORY_MAX_BYTES,
             |_, matches| {
                 assert!(!matches);
                 visited = visited.saturating_add(1);
@@ -2970,127 +2263,97 @@ pub(crate) mod tests {
         assert_eq!(error, QueryExecutionFail::GasBudgetExceeded);
         assert_eq!(visited, 2, "only the first carrier may be projected");
         assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 1),
-            "the over-budget carrier must be rejected before sidecar resolution",
+            state_view.kura().canonical_query_reads_for_test().0,
+            2,
+            "the complete row work is charged after its admitted body read, before proof projection",
         );
     }
     #[test]
     fn cumulative_transaction_visitor_charges_empty_carriers() {
-        let mut sandbox = Sandbox::default();
-        let genesis = Arc::new(empty_query_block(None));
-        sandbox
-            .state
-            .kura()
-            .store_block(Arc::clone(&genesis))
-            .expect("store empty query genesis");
-        sandbox.state.push_block_hash_for_testing(genesis.hash());
-        let mut previous = genesis;
+        let mut blocks = vec![Arc::new(empty_query_block(None))];
         for _ in 0..3 {
-            let carrier = Arc::new(empty_query_block(Some(previous.as_ref())));
-            sandbox
-                .state
-                .kura()
-                .store_block(Arc::clone(&carrier))
-                .expect("store empty query carrier");
-            sandbox.state.push_block_hash_for_testing(carrier.hash());
-            previous = carrier;
+            blocks.push(Arc::new(empty_query_block(Some(blocks.last().unwrap()))));
         }
-        let state_view = sandbox.state.view();
+        let store = crate::kura::tests::CanonicalQueryStore::new(blocks);
+        let mut state = crate::state::State::new_with_chain_and_network_id_for_testing(
+            crate::state::World::default(),
+            Arc::clone(&store.kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            "canonical-query".parse().unwrap(),
+            crate::kura::tests::canonical_query_network_id(),
+        );
+        for block in &store.blocks {
+            state.push_block_hash_for_testing(block.hash());
+        }
+        store.kura.reset_canonical_query_reads_for_test();
+        let state_view = state.view();
         let error = visit_committed_transactions_with_work_budget(
             &state_view,
             CompoundPredicate::PASS,
             1,
             2,
+            TRANSACTION_HISTORY_MAX_BYTES,
             |_, _| panic!("empty carriers must not project transactions"),
         )
         .expect_err("three empty carriers must exceed cumulative work two");
         assert_eq!(error, QueryExecutionFail::GasBudgetExceeded);
+        assert_eq!(
+            store.kura.canonical_query_reads_for_test(),
+            (2, store.wire_bytes([4, 3]))
+        );
     }
     #[test]
-    fn transaction_budget_rejects_large_sidecar_before_resolve_or_decode() {
+    fn transaction_budget_rejects_large_body_before_read_or_decode() {
         const TRANSACTION_METADATA_BYTES: usize = 256 * 1024;
-        let mut sandbox = Sandbox::default();
         let genesis = Arc::new(empty_query_block(None));
-        sandbox
-            .state
-            .kura()
-            .store_block(Arc::clone(&genesis))
-            .expect("store large-sidecar query genesis");
-        sandbox.state.push_block_hash_for_testing(genesis.hash());
-        let entry =
-            sample_certified_merge_execution_entry(1, true, None, TRANSACTION_METADATA_BYTES);
-        let source_bundle = &entry
-            .execution_batch
-            .as_ref()
-            .expect("query execution batch")
-            .lanes[0]
-            .source_bundle;
-        assert!(source_bundle.len() > 2 * TRANSACTION_METADATA_BYTES);
-        assert!(
-            source_bundle.len() < iroha_data_model::merge::MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES
+        let carrier = canonical_query_carrier(&genesis, 1, true, TRANSACTION_METADATA_BYTES);
+        let store = crate::kura::tests::CanonicalQueryStore::new(vec![genesis, carrier]);
+        let expected_bytes = store.wire_bytes([2]);
+        assert!(expected_bytes > u64::try_from(2 * TRANSACTION_METADATA_BYTES).unwrap());
+        let mut state = crate::state::State::new_with_chain_and_network_id_for_testing(
+            crate::state::World::default(),
+            Arc::clone(&store.kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            "canonical-query".parse().unwrap(),
+            crate::kura::tests::canonical_query_network_id(),
         );
-        let (carrier, entry) = certified_query_carrier_with_entry(&genesis, entry);
-        let carrier_hash = carrier.hash();
-        sandbox
-            .state
-            .kura()
-            .store_block_with_merge_entry(carrier, &entry)
-            .expect("store large certified merge sidecar");
-        sandbox.state.push_block_hash_for_testing(carrier_hash);
-        crate::kura::tests::persist_v2_finality_chain_through(
-            sandbox.state.kura(),
-            NonZeroUsize::new(2).expect("large query carrier"),
-        );
-        let state_view = sandbox.state.view();
-        state_view.kura().reset_merge_query_read_counters_for_test();
-        reset_certified_merge_projection_calls_for_test();
-        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
-            prototype.equals("field_that_does_not_exist", true)
-        });
-        let mut charged = 0_u64;
+        for block in &store.blocks {
+            state.push_block_hash_for_testing(block.hash());
+        }
+        let state_view = state.view();
+        store.kura.reset_canonical_query_reads_for_test();
+        reset_canonical_network_projection_calls_for_test();
+        let mut charges = Vec::new();
         let err = visit_committed_transactions(
             &state_view,
-            &false_filter,
+            &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
-            |projection_work| {
-                charged = charged.saturating_add(projection_work);
-                if charged > 1 {
-                    Err(QueryExecutionFail::GasBudgetExceeded)
-                } else {
-                    Ok(())
-                }
+            |work, bytes| {
+                charges.push((work, bytes));
+                Err(QueryExecutionFail::GasBudgetExceeded)
             },
             |_, _, _| panic!("underfunded query must not project a transaction"),
         )
-        .expect_err("declared sidecar work exceeds the one-item budget");
+        .expect_err("authenticated physical bytes are charged before allocation or decode");
         assert_eq!(err, QueryExecutionFail::GasBudgetExceeded);
-        assert_eq!(charged, 2, "compact reference declares both entrypoints");
-        assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 0),
-            "budget rejection must happen before indexed sidecar resolution or decode"
-        );
-        assert_eq!(
-            certified_merge_projection_calls_for_test(),
-            0,
-            "budget rejection must happen before proof reconstruction"
-        );
+        assert_eq!(charges, vec![(1, expected_bytes)]);
+        assert_eq!(store.kura.canonical_query_reads_for_test(), (0, 0));
+        assert_eq!(canonical_network_projection_calls_for_test(), 0);
     }
     #[test]
     fn fallible_transaction_visitor_exact_scan_is_point_indexed_and_ordered() {
-        let fixture = merge_query_fixture();
+        let fixture = canonical_query_fixture();
         let state_view = fixture.sandbox.state.view();
         let expected = committed_transactions_snapshot(&state_view).expect("eager exact baseline");
-        state_view.kura().reset_merge_query_read_counters_for_test();
+        state_view.kura().reset_canonical_query_reads_for_test();
         let mut visited = Vec::new();
         let exhausted = visit_committed_transactions(
             &state_view,
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |transaction, matches, _| {
                 assert!(matches);
                 visited.push(transaction);
@@ -3101,19 +2364,15 @@ pub(crate) mod tests {
         assert!(exhausted);
         assert_eq!(visited, expected);
         assert_eq!(
-            state_view.kura().merge_query_read_counters_for_test(),
-            (0, 0, 16),
-            "exact scan should point-resolve each carrier without a complete carrier snapshot"
+            state_view.kura().canonical_query_reads_for_test().0,
+            17,
+            "exact scan reads every complete body, including the empty genesis"
         );
     }
     #[test]
     fn fallible_transaction_visitor_defers_unreached_corruption_but_exact_fails() {
-        let fixture = merge_query_fixture();
-        fixture
-            .sandbox
-            .state
-            .kura()
-            .remove_merge_entry_payload_for_test(fixture.unrelated_entry_hash);
+        let fixture = canonical_query_fixture();
+        fixture.store.corrupt_body(fixture.unrelated_height);
         let state_view = fixture.sandbox.state.view();
         let mut visited = 0_usize;
         let exhausted = visit_committed_transactions(
@@ -3121,7 +2380,7 @@ pub(crate) mod tests {
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |_, matches, _| {
                 assert!(matches);
                 visited += 1;
@@ -3140,11 +2399,13 @@ pub(crate) mod tests {
             &CompoundPredicate::PASS,
             TransactionHistoryAnchor::capture(&state_view),
             None,
-            |_| Ok(()),
+            |_, _| Ok(()),
             |_, _, _| Ok(ControlFlow::Continue(())),
         )
         .expect_err("exact scan must fail on selected historical corruption");
-        assert!(matches!(err, QueryExecutionFail::Conversion(_)));
+        assert!(
+            matches!(err, QueryExecutionFail::Conversion(message) if message.contains("storage authentication"))
+        );
     }
     /// Verifies that all per-field iterators over a committed block are consistent.
     #[tokio::test]
@@ -3179,62 +2440,56 @@ pub(crate) mod tests {
             ("eve", 30),
         ]);
         let block = committed_block.as_ref();
-        let ordinary = block_committed_transactions(block);
-        let mut merge_by_height = BTreeMap::new();
-        merge_by_height.insert(
-            NonZeroUsize::new(
-                usize::try_from(block.header().height().get()).expect("height fits usize"),
-            )
-            .expect("non-zero block height"),
-            vec![ordinary[0].clone()],
+        let ordinary = block_committed_transactions(block).unwrap();
+        assert_eq!(ordinary.len(), 6);
+        assert!(
+            ordinary
+                .iter()
+                .all(|tx| tx.verify_inclusion_in_block(block))
         );
-        let combined = block_committed_transactions_with_merge(block, &merge_by_height);
-        assert_eq!(combined.len(), ordinary.len() + 1);
-        assert_eq!(combined.last(), ordinary.first());
-        // All entrypoint-related iterators yield the same number of elements.
-        assert_eq!(10, block.entrypoint_hashes().len());
-        assert_eq!(10, block.entrypoint_proofs().len());
-        assert_eq!(10, block.entrypoints_cloned().len());
-        assert_eq!(10, block.result_hashes().len());
-        assert_eq!(10, block.result_proofs().len());
-        assert_eq!(10, block.results().len());
+        assert_eq!(6, block.network_input_hashes().len());
+        assert_eq!(6, block.external_entrypoints_cloned().len());
         assert_eq!(6, block.external_transactions().len());
-        assert_eq!(4, block.time_triggers().len());
-        // Hashes of entrypoints and results match their respective contents.
+        assert_eq!(10, block.output_hashes().len());
+        assert_eq!(10, block.output_results().len());
         assert_eq!(
-            block.entrypoint_hashes().collect::<Vec<_>>(),
+            4,
             block
-                .entrypoints_cloned()
-                .map(|e| e.hash())
+                .execution_outputs()
+                .iter()
+                .filter(|row| matches!(row, ExecutionOutputV1::Time(_)))
+                .count()
+        );
+        let inputs = block.network_input_merkle_tree();
+        assert!((0..6).all(|index| inputs.get_proof(index).is_some()));
+        assert!(inputs.get_proof(6).is_none());
+        assert!((0..10).all(|index| block.output_proof(index).is_some()));
+        assert!(block.output_proof(10).is_none());
+        assert_eq!(
+            block.network_input_hashes().collect::<Vec<_>>(),
+            block
+                .external_entrypoints_cloned()
+                .map(|entry| entry.hash())
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            block.result_hashes().collect::<Vec<_>>(),
+            block.output_hashes().collect::<Vec<_>>(),
             block
-                .results()
-                .map(TransactionResult::hash)
+                .execution_outputs()
+                .iter()
+                .map(HashOf::new)
                 .collect::<Vec<_>>()
         );
-        // External and time-triggered entrypoints are merged correctly into a unified view.
         assert_eq!(
-            block.entrypoints_cloned().collect::<Vec<_>>(),
+            block.external_entrypoints_cloned().collect::<Vec<_>>(),
             block
                 .external_transactions()
                 .cloned()
                 .map(TransactionEntrypoint::from)
-                .chain(
-                    block
-                        .time_triggers()
-                        .cloned()
-                        .map(TransactionEntrypoint::from)
-                )
                 .collect::<Vec<_>>()
         );
-        // The order and content of the first and last transactions are as expected.
-        // Ensure the first merged entrypoint matches the first external transaction and
-        // the last entrypoint matches the last time-triggered entry.
         assert_eq!(
-            block.entrypoints_cloned().next(),
+            block.external_entrypoints_cloned().next(),
             block
                 .external_transactions()
                 .cloned()
@@ -3242,21 +2497,32 @@ pub(crate) mod tests {
                 .next()
         );
         assert_eq!(
-            block.entrypoints_cloned().next_back(),
+            block.external_entrypoints_cloned().next_back(),
             block
-                .time_triggers()
+                .external_transactions()
                 .cloned()
                 .map(TransactionEntrypoint::from)
                 .next_back()
         );
-        // Results remain aligned with entrypoints across the merged view.
         assert_eq!(
-            block.results().next().map(TransactionResult::hash),
-            block.result_hashes().next()
+            block.output_hashes().next(),
+            block.execution_outputs().first().map(HashOf::new)
         );
         assert_eq!(
-            block.results().last().map(TransactionResult::hash),
-            block.result_hashes().last()
+            block.output_hashes().last(),
+            block.execution_outputs().last().map(HashOf::new)
         );
+        for (index, entry) in block.network_entrypoints().enumerate() {
+            let (position, row) = block
+                .network_output_at(u32::try_from(index).unwrap())
+                .unwrap();
+            assert_eq!(position, row.input_index);
+            assert_eq!(ordinary[5 - index].entrypoint_hash, entry.hash());
+            assert_eq!(ordinary[5 - index].result(), &row.result);
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "tx_canonical_network_query_tests.rs"]
+mod canonical_network_query_tests;

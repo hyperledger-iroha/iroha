@@ -18,7 +18,7 @@ fn ivm_instruction_executes() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = new_state(world, kura, query_handle);
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain id");
@@ -35,7 +35,7 @@ fn ivm_instruction_reports_error() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = new_state(world, kura, query_handle);
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("fail", "universal").expect("domain id");
@@ -53,7 +53,7 @@ fn register_genesis_domain_rejected() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = new_state(world, kura, query_handle);
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let domain_id = (*iroha_genesis::GENESIS_DOMAIN_ID).clone();

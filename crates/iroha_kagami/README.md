@@ -119,6 +119,19 @@ into the output directory.
   the current epoch's final height: for final height B, it must be committed by
   B-1. The next epoch starts at B+1; do not stage its successor until the current
   boundary has finalized and the transition is observed.
+- `kagemusha derive-mint-finality-epoch-schedule-v1` consumes the same protected
+  seed pipe once and emits a public schedule for `iroha taira epoch-maintenance`.
+  Supply `--epoch`, `--epoch-count` (1–256), `--payment-asset`, and a positive
+  `--transaction-fee-maximum`, alongside the exact network and four ordered voters.
+  Provision the schedule from the validators' installed independent seeds;
+  unrelated keys cannot sign after rotation. The required public `genesis_roster`
+  is derived from the same consumed seeds at epoch zero and must exactly match
+  the authenticated signed genesis before a maintainer accepts the schedule.
+  This detects substituted original seeds in a pinned native provisioning run;
+  it is not a proof linking arbitrary external schedules to private seeds.
+  Public schedules authorize bounded
+  fees and require renewal when their finite epoch range is exhausted. They do
+  not prove future election eligibility or submit ledger transactions.
 - Writes genesis, signed genesis, its exact hash, per-peer configs,
   `client.toml`, `start.sh`, `stop.sh`, and a generated guide
 - Generic generated stop scripts validate pidfiles against the expected peer

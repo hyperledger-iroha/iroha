@@ -23,6 +23,12 @@ impl FileWrap {
             opts.write(true).read(true).create(true).truncate(false);
         })
     }
+    /// Reopen an initialized journal without creating a replacement if it disappeared.
+    fn open_existing_read_write(path: PathBuf) -> Result<Self> {
+        let file = open_existing_regular_file(&path, "canonical Kura journal", true)
+            .add_err_context(&path)?;
+        Ok(Self { path, file })
+    }
     fn open_read_only(path: PathBuf) -> Result<Self> {
         let file =
             open_read_only_regular_file(&path, "canonical Kura journal").add_err_context(&path)?;
@@ -36,8 +42,15 @@ impl FileWrap {
         Ok(value)
     }
 }
-#[cfg(unix)]
 fn open_read_only_regular_file(path: &Path, description: &str) -> std::io::Result<std::fs::File> {
+    open_existing_regular_file(path, description, false)
+}
+#[cfg(unix)]
+fn open_existing_regular_file(
+    path: &Path,
+    description: &str,
+    writable: bool,
+) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     let flags =
@@ -45,29 +58,39 @@ fn open_read_only_regular_file(path: &Path, description: &str) -> std::io::Resul
             .bits();
     let file = std::fs::OpenOptions::new()
         .read(true)
+        .write(writable)
         .custom_flags(i32::try_from(flags).expect("open flags fit platform c_int"))
         .open(path)?;
-    ensure_read_only_input_is_regular(file, description)
+    ensure_input_is_regular(file, description)
 }
 #[cfg(windows)]
-fn open_read_only_regular_file(path: &Path, description: &str) -> std::io::Result<std::fs::File> {
+fn open_existing_regular_file(
+    path: &Path,
+    description: &str,
+    writable: bool,
+) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
 
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let file = std::fs::OpenOptions::new()
         .read(true)
+        .write(writable)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
-    ensure_read_only_input_is_regular(file, description)
+    ensure_input_is_regular(file, description)
 }
 #[cfg(not(any(unix, windows)))]
-fn open_read_only_regular_file(_path: &Path, _description: &str) -> std::io::Result<std::fs::File> {
+fn open_existing_regular_file(
+    _path: &Path,
+    _description: &str,
+    _writable: bool,
+) -> std::io::Result<std::fs::File> {
     Err(std::io::Error::new(
         ErrorKind::Unsupported,
-        "secure read-only Kura file admission is unavailable on this platform",
+        "secure existing Kura file admission is unavailable on this platform",
     ))
 }
-fn ensure_read_only_input_is_regular(
+fn ensure_input_is_regular(
     file: std::fs::File,
     description: &str,
 ) -> std::io::Result<std::fs::File> {
@@ -326,6 +349,25 @@ pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     /// Production Kura store root resolved to an empty path
     EmptyStoreRoot,
+    /// Another exact geometry operation retains the journal and its instance references ({wait}).
+    LaneGeometryAttemptBusy {
+        /// Release all physical locks before awaiting the original operation.
+        wait: RawGeometryWait,
+    },
+    /// A partially applied geometry owner was abandoned; restart recovery is required.
+    LaneGeometryAttemptAbandoned,
+    /// Lane geometry requires Strict startup to complete canonical storage recovery
+    LaneGeometryCanonicalRecoveryRequired,
+    /// Lane geometry instance creation for lane {lane_id} at operation {operation} requires Strict startup recovery: {source}
+    LaneGeometryInstanceRecoveryRequired {
+        /// Original operation's exact lane coordinate.
+        lane_id: LaneId,
+        /// Original zero-based operation cursor, retained without advancing.
+        operation: usize,
+        /// The original failure after native provisioning may have changed storage.
+        #[source]
+        source: Arc<Error>,
+    },
     /// Autonomous payload epoch resolution failed at proposal height `{proposal_height}`: {reason}
     AutonomousEpochResolution {
         /// Proposal height whose authenticated consensus epoch could not be resolved.

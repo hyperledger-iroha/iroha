@@ -6,7 +6,7 @@ use crate::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    transaction::signed::{TransactionEntrypoint, TransactionResult},
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree, Signature, SignatureOf};
 use iroha_data_model_derive::model;
@@ -54,11 +54,6 @@ mod model {
         #[getset(get_copy = "pub")]
         #[norito(required)]
         pub merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-        /// Merkle root of this block's transaction results (external transactions + time triggers).
-        /// None if there are no entrypoints.
-        #[getset(get_copy = "pub")]
-        #[norito(required)]
-        pub result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
         /// Optional hash covering the DA proof policy bundle embedded in the block payload.
         #[getset(get_copy = "pub", set = "pub")]
         #[norito(required)]
@@ -146,34 +141,32 @@ pub use self::model::{BlockHeader, BlockSignature};
 pub mod wire {
     use super::*;
     use norito::core as ncore;
-    /// Stable transport for `BlockHeader` mapping typed hashes to raw bytes.
+    /// Payload-only proposal header mapping; no output fields exist.
     #[derive(Clone, Copy)]
     pub struct BlockHeaderWire(
-        /// Height of the block being represented.
+        /// Height of this proposal.
         pub NonZeroU64,
-        /// Optional hash of the previous block.
+        /// Optional previous proposal hash.
         pub Option<[u8; 32]>,
-        /// Optional Merkle root for the block's transactions.
+        /// Physical external-input root.
         pub Option<[u8; 32]>,
-        /// Optional Merkle root for transaction results.
+        /// DA proof-policy hash.
         pub Option<[u8; 32]>,
-        /// Optional hash of the DA proof policy bundle embedded in the block payload.
-        pub Option<[u8; 32]>,
-        /// Block creation timestamp in milliseconds since Unix epoch.
+        /// Creation timestamp in milliseconds.
         pub u64,
-        /// View change index recorded in the block header.
+        /// Consensus view index.
         pub u64,
-        /// Optional V1 commitment to the DA tree version, leaf count, and Merkle root.
+        /// DA commitments hash.
         pub Option<[u8; 32]>,
-        /// Optional V1 commitment to the pin-intent tree version, leaf count, and Merkle root.
+        /// DA pin-intent hash.
         pub Option<[u8; 32]>,
-        /// Optional hash of deterministic `NPoS` effects embedded in the block payload.
+        /// NPoS effects hash.
         pub Option<[u8; 32]>,
-        /// Optional hash of durable execution context embedded in the block payload.
+        /// Execution-context hash.
         pub Option<[u8; 32]>,
-        /// Optional SCCP commitment root finalized in this block.
+        /// SCCP commitment root.
         pub Option<[u8; 32]>,
-        /// Optional confidential feature digest committed in the header.
+        /// Confidential feature digest.
         pub Option<ConfidentialFeatureDigestWire>,
     );
     impl ncore::SerializePayload for BlockHeaderWire {
@@ -187,12 +180,10 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                self.8,
-                (self.9, self.10, self.11, self.12),
+                (self.8, self.9, self.10, self.11),
             );
             <(
                 NonZeroU64,
-                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
@@ -218,12 +209,10 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                self.8,
-                (self.9, self.10, self.11, self.12),
+                (self.8, self.9, self.10, self.11),
             );
             <(
                 NonZeroU64,
-                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
@@ -249,12 +238,10 @@ pub mod wire {
                 self.5,
                 self.6,
                 self.7,
-                self.8,
-                (self.9, self.10, self.11, self.12),
+                (self.8, self.9, self.10, self.11),
             );
             <(
                 NonZeroU64,
-                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
@@ -272,11 +259,9 @@ pub mod wire {
         }
     }
     impl<'de> ncore::DeserializePayload<'de> for BlockHeaderWire {
-        #[allow(clippy::many_single_char_names, clippy::type_complexity)]
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
             let tuple: (
                 NonZeroU64,
-                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
@@ -295,7 +280,6 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
-                Option<[u8; 32]>,
                 u64,
                 u64,
                 Option<[u8; 32]>,
@@ -307,22 +291,9 @@ pub mod wire {
                     Option<ConfidentialFeatureDigestWire>,
                 ),
             ) as ncore::DeserializePayload>::deserialize(archived.cast());
-            let (h, p, m, r, proof_hash, t, v, d, pins, extensions) = tuple;
-            let (npos_effects, exec_ctx, sccp_root, f) = extensions;
             Self(
-                h,
-                p,
-                m,
-                r,
-                proof_hash,
-                t,
-                v,
-                d,
-                pins,
-                npos_effects,
-                exec_ctx,
-                sccp_root,
-                f,
+                tuple.0, tuple.1, tuple.2, tuple.3, tuple.4, tuple.5, tuple.6, tuple.7, tuple.8.0,
+                tuple.8.1, tuple.8.2, tuple.8.3,
             )
         }
     }
@@ -511,7 +482,6 @@ impl From<BlockHeader> for wire::BlockHeaderWire {
             b.height,
             opt_hash_to_bytes(b.prev_block_hash),
             opt_hash_to_bytes(b.merkle_root),
-            opt_hash_to_bytes(b.result_merkle_root),
             opt_hash_to_bytes(b.da_proof_policies_hash),
             b.creation_time_ms,
             b.view_change_index,
@@ -538,17 +508,16 @@ impl From<wire::BlockHeaderWire> for BlockHeader {
             w.0,
             opt_hash_from_bytes::<BlockHeader>(w.1),
             opt_hash_from_bytes::<MerkleTree<TransactionEntrypoint>>(w.2),
-            opt_hash_from_bytes::<MerkleTree<TransactionResult>>(w.3),
+            w.4,
             w.5,
-            w.6,
         );
-        header.set_da_proof_policies_hash(opt_hash_from_bytes::<DaProofPolicyBundle>(w.4));
-        header.set_da_commitments_hash(opt_hash_from_bytes::<DaCommitmentBundle>(w.7));
-        header.set_da_pin_intents_hash(opt_hash_from_bytes::<DaPinIntentBundle>(w.8));
-        header.set_npos_effects_hash(opt_hash_from_bytes::<NposConsensusEffects>(w.9));
-        header.set_execution_context_hash(opt_hash_from_bytes::<BlockExecutionContextBundle>(w.10));
-        header.set_sccp_commitment_root(w.11);
-        header.set_confidential_features(digest_from_wire(w.12));
+        header.set_da_proof_policies_hash(opt_hash_from_bytes::<DaProofPolicyBundle>(w.3));
+        header.set_da_commitments_hash(opt_hash_from_bytes::<DaCommitmentBundle>(w.6));
+        header.set_da_pin_intents_hash(opt_hash_from_bytes::<DaPinIntentBundle>(w.7));
+        header.set_npos_effects_hash(opt_hash_from_bytes::<NposConsensusEffects>(w.8));
+        header.set_execution_context_hash(opt_hash_from_bytes::<BlockExecutionContextBundle>(w.9));
+        header.set_sccp_commitment_root(w.10);
+        header.set_confidential_features(digest_from_wire(w.11));
         header
     }
 }
@@ -604,7 +573,6 @@ impl From<&BlockHeader> for BlockHeaderConsensusProjectionV1 {
             height,
             prev_block_hash,
             merkle_root,
-            result_merkle_root: _,
             da_proof_policies_hash,
             da_commitments_hash,
             da_pin_intents_hash,
@@ -639,7 +607,6 @@ impl BlockHeader {
         height: NonZeroU64,
         prev_block_hash: Option<HashOf<BlockHeader>>,
         merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-        result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
         creation_time_ms: u64,
         view_change_index: u64,
     ) -> Self {
@@ -647,7 +614,6 @@ impl BlockHeader {
             height,
             prev_block_hash,
             merkle_root,
-            result_merkle_root,
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
@@ -670,18 +636,17 @@ impl BlockHeader {
     }
     /// Returns the consensus-level hash of the block header.
     ///
-    /// `result_merkle_root` is validated after execution and remains outside
-    /// the consensus hash. `sccp_commitment_root` is included so block
+    /// This header contains only proposal inputs. `sccp_commitment_root` is included so block
     /// signatures and commit QCs authenticate exported SCCP proofs.
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
-        self.hash_without_execution_results()
+        self.hash_consensus_projection()
     }
     /// Computes the header hash used by consensus signatures from the single
     /// versioned V1 projection. Nullable commitments remain explicit in that
     /// projection, so their absence does not select a different hash layout.
     #[inline]
-    fn hash_without_execution_results(&self) -> HashOf<BlockHeader> {
+    fn hash_consensus_projection(&self) -> HashOf<BlockHeader> {
         let projection = BlockHeaderConsensusProjectionV1::from(self);
         HashOf::from_untyped_unchecked(HashOf::new(&projection).into())
     }
@@ -800,7 +765,7 @@ mod tests {
     #[test]
     fn block_signature_getters_and_roundtrip() {
         let keypair = checked_random_keypair();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header fixture signature");
         let block_signature = BlockSignature::new(42, signature.clone());
@@ -859,7 +824,7 @@ mod tests {
     }
     #[test]
     fn block_header_setters_work() {
-        let mut header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         header.set_height(nonzero!(2_u64));
         header.set_view_change_index(10);
         assert_eq!(header.height(), nonzero!(2_u64));
@@ -867,7 +832,7 @@ mod tests {
     }
     #[test]
     fn block_header_defaults_confidential_digest() {
-        let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
         assert_eq!(
             header.confidential_features(),
             Some(crate::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST)
@@ -875,13 +840,11 @@ mod tests {
     }
 
     #[test]
-
     fn block_header_json_requires_every_nullable_commitment_slot() {
-        let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
         let nullable_fields = [
             "prev_block_hash",
             "merkle_root",
-            "result_merkle_root",
             "da_proof_policies_hash",
             "da_commitments_hash",
             "da_pin_intents_hash",
@@ -917,7 +880,6 @@ mod tests {
             nonzero!(3_u64),
             Some(typed_hash::<BlockHeader>(0x11)),
             Some(typed_hash::<MerkleTree<TransactionEntrypoint>>(0x22)),
-            Some(typed_hash::<MerkleTree<TransactionResult>>(0x33)),
             42,
             7,
         );
@@ -948,7 +910,7 @@ mod tests {
             s
         }
         let keypair = checked_random_keypair();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header diagnostic fixture signature");
         let bs = BlockSignature::new(42, signature.clone());
@@ -976,7 +938,7 @@ mod tests {
     #[test]
     fn block_signature_btreeset_roundtrip() {
         let keypair = checked_random_keypair();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let signature = SignatureOf::try_from_hash(keypair.private_key(), header.hash())
             .expect("checked block-header btreeset fixture signature");
         let block_signature = BlockSignature::new(7, signature);
@@ -1015,7 +977,7 @@ mod tests {
     }
     #[test]
     fn block_header_da_commitments_roundtrip() {
-        let mut header = BlockHeader::new(nonzero!(4_u64), None, None, None, 99, 1);
+        let mut header = BlockHeader::new(nonzero!(4_u64), None, None, 99, 1);
         let da_hash =
             HashOf::<DaCommitmentBundle>::from_untyped_unchecked(Hash::new([0xA5; Hash::LENGTH]));
         header.set_da_commitments_hash(Some(da_hash));
@@ -1026,7 +988,7 @@ mod tests {
     }
     #[test]
     fn block_header_da_proof_policies_roundtrip() {
-        let mut header = BlockHeader::new(nonzero!(4_u64), None, None, None, 99, 1);
+        let mut header = BlockHeader::new(nonzero!(4_u64), None, None, 99, 1);
         let da_hash =
             HashOf::<DaProofPolicyBundle>::from_untyped_unchecked(Hash::new([0xC4; Hash::LENGTH]));
         header.set_da_proof_policies_hash(Some(da_hash));
@@ -1037,7 +999,7 @@ mod tests {
     }
     #[test]
     fn block_header_da_pin_intents_roundtrip() {
-        let mut header = BlockHeader::new(nonzero!(4_u64), None, None, None, 99, 1);
+        let mut header = BlockHeader::new(nonzero!(4_u64), None, None, 99, 1);
         let da_hash =
             HashOf::<DaPinIntentBundle>::from_untyped_unchecked(Hash::new([0xB6; Hash::LENGTH]));
         header.set_da_pin_intents_hash(Some(da_hash));
@@ -1048,7 +1010,7 @@ mod tests {
     }
     #[test]
     fn header_hash_captures_da_commitment_hash() {
-        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
+        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, 123, 0);
         let base = header.hash();
         let da_hash =
             HashOf::<DaCommitmentBundle>::from_untyped_unchecked(Hash::new([0xD1; Hash::LENGTH]));
@@ -1061,7 +1023,7 @@ mod tests {
     }
     #[test]
     fn header_hash_captures_da_proof_policy_hash() {
-        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
+        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, 123, 0);
         let base = header.hash();
         let da_hash =
             HashOf::<DaProofPolicyBundle>::from_untyped_unchecked(Hash::new([0xE2; Hash::LENGTH]));
@@ -1074,7 +1036,7 @@ mod tests {
     }
     #[test]
     fn header_hash_captures_da_pin_intents_hash() {
-        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
+        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, 123, 0);
         let base = header.hash();
         let pin_hash =
             HashOf::<DaPinIntentBundle>::from_untyped_unchecked(Hash::new([0xE2; Hash::LENGTH]));
@@ -1087,7 +1049,7 @@ mod tests {
     }
     #[test]
     fn header_hash_captures_execution_context_hash_and_preserves_no_context_hash() {
-        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
+        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, 123, 0);
         let base = header.hash();
         header.set_execution_context_hash(Some(sample_execution_context_hash()));
         let with_context = header.hash();
@@ -1104,7 +1066,7 @@ mod tests {
     }
     #[test]
     fn header_hash_captures_npos_effects_hash() {
-        let mut header = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
+        let mut header = BlockHeader::new(nonzero!(7_u64), None, None, 123, 0);
         let base = header.hash();
         header.set_npos_effects_hash(Some(HashOf::new(&NposConsensusEffects::default())));
         assert_ne!(
@@ -1120,14 +1082,13 @@ mod tests {
             nonzero!(7_u64),
             None,
             None,
-            None,
             123,
             0,
         ));
-        let mut with_context = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
+        let mut with_context = BlockHeader::new(nonzero!(7_u64), None, None, 123, 0);
         with_context.set_execution_context_hash(Some(sample_execution_context_hash()));
         assert_sccp_commitment_root_captured_by_hash(with_context);
-        let mut with_npos = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
+        let mut with_npos = BlockHeader::new(nonzero!(7_u64), None, None, 123, 0);
         with_npos.set_execution_context_hash(Some(sample_execution_context_hash()));
         with_npos.set_npos_effects_hash(Some(HashOf::new(&NposConsensusEffects::default())));
         assert_sccp_commitment_root_captured_by_hash(with_npos);
@@ -1139,7 +1100,6 @@ mod tests {
             height: NonZeroU64,
             prev_block_hash: Option<HashOf<BlockHeader>>,
             merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-            result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
             da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
@@ -1153,7 +1113,6 @@ mod tests {
             height: nonzero!(7_u64),
             prev_block_hash: None,
             merkle_root: None,
-            result_merkle_root: None,
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
@@ -1177,7 +1136,6 @@ mod tests {
             height: NonZeroU64,
             prev_block_hash: Option<HashOf<BlockHeader>>,
             merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-            result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
             da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
@@ -1191,7 +1149,6 @@ mod tests {
             height: nonzero!(7_u64),
             prev_block_hash: None,
             merkle_root: None,
-            result_merkle_root: None,
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
@@ -1217,7 +1174,6 @@ mod tests {
             height: NonZeroU64,
             prev_block_hash: Option<HashOf<BlockHeader>>,
             merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-            result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
             da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
@@ -1234,7 +1190,6 @@ mod tests {
             height: nonzero!(7_u64),
             prev_block_hash: None,
             merkle_root: None,
-            result_merkle_root: None,
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
@@ -1256,19 +1211,117 @@ mod tests {
         );
     }
     #[test]
-    fn header_hash_ignores_result_merkle_root_and_roundtrips() {
-        // Build a header without result_merkle_root
-        let header1 = BlockHeader::new(nonzero!(5_u64), None, None, None, 12345, 0);
-        // Compute its consensus hash
-        let h1 = header1.hash();
-        // Same header but with a result_merkle_root set must have the same consensus hash
-        // Use Hash::new (safe) to avoid relying on prehashed layout in tests
-        let fake_root = HashOf::from_untyped_unchecked(Hash::new([9_u8; Hash::LENGTH]));
-        let header2 = BlockHeader::new(nonzero!(5_u64), None, None, Some(fake_root), 12345, 0);
-        let h2 = header2.hash();
-        assert_eq!(h1, h2, "consensus hash must ignore result_merkle_root");
-        // NOTE: Norito roundtrip for header2 is validated in integration tests.
-        // Keep this unit test focused on consensus hashing behavior.
+    fn proposal_header_has_no_execution_output_slot_and_roundtrips() {
+        let header = BlockHeader::new(nonzero!(5_u64), None, None, 12345, 0);
+        let value = norito::json::to_value(&header).unwrap();
+        assert!(
+            !value
+                .as_object()
+                .unwrap()
+                .contains_key("result_merkle_root")
+        );
+        for retired in [
+            norito::json::Value::Null,
+            norito::json::to_value(&Some(HashOf::<
+                MerkleTree<crate::transaction::signed::TransactionResult>,
+            >::from_untyped_unchecked(Hash::new(
+                b"retired output root",
+            ))))
+            .unwrap(),
+        ] {
+            let mut old = value.clone();
+            old.as_object_mut()
+                .unwrap()
+                .insert("result_merkle_root".into(), retired);
+            assert!(
+                norito::json::from_value::<BlockHeader>(old).is_err(),
+                "the retired output root is not an optional compatibility field"
+            );
+        }
+        let bytes = header.encode();
+        let decoded = BlockHeader::decode_all(&mut bytes.as_slice()).unwrap();
+        assert_eq!(decoded, header);
+        assert_eq!(decoded.hash(), header.hash());
+    }
+
+    #[test]
+    fn proposal_header_rejects_retired_thirteen_field_payload() {
+        #[derive(norito::codec::Encode)]
+        struct RetiredHeader {
+            height: NonZeroU64,
+            prev_block_hash: Option<HashOf<BlockHeader>>,
+            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
+            result_merkle_root:
+                Option<HashOf<MerkleTree<crate::transaction::signed::TransactionResult>>>,
+            da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
+            da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
+            da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+            npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
+            sccp_commitment_root: Option<[u8; 32]>,
+            creation_time_ms: u64,
+            view_change_index: u64,
+            confidential_features: Option<ConfidentialFeatureDigest>,
+            execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
+        }
+        for result_merkle_root in [
+            None,
+            Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"retired output root",
+            ))),
+        ] {
+            let old = RetiredHeader {
+                height: nonzero!(5_u64),
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                npos_effects_hash: None,
+                sccp_commitment_root: None,
+                creation_time_ms: 12345,
+                view_change_index: 0,
+                confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
+                execution_context_hash: None,
+            };
+            let bytes = old.encode();
+            assert!(
+                BlockHeader::decode_all(&mut bytes.as_slice()).is_err(),
+                "even an absent retired output root must not shift the proposal header layout"
+            );
+        }
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn attaching_full_outputs_preserves_the_signed_proposal_header() {
+        use super::super::{execution_output::ExecutionOutputV1, output_test_support as fixture};
+        let mut block = fixture::proposal(1);
+        let header = block.header();
+        let signatures = block.signatures().cloned().collect::<Vec<_>>();
+        let proposal_wire_hash = block.canonical_proposal_wire_hash().unwrap();
+        let timer = fixture::simple_time(&block, 0);
+        fixture::install(
+            &mut block,
+            vec![ExecutionOutputV1::network_output_limit_rejection(0), timer],
+            0,
+        )
+        .unwrap();
+        assert_eq!(block.header(), header);
+        assert_eq!(block.hash(), header.hash());
+        assert_eq!(block.signatures().cloned().collect::<Vec<_>>(), signatures);
+        assert_eq!(
+            block.canonical_proposal_wire_hash().unwrap(),
+            proposal_wire_hash
+        );
+        assert_ne!(
+            block.executed_block_wire_hash().unwrap(),
+            proposal_wire_hash
+        );
+        assert_eq!(
+            block.output_merkle_commitment().unwrap().leaf_count().get(),
+            2
+        );
     }
 }
 

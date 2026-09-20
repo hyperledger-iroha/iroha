@@ -1557,7 +1557,7 @@ fn sns_state_block_does_not_advance_transaction_height() {
         0,
         "SNS state-only mutations must not advance committed transaction height"
     );
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     {
         let tx = block.transaction();

@@ -120,7 +120,7 @@ fn mk_block_with_permuted_txs(
         .map(|tx| u64::try_from(tx.creation_time().as_millis()).unwrap_or(0))
         .max()
         .unwrap_or(0);
-    let header = BlockHeader::new(height, prev_block_hash, None, None, ct_ms + 1, 0);
+    let header = BlockHeader::new(height, prev_block_hash, None, ct_ms + 1, 0);
     let execution_context = BlockExecutionContextBundle::new(
         txs.iter()
             .map(|tx| {
@@ -186,7 +186,7 @@ fn seed_genesis_block(state: &State) -> HashOf<BlockHeader> {
     if let Some(hash) = state.view().latest_block_hash() {
         return hash;
     }
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let leader = lane_authority_fixture::leader();
     let genesis = BlockBuilder::new(header)
         .build_with_signature(0, leader.private_key())

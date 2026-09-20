@@ -951,6 +951,8 @@ fn run_inner(
     startup_recovery: &super::StartupRecoveryPublisher,
 ) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
+        beacon_readiness,
+        admission_capacity,
         build_identity,
         config,
         common_config,
@@ -1034,6 +1036,13 @@ fn run_inner(
                     .into(),
                 );
             }
+            let shared_config = config.v2_config(block_cadence, terminal_context.mode)?;
+            super::admission_capacity::publish_authenticated_capacity(
+                &admission_capacity,
+                terminal.verified_context(),
+                &shared_config,
+            )
+            .map_err(V2RunnerError::Service)?;
             // Terminal recovery authorizes writers only after exact final validation.
             startup_recovery.ready();
             wait_for_terminal_shutdown(
@@ -1057,6 +1066,13 @@ fn run_inner(
         recovered_successor_activation,
         staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
+    let shared_config = config.v2_config(block_cadence, verified_context.context().mode)?;
+    super::admission_capacity::publish_authenticated_capacity(
+        &admission_capacity,
+        &verified_context,
+        &shared_config,
+    )
+    .map_err(V2RunnerError::Service)?;
     let local_peer = common_config.peer.id().clone();
     // Height-local roster membership is read-only and must precede the first
     // lifecycle mutation. It controls global duty for this frozen height, not
@@ -1149,6 +1165,7 @@ fn run_inner(
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            beacon_readiness,
             kagemusha_mint_finality_authority,
             network,
             block_rx,
@@ -1194,6 +1211,7 @@ fn run_inner(
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            beacon_readiness,
             kagemusha_mint_finality_authority,
             network,
             block_rx,
@@ -1302,7 +1320,7 @@ fn schedule_local_proposal(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
-    npos_beacon: &V2GlobalBeaconLifecycle,
+    npos_beacon: &mut V2GlobalBeaconLifecycle,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
     let directive = executor.local_proposal_directive()?;
@@ -1458,14 +1476,6 @@ fn schedule_local_proposal(
     if directive.locked_body().is_some() {
         return Ok(());
     }
-    if npos_beacon.pulse_requested()
-        && npos_beacon.pulse_required_for_consensus()
-        && npos_beacon
-            .finalized_pulse(directive.tag().view())
-            .is_none()
-    {
-        return Ok(());
-    }
     if context.height == 1 {
         let body = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
         // Genesis staging retains its deterministic execution image for application, while
@@ -1567,6 +1577,21 @@ fn schedule_local_proposal(
         })?;
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
+            CandidateAssemblyOutcome::AwaitingRequiredBeacon(_report) => {
+                // The complete bounded snapshot found independently useful
+                // work. Its lease has been released without consuming work;
+                // retry selection after the exact-view pulse is reconstructed.
+                npos_beacon
+                    .activate()
+                    .and_then(|()| npos_beacon.begin_round(directive.tag().view()))
+                    .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+                broadcast_npos_beacon_messages(
+                    npos_beacon.take_outbound(),
+                    output_guard,
+                    services,
+                )?;
+                return Ok(());
+            }
             CandidateAssemblyOutcome::WorkDeferred { report, reason } => {
                 proposal_state.defer_candidate_snapshot(owner, Instant::now());
                 iroha_logger::debug!(
@@ -2751,12 +2776,12 @@ fn candidate_limits(
     context: &wire::HeightContext,
     config: &SumeragiV2Config,
 ) -> Result<CandidateLimits, V2RunnerError> {
+    super::admission_capacity::require_local_payload_capacity(context.da_layout, config)
+        .map_err(V2RunnerError::Service)?;
     let max_transactions = NonZeroUsize::new(usize::try_from(config.limits.max_transactions)?)
         .ok_or(V2RunnerError::InvalidLimits)?;
     let context_payload = usize::try_from(context.da_layout.max_payload_size_bytes)?;
-    let configured_payload = usize::try_from(config.limits.max_payload_bytes)?;
-    let max_payload = NonZeroUsize::new(context_payload.min(configured_payload))
-        .ok_or(V2RunnerError::InvalidLimits)?;
+    let max_payload = NonZeroUsize::new(context_payload).ok_or(V2RunnerError::InvalidLimits)?;
     CandidateLimits::new(
         max_transactions,
         max_payload,
@@ -2778,7 +2803,6 @@ fn candidate_attachments(
         || round_header.prev_block_hash() != Some(parent.hash())
         || round_header.view_change_index() != view
         || round_header.merkle_root().is_some()
-        || round_header.result_merkle_root().is_some()
     {
         return Err(V2RunnerError::Candidate(
             "certified merge carrier probe differs from the frozen round".to_owned(),
@@ -2797,13 +2821,51 @@ fn candidate_attachments(
     } else {
         Default::default()
     };
-    npos_beacon
-        .attach_candidate_effects(view, &mut effects)
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let required_beacon_pulse_pending =
+        npos_beacon.pulse_required_for_consensus() && npos_beacon.finalized_pulse(view).is_none();
+    if !required_beacon_pulse_pending {
+        npos_beacon
+            .attach_candidate_effects(view, &mut effects)
+            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    }
+    let expected_merge_epoch = state
+        .merge_ledger()
+        .latest()
+        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
+    // The same height-derived opportunity used by the exact carrier fitter
+    // applies to certified execution. Defer optional evidence only for an
+    // actual eligible merge; mandatory penalties still require ControlOnly.
+    let preferred_merge_entry =
+        if super::v2_candidate::candidate_economic_work_first(context.height)
+            && effects.penalty_actions.is_empty()
+            && queue_plan_admissions.is_empty()
+        {
+            state
+                .select_pending_certified_merge_entry_for_round(
+                    round_header,
+                    expected_merge_epoch,
+                    PendingCertifiedMergeSelection::Any,
+                    context.mode,
+                )
+                .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
+                .filter(|(_, entry, _)| entry.execution_batch.is_some())
+        } else {
+            None
+        };
+    if preferred_merge_entry.is_some() {
+        effects.v2_evidence_admissions.clear();
+    }
     let npos_consensus_effects = (!effects.is_empty()).then_some(effects);
     super::v2_npos::validate_candidate_context(context)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
-    let merge_selection = certified_merge_selection_for_npos(npos_consensus_effects.is_some());
+    // A pulse (including a pending mandatory one) can accompany real merge work
+    // through the block validator's two-stage native authorization. Other NPoS
+    // effects retain the control-only boundary and never borrow that authority.
+    let merge_selection = certified_merge_selection_for_npos(
+        npos_consensus_effects.as_ref().is_some_and(|effects| {
+            !effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()
+        }),
+    );
     if merge_selection == PendingCertifiedMergeSelection::ControlOnly {
         iroha_logger::debug!(
             height = context.height,
@@ -2811,11 +2873,9 @@ fn candidate_attachments(
             "prioritizing deterministic NPoS effects before a certified execution carrier"
         );
     }
-    let expected_merge_epoch = state
-        .merge_ledger()
-        .latest()
-        .map_or(1, |latest| latest.epoch_id.saturating_add(1));
-    let selected_merge_entry = if queue_plan_admissions.is_empty() {
+    let selected_merge_entry = if preferred_merge_entry.is_some() {
+        preferred_merge_entry
+    } else if queue_plan_admissions.is_empty() {
         state
             .select_pending_certified_merge_entry_for_round(
                 round_header,
@@ -2848,6 +2908,7 @@ fn candidate_attachments(
         time_trigger_clock_progress_required: state
             .time_trigger_clock_progress_required_fast(parent_creation_time),
         npos_consensus_effects,
+        required_beacon_pulse_pending,
         certified_merge_carrier_header: certified_merge_entry
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())

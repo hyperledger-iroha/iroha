@@ -136,3 +136,32 @@ pub(super) fn parliament_tle_capability_attest(
         MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
     )
 }
+
+pub(super) fn global_beacon_capability_attest(
+    state: &BrokerServerStateV1,
+    request: &OperationRequestV1,
+) -> Result<Vec<u8>, BrokerError> {
+    let requalify =
+        || qualify_server_binding(state, &request.binding, request.provider_metadata_digest);
+    let (request, session) =
+        decode_global_beacon_capability_attest_request(&request.payload, &state.network_id)?;
+    let backend = broker_backend!(state, global_beacon_partial_signer);
+    let attestation = backend
+        .attest_partial_signing_capability(&session, request.signer_index)
+        .map_err(|error| match error {
+            GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable => BrokerError::Unavailable,
+            GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected => BrokerError::Rejected,
+        })?;
+    if !attestation.matches(&session, request.signer_index) {
+        return Err(BrokerError::StaleOrRevoked);
+    }
+    requalify()?;
+    encode_canonical(
+        &GlobalBeaconCapabilityAttestResultWireV1 {
+            session_id: attestation.session_id(),
+            transcript_hash: attestation.transcript_hash(),
+            signer_index: attestation.signer_index(),
+        },
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )
+}

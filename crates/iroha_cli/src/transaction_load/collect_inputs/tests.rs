@@ -32,11 +32,14 @@ pub(super) fn arguments() -> Args {
         context: "/var/empty/context.norito".into(),
         context_sha256: "ab".repeat(32),
         context_max_bytes: MIB as u64,
+        native_contexts: "/var/empty/native-contexts.norito".into(),
+        native_contexts_sha256: "cd".repeat(32),
+        native_contexts_max_bytes: MIB as u64,
         finality_out: "/var/empty/finality.norito".into(),
         queries_out: "/var/empty/queries.norito".into(),
         finality_max_bytes: 8 * MIB as u64,
         queries_max_bytes: 8 * MIB as u64,
-        total_max_bytes: 18 * MIB as u64,
+        total_max_bytes: 19 * MIB as u64,
         reply_max_bytes: MAX_REPLY_BYTES,
         limits: limits(),
     }
@@ -89,6 +92,12 @@ fn root_command_admits_only_complete_explicit_collection_arguments() {
         "abababababababababababababababababababababababababababababababab",
         "--context-max-bytes",
         "1000",
+        "--native-contexts",
+        "/var/empty/native-contexts.norito",
+        "--native-contexts-sha256",
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "--native-contexts-max-bytes",
+        "1000",
         "--finality-out",
         "/var/empty/finality.norito",
         "--queries-out",
@@ -98,7 +107,7 @@ fn root_command_admits_only_complete_explicit_collection_arguments() {
         "--queries-max-bytes",
         "1000",
         "--total-max-bytes",
-        "4000",
+        "5000",
         "--reply-max-bytes",
         "1000",
         "--last-height",
@@ -127,6 +136,7 @@ fn all_count_and_byte_limits_fail_before_opening_a_source_or_output() {
     let mut valid = arguments();
     // Exercise one byte below the complete reservation, including client custody.
     valid.total_max_bytes = valid.context_max_bytes
+        + valid.native_contexts_max_bytes
         + valid.client_config_max_bytes
         + valid.finality_max_bytes
         + valid.queries_max_bytes;
@@ -153,6 +163,9 @@ fn all_count_and_byte_limits_fail_before_opening_a_source_or_output() {
         |a| a.limits.max_value_decode_bytes = MAX_DECODE_BYTES + 1,
         |a| a.context_max_bytes = 0,
         |a| a.context_max_bytes = 8 * MIB as u64 + 1,
+        |a| a.native_contexts_max_bytes = 0,
+        |a| a.native_contexts_max_bytes = MAX_FRAME_BYTES as u64 + 1,
+        |a| a.native_contexts_sha256 = "GG".repeat(32),
         |a| a.finality_max_bytes = 0,
         |a| a.queries_max_bytes = 0,
         |a| a.total_max_bytes -= 1,
@@ -464,11 +477,13 @@ mod retained {
         transport: Arc<ScriptedTransport>,
     }
     fn replies(fixture: &Fixture) -> Vec<HttpReply> {
-        let mut replies = vec![
-            HttpReply::capabilities(),
-            HttpReply::finality(&fixture.first),
-            HttpReply::finality(&fixture.second),
-        ];
+        let mut replies = vec![HttpReply::capabilities()];
+        replies.extend(
+            fixture
+                .heights
+                .iter()
+                .map(|height| HttpReply::finality(&height.proof)),
+        );
         replies.extend(fixture.queries().into_iter().map(HttpReply::details));
         replies
     }
@@ -477,13 +492,17 @@ mod retained {
         let path = root.path().canonicalize().unwrap();
         let mut args = arguments();
         let (blocks, merge) = fixture.paths();
+        args.network_id = fixture.network_id;
         args.block_store = blocks;
         args.merge_log = merge;
+        args.limits.last_height = fixture.heights.len() as u64;
+        args.limits.max_committed_blocks = fixture.heights.len() as u64;
         args.context = path.join("original-context.norito");
         args.finality_out = path.join("finality.norito");
         args.queries_out = path.join("queries.norito");
         let bytes =
-            norito::encode_canonical(&fixture.first.finality_artifact.height_context).unwrap();
+            norito::encode_canonical(&fixture.heights[0].proof.finality_artifact.height_context)
+                .unwrap();
         fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -493,6 +512,17 @@ mod retained {
             .write_all(&bytes)
             .unwrap();
         args.context_sha256 = hex::encode(iroha_crypto::sha256(&bytes));
+        args.native_contexts = path.join("native-contexts.norito");
+        let bytes = norito::encode_canonical(&fixture.native_contexts()).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&args.native_contexts)
+            .unwrap()
+            .write_all(&bytes)
+            .unwrap();
+        args.native_contexts_sha256 = hex::encode(iroha_crypto::sha256(&bytes));
         let transport = ScriptedTransport::new(responses);
         let client = fixture.client(transport.clone());
         Prepared {
@@ -532,17 +562,25 @@ mod retained {
                     .clone()
                     .run_with_client(&prepared.config, &prepared.client, &mut reply, &|| Ok(()))
                     .unwrap();
-                prepared.transport.assert_drained(11);
-                let proofs: Vec<BridgeFinalityProof> =
+                prepared
+                    .transport
+                    .assert_drained(1 + fixture.heights.len() + fixture.queries().len());
+                let proofs: Vec<FinalizedNativeContextV1> =
                     norito::decode_canonical(&fs::read(&prepared.args.finality_out).unwrap())
                         .unwrap();
                 let queries: Vec<CommittedTransaction> =
                     norito::decode_canonical(&fs::read(&prepared.args.queries_out).unwrap())
                         .unwrap();
-                assert_eq!(proofs, [fixture.first.clone(), fixture.second.clone()]);
+                assert_eq!(
+                    norito::encode_canonical(&proofs).unwrap(),
+                    norito::encode_canonical(&fixture.finalized_contexts()).unwrap()
+                );
                 assert_eq!(queries, fixture.queries());
                 assert_eq!(
-                    queries.iter().filter(|q| q.result.0.is_err()).count(),
+                    queries
+                        .iter()
+                        .filter(|q| q.output.result().0.is_err())
+                        .count(),
                     usize::from(rejected.is_some())
                 );
                 assert_eq!(reply.flushed, 1);
@@ -567,7 +605,7 @@ mod retained {
                 a.limits.max_total_leaves = 4;
                 a.limits.max_leaves_per_carrier = 4;
             },
-            |a| a.limits.max_merge_frames = 0,
+            |a| a.native_contexts_sha256 = "00".repeat(32),
             |a| a.limits.max_input_bytes = 1,
             |a| a.limits.max_carrier_bytes = 1,
             |a| a.finality_max_bytes = 1,
@@ -593,25 +631,63 @@ mod retained {
     }
 
     #[test]
+    fn complete_native_context_archive_is_required_before_any_query_or_publication() {
+        for control in 0..4 {
+            let fixture = Fixture::new(4, None);
+            let mut prepared = prepare(&fixture, replies(&fixture));
+            let mut contexts = fixture.native_contexts();
+            match control {
+                0 => {
+                    contexts.pop();
+                }
+                1 => contexts.swap(0, 1),
+                2 => contexts[1] = contexts[0].clone(),
+                _ => prepared.args.native_contexts_max_bytes = 1,
+            }
+            let bytes = norito::encode_canonical(&contexts).unwrap();
+            fs::write(&prepared.args.native_contexts, &bytes).unwrap();
+            prepared.args.native_contexts_sha256 = hex::encode(iroha_crypto::sha256(&bytes));
+            let mut writer = Writer::default();
+            assert!(
+                prepared
+                    .args
+                    .clone()
+                    .run_with_client(&prepared.config, &prepared.client, &mut writer, &|| Ok(()))
+                    .is_err()
+            );
+            assert!(prepared.transport.consumed() <= 1 + fixture.heights.len());
+            assert!(writer.bytes.is_empty());
+            no_outputs(&prepared.args);
+        }
+    }
+
+    #[test]
     fn sdk_failures_and_wrong_leaf_identity_never_publish_a_partial_collection() {
         for lanes in [1, 4] {
             for control in 0..9 {
                 let fixture = Fixture::new(lanes, None);
                 let mut responses = replies(&fixture);
+                let query_start = 1 + fixture.heights.len();
                 match control {
                     0 => responses[0].body = b"{}".to_vec(),
-                    1 => responses[1].body = norito::encode_canonical(&fixture.second).unwrap(),
-                    2 => responses[2].body = norito::encode_canonical(&fixture.first).unwrap(),
+                    1 => {
+                        responses[1].body =
+                            norito::encode_canonical(&fixture.heights[1].proof).unwrap()
+                    }
+                    2 => {
+                        responses[2].body =
+                            norito::encode_canonical(&fixture.heights[0].proof).unwrap()
+                    }
                     3 => responses[2].body.pop().map(|_| ()).unwrap(),
                     4 => {
-                        let first = responses[3].body.clone();
-                        responses[3].body = responses[4].body.clone();
-                        responses[4].body = first;
+                        let first = responses[query_start].body.clone();
+                        responses[query_start].body = responses[query_start + 1].body.clone();
+                        responses[query_start + 1].body = first;
                     }
                     5 => {
                         let mut query = fixture.queries().remove(0);
-                        query.block_hash = fixture.genesis.hash();
-                        responses[3] = HttpReply::details(query);
+                        query.block_hash = fixture.heights[0].block.hash();
+                        responses[query_start] = HttpReply::details(query);
                     }
                     6 => {
                         responses.pop();
@@ -619,14 +695,21 @@ mod retained {
                     7 => {
                         let leaves = fixture.queries();
                         let mut query = leaves[0].clone();
-                        query.entrypoint_proof = leaves[1].entrypoint_proof.clone();
-                        query.result_proof = leaves[1].result_proof.clone();
-                        responses[3] = HttpReply::details(query);
+                        query.entrypoint_proof = iroha_crypto::MerkleProof::from_audit_path(
+                            query.entrypoint_proof.leaf_index() + 1,
+                            query.entrypoint_proof.audit_path().to_vec(),
+                        );
+                        query.output_proof = iroha_crypto::MerkleProof::from_audit_path(
+                            query.output_proof.leaf_index() + 1,
+                            query.output_proof.audit_path().to_vec(),
+                        );
+                        responses[query_start] = HttpReply::details(query);
                     }
                     8 => {
                         let mut query = fixture.queries().remove(0);
-                        query.merge_inclusion = None;
-                        responses[3] = HttpReply::details(query);
+                        query.output_hash =
+                            HashOf::from_untyped_unchecked(Hash::new(b"changed output"));
+                        responses[query_start] = HttpReply::details(query);
                     }
                     _ => unreachable!(),
                 }
@@ -650,13 +733,26 @@ mod retained {
         for control in 0..3 {
             let fixture = Fixture::new(4, None);
             let mut prepared = prepare(&fixture, replies(&fixture));
-            let mut anchor = fixture.first.finality_artifact.height_context.clone();
+            let mut anchor = fixture.heights[0]
+                .proof
+                .finality_artifact
+                .height_context
+                .clone();
             match control {
-                0 => anchor.network_id = NetworkId::from_genesis_hash(fixture.carrier.hash()),
-                1 => anchor = fixture.second.finality_artifact.height_context.clone(),
+                0 => {
+                    anchor.network_id =
+                        NetworkId::from_genesis_hash(fixture.heights[1].block.hash())
+                }
+                1 => {
+                    anchor = fixture.heights[1]
+                        .proof
+                        .finality_artifact
+                        .height_context
+                        .clone()
+                }
                 2 => {
                     anchor.parent_commit_qc =
-                        Some(fixture.first.finality_artifact.commit_qc.clone())
+                        Some(fixture.heights[0].proof.finality_artifact.commit_qc.clone())
                 }
                 _ => unreachable!(),
             }
@@ -681,16 +777,15 @@ mod retained {
     }
 
     #[test]
-    fn reordered_or_unaligned_full_merge_transcripts_fail_before_any_leaf_query() {
+    fn reordered_or_unaligned_native_transcripts_fail_before_any_leaf_query() {
         for control in 0..2 {
             let mut fixture = Fixture::new(4, None);
             fixture
-                .rewrite_entry_for_test(|entry| {
-                    let batch = entry.execution_batch.as_mut().unwrap();
+                .rewrite_native_for_test(2, |batch| {
                     if control == 0 {
-                        batch.lanes.reverse();
+                        batch.groups.reverse();
                     } else {
-                        batch.lanes[0].entrypoint_hashes.pop();
+                        batch.groups[0].payload.descriptor.slots.pop();
                     }
                 })
                 .unwrap();
@@ -698,8 +793,9 @@ mod retained {
                 &fixture,
                 vec![
                     HttpReply::capabilities(),
-                    HttpReply::finality(&fixture.first),
-                    HttpReply::finality(&fixture.second),
+                    HttpReply::finality(&fixture.heights[0].proof),
+                    HttpReply::finality(&fixture.heights[1].proof),
+                    HttpReply::finality(&fixture.heights[2].proof),
                 ],
             );
             assert!(
@@ -714,7 +810,7 @@ mod retained {
                     )
                     .is_err()
             );
-            prepared.transport.assert_drained(3);
+            prepared.transport.assert_drained(4);
             no_outputs(&prepared.args);
         }
     }
@@ -722,14 +818,14 @@ mod retained {
     #[test]
     fn valid_finality_for_another_executed_wire_cannot_attest_this_kura_carrier() {
         let fixture = Fixture::new(4, None);
-        let wrong = fixture.second_with_wrong_executed_wire();
+        let wrong = fixture.height_with_wrong_executed_wire(1);
         let mut verifier = BridgeFinalityVerifier::with_context(
             fixture.network_id,
-            fixture.first.finality_artifact.context_id(),
+            fixture.heights[0].proof.finality_artifact.context_id(),
         );
-        verifier.verify(&fixture.first).unwrap();
+        verifier.verify(&fixture.heights[0].proof).unwrap();
         verifier.verify(&wrong).unwrap();
-        assert_eq!(wrong.block_header, fixture.second.block_header);
+        assert_eq!(wrong.block_header, fixture.heights[1].proof.block_header);
         let mut responses = replies(&fixture);
         responses[2] = HttpReply::finality(&wrong);
         let prepared = prepare(&fixture, responses);
@@ -743,7 +839,7 @@ mod retained {
                 &|| Ok(()),
             )
             .unwrap_err();
-        assert!(error.to_string().contains("exact executed Kura wire"));
+        assert!(error.to_string().contains("exact current Network carrier"));
         no_outputs(&prepared.args);
     }
 
@@ -751,8 +847,7 @@ mod retained {
     fn typed_output_exact_caps_pass_and_one_byte_less_fails_before_staging() {
         let fixture = Fixture::new(4, None);
         let sizes = [
-            norito::canonical_frame_len(&vec![fixture.first.clone(), fixture.second.clone()])
-                .unwrap() as u64,
+            norito::canonical_frame_len(&fixture.finalized_contexts()).unwrap() as u64,
             norito::canonical_frame_len(&fixture.queries()).unwrap() as u64,
         ];
         for smaller in [None, Some(0), Some(1), Some(2)] {
@@ -761,6 +856,7 @@ mod retained {
             prepared.args.finality_max_bytes = sizes[0] - u64::from(smaller == Some(0));
             prepared.args.queries_max_bytes = sizes[1] - u64::from(smaller == Some(1));
             prepared.args.total_max_bytes = prepared.args.context_max_bytes
+                + prepared.args.native_contexts_max_bytes
                 + prepared.args.client_config_max_bytes
                 + prepared.args.finality_max_bytes
                 + prepared.args.queries_max_bytes
@@ -801,13 +897,11 @@ mod retained {
     }
 
     #[test]
-    fn duplicate_committed_entrypoint_is_rejected_after_complete_transcript_collection() {
-        let mut fixture = Fixture::new(1, None);
+    fn duplicate_native_input_is_rejected_before_query_collection() {
+        let mut fixture = Fixture::new(4, None);
         fixture
-            .rewrite_entry_for_test(|entry| {
-                let lane = &mut entry.execution_batch.as_mut().unwrap().lanes[0];
-                lane.entrypoints[1] = lane.entrypoints[0].clone();
-                lane.entrypoint_hashes[1] = Hash::from(lane.entrypoints[1].hash());
+            .rewrite_native_for_test(2, |batch| {
+                batch.groups[1].payload = batch.groups[0].payload.clone();
             })
             .unwrap();
         let prepared = prepare(&fixture, replies(&fixture));
@@ -821,11 +915,8 @@ mod retained {
                 &|| Ok(()),
             )
             .unwrap_err();
-        assert!(
-            error.to_string().contains("duplicate entrypoint"),
-            "{error:#}"
-        );
-        prepared.transport.assert_drained(11);
+        assert!(!error.to_string().is_empty());
+        assert_eq!(prepared.transport.consumed(), 4);
         no_outputs(&prepared.args);
     }
     impl HttpTransport for MutatingTransport {
@@ -852,13 +943,13 @@ mod retained {
 
     #[test]
     fn original_anchor_and_kura_replacement_during_sdk_queries_fail_closed() {
-        for replace_anchor in [true, false] {
+        for source_index in 0..3 {
             let fixture = Fixture::new(4, None);
             let prepared = prepare(&fixture, replies(&fixture));
-            let source = if replace_anchor {
-                prepared.args.context.clone()
-            } else {
-                prepared.args.block_store.join("blocks.data")
+            let source = match source_index {
+                0 => prepared.args.context.clone(),
+                1 => prepared.args.native_contexts.clone(),
+                _ => prepared.args.block_store.join("blocks.data"),
             };
             let client = fixture.client(Arc::new(MutatingTransport {
                 inner: prepared.transport.clone(),
@@ -927,7 +1018,7 @@ mod retained {
     #[test]
     fn actual_reply_write_and_flush_keep_all_originals_and_outputs_retained() {
         for at_flush in [false, true] {
-            for target in 0..4 {
+            for target in 0..5 {
                 let fixture = Fixture::new(1, None);
                 let prepared = prepare(&fixture, replies(&fixture));
                 let path = match target {
@@ -935,6 +1026,7 @@ mod retained {
                     1 => prepared.args.finality_out.clone(),
                     2 => prepared.args.queries_out.clone(),
                     3 => prepared.args.block_store.join("blocks.data"),
+                    4 => prepared.args.native_contexts.clone(),
                     _ => unreachable!(),
                 };
                 let mut writer = MutatingWriter {

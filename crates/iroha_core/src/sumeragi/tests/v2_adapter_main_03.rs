@@ -877,7 +877,7 @@ fn recovered_proposal_broadcast_and_sign_seals_exact_wal_body_and_successor() {
         effects: confirmed_effects,
         leader_wire_launch_prepared: false,
         ..
-    } = confirmed.state
+    } = *confirmed.state
     else {
         panic!("confirmed production startup remains in the recovered state")
     };
@@ -909,7 +909,6 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
     let local_index = usize::try_from(local).expect("fixture signer index fits usize");
     let header = BlockHeader::new(
         NonZeroU64::new(round.height).expect("fixture height is non-zero"),
-        None,
         None,
         None,
         8_214,
@@ -1115,7 +1114,7 @@ fn production_recovered_proposal_sign_joins_exact_next_vote_body_store() {
         local_proposal_attempt: Some(recovered_local_proposal),
         leader_wire_launch_prepared: false,
         ..
-    } = cold_startup.state
+    } = *cold_startup.state
     else {
         panic!("advanced cold preview retains one recovered adapter startup")
     };

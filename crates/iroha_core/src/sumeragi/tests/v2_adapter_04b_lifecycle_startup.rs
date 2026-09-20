@@ -320,6 +320,12 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
     let mut activated = launched
         .activate(Instant::now(), activation, local_proposal_state)
         .unwrap_or_else(|error| panic!("activate exact Kura-bound lifecycle owner: {error}"));
+    assert_eq!(
+        activated
+            .producer_claim_projection()
+            .expect("activated owner has no outstanding worker custody"),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible,
+    );
     assert!(ingress_ready.load(Ordering::Acquire));
     assert!(leader_wire_ingress.state.lock().open);
     assert_eq!(
@@ -539,19 +545,19 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
-fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
+fn production_genesis_complete_tip_adopts_control_repair_and_launches() {
     run_lifecycle_fixture_on_large_stack(
-        "production_empty_genesis_complete_tip_adopts_control_repair_and_launches",
-        production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body,
+        "production_genesis_complete_tip_adopts_control_repair_and_launches",
+        production_genesis_complete_tip_adopts_control_repair_and_launches_body,
     );
 }
 
 #[cfg(feature = "bls")]
-fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body() {
+fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
     let (kura, state, verified, storage_authority, local_signer, retirement) =
-        super::super::v2_recovery::production_empty_genesis_complete_tip_fixture_for_test();
+        super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let context = verified.context().clone();
     let local_peer = PeerId::new(local_signer.public_key().clone());
     let local_validator = context
@@ -748,7 +754,6 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
         &mut npos_beacon,
         1,
         64,
-        super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
         None,
     )
     .expect("dispatch the first active CompleteTip recovered Sign");
@@ -758,13 +763,18 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
         "the recovered Sign worker owns Completion before ProducerTurn may claim"
     );
     assert!(first.requires_yield());
+    assert_eq!(
+        first.producer_claim(),
+        activated
+            .producer_claim_projection()
+            .expect("inspect the actual Sign owner"),
+    );
     assert!(
         !output_guard.restart_required(),
         "queueing the recovered Sign must keep consensus output open"
     );
 
     let completion_deadline = Instant::now() + Duration::from_secs(5);
-    let mut producer_claim = first.producer_claim();
     loop {
         let next = super::super::v2_runner::drain_lifecycle_v2_ingress(
             &mut activated,
@@ -779,11 +789,13 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches_body
             &mut npos_beacon,
             1,
             64,
-            producer_claim,
             None,
         )
         .expect("settle the active CompleteTip recovered Sign");
-        producer_claim = next.producer_claim();
+        let producer_claim = activated
+            .producer_claim_projection()
+            .expect("inspect retained work after Completion");
+        assert_eq!(next.producer_claim(), producer_claim);
         if producer_claim == super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible
         {
             assert!(!next.requires_yield());
@@ -913,8 +925,21 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         foreign_state_error.to_string(),
         "recovered lifecycle execution dependencies changed identity"
     );
-    let wrong_network_state =
-        lifecycle_factory_state_for_test(Arc::clone(&kura), test_network_id(0xFE));
+    // Build the foreign State before attaching its physical lane storage. The
+    // factory must reject this network mismatch; the test constructor would
+    // instead attempt to rebind Kura's already authenticated lane journal.
+    let wrong_network_state = Arc::new(
+        crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
+            crate::state::World::default(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            "sumeragi-v2-lifecycle-test"
+                .parse()
+                .expect("fixture chain id"),
+            test_network_id(0xFE),
+        )
+        .expect("construct the foreign State before physical storage attachment"),
+    );
     let wrong_network_error = match try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage(),
@@ -1046,6 +1071,7 @@ fn exercise_pending_kura_production_lifecycle(
         super::super::v2_lifecycle_coordinator::LifecycleLedgerV1,
         wire::Vote,
     )>,
+    retained_apply: Option<super::super::v2_lifecycle_coordinator::LifecycleLedgerV1>,
 ) {
     let local_peer = PeerId::new(local_signer.public_key().clone());
     let local_validator = context
@@ -1095,17 +1121,14 @@ fn exercise_pending_kura_production_lifecycle(
         .map(|entry| entry.validator.clone())
         .filter(|peer| peer != &local_peer)
         .collect::<std::collections::BTreeSet<_>>();
-    let (network, mut actor_admissions) = if retained_incident.is_some() {
-        assert_eq!(remote_peers.len(), 3);
-        let (network, actor_admissions) = crate::IrohaNetwork::actor_admission_for_tests(
-            local_peer.clone(),
-            remote_peers.iter().cloned().collect(),
-            std::num::NonZeroUsize::new(3).expect("one exact Prepare slot per remote voter"),
-        );
-        (network, Some(actor_admissions))
-    } else {
-        (crate::IrohaNetwork::closed_for_tests(), None)
-    };
+    assert_eq!(remote_peers.len(), 3);
+    // Pending Apply recovery still owns canonical output admission before live
+    // clocks start. Retain the actual actor receiver throughout every replay.
+    let (network, mut actor_admissions) = crate::IrohaNetwork::actor_admission_for_tests(
+        local_peer.clone(),
+        remote_peers.iter().cloned().collect(),
+        std::num::NonZeroUsize::new(3).expect("one exact output slot per remote voter"),
+    );
     let launch_inputs =
         super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
             launched_at,
@@ -1161,12 +1184,9 @@ fn exercise_pending_kura_production_lifecycle(
         let expected_message = wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::Vote(prepare_vote.clone()),
         );
-        let actor = actor_admissions
-            .as_mut()
-            .expect("incident launch retains its live actor receiver owner");
         let mut accepted = std::collections::BTreeSet::new();
         assert_eq!(
-            actor.drain_posts(|post| {
+            actor_admissions.drain_posts(|post| {
                 let crate::NetworkMessage::SumeragiBlock(envelope) = &post.data else {
                     panic!("incident actor admission changed the Prepare envelope");
                 };
@@ -1181,7 +1201,7 @@ fn exercise_pending_kura_production_lifecycle(
         );
         assert_eq!(accepted, remote_peers);
         assert_eq!(
-            actor.drain_posts(|_| panic!("unexpected extra actor post")),
+            actor_admissions.drain_posts(|_| panic!("unexpected extra actor post")),
             0
         );
     }
@@ -1195,7 +1215,11 @@ fn exercise_pending_kura_production_lifecycle(
     loop {
         let progress = pending
             .drive_apply_recovery_turn(&mut setup_runner, 64)
-            .unwrap_or_else(|error| panic!("drive pending Kura Apply recovery: {error}"));
+            .unwrap_or_else(|error| {
+                panic!(
+                    "drive pending Kura Apply recovery: {error}; guard={output_guard:?}, stages={recovery_stages:?}"
+                )
+            });
         let (completed, observed_stage) = match progress {
             super::super::v2_lifecycle_coordinator::ProductionPendingKuraApplyRecoveryProgressV1::Advanced {
                 stage,
@@ -1224,6 +1248,12 @@ fn exercise_pending_kura_production_lifecycle(
                 >(())
             })
             .expect("inspect closed pending Kura lifecycle");
+        if let Some(before) = retained_apply.as_ref() {
+            super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::assert_pending_kura_apply_progress_for_test(
+                before, &kura.sumeragi_v2_storage_root().join("lifecycle-v1")
+                    .join(hex::encode(context.id().0.as_ref())), completed,
+            );
+        }
         assert!(!ingress_ready.load(Ordering::Acquire));
         assert!(!leader_wire_ingress.state.lock().open);
         assert!(crate::sumeragi::status::v2_status().is_none());
@@ -1377,7 +1407,9 @@ fn settle_terminal_fixture_runner_handoff(
     lane_work: &mut super::super::v2_lane_work::V2LaneWorkAdapter,
     output_guard: &crate::sumeragi::output_guard::ConsensusOutputGuard,
 ) {
-    let permit = super::super::v2_runner::LifecycleProducerClaimDispositionV1::ApplyTerminalSettled
+    let permit = activated
+        .producer_claim_projection()
+        .expect("inspect the terminal fixture's actual Apply owner")
         .decided_lane_recovery_permit()
         .expect("settled Apply authorizes its exact runner handoff");
     activated
@@ -1403,15 +1435,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
     if std::thread::current().name() != Some("production-lifecycle-marker-replay") {
         return run_marker_replay_test_on_stack();
     }
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
-    for (
-        marker,
-        persist_matching_outcome,
-        shutdown_before_activation,
-        shutdown_after_activation,
-        pending_kura_finalize,
-    ) in [
+    exercise_production_marker_replay_cases(&[
         (0xB1_u8, true, false, false, None),
         (0xB2_u8, false, false, false, None),
         (0xB3_u8, true, true, false, None),
@@ -1419,15 +1443,83 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         (0xB5_u8, true, false, false, Some(false)),
         (0xB6_u8, true, false, false, Some(true)),
         (0xB7_u8, true, false, false, Some(true)),
-    ] {
-        let kura = Kura::blank_kura_for_testing();
+    ]);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn pending_kura_standalone_apply_recovers_real_kura_shutdown_cut() {
+    run_pending_kura_retained_apply_case(0xB8);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn pending_kura_standalone_apply_rejects_foreign_owner_without_mutation() {
+    run_pending_kura_retained_apply_case(0xB9);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn pending_kura_linked_apply_recovers_real_kura_shutdown_cut() {
+    run_pending_kura_retained_apply_case(0xBA);
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn pending_kura_linked_apply_rejects_changed_parent_and_decision_without_mutation() {
+    for marker in [0xBB, 0xBC] {
+        run_pending_kura_retained_apply_case(marker);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn pending_kura_recovered_decision_chain_recovers_real_kura_shutdown_cut() {
+    run_pending_kura_retained_apply_case(0xBD);
+}
+
+#[cfg(feature = "bls")]
+fn run_pending_kura_retained_apply_case(marker: u8) {
+    let handle = std::thread::Builder::new()
+        .name("pending-kura-retained-apply".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            exercise_production_marker_replay_cases(&[(marker, true, false, false, Some(true))]);
+        })
+        .expect("spawn actual pending Kura shutdown-cut regression");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Option<bool>)]) {
+    let logging_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the recovery fixture logger requires a Tokio reactor");
+    let _runtime_guard = logging_runtime.enter();
+    let _logger = iroha_logger::test_logger();
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    crate::sumeragi::status::clear_v2_status();
+    for &(
+        marker,
+        persist_matching_outcome,
+        shutdown_before_activation,
+        shutdown_after_activation,
+        pending_kura_finalize,
+    ) in cases
+    {
+        let kura = super::super::v2_lane_work::tests::locked_lane_work_test_kura(
+            iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+        );
         let storage_root = kura.sumeragi_v2_storage_root();
         let (mut recovered_context, keys, proofs) = authenticated_context();
         let genesis_key = KeyPair::try_from_seed(vec![0xE7; 32], Algorithm::Ed25519)
             .expect("deterministic production marker-replay genesis key");
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
-        let state = Arc::new(
-            crate::state::State::new_with_chain_and_network_id_for_testing(
+        let mut state =
+            crate::state::State::try_new_with_chain_and_network_id_with_default_telemetry(
                 crate::state::World::with(
                     [],
                     [iroha_data_model::Registrable::build(
@@ -1442,8 +1534,14 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     .parse()
                     .expect("lifecycle fixture chain id"),
                 recovered_context.network_id,
-            ),
+            )
+            .expect("construct marker-replay State over authenticated Kura storage");
+        // Authenticate and publish the initial lane journal before deriving any
+        // context or body commitment that recovery must later revalidate.
+        state.install_pre_genesis_nexus_for_testing(
+            iroha_config::parameters::actual::Nexus::default(),
         );
+        let state = Arc::new(state);
         recovered_context.nexus_amx_context_hash =
             super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref())
                 .expect("valid committed catalog");
@@ -1490,7 +1588,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             .expect("marker-replay genesis creation time fits u64");
         let mut header = BlockHeader::new(
             NonZeroU64::new(round.height).expect("marker-replay height is non-zero"),
-            None,
             None,
             None,
             creation_time_ms,
@@ -1585,6 +1682,157 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
         authenticate_qc(&mut decision, &keys);
 
         if let Some(finalize) = pending_kura_finalize {
+            // Publish the survivor through native admission before the crash.
+            // Recovery's passive comparison never constructs its own expected row.
+            let retained_apply = if matches!(marker, 0xBA | 0xBB | 0xBC) {
+                let verified =
+                    VerifiedHeightContext::genesis(recovered_context.clone(), proofs.clone())
+                        .expect("verify linked Apply fixture context");
+                let proposer = recovered_context.leader(round.view);
+                let mut proposal = wire::Proposal {
+                    round,
+                    proposer,
+                    subject,
+                    manifest: manifest.clone(),
+                    justification: wire::ProposalJustification::ParentCommit(
+                        wire::ParentCommitJustification { certificate: None },
+                    ),
+                    signature: Vec::new(),
+                };
+                proposal.signature = Signature::new(
+                    keys[usize::try_from(proposer).expect("linked Apply proposer")].private_key(),
+                    &proposal.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                let mut prepare = decision.clone();
+                prepare.phase = wire::GlobalPhase::Prepare;
+                authenticate_qc(&mut prepare, &keys);
+                let wal_path = storage_root
+                    .join("wal")
+                    .join(format!("{:020}.wal", recovered_context.height));
+                let (mut adapter, effects) = SumeragiV2Adapter::open(
+                    wal_path,
+                    verified.clone(),
+                    Some(0),
+                    reducer::Generation::INITIAL,
+                    [marker; 32],
+                    fingerprints(),
+                    deferred_admission_ordinals(),
+                )
+                .expect("open the linked Apply's actual safety WAL");
+                assert!(effects.is_empty());
+                let ledger_root = storage_root
+                    .join("lifecycle-v1")
+                    .join(hex::encode(recovered_context.id().0.as_ref()));
+                Some(super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::persist_pending_kura_linked_apply_for_test(
+                    &verified,
+                    &mut adapter,
+                    proposal,
+                    prepare,
+                    decision.clone(),
+                    validated_receipt.as_ref().expect("actual validated body receipt").clone(),
+                    &ledger_root,
+                ))
+            } else if matches!(marker, 0xB8 | 0xB9 | 0xBD) {
+                let verified =
+                    VerifiedHeightContext::genesis(recovered_context.clone(), proofs.clone())
+                        .expect("verify standalone Apply fixture context");
+                let ledger_root = storage_root
+                    .join("lifecycle-v1")
+                    .join(hex::encode(recovered_context.id().0.as_ref()));
+                if marker != 0xBD {
+                    super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::persist_pending_kura_released_validate_for_test(
+                        &verified, &manifest, &durable, &ledger_root,
+                    );
+                }
+                drop(body_store);
+                let wal_path = storage_root
+                    .join("wal")
+                    .join(format!("{:020}.wal", recovered_context.height));
+                let ordinary = write_and_reopen_authenticated_wal_startup_at_path(
+                    wal_path,
+                    &recovered_context,
+                    &proofs,
+                    0,
+                    [marker; 32],
+                    vec![WalRecordV2::Decision(decision.clone())],
+                )
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|(error, _)| {
+                    panic!("authenticate original standalone Apply: {error}")
+                });
+                let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+                    .expect("original standalone Apply signer");
+                let storage = RecoveredLifecycleStorageAuthorityV1::for_test(
+                    kura.as_ref(),
+                    &verified,
+                    signature_policy.clone(),
+                    genesis_account.clone(),
+                );
+                let inputs = ordinary.bind_production_lifecycle_owner_factory_inputs_v1(
+                    super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
+                        local_signer, state.sumeragi_block_cadence(),
+                    ), storage, Arc::clone(&state), Arc::clone(&queue), Arc::clone(&kura),
+                    None, None, events_sender.clone(),
+                ).unwrap_or_else(|error| panic!("bind original standalone Apply dependencies: {error}"));
+                let quarantined = super::super::v2_body_store::V2BodyStore::open_with_policy(
+                    storage_root.join("bodies"),
+                    recovered_context.clone(),
+                    signature_policy.clone(),
+                )
+                .expect("reopen original standalone Apply body")
+                .into_quarantined_recovered_startup()
+                .expect("quarantine original standalone Apply body");
+                let mut owner = ordinary
+                    .open_production_lifecycle_owner_v1(
+                        &lifecycle_owner_config(),
+                        4,
+                        inputs,
+                        quarantined,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "publish original standalone Apply through native admission: {error}"
+                        )
+                    });
+                let before = if marker == 0xBD {
+                    let (count, apply_ordinal) = owner
+                        .recovered_decision_apply_summary_for_test()
+                        .expect("native Decision recovery published its four-row body chain");
+                    assert_eq!(count, 4);
+                    let (_, ledger) =
+                        super::super::v2_lifecycle_coordinator::LifecycleLedgerStoreV1::open(
+                            &ledger_root,
+                            super::super::v2_lifecycle_coordinator::LifecycleContext::new(
+                                super::super::v2_lifecycle_coordinator::LifecycleDigest::new(
+                                    *recovered_context.id().0.as_ref(),
+                                ),
+                                recovered_context.height,
+                            ),
+                        )
+                        .expect("read the actual native Decision body chain");
+                    ledger.assert_pending_kura_linked_owner_for_test(apply_ordinal);
+                    ledger
+                } else {
+                    owner.snapshot_pending_kura_standalone_apply_for_test(&ledger_root)
+                };
+                drop(owner);
+                body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+                    storage_root.join("bodies"),
+                    recovered_context.clone(),
+                    signature_policy.clone(),
+                )
+                .expect("reopen actual Apply body before Kura write");
+                body_store
+                    .revalidate_recovered_markers(|body| {
+                        semantic_probe.revalidate_recovered_candidate(&recovered_context, body)
+                    })
+                    .expect("revalidate original body before actual Kura write");
+                Some(before)
+            } else {
+                None
+            };
             let task = super::super::v2_effects::ApplyTask::for_test(
                 u64::from(marker),
                 super::super::v2_core::EventTag::new(
@@ -1594,7 +1842,14 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 ),
                 subject,
                 decision.clone(),
-                validated_receipt.expect("pending Kura fixture has a validated body"),
+                body_store
+                    .validated_recovery_catalog()
+                    .remove(&(round, subject))
+                    .expect("pending Kura fixture has its current store's validated body"),
+            );
+            assert!(
+                validated_receipt.is_some(),
+                "pending Kura starts with successful validation"
             );
             semantic_probe.fail_after_kura_store_for_test();
             assert!(matches!(
@@ -1604,6 +1859,9 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             drop(body_store);
             assert_eq!(state.committed_height(), 0);
             assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
+            // The original live adapter and body store are gone at this crash
+            // boundary. A fresh process cannot retain their published status.
+            crate::sumeragi::status::clear_v2_status();
             let expected = super::super::v2_recovery::PendingKuraApply::for_test(
                 recovered_context.id(),
                 recovered_context.height,
@@ -1726,14 +1984,32 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     assert!(attempted.exactly_matches_directive(directive));
                 }
             }
-            let startup = write_and_reopen_authenticated_wal_startup_at_path(
-                wal_path.clone(),
-                &recovered_context,
-                &proofs,
-                local_validator,
-                [marker; 32],
-                wal_records,
-            );
+            let startup = if retained_apply.is_some() {
+                SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+                    wal_path.clone(),
+                    verified.clone(),
+                    Some(local_validator),
+                    if matches!(marker, 0xBA | 0xBB | 0xBC) {
+                        reducer::Generation::INITIAL
+                    } else {
+                        reducer::Generation::new(50)
+                    },
+                    [marker; 32],
+                    fingerprints(),
+                    Box::new(TestAggregator),
+                    deferred_admission_ordinals(),
+                )
+                .expect("reopen the exact original Decision WAL without rewriting it")
+            } else {
+                write_and_reopen_authenticated_wal_startup_at_path(
+                    wal_path.clone(),
+                    &recovered_context,
+                    &proofs,
+                    local_validator,
+                    [marker; 32],
+                    wal_records,
+                )
+            };
             if marker == 0xB7 {
                 let durable = startup.adapter.reducer.durable_state();
                 assert!(durable.decision().is_some());
@@ -1787,14 +2063,61 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     events_sender.clone(),
                 )
                 .unwrap_or_else(|error| panic!("bind pending Kura lifecycle inputs: {error}"));
-            let mut owner = authenticated
-                .open_production_lifecycle_owner_v1(
-                    &lifecycle_owner_config(),
-                    4,
-                    factory_inputs,
-                    recovered_body_store,
-                )
-                .unwrap_or_else(|error| panic!("open pending Kura lifecycle owner: {error}"));
+            let ledger_root = storage_root
+                .join("lifecycle-v1")
+                .join(hex::encode(recovered_context.id().0.as_ref()));
+            if marker == 0xB9 {
+                super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::replace_pending_kura_apply_owner_for_test(
+                    retained_apply.as_ref().expect("negative retains a genuine admitted Apply"), &ledger_root,
+                );
+            }
+            if matches!(marker, 0xBB | 0xBC) {
+                retained_apply
+                    .as_ref()
+                    .expect("negative retains a genuine linked Apply")
+                    .persist_pending_kura_corruption_for_test(&ledger_root, marker == 0xBB);
+            }
+            let before_open = std::fs::read(ledger_root.join("lifecycle-ledger-v1.norito")).ok();
+            let opened = authenticated.open_production_lifecycle_owner_v1(
+                &lifecycle_owner_config(),
+                4,
+                factory_inputs,
+                recovered_body_store,
+            );
+            if matches!(marker, 0xB9 | 0xBB | 0xBC) {
+                assert!(
+                    opened.is_err(),
+                    "changed retained Apply authority cannot borrow native PendingKura authority"
+                );
+                assert_eq!(
+                    &std::fs::read(ledger_root.join("lifecycle-ledger-v1.norito"))
+                        .expect("read retained wrong-authority ledger after rejection"),
+                    before_open
+                        .as_ref()
+                        .expect("wrong-authority input is a retained durable ledger"),
+                    "rejection must preserve the exact wrong-authority ledger"
+                );
+                assert_eq!(
+                    state.committed_height(),
+                    0,
+                    "rejected owner cannot apply State"
+                );
+                assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
+                continue;
+            }
+            let mut owner =
+                opened.unwrap_or_else(|error| panic!("open pending Kura lifecycle owner: {error}"));
+            if let Some(before) = retained_apply.as_ref() {
+                owner.assert_pending_kura_passive_apply_for_test(before, &ledger_root);
+                assert_eq!(
+                    &std::fs::read(ledger_root.join("lifecycle-ledger-v1.norito"))
+                        .expect("read passively retained Apply ledger"),
+                    before_open
+                        .as_ref()
+                        .expect("genuine Apply was durable before recovery"),
+                    "passive admission and generic output deferral preserve every ledger byte",
+                );
+            }
             if let Some(before) = retained_proposal.as_ref() {
                 assert_eq!(owner.recovered_lifecycle_output_count(), 2);
                 let output_calls = std::cell::Cell::new(0);
@@ -1824,6 +2147,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 wal_path,
                 finalize,
                 retained_proposal.zip(retained_prepare),
+                retained_apply,
             );
             continue;
         }
@@ -2574,62 +2898,69 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let batch_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
             let mut batch_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            let mut producer_claim =
-                super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial();
-            let batch_deadline = Instant::now() + Duration::from_secs(5);
-            for turn in 0..64 {
-                let disposition = super::super::v2_runner::drain_lifecycle_v2_ingress(
-                    &mut activated,
-                    &mut batch_runner,
-                    &leader_wire_ingress,
-                    &mut lane_work,
-                    kura.as_ref(),
-                    &local_signer,
-                    &mut block_sync_server,
-                    &mut block_sync,
-                    &mut block_sync_request,
-                    &mut npos_beacon,
-                    1,
-                    16,
-                    producer_claim,
-                    None,
-                )
-                .expect("drain one exact lifecycle-owned ordinary batch");
-                producer_claim = disposition.producer_claim();
-                settle_terminal_fixture_runner_handoff(
-                    &mut activated,
-                    &mut batch_runner,
-                    &mut lane_work,
-                    output_guard.as_ref(),
-                );
-                assert!(!output_guard.restart_required(), "{disposition:?}");
-                let retained_ordinals = leader_wire_ingress
-                    .state
-                    .lock()
-                    .lanes
-                    .values()
-                    .flat_map(|lane| lane.entries.iter().map(|entry| entry.admission_ordinal))
-                    .collect::<Vec<_>>();
-                if retained_ordinals.is_empty() {
-                    assert!(!disposition.requires_yield(), "{disposition:?}");
-                    break;
-                }
-                assert_eq!(retained_ordinals, vec![batch_ordinal], "{disposition:?}");
-                // A settled Completion or Runtime output can stop before
-                // Ingress without requiring a yield before Producer planning.
-                // Preserve that typed stop and its claim for the next real turn.
-                assert!(
-                    disposition.advance_executor_yield().is_some()
-                        || disposition.terminal_settlement_stops_runtime(),
-                    "batch ordinal {batch_ordinal} survived without a pre-Ingress stop: {disposition:?}",
-                );
-                assert!(
-                    turn < 63 && Instant::now() < batch_deadline,
-                    "batch ordinal {batch_ordinal} did not drain after {} turns: {disposition:?}",
-                    turn + 1,
-                );
-                std::thread::yield_now();
-            }
+            let disposition = super::super::v2_runner::drain_lifecycle_v2_ingress(
+                &mut activated,
+                &mut batch_runner,
+                &leader_wire_ingress,
+                &mut lane_work,
+                kura.as_ref(),
+                &local_signer,
+                &mut block_sync_server,
+                &mut block_sync,
+                &mut block_sync_request,
+                &mut npos_beacon,
+                1,
+                16,
+                None,
+            )
+            .expect("observe the settled Apply fence in the ordinary batch");
+            assert_eq!(
+                disposition.producer_claim(),
+                activated
+                    .producer_claim_projection()
+                    .expect("inspect the batch's actual remaining owner"),
+            );
+            assert!(
+                disposition.terminal_settlement_stops_runtime(),
+                "{disposition:?}"
+            );
+            assert!(!disposition.requires_yield(), "{disposition:?}");
+            let retained_ordinals = leader_wire_ingress
+                .state
+                .lock()
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter().map(|entry| entry.admission_ordinal))
+                .collect::<Vec<_>>();
+            assert_eq!(retained_ordinals, vec![batch_ordinal], "{disposition:?}");
+            settle_terminal_fixture_runner_handoff(
+                &mut activated,
+                &mut batch_runner,
+                &mut lane_work,
+                output_guard.as_ref(),
+            );
+            // The ordinary batch must preserve the terminal fence. Its bounded
+            // decided-lane recovery suffix owns this exact queued occurrence;
+            // resetting a runner claim to Eligible would conceal that contract.
+            let drained = activated.with_runner_runtime(
+                &mut batch_runner,
+                |_owner, executor, services, _local_proposal| {
+                    super::super::v2_runner::lifecycle_run_inner::drain_decided_lane_recovery_ingress_batch_for_test(
+                        &leader_wire_ingress,
+                        executor,
+                        services,
+                        &mut lane_work,
+                        kura.as_ref(),
+                        &mut block_sync_server,
+                        1,
+                    )
+                },
+            )
+            .expect("drain the terminal occurrence through the production recovery suffix");
+            assert_eq!(
+                drained, 1,
+                "one bounded recovery turn must release the exact occurrence"
+            );
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
             let (rejected_serve, admitted_serve) =

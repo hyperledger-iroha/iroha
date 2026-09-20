@@ -232,7 +232,7 @@ fn evidence_resource_kind(
                 index_resource_kind(&path.with_file_name(index_name)),
                 Some((_, IndexResourceFormat::SidecarV1, false))
             ) {
-                return singleton(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES as u64, true);
+                return singleton(BOUND_PROGRESS_APPEND_INTENT_DECODE_MAX_BYTES as u64, true);
             }
             return Err(Missing::OwnerMismatch);
         }
@@ -569,7 +569,7 @@ mod evidence_resource_tests {
             let intent = lane.join(format!("{name}.append.intent.tmp"));
             assert!(index_resource_kind(&intent).is_none());
             assert!(
-                matches!(evidence_resource_kind(&intent, limits()).unwrap(), Some((IndexResourceFormat::Singleton(maximum), true)) if maximum == BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES as u64)
+                matches!(evidence_resource_kind(&intent, limits()).unwrap(), Some((IndexResourceFormat::Singleton(maximum), true)) if maximum == BOUND_PROGRESS_APPEND_INTENT_DECODE_MAX_BYTES as u64)
             );
         }
         assert!(

@@ -41,7 +41,6 @@ impl TestExecutor {
                     NonZeroU64::new(2).expect("non-zero block height"),
                     None,
                     None,
-                    None,
                     0,
                     0,
                 ),

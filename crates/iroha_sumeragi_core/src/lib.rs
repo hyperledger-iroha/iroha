@@ -47,12 +47,12 @@ pub use reducer::{
 };
 pub use scheduler::{ScheduleState, ScheduledWork};
 pub use types::{
-    CertificateRef, ConsensusMessageV2, ContextId, Digest, EventTag, Generation, HeightContext,
-    HeightContextError, MAX_FAULT_TOLERANCE, MAX_VOTING_ROSTER_LEN, MIN_FAULT_TOLERANCE,
-    MIN_VOTING_ROSTER_LEN, NetworkId, OpaqueSignature, PROTOCOL_VERSION_V4, PayloadManifest, Phase,
-    Proposal, ProposalJustification, QuorumCertificate, Round, SignatureShare, SignedProposal,
-    SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
-    Validator, ValidatorId, Vote, VotingMode, VotingPower,
+    CertificateRef, ConsensusMessageV2, ContextId, Digest, EventTag, FinalizedStateAnchor,
+    Generation, HeightContext, HeightContextError, MAX_FAULT_TOLERANCE, MAX_VOTING_ROSTER_LEN,
+    MIN_FAULT_TOLERANCE, MIN_VOTING_ROSTER_LEN, NetworkId, OpaqueSignature, PROTOCOL_VERSION_V4,
+    PayloadManifest, Phase, Proposal, ProposalJustification, QuorumCertificate, Round,
+    SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
+    TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
 };
 pub use wal::{
     DurableState, EncodedWalFrame, PersistenceId, RecoveredWalRecord, ReplayError,

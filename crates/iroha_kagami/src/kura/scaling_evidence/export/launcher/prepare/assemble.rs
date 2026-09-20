@@ -14,6 +14,7 @@ use iroha_config::parameters::actual;
 use iroha_core::{
     kura::{CanonicalKuraEvidenceComplete, CanonicalKuraEvidenceLimits},
     queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
+    state::FinalizedNativeContextV1,
     sumeragi::GenesisMergeAuthority,
 };
 use iroha_crypto::PublicKey;
@@ -269,7 +270,7 @@ pub(in crate::kura::scaling_evidence::export) fn assemble(
             "original context differs from actual staged genesis"
         );
         let catalog_bytes = catalog_copy_bytes(
-            authorities[0].genesis.active_lanes(),
+            authorities[0].genesis.active_lanes().len(),
             authorities[0].genesis.lane_authority_catalog(),
         )?;
         ensure!(
@@ -282,12 +283,23 @@ pub(in crate::kura::scaling_evidence::export) fn assemble(
             first_context: context.id(),
             first_height: 1,
             last_height: reader.last_height,
-            lane_catalog_hash: authorities[0].genesis.catalog_hash(),
-            active_lanes: authorities[0].genesis.active_lanes().to_vec(),
+            nexus_amx_context_hash: context.nexus_amx_context_hash,
+            execution_policy_hash: context.execution_policy_hash,
+            active_lanes: authorities[0]
+                .genesis
+                .active_lanes()
+                .iter()
+                .map(|lane| NativeWorkloadLane {
+                    lane_id: lane.lane_id,
+                    dataspace_id: lane.dataspace_id,
+                    incarnation: lane.incarnation,
+                    activation_height: lane.activation_height,
+                })
+                .collect(),
             lane_authorities: authorities[0].genesis.lane_authority_catalog().clone(),
             scheduled,
         };
-        let finality: Vec<BridgeFinalityProof> = canonical(originals.finality.bytes)?;
+        let finality: Vec<FinalizedNativeContextV1> = canonical(originals.finality.bytes)?;
         let queries: Vec<CommittedTransaction> = canonical(originals.queries.bytes)?;
         let heights = group_supplied(finality, queries, reader.last_height, verification)?;
         let bindings = super::derive_bindings(&heights, &plan, verification)?;
@@ -764,7 +776,7 @@ fn bounded_frame<T: norito::NoritoSerialize>(value: &T, cap: usize) -> Result<Ve
     Ok(bytes)
 }
 fn group_supplied(
-    finality: Vec<BridgeFinalityProof>,
+    finality: Vec<FinalizedNativeContextV1>,
     queries: Vec<CommittedTransaction>,
     last: u64,
     limits: VerificationLimits,
@@ -784,7 +796,11 @@ fn group_supplied(
         .ok_or_else(|| eyre!("facts supplied slot reservation overflow"))?;
     let mut charged_bytes = charged(0, slots, limits.input_bytes)?;
     rows.try_reserve_exact(finality.len())?;
-    for (index, proof) in finality.into_iter().enumerate() {
+    for (index, original) in finality.into_iter().enumerate() {
+        let FinalizedNativeContextV1 {
+            finality: proof,
+            contexts,
+        } = original;
         let height = u64::try_from(index)?
             .checked_add(1)
             .ok_or_else(|| eyre!("facts height overflow"))?;
@@ -798,9 +814,15 @@ fn group_supplied(
                 &proof,
                 MAX_FINALITY_BYTES.min(usize::try_from(limits.input_bytes - charged_bytes)?),
             )?,
+            contexts: Vec::new(),
             queries: Vec::new(),
         };
         charged_bytes = charged(charged_bytes, row.finality.len(), limits.input_bytes)?;
+        row.contexts = bounded_frame(
+            &contexts,
+            MAX_FINALITY_BYTES.min(usize::try_from(limits.input_bytes - charged_bytes)?),
+        )?;
+        charged_bytes = charged(charged_bytes, row.contexts.len(), limits.input_bytes)?;
         let carrier_hash = proof.block_header.hash();
         let cohort = query
             .as_slice()
@@ -812,6 +834,7 @@ fn group_supplied(
             "facts query cohort exceeds leaf reservation"
         );
         row.queries.try_reserve_exact(cohort)?;
+        let mut previous_output = None;
         while query
             .as_slice()
             .first()
@@ -820,12 +843,14 @@ fn group_supplied(
             let q = query
                 .next()
                 .ok_or_else(|| eyre!("facts query iterator changed"))?;
+            let output_index = q.output_proof.leaf_index();
             ensure!(
                 row.queries.len() < limits.leaves_per_carrier
                     && usize::try_from(q.entrypoint_proof.leaf_index())? == row.queries.len()
-                    && usize::try_from(q.result_proof.leaf_index())? == row.queries.len(),
+                    && previous_output.is_none_or(|previous| previous < output_index),
                 "facts query vector is not in full contiguous leaf order"
             );
+            previous_output = Some(output_index);
             let bytes = bounded_frame(
                 &q,
                 MAX_TRANSACTION_BYTES.min(usize::try_from(limits.input_bytes - charged_bytes)?),
@@ -841,15 +866,11 @@ fn group_supplied(
     );
     Ok(rows)
 }
-fn catalog_copy_bytes(
-    active: &[MergeLaneBinding],
-    catalog: &MergeLaneAuthorityCatalogV1,
-) -> Result<usize> {
+fn catalog_copy_bytes(active_count: usize, catalog: &MergeLaneAuthorityCatalogV1) -> Result<usize> {
     // Validated fixed geometry has at most four BLS rosters with four keys apiece. The 1 KiB
     // key allowance covers each owned public identity; this is a conservative work reservation.
-    active
-        .len()
-        .checked_mul(std::mem::size_of::<MergeLaneBinding>())
+    active_count
+        .checked_mul(std::mem::size_of::<NativeWorkloadLane>())
         .and_then(|n| {
             n.checked_add(
                 catalog
@@ -875,7 +896,7 @@ fn verification_copy(
     // allowance before cloning. The output facts cap remains solely a canonical byte bound.
     let mut bytes = charged(
         0,
-        catalog_copy_bytes(&plan.active_lanes, &plan.lane_authorities)?,
+        catalog_copy_bytes(plan.active_lanes.len(), &plan.lane_authorities)?,
         caps.decode_bytes,
     )?;
     for request in &plan.scheduled {
@@ -894,6 +915,7 @@ fn verification_copy(
             caps.decode_bytes,
         )?;
         bytes = charged(bytes, height.finality.len(), caps.decode_bytes)?;
+        bytes = charged(bytes, height.contexts.len(), caps.decode_bytes)?;
         for query in &height.queries {
             bytes = charged(bytes, std::mem::size_of::<Vec<u8>>(), caps.decode_bytes)?;
             bytes = charged(bytes, query.len(), caps.decode_bytes)?;
@@ -916,6 +938,7 @@ fn verification_copy(
         supplied.push(SuppliedHeightEvidence {
             height: h.height,
             finality: h.finality.clone(),
+            contexts: h.contexts.clone(),
             queries: h.queries.clone(),
         });
     }
@@ -925,7 +948,8 @@ fn verification_copy(
             first_context: plan.first_context,
             first_height: plan.first_height,
             last_height: plan.last_height,
-            lane_catalog_hash: plan.lane_catalog_hash,
+            nexus_amx_context_hash: plan.nexus_amx_context_hash,
+            execution_policy_hash: plan.execution_policy_hash,
             active_lanes: plan.active_lanes.clone(),
             lane_authorities: plan.lane_authorities.clone(),
             scheduled,

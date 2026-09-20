@@ -11,7 +11,6 @@ use iroha::data_model::{
     query::error::FindError,
     transaction::error::TransactionRejectionReason,
 };
-use iroha_config::parameters::actual::LaneConfig;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
@@ -156,14 +155,7 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
         .await;
     // Then: the Kura storage on disk must contain at least two block entries
     let store_dir = peer.kura_store_dir();
-    let lane_config = LaneConfig::default();
-    let primary_lane = lane_config.primary();
-    let candidate_blocks_dir = primary_lane.blocks_dir(&store_dir);
-    let blocks_dir = if candidate_blocks_dir.join("blocks.index").exists() {
-        candidate_blocks_dir
-    } else {
-        store_dir.clone()
-    };
+    let (blocks_dir, _) = iroha_core::kura::Kura::canonical_storage_paths(&store_dir);
     let hashes_path = blocks_dir.join("blocks.hashes");
     let index_path = blocks_dir.join("blocks.index");
     let data_path = blocks_dir.join("blocks.data");

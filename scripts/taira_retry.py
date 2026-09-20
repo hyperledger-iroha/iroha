@@ -3,6 +3,11 @@
 
 The build identity is immutable; each attempt gets a fresh inventory and nonce.
 Native assemble/authorize/apply remain the authentication and execution authority.
+Native preparation derives public genesis, beacon inputs and the ongoing epoch
+supervisor plan from a closed topology intent and actual retained input paths.
+Only the pinned renderer creates final FD200 units; native code admits credentials.
+Static retained path arguments and per-attempt derived assembly arguments have
+separate records. No prior four-file public bundle is accepted as the new closure.
 Runtime signing keys and peer configs are passed only to native code. This module
 also retains the locked operator-custody retirement, seed metadata continuity and
 boot publication checks used by the deployed corridor.
@@ -46,6 +51,9 @@ RESULT_SCHEMA = "taira.retry-result.v1"
 PROGRESS_SECONDS = 30
 PHASES = (
     "retire",
+    "prepare-public-inputs",
+    "prepare-beacon-inputs",
+    "prepare-epoch-supervisor-plan",
     "assemble",
     "seed-pre",
     "authorize",
@@ -143,12 +151,20 @@ def decode(raw):
 def write_public(path, value):
     """Publish one new private evidence record; previous attempts are never overwritten."""
     raw = (json.dumps(value, sort_keys=True) + "\n").encode()
+    return write_public_bytes(path, raw)
+
+
+def write_public_bytes(path, raw, *, mode=0o600):
+    """Publish exact public bytes; only rendered public units use mode0644."""
+    require(mode in (0o600, 0o644), "public output mode must be0600 or0644")
     fd = os.open(
         path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
     )
     with os.fdopen(fd, "wb") as output:
         output.write(raw)
         output.flush()
+        if mode != 0o600:
+            os.fchmod(output.fileno(), mode)
         os.fsync(output.fileno())
     sync_directory(Path(path).parent)
     return hashlib.sha256(raw).hexdigest()
@@ -254,6 +270,7 @@ def native_journal_progress(path):
             "admitted",
             "preflight",
             "stage",
+            "epoch_supervisor_pause",
             "stop",
             "install",
             "reset",
@@ -356,7 +373,7 @@ def run_native(argv, directory, *, phase, pass_fds=(), env=None, journal_path=No
 def qualification_steps(scope):
     """Exact first-release native journal sequence; never reinterpret old indices."""
     require(scope in ("core_testnet", "full_inrou"), "one explicit canonical qualification scope is required")
-    return ("preflight", "stage", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "convergence", "canary", "restart_proof", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
+    return ("preflight", "stage", "epoch_supervisor_pause", "stop", "install", "reset") + (("preseed",) if scope == "full_inrou" else ()) + ("start", "canary", "convergence", "restart_proof", "edge_stage", "edge_cutover", "edge_verify", "seal", "cleanup")
 
 
 def require_candidate_probe_inventory(inventory):
@@ -399,25 +416,97 @@ def require_candidate_probe_inventory(inventory):
 
 
 def fresh_inventory(previous, attempt_id, nonce):
-    """Native Assemble owns all derived fields; change only the public operation identity."""
+    """Project explicit topology intent only; native code derives every release pin."""
     require_candidate_probe_inventory(previous)
-    require(
-        re.fullmatch(r"retry-[0-9]{16,24}-[0-9a-f]{8}", attempt_id) is not None,
-        "fresh generated attempt identity required",
-    )
-    require(
-        re.fullmatch("[0-9a-f]{32}", nonce) is not None
-        and nonce != previous["authorization_nonce"],
-        "fresh authorization nonce required",
-    )
-    value = copy.deepcopy(previous)
-    value["deployment_id"] = "taira-" + attempt_id
-    value["authorization_nonce"] = nonce
-    require(
-        value["deployment_id"] != previous["deployment_id"],
-        "deployment identity reused",
-    )
+    require(re.fullmatch(r"retry-[0-9]{16,24}-[0-9a-f]{8}", attempt_id) is not None,
+            "fresh generated attempt identity required")
+    require(re.fullmatch("[0-9a-f]{32}", nonce) is not None
+            and nonce != previous["authorization_nonce"], "fresh authorization nonce required")
+    def project(value, fields):
+        return {field: copy.deepcopy(value[field]) for field in fields}
+    def host(value, fields):
+        result = project(value, fields)
+        result["artifacts"] = [project(row, ("role", "local_path", "remote_path"))
+                               for row in value["artifacts"]]
+        return result
+    value = project(previous, ("qualification_scope", "previous_genesis_hash",
+        "validator_clients", "canary_onboarding_request", "faucet_policy", "fee_intent",
+        "cleanup", "timeouts"))
+    value.update(schema="iroha.taira.public-reset.topology-intent.v1",
+        deployment_id="taira-" + attempt_id, authorization_nonce=nonce,
+        revision=project(previous["revision"], ("source_root", "source_manifest_path")),
+        validators=[host(row, ("slug", "endpoint", "platform", "service_root", "state_root",
+            "reset_guard", "systemd_unit", "initial_state")) for row in previous["validators"]],
+        edge=host(previous["edge"], ("slug", "endpoint", "platform", "service_root", "state_root",
+            "reset_guard", "nginx_config", "initial_state")))
+    require(value["deployment_id"] != previous["deployment_id"], "deployment identity reused")
     return value
+
+
+def validate_supervisor_intent(value):
+    """Ongoing authority and original service state are explicit owner inputs."""
+    fields = {"host_slug", "authorization", "payment_asset", "transaction_fee_maximum",
+              "first_epoch", "batch_epochs", "operation_timeout_ms", "provision_timeout_ms",
+              "timeout_ms", "prior_state", "prior_plan"}
+    require(isinstance(value, dict) and set(value) == fields,
+            "exact explicit epoch supervisor intent required")
+    require(value["authorization"] == "until_stopped"
+            and value["host_slug"] in {f"taira-validator-{i}" for i in range(1, 5)}
+            and value["prior_state"] in ("absent", "running", "stopped"),
+            "explicit ongoing authority, selected host and prior state required")
+    for key in ("payment_asset", "transaction_fee_maximum"):
+        require(isinstance(value[key], str) and 0 < len(value[key]) <= 1024
+                and not any(c.isspace() or ord(c) < 32 for c in value[key])
+                and not value[key].startswith("-"), "invalid public supervisor intent: " + key)
+    for key in ("first_epoch", "operation_timeout_ms", "provision_timeout_ms", "timeout_ms"):
+        require(type(value[key]) is int and 1 <= value[key] <= 2**64 - 1,
+                "positive finite native supervisor bound required: " + key)
+    require(type(value["batch_epochs"]) is int and 2 <= value["batch_epochs"] <= 256,
+            "native supervisor batch must be within 2..256")
+    prior = value["prior_plan"]
+    require((value["prior_state"] == "absent") == (prior is None),
+            "occupied predecessor requires an exact pinned prior plan")
+    if prior is not None:
+        require(isinstance(prior, dict) and set(prior) == {"path", "sha256"}
+                and isinstance(prior["path"], str) and prior["path"].startswith("/")
+                and Path(prior["path"]) == Path(os.path.normpath(prior["path"]))
+                and not any(c in prior["path"] for c in "\x00\n\r")
+                and isinstance(prior["sha256"], str)
+                and re.fullmatch("[0-9a-f]{64}", prior["sha256"]),
+                "exact public predecessor path and SHA256 required")
+    return value
+
+
+def validate_supervisor_inputs(plan, inventory, arguments):
+    """Join retained public plans and original seed paths before retirement; no secret IO."""
+    intent = validate_supervisor_intent(plan.get("epoch_supervisor"))
+    retained = inventory.get("epoch_supervisor")
+    require(isinstance(retained, dict)
+            and retained.get("schema") == "iroha.taira.public-reset.epoch-supervisor-plan.v1",
+            "retained native supervisor plan required")
+    path = arguments["--epoch-supervisor-plan"][0]
+    require(decode(public_record(path, owner=0, private=True)) == retained,
+            "retained supervisor path does not identify the inventory's exact native plan")
+    originals = retained.get("original_seed_sources")
+    require(isinstance(originals, list) and len(originals) == 4
+            and all(isinstance(row, dict) and set(row) == {"validator", "path"} for row in originals)
+            and arguments["--epoch-seed-sources"] == [row["path"] for row in originals],
+            "original seed paths differ from the retained sorted native mapping")
+    require(intent["prior_state"] == retained.get("prior_state"),
+            "explicit prior service state differs from completed rollback authority")
+    prior = retained.get("prior")
+    if intent["prior_state"] == "absent":
+        require(prior is None, "absence cannot discard an admitted predecessor")
+    else:
+        pin = intent["prior_plan"]
+        require(isinstance(prior, dict) and set(prior) == {"plan_sha256", "plan_bytes"}
+                and pin["sha256"] == prior["plan_sha256"]
+                and pin["path"] != path,
+                "prior plan must identify the original predecessor, never the failed candidate")
+        raw = public_record(pin["path"], pin["sha256"], owner=0, private=True)
+        require(isinstance(prior["plan_bytes"], list) and list(raw) == prior["plan_bytes"],
+                "original predecessor plan bytes differ")
+    return intent
 
 
 def validate_artifact_receipts(build, binary, source):
@@ -661,10 +750,12 @@ def validate_plan(plan):
         "local_node",
         "expected_mac",
         "retired_public_imports",
+        "epoch_supervisor",
     }
     require(set(plan["guest"]) == guest_keys,
             "unexpected guest runtime plan fields")
     validate_retired_public_imports(plan["guest"]["retired_public_imports"])
+    validate_supervisor_intent(plan["guest"]["epoch_supervisor"])
     for key in guest_keys - {
         "guard_support",
         "unit_renderer",
@@ -672,6 +763,7 @@ def validate_plan(plan):
         "capacity_plan",
         "expected_mac",
         "retired_public_imports",
+        "epoch_supervisor",
     }:
         value = plan["guest"][key]
         require(
@@ -733,6 +825,7 @@ RETIRE_BINS = None
 RETIRE_BINARY_MANIFEST = None
 RETIRE_PUBLIC_IMPORTS = ()
 RETIRE_PROTECTED_INPUTS = ()
+RETIRE_EPOCH_STATE = Path("/var/lib/taira-epoch-supervisor")
 
 
 class _retire_RebindError(Exception):
@@ -956,12 +1049,68 @@ def _retire_no_running_inode(inode):
             )
 
 
-def _retire_live_references(roots):
-    """Port native require_no_live_target_references: no argv/env or mapped bytes."""
-    examined = 0
-    fds_examined = 0
-    namespaces = set()
-    references = []
+def _retire_mount_rows(raw):
+    """Decode only bounded public mount identity/path fields, never mounted bytes."""
+    _retire_need(0 < len(raw) <= 4 * 1024 * 1024, "namespace evidence exceeds bound")
+    rows = []
+    for line in raw.decode().splitlines():
+        fields = line.split()
+        _retire_need(len(fields) >= 10 and "-" in fields[6:]
+                     and re.fullmatch(r"[0-9]+:[0-9]+", fields[2]),
+                     "mount identity evidence malformed")
+        major, minor = map(int, fields[2].split(":"))
+        paths = [Path(re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value))
+                 for value in fields[3:5]]
+        _retire_need(all(path.is_absolute() and str(path) == os.path.normpath(path)
+                         for path in paths), "mount path evidence malformed")
+        rows.append((os.makedev(major, minor), *paths))
+        _retire_need(len(rows) <= 65536, "mount census exceeds bound")
+    return rows
+
+
+def _retire_live_references(roots, *, file_identities=(), own_fds=None, proc_root=Path("/proc")):
+    """Observe paths, admitted inodes and mount aliases; never argv/env or payloads.
+
+    Directory roots are checked for path references and mount aliases. Callers
+    with a closed file census also pass its identities to catch aliases after
+    rename/unlink. Explicit own_fds includes the observer in the census and
+    admits only those custody descriptors; native callers may exclude self.
+    """
+    roots = tuple(Path(root) for root in roots)
+    _retire_need(len(roots) <= 65536 and all(root.is_absolute() for root in roots),
+                 "live reference roots exceed bounds or are not absolute")
+    _retire_need(len(file_identities) <= 65536, "live inode census exceeds bound")
+    selected, devices = {}, {}
+    for row in file_identities:
+        stamp, path = row["identity"], Path(row["path"])
+        _retire_need(path.is_absolute() and len(stamp) == 9
+                     and all(type(stamp[i]) is int and stamp[i] >= 0 for i in (0, 1))
+                     and stat.S_ISREG(stamp[2]), "selected file identity malformed")
+        _retire_need(any(path.is_relative_to(root) for root in roots),
+                     "selected file identity escaped observed roots")
+        selected[(stamp[0], stamp[1])] = str(path)
+        if path in roots:
+            devices[path] = stamp[0]
+    for root in roots:
+        try:
+            info = root.lstat()
+        except FileNotFoundError:
+            # Missing original/quarantine names still have a filesystem scope.
+            parent = root.parent
+            while not parent.exists():
+                _retire_need(parent != parent.parent, "live reference filesystem unavailable")
+                parent = parent.parent
+            devices.setdefault(root, parent.stat().st_dev)
+        else:
+            devices[root] = info.st_dev
+            selected[(info.st_dev, info.st_ino)] = str(root)
+    if own_fds is not None:
+        _retire_need(len(own_fds) <= 65536 and all(type(fd) is int and fd >= 0 for fd in own_fds),
+                     "own custody descriptor census malformed")
+    admitted_fds = set(own_fds or ())
+    examined = fds_examined = 0
+    namespaces, views, references = set(), set(), []
+    full_namespaces, empty_views = set(), []
 
     def match(target):
         target = target.removesuffix(" (deleted)")
@@ -970,26 +1119,63 @@ def _retire_live_references(roots):
         path = Path(target)
         return next((str(root) for root in roots if path.is_relative_to(root)), None)
 
-    def observe(pid, kind, target):
-        root = match(target)
-        if root is not None:
+    def observe(pid, kind, target=None, inode=None, fd=None):
+        root = selected.get(inode) or (match(target) if target is not None else None)
+        if root is not None and not (pid == os.getpid() and kind == "fd" and fd in admitted_fds):
             _retire_need(len(references) < 256, "live reference report bound exceeded")
             references.append({"pid": pid, "kind": kind, "target_root": root})
 
-    with os.scandir("/proc") as entries:
-        processes = sorted(
-            (e.name for e in entries if e.name.isascii() and e.name.isdigit()), key=int
-        )
+    def read_bounded(path):
+        with path.open("rb") as stream:
+            raw = stream.read(4 * 1024 * 1024 + 1)
+        _retire_need(len(raw) <= 4 * 1024 * 1024, "namespace evidence exceeds bound")
+        return raw
+
+    local_mounts = _retire_mount_rows(read_bounded(proc_root / "self/mountinfo"))
+    if os.readlink(proc_root / "self/root") == "/":
+        full_namespaces.add(os.readlink(proc_root / "self/ns/mnt"))
+    scopes = []
+    for path, device in devices.items():
+        candidates = [row for row in local_mounts if row[0] == device and path.is_relative_to(row[2])]
+        _retire_need(candidates, "selected filesystem missing from mount census")
+        _, mount_root, mountpoint = max(candidates, key=lambda row: len(row[2].parts))
+        scopes.append((device, mount_root / path.relative_to(mountpoint), path))
+
+    def observe_mounts(pid, rows):
+        for device, mount_root, mountpoint in rows:
+            for selected_device, selected_root, path in scopes:
+                if device != selected_device:
+                    continue
+                if selected_root.is_relative_to(mount_root):
+                    alias = mountpoint / selected_root.relative_to(mount_root)
+                    expected = path
+                elif mount_root.is_relative_to(selected_root):
+                    alias = mountpoint
+                    expected = path / mount_root.relative_to(selected_root)
+                else:
+                    continue
+                if alias != expected:
+                    _retire_need(len(references) < 256, "live reference report bound exceeded")
+                    references.append({"pid": pid, "kind": "mount_alias", "target_root": str(path)})
+
+    observe_mounts(os.getpid(), local_mounts)
+    with os.scandir(proc_root) as entries:
+        processes = sorted((e.name for e in entries if e.name.isascii() and e.name.isdigit()), key=int)
     for name in processes:
         pid = int(name)
-        if pid == os.getpid():
+        if pid == os.getpid() and own_fds is None:
             continue
         examined += 1
         _retire_need(examined <= 65536, "process census exceeds bound")
-        proc = Path("/proc") / name
+        proc = proc_root / name
+        process_root = None
         for leaf in ("exe", "cwd", "root"):
             try:
-                observe(pid, leaf, os.readlink(proc / leaf))
+                target = os.readlink(proc / leaf)
+                info = os.stat(proc / leaf)
+                observe(pid, leaf, target, (info.st_dev, info.st_ino))
+                if leaf == "root":
+                    process_root = target
             except FileNotFoundError:
                 pass
         try:
@@ -997,47 +1183,54 @@ def _retire_live_references(roots):
                 for index, entry in enumerate(entries):
                     _retire_need(index < 65536, "descriptor census exceeds bound")
                     fds_examined += 1
+                    _retire_need(fds_examined <= 1048576, "aggregate descriptor census exceeds bound")
                     try:
-                        observe(pid, "fd", os.readlink(entry.path))
+                        target = os.readlink(entry.path)
+                        info = os.stat(entry.path)
+                        observe(pid, "fd", target, (info.st_dev, info.st_ino), int(entry.name))
                     except FileNotFoundError:
                         pass
         except FileNotFoundError:
             continue
-        for leaf in ("maps", "mountinfo"):
-            namespace = None
-            if leaf == "mountinfo":
-                try:
-                    namespace = os.readlink(proc / "ns/mnt")
-                except FileNotFoundError:
-                    continue
-                if namespace in namespaces:
-                    continue
-            try:
-                with (proc / leaf).open("rb") as stream:
-                    raw = stream.read(4 * 1024 * 1024 + 1)
-            except FileNotFoundError:
+        try:
+            raw = read_bounded(proc / "maps")
+        except FileNotFoundError:
+            continue
+        for line in raw.decode().splitlines():
+            fields = line.split(None, 5)
+            _retire_need(len(fields) >= 5 and re.fullmatch(r"[0-9a-fA-F]+:[0-9a-fA-F]+", fields[3])
+                         and fields[4].isascii() and fields[4].isdigit(), "mapping identity evidence malformed")
+            major, minor = (int(part, 16) for part in fields[3].split(":"))
+            target = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[5]) if len(fields) == 6 else None
+            observe(pid, "maps", target, (os.makedev(major, minor), int(fields[4])))
+        try:
+            namespace = os.readlink(proc / "ns/mnt")
+            view = (namespace, process_root)
+            if view in views:
                 continue
-            _retire_need(
-                len(raw) <= 4 * 1024 * 1024, "namespace evidence exceeds bound"
-            )
-            for token in raw.decode().split():
-                decoded = (
-                    token.replace("\\040", " ")
-                    .replace("\\011", "\t")
-                    .replace("\\012", "\n")
-                    .replace("\\134", "\\")
-                )
-                observe(pid, leaf, decoded)
-            if namespace is not None:
-                namespaces.add(namespace)
-    return {
-        "passed": not references,
-        "processes_examined": examined,
-        "descriptors_examined": fds_examined,
-        "mount_namespaces_examined": len(namespaces),
-        "references": references,
-        "argv_or_environment_read": False,
-    }
+            raw_mounts = read_bounded(proc / "mountinfo")
+            if not raw_mounts:
+                # A chroot with no mountpoints below its root has an empty
+                # view. Require the same namespace's full-root view elsewhere;
+                # kernel threads or tasks that exited retain no such view.
+                if process_root is not None and os.path.lexists(proc / "root"):
+                    empty_views.append((namespace, proc))
+                continue
+            rows = _retire_mount_rows(raw_mounts)
+            if process_root == "/":
+                full_namespaces.add(namespace)
+        except FileNotFoundError:
+            continue
+        observe_mounts(pid, rows)
+        namespaces.add(namespace)
+        views.add(view)
+    _retire_need(all(namespace in full_namespaces or not os.path.lexists(proc / "root")
+                     for namespace, proc in empty_views),
+                 "empty chroot mount view has no observed full namespace")
+    return {"passed": not references, "processes_examined": examined,
+            "descriptors_examined": fds_examined, "mount_namespaces_examined": len(namespaces),
+            "mount_views_examined": len(views), "references": references,
+            "argv_or_environment_read": False}
 
 
 RETIRE_SLUGS = tuple((f"taira-validator-{i}" for i in range(1, 5))) + ("taira-edge",)
@@ -1077,7 +1270,7 @@ def _retire_validate_terminal(inventory, value, *, expected_commit=None, expecte
         and value.get("status") == value.get("phase") == "rolled_back"
         and type(value.get("next_step")) is int
         and value.get("qualification_scope") == inventory.get("qualification_scope")
-        and 5 <= value["next_step"] <= len(qualification_steps(inventory.get("qualification_scope"))) - 3
+        and qualification_steps(inventory.get("qualification_scope")).index("reset") + 1 <= value["next_step"] <= len(qualification_steps(inventory.get("qualification_scope"))) - 3
         and value.get("recovery_intent") is None
         and value.get("touched_validators") == list(RETIRE_SLUGS[:-1])
         and type(value.get("edge_touched")) is bool
@@ -1262,6 +1455,38 @@ def _retire_check_guards(g, root, expected_cli_sha):
         )
 
 
+def _retire_epoch_lock():
+    """Join the existing native lifecycle lock; never recreate lost authority."""
+    root = direct(RETIRE_EPOCH_STATE)
+    root_info = root.lstat()
+    _retire_need(stat.S_ISDIR(root_info.st_mode) and root_info.st_uid == 0
+                 and root_info.st_gid == 0 and stat.S_IMODE(root_info.st_mode) == 0o700,
+                 "epoch supervisor state root custody differs")
+    for parent in root.parents:
+        info = parent.lstat()
+        _retire_need(stat.S_ISDIR(info.st_mode) and info.st_uid == 0
+                     and not info.st_mode & 0o022, "epoch lock ancestor custody differs")
+    path = root / ".deployment.lock"
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        _retire_need(stat.S_ISREG(before.st_mode) and before.st_uid == 0
+                     and before.st_gid == 0 and before.st_nlink == 1
+                     and stat.S_IMODE(before.st_mode) == 0o600 and before.st_size == 0,
+                     "epoch deployment lock custody differs")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _retire_need(identity(path.lstat()) == identity(before)
+                     and identity(os.fstat(fd)) == identity(before)
+                     and identity(root.lstat()) == identity(root_info),
+                     "epoch deployment lock changed during acquisition")
+        _retire_need(not os.path.lexists(root / ".reset-owner.json"),
+                     "active reset owner forbids retirement")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 @contextmanager
 def _retire_locks(g, context):
     opened = []
@@ -1279,6 +1504,10 @@ def _retire_locks(g, context):
             opened.append(fd)
             g["inspect_file"](os.fstat(fd), private=True, size=0)
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Native reset order is coordinator -> host action -> epoch deployment.
+        # Rollback already released its durable owner; an updater can otherwise
+        # enter while retirement archives control and prunes failed artifacts.
+        opened.append(_retire_epoch_lock())
         yield
     finally:
         for fd in reversed(opened):
@@ -1516,7 +1745,8 @@ def _retire_prune_scopes(g, context, inventory):
         protected[str(marker)] = list(identity(_retire_prune_info(marker)))
     names = {"iroha_cli": ("iroha", "iroha"),
              "iroha3d": ("artifact-iroha3d", "iroha3d_taira"),
-             "sorafs_node": ("artifact-sorafs_node", "sorafs-node")}
+             "sorafs_node": ("artifact-sorafs_node", "sorafs-node"),
+             "kagami": ("artifact-kagami", "kagami")}
     for host in inventory["validators"] + [inventory["edge"]]:
         slug = host["slug"]
         for artifact in host["artifacts"]:
@@ -1528,7 +1758,7 @@ def _retire_prune_scopes(g, context, inventory):
                          "canonical public artifact metadata changed")
             protected[str(source)] = list(identity(info))
             upload_name, release_name = names[artifact["role"]]
-            mode = 0o500 if artifact["role"] == "iroha_cli" else 0o400
+            mode = 0o500 if artifact["role"] in ("iroha_cli", "iroha3d") else 0o400
             exact[staged / slug / context["nonce"] / upload_name] = (artifact["size"], mode)
             if slug in archives:
                 exact[archives[slug] / upload_name] = (artifact["size"], 0o755)
@@ -1671,7 +1901,7 @@ def _retire_prune_revalidate(g, context, intent, exact, chunk_dirs, protected):
         _retire_need(list(identity(_retire_prune_info(path))) == stamp,
                      "canonical public input changed during prune")
     _retire_retained_state(g, context)
-    _retire_need(_retire_live_references(list(expected_directories))["passed"],
+    _retire_need(_retire_live_references(list(expected_directories), file_identities=present)["passed"],
                  "public disposable payload has a live reference")
     return present
 
@@ -2015,7 +2245,8 @@ def _retire_import_admission(g, descriptor, current_inventory):
     require(bins.is_relative_to(RETIRE_RUNTIME)
             and Path(descriptor["binary_manifest"]["path"]) == bins.parent / "verified-manifest.json",
             "superseded binary namespace differs from its completed transfer")
-    roles = {"iroha_cli": "iroha", "iroha3d": "iroha3d_taira", "sorafs_node": "sorafs-node"}
+    roles = {"iroha_cli": "iroha", "iroha3d": "iroha3d_taira",
+             "sorafs_node": "sorafs-node", "kagami": "kagami"}
     admitted_names = set()
     for host in inventory["validators"] + [inventory["edge"]]:
         for artifact in host["artifacts"]:
@@ -2138,7 +2369,13 @@ def _retire_import_revalidate(g, context, admission, intent):
     roots = [row["path"] for row in admission["files"]]
     roots += [row["path"] for row in intent["directories"]]
     roots += [tree, quarantine] if tree else []
-    require(_retire_live_references(roots)["passed"], "superseded import has a live process or mount reference")
+    source_files = []
+    if tree:
+        source_base = Path(quarantine if os.path.lexists(quarantine) else tree)
+        source_files = [{"path": str(source_base / row["path"]), "identity": row["identity"]}
+                        for row in remaining if row["kind"] == "file"]
+    require(_retire_live_references(roots, file_identities=files + source_files)["passed"],
+            "superseded import has a live process or mount reference")
     return files, remaining
 
 
@@ -2811,6 +3048,76 @@ def _continuity_capture(args):
     )
 
 
+def beacon_completed_rows(runtime, assembly, before):
+    """Bind final process paths to completed native authorization and activation.
+
+    The native controller verifies the bundle, installation inclusion and exact
+    private config projection before recording completion. Python consumes only
+    its public hashes, after proving that exact completed deployment; an isolated
+    activation marker never authorizes a process or a config.
+    """
+    proof = completed_attempt({"runtime_root": str(runtime)}, assembly.parent, required=True)
+    inventory = proof["inventory"]
+    frontier = decode(public_record(assembly.parent / "apply-started.json", owner=0, private=True))
+    require(before["inventory_sha256"] == frontier["inventory_sha256"],
+            "beacon completion belongs to another pre-start inventory")
+    plan = inventory["beacon_bootstrap"]
+    units = plan["final_units"]
+    validators = inventory["validators"]
+    clients = inventory["validator_clients"]
+    require(len(units) == len(validators) == len(clients) == len(before["nodes"]) == 4,
+            "completed beacon projection requires the exact four validators")
+    prior = {row["peer_id"]: row for row in before["nodes"]}
+    require(len(prior) == 4, "pre-start beacon identities repeat")
+    rows = {}
+    bundle_sha = None
+    for validator, client, unit in zip(validators, clients, units):
+        role = validator["slug"]
+        require(client["slug"] == unit["validator"] == role and client["peer_id"] in prior,
+                "signed final beacon unit or peer order differs")
+        row = copy.deepcopy(prior[client["peer_id"]])
+        require(row["systemd_unit"] == validator["systemd_unit"],
+                "pre-start unit differs from completed validator")
+        marker_path = (Path("/var/lib/taira/.public-reset-control-v1/beacon")
+                       / inventory["authorization_nonce"] / (role + ".active.json"))
+        marker = decode(public_record(marker_path, owner=0, private=True, limit=65536))
+        require(isinstance(marker, dict) and set(marker) == {
+                    "schema", "authorization_sha256", "bundle_sha256", "validator",
+                    "session_id", "config_sha256", "unit_sha256"}
+                and marker["schema"] == "iroha.taira.public-reset.beacon-provider-active.v1"
+                and marker["authorization_sha256"] == frontier["authorization_sha256"]
+                and marker["validator"] == role
+                and marker["session_id"] == plan["request"]["dkg_session"]["session_id"]
+                and marker["unit_sha256"] == unit["sha256"]
+                and all(isinstance(marker[name], str)
+                        and re.fullmatch("[0-9a-f]{64}", marker[name])
+                        for name in ("bundle_sha256", "config_sha256", "unit_sha256")),
+                "native beacon activation differs from exact completed authorization")
+        if bundle_sha is None:
+            bundle_sha = marker["bundle_sha256"]
+        require(marker["bundle_sha256"] == bundle_sha,
+                "native beacon activations disagree on the verified bundle")
+        config = next((item for item in validator["artifacts"] if item["role"] == "config"), None)
+        require(config is not None and row["binding"]["config_path"] == config["remote_path"]
+                and row["config_sha256"] == config["sha256"],
+                "pre-start config differs from the signed original artifact")
+        final_config = str(Path(config["remote_path"]).with_name("beacon.toml"))
+        row["unit_sha256"] = marker["unit_sha256"]
+        row["config_sha256"] = marker["config_sha256"]
+        binding = row["binding"]
+        require(binding["argv"].count("--config") == 1
+                and binding["argv"][binding["argv"].index("--config") + 1]
+                    == f"/srv/taira/{role}/current/config/config.toml",
+                "pre-start config argument differs from exact initial renderer")
+        binding["argv"][binding["argv"].index("--config") + 1] = f"/srv/taira/{role}/current/config/beacon.toml"
+        binding["config_path"] = final_config
+        binding["config_sha256"] = marker["config_sha256"]
+        binding["config_files"] = [{"path": final_config, "sha256": marker["config_sha256"]}]
+        rows[row["peer_id"]] = row
+    require(set(rows) == set(prior), "completed beacon projection omitted a peer")
+    return [rows[row["peer_id"]] for row in before["nodes"]]
+
+
 def _continuity_reconcile(args):
     _continuity_need(
         args.prestart_sha256 and args.local_node_module and args.local_node_sha256,
@@ -2831,6 +3138,7 @@ def _continuity_reconcile(args):
     _continuity_read(
         CONTINUITY_ASSEMBLY / "inventory.json", expected=before["inventory_sha256"]
     )
+    before["nodes"] = beacon_completed_rows(CONTINUITY_RUNTIME, CONTINUITY_ASSEMBLY, before)
     node_class = _continuity_load_public_module(
         Path(args.local_node_module), args.local_node_sha256
     )["LocalNode"]
@@ -3311,13 +3619,14 @@ def _boot_main(request):
         and inventory["next_genesis_hash"] == BOOT_GENESIS,
         "assembled signed deployment differs",
     )
+    pre["nodes"] = beacon_completed_rows(BOOT_ROOT, BOOT_ASSEMBLY, pre)
     validators = inventory["validators"]
     _boot_need(
         len(validators) == 4
         and tuple((v["systemd_unit"] for v in validators)) == BOOT_UNITS[:4],
         "exact four signed units required",
     )
-    hashes = {v["systemd_unit"]: v["systemd_unit_sha256"] for v in validators}
+    hashes = {row["systemd_unit"]: row["unit_sha256"] for row in pre["nodes"]}
     hashes["nginx.service"] = BOOT_NGINX_SHA
     _boot_need(
         inventory["edge"]["systemd_unit_sha256"] == BOOT_NGINX_SHA,
@@ -3448,6 +3757,9 @@ def local_arguments(raw, qualification_scope):
     shape = (
         ("--public-inputs", 1),
         ("--runtime-client-config", 1),
+        ("--maintenance-admin-config", 1),
+        ("--epoch-seed-sources", 4),
+        ("--epoch-supervisor-plan", 1),
         ("--validator-client-config", 4),
         ("--validator-operator-key", 1),
         ("--onboarding-token", 1),
@@ -3479,6 +3791,118 @@ def local_arguments(raw, qualification_scope):
         result[flag] = paths
         offset += count + 1
     return value, result
+
+
+def apply_arguments(arguments, qualification_scope):
+    """Apply receives runtime paths only, never public assembly or unit inputs."""
+    qualification_steps(qualification_scope)
+    flags = ["--runtime-client-config", "--maintenance-admin-config", "--validator-client-config",
+             "--validator-operator-key", "--onboarding-token"]
+    if qualification_scope == "full_inrou":
+        flags.append("--inrou-stage-dir")
+    return ([item for flag in flags for item in [flag, *arguments[flag]]]
+            + ["--epoch-seed-source", *arguments["--epoch-seed-sources"]])
+
+
+def prepare_beacon_arguments(cli, assembly, plan, static_args, arguments, draft, previous, logs):
+    """Use native public derivation and the pinned renderer; never load a key/config."""
+    bundle = assembly / "public-inputs"
+    inputs = assembly / "beacon-inputs.json"
+    run_native([
+        *cli, "prepare-beacon-inputs", "--intent", assembly / "topology-intent.json",
+        "--public-inputs", bundle, "--output", inputs,
+    ], logs / "prepare-beacon-inputs", phase="prepare-beacon-inputs")
+    value = decode(public_record(inputs, owner=0, private=True))
+    require(isinstance(value, dict)
+            and set(value) == {"schema", "authorization_nonce", "request", "final_units"}
+            and value["schema"] == "iroha.taira.public-reset.beacon-inputs.v1"
+            and value["authorization_nonce"] == draft["authorization_nonce"]
+            and isinstance(value["request"], dict)
+            and isinstance(value["final_units"], list) and len(value["final_units"]) == 4,
+            "native beacon inputs differ from this exact fresh attempt")
+    validators = draft["validators"]
+    require(len(validators) == 4 and len(arguments["--validator-unit"]) == 4,
+            "beacon preparation requires four exact validator units")
+    seen = set()
+    # Admit all public descriptors before executing even the authenticated renderer.
+    for index, (validator, row) in enumerate(zip(validators, value["final_units"]), 1):
+        require(isinstance(row, dict)
+                and set(row) == {"validator", "signer_index", "credential_path", "config_file"}
+                and row["validator"] == validator["slug"] == f"taira-validator-{index}"
+                and type(row["signer_index"]) is int and 1 <= row["signer_index"] <= 4
+                and row["signer_index"] not in seen and row["config_file"] == "beacon.toml",
+                "native beacon unit descriptors omit, repeat or reorder a validator seat")
+        seat = row["signer_index"]
+        expected = (Path("/var/lib/taira/.public-reset-control-v1/beacon")
+                    / draft["authorization_nonce"] / "ceremony" / f"seat-{seat}"
+                    / "iroha-global-beacon-partial-signer-v1.norito")
+        require(row["credential_path"] == str(expected),
+                "native beacon credential path differs from its nonce and signer seat")
+        seen.add(seat)
+    renderer = _continuity_load_public_module(
+        Path(plan["unit_renderer"]["path"]), plan["unit_renderer"]["sha256"])
+    units = assembly / "beacon-units"
+    units.mkdir(mode=0o700)
+    paths = []
+    for validator, retained, row, initial in zip(validators, previous["validators"], value["final_units"], arguments["--validator-unit"]):
+        require(validator["slug"] == retained["slug"], "retained unit validator order differs")
+        data = public_record(initial, retained["systemd_unit_sha256"], owner=0)
+        fields = _continuity_unit_sources(data, validator["slug"], renderer)
+        rendered = renderer["render"](
+            validator["slug"], fields["runtime_key"], fields["mint_finality_seed"],
+            row["credential_path"], config_file=row["config_file"])
+        require(isinstance(rendered, str), "authenticated renderer omitted exact unit text")
+        path = units / validator["systemd_unit"]
+        require(path.parent == units and path.name == f"iroha3d-{validator['slug']}.service",
+                "signed validator unit filename differs")
+        write_public_bytes(path, rendered.encode(), mode=0o644)
+        paths.append(str(path))
+    # Keep the static retained closure intact; derived arguments have distinct custody.
+    derived = list(static_args)
+    derived[derived.index("--public-inputs") + 1] = str(bundle)
+    derived.extend(["--beacon-inputs", str(inputs), "--beacon-validator-unit", *paths])
+    return derived
+
+
+def prepare_supervisor_arguments(cli, assembly, plan, static_args, arguments, intent,
+                                 previous, derived_args, logs):
+    """Native code derives the complete current plan from held actual inputs."""
+    policy = validate_supervisor_inputs(plan, previous, arguments)
+    context_flags = ["--runtime-client-config", "--maintenance-admin-config",
+                     "--validator-client-config", "--validator-operator-key", "--onboarding-token"]
+    if intent["qualification_scope"] == "full_inrou":
+        context_flags.append("--inrou-stage-dir")
+    context_flags.extend(["--validator-unit", "--edge-unit", "--known-hosts"])
+    output = assembly / "epoch-supervisor"
+    argv = [*cli, "prepare-epoch-supervisor-plan", "--intent", assembly / "topology-intent.json",
+            "--public-inputs", assembly / "public-inputs"]
+    argv.extend(item for flag in context_flags for item in [flag, *arguments[flag]])
+    for key in ("host_slug", "authorization", "payment_asset", "transaction_fee_maximum",
+                "first_epoch", "batch_epochs", "operation_timeout_ms", "provision_timeout_ms",
+                "timeout_ms", "prior_state"):
+        argv.extend(["--" + key.replace("_", "-"),
+                     "until-stopped" if key == "authorization" else str(policy[key])])
+    argv.extend(["--epoch-seed-source", *arguments["--epoch-seed-sources"]])
+    if policy["prior_plan"] is not None:
+        argv.extend(["--prior-plan", policy["prior_plan"]["path"]])
+    argv.extend(["--output-dir", output])
+    run_native(argv, logs / "prepare-epoch-supervisor-plan", phase="prepare-epoch-supervisor-plan")
+    generated = output / "supervisor-plan.json"
+    value = decode(public_record(generated, owner=0, private=True))
+    require(isinstance(value, dict)
+            and value.get("schema") == "iroha.taira.public-reset.epoch-supervisor-plan.v1"
+            and value.get("host_slug") == policy["host_slug"]
+            and value.get("prior_state") == policy["prior_state"]
+            and value.get("original_seed_sources") == previous["epoch_supervisor"]["original_seed_sources"],
+            "native supervisor output differs from explicit host, state or original custody")
+    derived = list(derived_args)
+    derived[derived.index("--epoch-supervisor-plan") + 1] = str(generated)
+    current_static = list(static_args)
+    current_static[current_static.index("--epoch-supervisor-plan") + 1] = str(generated)
+    # Future attempts bind this actual generated plan, not the previous candidate.
+    write_public(assembly / "native-local-args.json", current_static)
+    write_public(assembly / "native-assembly-args.json", derived)
+    return derived
 
 
 def find_terminal(journal_root, deployment_id):
@@ -3742,7 +4166,10 @@ def configure_protocols(
             *(Path(plan[key]) for key in ("source_manifest", "binary_manifest", "signing_key",
                 "trusted_public_key", "ssh_identity", "known_hosts")),
             *(Path(path) for key in ("--runtime-client-config", "--validator-client-config",
-                "--validator-operator-key", "--onboarding-token") for path in arguments[key]),
+                "--validator-operator-key", "--onboarding-token", "--maintenance-admin-config",
+                "--epoch-seed-sources", "--epoch-supervisor-plan") for path in arguments[key]),
+            *([Path(plan["epoch_supervisor"]["prior_plan"]["path"])]
+              if plan["epoch_supervisor"]["prior_plan"] is not None else []),
         )],
         "CONTINUITY_RUNTIME": runtime,
         "CONTINUITY_PREP": Path(plan["prep_root"]),
@@ -3778,6 +4205,7 @@ def require_same_inventory_artifacts(inventory, binary, source):
         "iroha_cli": "iroha",
         "iroha3d": "iroha3d_taira",
         "sorafs_node": "sorafs-node",
+        "kagami": "kagami",
     }
     for host in inventory["validators"] + [inventory["edge"]]:
         for artifact in host["artifacts"]:
@@ -4209,6 +4637,7 @@ def guest_admit(request):
             inventory_path.parent / "native-local-args.json", owner=0, private=True
         ), inventory["qualification_scope"]
     )
+    validate_supervisor_inputs(plan, inventory, arguments)
     plan = derive_runtime_paths(plan, request["binary"], inventory, arguments)
     plan["previous_terminal"] = str(
         find_terminal(
@@ -4452,6 +4881,7 @@ def guest_locked(request, capacity, root):
         arguments["--known-hosts"] == [plan["known_hosts"]],
         "native SSH authority differs",
     )
+    validate_supervisor_inputs(plan, inventory, arguments)
     attempt_id = resume_id or (
         "retry-" + str(time.time_ns()) + "-" + secrets.token_hex(4)
     )
@@ -4512,8 +4942,8 @@ def guest_locked(request, capacity, root):
         draft = fresh_inventory(inventory, attempt_id, nonce)
         assembly = attempt / "assembly"
         assembly.mkdir(mode=0o700)
-        write_public(assembly / "inventory-draft.json", draft)
-        write_public(assembly / "native-local-args.json", args)
+        write_public(assembly / "topology-intent.json", draft)
+        write_public(assembly / "native-retained-args.json", args)
         cli = [Path(binary["destination"]) / "iroha", "taira", "public-reset"]
         logs = attempt / "native"
         logs.mkdir(mode=0o700)
@@ -4556,15 +4986,31 @@ def guest_locked(request, capacity, root):
                 write_public(ready, result)
             print(json.dumps(result, sort_keys=True), flush=True)
             return result
+        phase = "prepare-public-inputs"
+        check_capacity(capacity, plan["capacity_plan"], phase, attempt)
+        run_native([
+            *cli, "prepare-public-inputs", "--localnet-dir", Path(plan["prep_root"]) / "network",
+            "--intent", assembly / "topology-intent.json",
+            "--output-dir", assembly / "public-inputs",
+        ], logs / phase, phase=phase)
+        completed.append(phase)
+        phase = "prepare-beacon-inputs"
+        derived_args = prepare_beacon_arguments(
+            cli, assembly, plan, args, arguments, draft, inventory, logs)
+        completed.append(phase)
+        phase = "prepare-epoch-supervisor-plan"
+        derived_args = prepare_supervisor_arguments(
+            cli, assembly, plan, args, arguments, draft, inventory, derived_args, logs)
+        completed.append(phase)
         phase = "assemble"
         check_capacity(capacity, plan["capacity_plan"], phase, attempt)
         run_native(
             [
                 *cli,
                 "assemble",
-                "--inventory-draft",
-                assembly / "inventory-draft.json",
-                *args,
+                "--intent",
+                assembly / "topology-intent.json",
+                *derived_args,
                 "--output",
                 assembly / "inventory.json",
             ],
@@ -4597,7 +5043,7 @@ def guest_locked(request, capacity, root):
         completed.append(phase)
         phase = "authorize"
         check_capacity(capacity, plan["capacity_plan"], phase, attempt)
-        authorize_native(cli, assembly, args, plan, logs / phase)
+        authorize_native(cli, assembly, derived_args, plan, logs / phase)
         authentication = [
             "--inventory",
             assembly / "inventory.json",
@@ -4620,7 +5066,7 @@ def guest_locked(request, capacity, root):
             attempt / "apply-started.json", preflight_identity(attempt, assembled)
         )
         run_native(
-            [*cli, "apply", *authentication, *args[args.index("--runtime-client-config"): args.index("--validator-unit")]],
+            [*cli, "apply", *authentication, *apply_arguments(arguments, inventory["qualification_scope"])],
             logs / phase,
             phase=phase,
             journal_path=Path(plan["runtime_root"])

@@ -44,9 +44,18 @@ operation and one prepare, retained-envelope submit, or read-only recovery
 action; it is not a one-shot operator command. Keep onboarding tokens and all
 signing inputs in owner-only runtime files outside the repository.
 
+A sealed occupied deployment uses the native
+[`prepare-dispatcher-transition` / `dispatcher-transition` owner](DISPATCHER_TRANSITION.md)
+to advance the fixed dispatcher and its five guards before preparing the next
+reset. The completed transfer carries its preparation proof; the owner preserves
+current runtime bindings and durable deployment history.
+
 Reset input validation checks the complete action timeout budget before scanning
-artifacts or reading signing custody. Prepared Inrou stage files use mode0600;
-retained runtime snapshots use mode0400. Both remain owner-only, direct,
+artifacts or reading signing custody. The install budget counts every required
+artifact upload, including `kagami`, plus each validator's stage and install
+actions. All four beacon providers activate before the epoch supervisor starts;
+restart qualification follows that required barrier. Prepared Inrou stage files
+use mode0600; retained runtime snapshots use mode0400. Both remain owner-only, direct,
 singly linked files, with unchanged content verification.
 
 Journal admission holds one exclusive lock through classification and execution.
@@ -740,3 +749,12 @@ passes an anonymous read-only nonblocking pipe containing exactly 64 lowercase
 hexadecimal bytes followed by EOF. The descriptor is consumed before native
 output generation; the seed never enters process arguments or public receipts.
 Generic localnet development generation has its own independent input policy.
+
+`iroha tx collect-scaling-inputs` requires the independently retained complete
+Native context archive via `--native-contexts`, `--native-contexts-sha256`, and
+`--native-contexts-max-bytes`. Its canonical `Vec<NativeLaneContextsEvidenceV1>`
+contains one post-carrier context witness per height, including empty sets, in
+height order from genesis through the exact stopped tip. The collector verifies
+that archive against the anchored finality chain and exact Kura carriers before
+publishing `Vec<FinalizedNativeContextV1>` and committed Network output queries.
+A genesis context alone cannot supply this historical execution evidence.

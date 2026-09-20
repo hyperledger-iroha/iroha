@@ -9,13 +9,11 @@ use norito::json::Value;
 
 use iroha_data_model::block::{BlockHeader, BlockSignature};
 
-#[test]
-fn block_signature_frames_match_capture() {
-    let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+fn current_block_signature_capture() -> Value {
+    let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
     let second_header = BlockHeader::new(
         NonZeroU64::new(2).unwrap(),
         Some(first_header.hash()),
-        None,
         None,
         1_700_000_000_007,
         3,
@@ -63,17 +61,32 @@ fn block_signature_frames_match_capture() {
     record(&mut rows, "vec_empty", &Vec::<BlockSignature>::new());
     record(&mut rows, "vec_two", &signatures);
     assert_eq!(rows.len(), 7);
-    let evidence = norito::json!({
+    norito::json!({
         "format_version": 1,
         "purpose": "public BlockSignature pre-declaration capture",
         "default_encode_flags": (norito::core::default_encode_flags()),
         "signing_inputs": signing_inputs,
         "rows": rows,
-    });
+    })
+}
+
+#[test]
+fn block_signature_frames_match_capture() {
+    let evidence = current_block_signature_capture();
     let expected: Value = norito::json::from_json(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/block_signature_identity_frames.json"
     )))
     .expect("immutable pre-declaration BlockSignature capture");
     assert_eq!(evidence, expected);
+}
+
+#[test]
+#[ignore = "explicit first-release BlockSignature wire fixture capture"]
+fn capture_current_block_signature_identity_frames() {
+    eprintln!(
+        "BLOCK_SIGNATURE_CANONICAL_CAPTURE={}",
+        norito::json::to_json(&current_block_signature_capture())
+            .expect("encode current checked BlockSignature capture")
+    );
 }

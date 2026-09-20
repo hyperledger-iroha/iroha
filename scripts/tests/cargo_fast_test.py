@@ -19,6 +19,8 @@ SCRIPT = REPO_ROOT / "scripts" / "cargo_fast.sh"
 CONTROLLED_ENV_VARS = (
     "CI",
     "CARGO_BUILD_JOBS",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_FAST_TEST_CONFIG_WRAPPER",
     "CARGO_BUILD_TARGET",
     "CARGO_BUILD_TARGET_DIR",
     "CARGO_BUILD_BUILD_DIR",
@@ -44,6 +46,12 @@ CONTROLLED_ENV_VARS = (
     "CMAKE_BUILD_PARALLEL_LEVEL",
     "GITHUB_ACTIONS",
     "IROHA_GIT_COMMIT_HASH",
+    "IROHA_ZIG_BINARY",
+    "CARGO_ZIGBUILD_ZIG_PATH",
+    "CARGO_ZIGBUILD_PYTHON_PATH",
+    "CARGO_FAST_TEST_ZIGBUILD_ALIAS",
+    "CARGO_FAST_TEST_DRIVER",
+    "CC_ENABLE_DEBUG_OUTPUT",
     "RUST_TEST_THREADS",
     "RUSTC_WRAPPER",
     "RUSTFLAGS",
@@ -56,7 +64,7 @@ def hermetic_wrapper_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     checkout = tmp_path / "checkout"
     scripts = checkout / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("cargo_fast.sh", "check_cargo_target_owner.py"):
+    for name in ("cargo_fast.sh", "check_cargo_target_owner.py", "cargo_zigbuild_linux.sh", "zig_linux_gnu.py"):
         shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
     (checkout / "Cargo.toml").write_text("[workspace]\nmembers = []\n", encoding="utf-8")
     monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", checkout)
@@ -88,6 +96,7 @@ def _run_wrapper(
     *arguments: str,
     extra_env: dict[str, str] | None = None,
     binaries: dict[str, str] | None = None,
+    script_name: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, str], list[str]]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
@@ -96,7 +105,7 @@ def _run_wrapper(
         fake_bin / "cargo",
         r"""
         #!/usr/bin/env python3
-        import json, os, pathlib, sys
+        import json, os, pathlib, subprocess, sys
         args = sys.argv[1:]
         if "locate-project" in args:
             manifest = args[args.index("--manifest-path") + 1]
@@ -120,6 +129,18 @@ def _run_wrapper(
             build = str(pathlib.Path(build).absolute()) if build else target
             print(os.environ.get("CARGO_FAST_TEST_METADATA", json.dumps({"version": 1, "workspace_root": str(root), "target_directory": target, "build_directory": build})))
         else:
+            if args[0] == "zigbuild" and os.environ.get("CARGO_FAST_TEST_ZIGBUILD_ALIAS"):
+                raise SystemExit("unexpected Cargo alias expansion")
+            if os.environ.get("CARGO_FAST_TEST_CONFIG_WRAPPER"):
+                # The fixture has one JSON-quoted TOML string. Model Cargo's
+                # documented empty-environment override, then dispatch it.
+                config = pathlib.Path(os.environ["HOME"]) / ".cargo/config.toml"
+                configured = json.loads(config.read_text().split("=", 1)[1].strip())
+                wrapper = os.environ.get("RUSTC_WRAPPER", os.environ.get("CARGO_BUILD_RUSTC_WRAPPER", configured))
+                if wrapper:
+                    result = subprocess.run([wrapper, "rustc", "--version"], check=False)
+                    if result.returncode:
+                        sys.exit(result.returncode)
             with open(os.environ["CARGO_FAST_CAPTURE"], "w") as stream:
                 for name, value in os.environ.items():
                     print(name + "=" + value, file=stream)
@@ -144,7 +165,7 @@ def _run_wrapper(
         environment.update(extra_env)
 
     result = subprocess.run(
-        ["/bin/bash", str(SCRIPT), *arguments],
+        ["/bin/bash", str(SCRIPT if script_name is None else SCRIPT.with_name(script_name)), *arguments],
         cwd=REPO_ROOT,
         env=environment,
         check=False,
@@ -757,16 +778,75 @@ def test_incremental_never_dispatches_sccache(tmp_path: Path, inherited: bool) -
     )
     assert result.returncode == 0, result.stderr
     assert environment["CARGO_INCREMENTAL"] == "1"
-    assert "RUSTC_WRAPPER" not in environment
+    assert environment["RUSTC_WRAPPER"] == ""
+    assert environment["CARGO_BUILD_RUSTC_WRAPPER"] == ""
     assert arguments == ["check", "-p", "iroha_core"]
 
 
-def test_incremental_retains_unrelated_compiler_wrapper(tmp_path: Path) -> None:
+@pytest.mark.parametrize("variable", ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER"))
+def test_incremental_retains_unrelated_compiler_wrapper(tmp_path: Path, variable: str) -> None:
     result, environment, _ = _run_wrapper(
-        tmp_path, "--incremental", "--", "check", extra_env={"RUSTC_WRAPPER": "/fixed/instrument-rustc"},
+        tmp_path, "--incremental", "--", "check", extra_env={variable: "/fixed/instrument-rustc"},
     )
     assert result.returncode == 0, result.stderr
     assert environment["RUSTC_WRAPPER"] == "/fixed/instrument-rustc"
+
+
+@pytest.mark.parametrize("selection", ("file", "inherited", "config-env", "explicit-empty"))
+def test_incremental_suppresses_configured_sccache_fallback(tmp_path: Path, selection: str) -> None:
+    config = tmp_path / "home/.cargo/config.toml"
+    config.parent.mkdir(parents=True)
+    cache = tmp_path / "bin/sccache"
+    config.write_text("[build]\nrustc-wrapper = " + json.dumps(str(cache)) + "\n")
+    extra = {"CARGO_FAST_TEST_CONFIG_WRAPPER": "1"}
+    if selection == "inherited":
+        extra.update({"CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": str(cache)})
+    elif selection == "config-env":
+        extra["CARGO_BUILD_RUSTC_WRAPPER"] = str(cache)
+    elif selection == "explicit-empty":
+        extra.update({"RUSTC_WRAPPER": "", "CARGO_BUILD_RUSTC_WRAPPER": str(cache)})
+    before = config.read_bytes()
+    result, environment, arguments = _run_wrapper(
+        tmp_path, *(("--incremental",) if selection != "inherited" else ()), "--", "check",
+        extra_env=extra, binaries={"sccache": "#!/bin/sh\nexit 99\n"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["RUSTC_WRAPPER"] == ""
+    assert environment["CARGO_BUILD_RUSTC_WRAPPER"] == ""
+    assert arguments == ["check"]
+    assert config.read_bytes() == before
+
+
+@pytest.mark.parametrize("variable", ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER"))
+def test_incremental_dispatches_explicit_instrumentation_over_file_cache(tmp_path: Path, variable: str) -> None:
+    config = tmp_path / "home/.cargo/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[build]\nrustc-wrapper = " + json.dumps(str(tmp_path / "bin/sccache")) + "\n")
+    log = tmp_path / "instrumentation.log"
+    extra = {"CARGO_FAST_TEST_CONFIG_WRAPPER": "1", variable: str(tmp_path / "bin/instrument-rustc"),
+             "INSTRUMENTATION_LOG": str(log)}
+    if variable == "RUSTC_WRAPPER":
+        extra["CARGO_BUILD_RUSTC_WRAPPER"] = str(tmp_path / "bin/sccache")
+    result, environment, _ = _run_wrapper(
+        tmp_path, "--incremental", "--", "check", extra_env=extra,
+        binaries={"sccache": "#!/bin/sh\nexit 99\n",
+                  "instrument-rustc": '#!/bin/sh\nprintf "%s\\n" "$*" > "$INSTRUMENTATION_LOG"\n'},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["RUSTC_WRAPPER"] == str(tmp_path / "bin/instrument-rustc")
+    assert log.read_text() == "rustc --version\n"
+
+
+def test_nonincremental_keeps_explicit_file_wrapper_selection(tmp_path: Path) -> None:
+    config = tmp_path / "home/.cargo/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[build]\nrustc-wrapper = " + json.dumps(str(tmp_path / "bin/sccache")) + "\n")
+    result, _, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--", "check",
+        extra_env={"CARGO_FAST_TEST_CONFIG_WRAPPER": "1"},
+        binaries={"sccache": "#!/bin/sh\nexit 99\n"},
+    )
+    assert result.returncode == 99
 
 
 def _lane_role(target: Path, role: str = "release", repo: Path | None = None) -> Path:
@@ -899,3 +979,144 @@ def test_metadata_preserves_toolchain_config_order_and_cli_priority(tmp_path: Pa
     assert query[:7] == ["+1.93.1", "--config", first, "--config", second, "--config", "build.target-dir=" + json.dumps(str(target))]
     assert query[7:12] == ["metadata", "--locked", "--offline", "--no-deps", "--format-version=1"]
     assert not target.exists()
+
+
+ZIG_DRIVER_STUB = """#!/usr/bin/env python3
+import os, sys
+assert sys.argv[1] == "build", "only explicit native build semantics are supported"
+os.environ["CARGO_FAST_TEST_DRIVER"] = "cargo-zigbuild"
+os.execvp("cargo", ["cargo", *sys.argv[1:]])
+"""
+
+
+def _gnu_build(tmp_path: Path, *build_args: str, wrapper_args: tuple[str, ...] = (),
+               extra_env: dict[str, str] | None = None):
+    return _run_wrapper(
+        tmp_path, "--no-sccache", *wrapper_args, "--", "zigbuild",
+        "--target", "aarch64-unknown-linux-gnu", *build_args,
+        extra_env=extra_env,
+        binaries={"zig": "#!/bin/sh\nexit 93\n", "cargo-zigbuild": ZIG_DRIVER_STUB},
+        script_name="cargo_zigbuild_linux.sh",
+    )
+
+
+def test_gnu_documented_build_checks_routine_owner_and_dispatches_exact_driver(tmp_path: Path) -> None:
+    target = tmp_path / "routine"
+    _lane_role(target, "development")
+    result, environment, arguments = _gnu_build(
+        tmp_path, "--locked", "--offline", "--profile", "dev", "-p", "iroha core",
+        wrapper_args=("--target-dir", str(target), "--jobs", "6", "--incremental", "--stable-local-metadata", "--zero-debug"),
+    )
+    assert result.returncode == 0, result.stderr
+    assert arguments == ["build", "--target", "aarch64-unknown-linux-gnu", "--locked", "--offline", "--profile", "dev", "-p", "iroha core"]
+    assert environment["CARGO_FAST_TEST_DRIVER"] == "cargo-zigbuild"
+    assert environment["CARGO_TARGET_DIR"] == str(target)
+    assert environment["CARGO_BUILD_JOBS"] == "6"
+    assert environment["CARGO_INCREMENTAL"] == "1"
+    assert environment["RUSTC_WRAPPER"] == environment["CARGO_BUILD_RUSTC_WRAPPER"] == ""
+    assert environment["CARGO_PROFILE_DEV_DEBUG"] == environment["CARGO_PROFILE_TEST_DEBUG"] == "0"
+    assert environment["VERGEN_GIT_SHA"] == "local-fast-build"
+    assert environment["IROHA_ZIG_BINARY"] == str(tmp_path / "bin/zig")
+    assert environment["CARGO_ZIGBUILD_ZIG_PATH"] == str(REPO_ROOT / "scripts/zig_linux_gnu.py")
+    assert environment["CARGO_ZIGBUILD_PYTHON_PATH"] == "/usr/bin/false"
+    assert environment["CC_ENABLE_DEBUG_OUTPUT"] == "1"
+    assert "running: cargo-zigbuild build" in result.stdout
+    assert r"iroha\ core" in result.stdout
+    assert not (target / "debug").exists()
+
+
+def test_gnu_print_env_needs_only_native_metadata_not_optional_compilers(tmp_path: Path) -> None:
+    capture = tmp_path / "metadata.json"
+    result, environment, arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--print-env", "--", "zigbuild",
+        "--target=aarch64-unknown-linux-gnu.2.17",
+        extra_env={"CARGO_FAST_RESOLUTION_CAPTURE": str(capture)},
+        script_name="cargo_zigbuild_linux.sh",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "metadata" in json.loads(capture.read_text())
+    assert not environment and not arguments
+    assert not (tmp_path / "bin/zig").exists()
+    assert not (tmp_path / "bin/cargo-zigbuild").exists()
+
+
+def test_gnu_direct_driver_does_not_expand_masking_cargo_alias(tmp_path: Path) -> None:
+    foreign = tmp_path / "foreign"
+    alias = 'alias.zigbuild="build --target-dir ' + str(foreign) + '"'
+    result, environment, arguments = _gnu_build(
+        tmp_path, "--config", alias, extra_env={"CARGO_FAST_TEST_ZIGBUILD_ALIAS": "1"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["CARGO_FAST_TEST_DRIVER"] == "cargo-zigbuild"
+    assert arguments == ["build", "--target", "aarch64-unknown-linux-gnu", "--config", alias]
+    assert not foreign.exists()
+
+
+@pytest.mark.parametrize("selection", ("environment", "wrapper", "cargo", "cargo-equals", "config", "build-config"))
+def test_gnu_build_preserves_release_target_and_build_directory_rejection(tmp_path: Path, selection: str) -> None:
+    target = tmp_path / "release"
+    marker = _lane_role(target)
+    before = marker.read_bytes()
+    args, wrapper, environment = [], (), {}
+    if selection == "environment":
+        environment["CARGO_TARGET_DIR"] = str(target)
+    elif selection == "wrapper":
+        wrapper = ("--target-dir", str(target))
+    elif selection == "cargo":
+        args = ["--target-dir", str(target)]
+    elif selection == "cargo-equals":
+        args = ["--target-dir=" + str(target)]
+    elif selection == "config":
+        args = ["--config", "build.target-dir=" + json.dumps(str(target))]
+    else:
+        args = ["--config", "build.build-dir=" + json.dumps(str(target))]
+    result, captured, _ = _gnu_build(tmp_path, *args, wrapper_args=wrapper, extra_env=environment)
+    assert result.returncode != 0 and "authenticated release lane" in result.stderr
+    assert not captured and marker.read_bytes() == before
+    assert not (target / "debug").exists()
+
+
+@pytest.mark.parametrize("selection", ("foreign-target", "foreign-manifest", "foreign-role"))
+def test_gnu_build_preserves_foreign_source_ownership(tmp_path: Path, selection: str) -> None:
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    manifest = foreign / "Cargo.toml"
+    manifest.write_text("[workspace]\nmembers = []\n")
+    if selection == "foreign-target":
+        args = ["--target-dir", str(foreign / "target")]
+    elif selection == "foreign-manifest":
+        args = ["--manifest-path", str(manifest), "--target-dir", str(REPO_ROOT / "target")]
+    else:
+        target = tmp_path / "owned-elsewhere"
+        _lane_role(target, "development", foreign)
+        args = ["--target-dir", str(target)]
+    result, captured, _ = _gnu_build(tmp_path, *args)
+    assert result.returncode != 0
+    assert "another source tree" in result.stderr or "another repository" in result.stderr
+    assert not captured
+
+
+@pytest.mark.parametrize("command", ("check", "test", "zigbuild", "hidden-target-alias", "+nightly", "--config"))
+def test_closed_zig_driver_rejects_nonbuild_commands_and_prefixes(tmp_path: Path, command: str) -> None:
+    result, captured, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--cargo-zigbuild", "--", command,
+        binaries={"cargo-zigbuild": ZIG_DRIVER_STUB},
+    )
+    assert result.returncode != 0 and "requires an explicit build command" in result.stderr
+    assert not captured
+
+
+@pytest.mark.parametrize("arguments", (
+    ("--", "build", "--target", "aarch64-unknown-linux-gnu"),
+    ("--", "hidden-target-alias", "zigbuild", "--target", "aarch64-unknown-linux-gnu"),
+    ("--", "zigbuild", "-p", "aarch64-unknown-linux-gnu"),
+    ("--", "zigbuild", "--target", "x86_64-apple-darwin"),
+    ("--", "zigbuild", "--target", "aarch64-unknown-linux-gnu", "--target", "x86_64-apple-darwin"),
+))
+def test_gnu_wrapper_accepts_only_its_explicit_command_and_target(tmp_path: Path, arguments: tuple[str, ...]) -> None:
+    result, captured, _ = _run_wrapper(
+        tmp_path, "--no-sccache", *arguments,
+        script_name="cargo_zigbuild_linux.sh",
+    )
+    assert result.returncode != 0
+    assert not captured

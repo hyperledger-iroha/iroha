@@ -2565,10 +2565,10 @@ def _production_liveness_release_inventory_errors(
                     "b464b36f2ad4bf07c7ec969f14d97b7d29b99e27dd74b1f47ecd1dcaabf0014c"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
-                    '8cb10f1984af55194c2209d3a65a5e28e1a2ab563a5e333f49bc9184e7f83a9e'
+                    "fd19b43e1499942b42a1d67bf64d4069cfa1a0a7c24a452f8f698753e7c46d3e"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    '6d1f78d58ce2455dbd7a6426cd8d8f82f5b2752b126d04c38a81811a8fb85ec7'
+                    "d32bb675f783227f514f00f542ea5fef78507f08f4587fff684057fbe4c1ce9c"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -2851,7 +2851,7 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            '8efda50ba816170d063ca8b4755a05189c6d5fff8ae64d5746d9bebfcb40b824'
+            "06e5d09c2971525119a68c874937547f47ed20d2a061f4738673a6c44b97d239"
         ),
     }
     expected_bootstrap_component_symbols = {

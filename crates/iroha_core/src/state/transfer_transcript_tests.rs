@@ -26,7 +26,7 @@ fn transfer_transcripts_flush_into_block_map_on_apply() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let call_hash = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
@@ -74,7 +74,7 @@ fn transfer_transcripts_reject_missing_call_hash() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let asset_definition: iroha_data_model::asset::AssetDefinitionId =
@@ -110,7 +110,7 @@ fn transfer_transcript_identity_preflight_always_fails_closed() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     {
         let mut transaction = block.transaction();
@@ -138,7 +138,7 @@ fn transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let _guard = crate::sumeragi::witness::exec_witness_guard();
     crate::sumeragi::witness::start_block();
@@ -160,7 +160,7 @@ fn generated_rwa_id_rejects_missing_call_hash() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let domain = DomainId::try_new("wonderland", "universal").unwrap();
@@ -177,7 +177,7 @@ fn transfer_transcripts_batch_records_multiple_deltas() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
@@ -232,7 +232,7 @@ fn transfer_transcripts_batch_flushes_each_recorded_transaction_hash() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let call_hash_a = iroha_crypto::Hash::prehashed([2_u8; iroha_crypto::Hash::LENGTH]);
@@ -350,7 +350,7 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
             .unwrap_or_else(Quantity::zero)
     }
     let call_hash = iroha_crypto::Hash::prehashed([7_u8; iroha_crypto::Hash::LENGTH]);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let (world_seq, alice_asset_id, bob_asset_id) = build_transfer_world(None);
     let kura_seq = Kura::blank_kura_for_testing();
     let query_seq = crate::query::store::LiveQueryStore::start_test();

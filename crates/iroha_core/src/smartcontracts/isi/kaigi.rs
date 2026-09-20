@@ -4372,7 +4372,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            None,
             creation_time_ms,
             0,
         );
@@ -4404,7 +4403,6 @@ mod tests {
         );
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
-            None,
             None,
             None,
             0,
@@ -4609,7 +4607,6 @@ mod tests {
         );
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
-            None,
             None,
             None,
             0,

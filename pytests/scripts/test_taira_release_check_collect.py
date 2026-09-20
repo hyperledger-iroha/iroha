@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import test_taira_release_check as existing
+from taira_fake_libtest import executable
 
 gate = existing.gate
 
@@ -33,15 +34,9 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                 tests = [name + "_first", name + "_second"]
                 listed = tests[:1] if name == missing else tests
                 script = root / name
-                script.write_text(f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
-                    f"if '--list' in sys.argv: print({chr(10).join(test + ': test' for test in listed)!r}); sys.exit(0)\n"
-                    "name = sys.argv[1]\n"
-                    f"with Path({str(executed)!r}).open('a') as f: f.write(name + '\\n')\n"
-                    f"failed = {name in failed!r} and name.endswith('_first')\n"
-                    f"ignored = {name in ignored!r} and name.endswith('_first')\n"
-                    "print('test ' + name + (' ... FAILED' if failed else ' ... ignored' if ignored else ' ... ok'))\n"
-                    "print('fixture failure' if failed else 'test result: ok. 0 passed; 0 failed; 1 ignored;' if ignored else 'test result: ok. 1 passed; 0 failed; 0 ignored;')\n"
-                    "sys.exit(101 if failed else 0)\n")
+                script.write_text(executable(listed, executed,
+                    failed=(name + "_first",) if name in failed else (),
+                    ignored=(name + "_first",) if name in ignored else ()))
                 script.chmod(0o500)
                 artifacts[name] = str(script)
             artifacts["network"] = str(root / "unused-network")
@@ -93,7 +88,7 @@ class CollectIndependentRegressionTests(unittest.TestCase):
         self.assertIsInstance(error, gate.SelectedRegressionFailures)
         self.assertEqual(len(error.failures), 2)
         self.assertIn("daemon_first (exit 0)", str(error))
-        self.assertIn("cli_first (exit 101)", str(error))
+        self.assertIn("cli_first (FAILED)", str(error))
         self.assertEqual(len(executed), 20)
         self.assertEqual(len(released), 10)
 

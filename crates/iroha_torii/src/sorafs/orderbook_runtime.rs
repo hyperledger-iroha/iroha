@@ -42,9 +42,7 @@ use iroha_data_model::{
         },
         reserve::ReserveLifecycleStage,
     },
-    transaction::{
-        Executable, SignedTransaction, TransactionBuilder, signed::TransactionEntrypoint,
-    },
+    transaction::{Executable, SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, warn};
@@ -328,40 +326,27 @@ fn inspect_indexed_orderbook_transaction(
     block_height: NonZeroUsize,
     expected_block_hash: HashOf<BlockHeader>,
 ) -> OrderbookAuthoritativeTransactionOutcomeV1 {
-    let Some(block) = kura.get_block(block_height) else {
-        return classify_exact_orderbook_entrypoint_outcome(
-            transaction_hash,
-            false,
-            std::iter::empty::<(
-                HashOf<SignedTransaction>,
-                OrderbookCommittedExternalOutcomeV1,
-            )>(),
-        );
-    };
-    let Ok(block_height_u64) = u64::try_from(block_height.get()) else {
+    let Ok((_header, outcome)) = crate::canonical_history::exact_external_outcome(
+        kura,
+        block_height,
+        expected_block_hash,
+        transaction_hash,
+    ) else {
         return OrderbookAuthoritativeTransactionOutcomeV1::Unavailable;
     };
-    if block.header().height().get() != block_height_u64 || block.hash() != expected_block_hash {
-        return OrderbookAuthoritativeTransactionOutcomeV1::Unavailable;
-    }
-    let external_entrypoint_count = block.external_entrypoint_count();
     classify_exact_orderbook_entrypoint_outcome(
         transaction_hash,
         true,
-        block
-            .entrypoint_results()
-            .take(external_entrypoint_count)
-            .filter_map(|(_, entrypoint, result)| {
-                let TransactionEntrypoint::External(transaction) = entrypoint else {
-                    return None;
-                };
-                let outcome = if result.0.is_ok() {
+        outcome.map(|applied| {
+            (
+                *transaction_hash,
+                if applied {
                     OrderbookCommittedExternalOutcomeV1::Applied
                 } else {
                     OrderbookCommittedExternalOutcomeV1::Rejected
-                };
-                Some((transaction.hash(), outcome))
-            }),
+                },
+            )
+        }),
     )
 }
 fn orderbook_finalized_cursor_from_view(
@@ -1153,33 +1138,40 @@ fn observe_orderbook_transaction_in_one_finalized_view(
 ) -> Option<OrderbookFinalizedObservationV1> {
     let view = state.state.view();
     let snapshot = orderbook_snapshot_in_view(&view, delivery, retained)?;
-    let transaction_outcome = transaction_hash.map(|transaction_hash| {
-        match view
-            .transactions()
-            .get(&iroha_core::tx::external_entrypoint_hash_from_signed_hash(
-                transaction_hash.clone(),
-            )) {
-            None => OrderbookAuthoritativeTransactionOutcomeV1::Absent,
-            Some(block_height) if block_height.get() > view.block_hashes().len() => {
-                OrderbookAuthoritativeTransactionOutcomeV1::Unavailable
-            }
-            Some(block_height) => {
-                let Some(expected_block_hash) = view
-                    .block_hashes()
-                    .get(block_height.get().saturating_sub(1))
-                    .copied()
-                else {
-                    return OrderbookAuthoritativeTransactionOutcomeV1::Unavailable;
-                };
-                inspect_indexed_orderbook_transaction(
-                    view.kura(),
-                    transaction_hash,
-                    block_height,
-                    expected_block_hash,
-                )
-            }
-        }
+    // Capture all economic state and the exact indexed carrier in one view.
+    // Historical authentication owns no World read lock.
+    let indexed = transaction_hash.map(|hash| {
+        let input = iroha_core::tx::external_entrypoint_hash_from_signed_hash(*hash);
+        let height = view.transactions().get(&input);
+        let carrier = height.and_then(|height| {
+            view.block_hashes()
+                .get(height.get() - 1)
+                .copied()
+                .map(|hash| (height, hash))
+        });
+        (input, height, carrier)
     });
+    drop(view);
+    let transaction_outcome = transaction_hash
+        .zip(indexed)
+        .map(|(hash, (_, height, carrier))| match (height, carrier) {
+            (None, _) => OrderbookAuthoritativeTransactionOutcomeV1::Absent,
+            (Some(_), None) => OrderbookAuthoritativeTransactionOutcomeV1::Unavailable,
+            (Some(_), Some((height, expected))) => {
+                inspect_indexed_orderbook_transaction(&state.kura, hash, height, expected)
+            }
+        });
+    let current = state.state.view();
+    let cursor_height = usize::try_from(snapshot.finalized_cursor.height).ok()?;
+    if current
+        .block_hashes()
+        .get(cursor_height.checked_sub(1)?)
+        .map(|hash| *hash.as_ref())
+        != Some(snapshot.finalized_cursor.block_hash)
+        || indexed.is_some_and(|(input, height, _)| current.transactions().get(&input) != height)
+    {
+        return None;
+    }
     Some(OrderbookFinalizedObservationV1 {
         snapshot,
         transaction_outcome,

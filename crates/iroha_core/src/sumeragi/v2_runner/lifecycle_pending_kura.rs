@@ -875,6 +875,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
     global_beacon_partial_signer: Option<
         Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
     >,
+    beacon_readiness: Arc<crate::beacon::readiness::GlobalBeaconReadinessV1>,
     kagemusha_mint_finality_authority: Option<
         Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
     >,
@@ -932,6 +933,13 @@ pub(super) fn run_pending_kura_lifecycle_height(
     }
     let local_peer = common_config.peer.id().clone();
     let context = verified_context.context().clone();
+    let shared_config = config.v2_config(block_cadence, context.mode)?;
+    super::super::admission_capacity::require_local_payload_capacity(
+        context.da_layout,
+        &shared_config,
+    )
+    .map_err(V2RunnerError::Service)?;
+    beacon_readiness.begin_height(context.id());
     close_ingress_for_rollover(&ingress_ready, &block_rx);
     block_rx
         .configure_roster_for_context(
@@ -944,7 +952,6 @@ pub(super) fn run_pending_kura_lifecycle_height(
         )
         .map_err(ingress_capacity_error)?;
     super::super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
-    let shared_config = config.v2_config(block_cadence, context.mode)?;
     let fingerprints = adapter_fingerprints(build_identity, &local_peer, &shared_config);
     let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;
     let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;
@@ -1293,6 +1300,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
         global_beacon_partial_signer,
+        beacon_readiness,
         kagemusha_mint_finality_authority,
         network,
         block_rx,

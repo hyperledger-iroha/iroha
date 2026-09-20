@@ -10864,6 +10864,47 @@ pub(crate) fn compatible_capabilities_body() -> String {
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked client fixture keypair")
 }
+// Explicit finite fixture policy, not a production policy/default.
+#[cfg(test)]
+fn client_fixture_output_limits() -> iroha_data_model::block::output_budget::ExecutionOutputLimits {
+    iroha_data_model::block::output_budget::ExecutionOutputLimits {
+        max_outputs: 16,
+        max_output_bytes: 64 * 1024,
+        max_total_output_bytes: 256 * 1024,
+        max_executed_wire_bytes: 1024 * 1024,
+    }
+}
+#[cfg(test)]
+fn client_fixture_network_output(
+    input_index: u32,
+    result: iroha_data_model::transaction::TransactionResult,
+) -> iroha_data_model::block::execution_output::ExecutionOutputV1 {
+    use iroha_data_model::block::execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1};
+    ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+        input_index,
+        result,
+        completions: Vec::new(),
+    })
+}
+#[cfg(test)]
+fn attach_client_fixture_outputs(
+    block: &mut SignedBlock,
+    outputs: Vec<iroha_data_model::block::execution_output::ExecutionOutputV1>,
+    fragments: u64,
+) {
+    block
+        .set_execution_outputs(
+            outputs,
+            fragments,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &client_fixture_output_limits(),
+        )
+        .expect("attach bounded canonical client fixture outputs");
+}
 #[cfg(test)]
 mod evidence_http_tests {
     use super::{default_alias_policy, *};
@@ -14116,22 +14157,27 @@ mod evidence_http_tests {
         let entrypoint = TransactionEntrypoint::External(signed.clone());
         let entrypoint_hash = signed.hash_as_entrypoint();
         assert_eq!(entrypoint.hash(), entrypoint_hash);
+        let output = iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+            iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                input_index: 0,
+                result,
+                completions: Vec::new(),
+            },
+        );
         let transaction = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH])),
             entrypoint_hash,
             entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
             entrypoint,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
+            output_hash: HashOf::new(&output),
+            output_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            output,
         };
         (
             signed,
             PipelineTransactionDetailsResponse {
                 hash: entrypoint_hash.to_string(),
                 transaction,
-                trigger_completions: Vec::new(),
             },
         )
     }
@@ -15731,6 +15777,80 @@ fn tx_confirmation_final_report(report: eyre::Report) -> eyre::Report {
 fn tx_confirmation_unresolved_final_report(report: eyre::Report) -> eyre::Report {
     TxConfirmationFinalError::unresolved(report).into()
 }
+/// A dispatched batch did not produce an all-accepted acknowledgement.
+///
+/// Inspect input-ordered outcomes when available. Missing or malformed results
+/// leave every submitted hash unresolved; never automatically resend the batch.
+#[derive(Debug)]
+pub struct TransactionBatchAdmissionError {
+    hashes: Vec<HashOf<SignedTransaction>>,
+    outcomes: Option<Vec<iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome>>,
+    cause: eyre::Report,
+}
+impl TransactionBatchAdmissionError {
+    /// Locally computed signed identities in original request order.
+    #[must_use]
+    pub fn hashes(&self) -> &[HashOf<SignedTransaction>] {
+        &self.hashes
+    }
+    /// Exact matched per-entry results, or `None` if the response was ambiguous.
+    #[must_use]
+    pub fn outcomes(
+        &self,
+    ) -> Option<&[iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome]> {
+        self.outcomes.as_deref()
+    }
+}
+impl fmt::Display for TransactionBatchAdmissionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "transaction batch was not fully acknowledged; reconcile each submitted hash before retrying: {}",
+            self.cause
+        )
+    }
+}
+impl std::error::Error for TransactionBatchAdmissionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+fn transaction_batch_outcomes(
+    response: &Response<Vec<u8>>,
+    hashes: &[HashOf<SignedTransaction>],
+) -> Result<Vec<iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome>> {
+    use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
+    let outcomes: Vec<TransactionBatchEntryOutcome> = norito::json::from_slice(response.body())
+        .wrap_err("invalid transaction batch outcome body")?;
+    if outcomes.len() != hashes.len()
+        || outcomes.iter().zip(hashes).any(|(outcome, hash)| {
+            &outcome.signed_transaction_hash != hash
+                || !(outcome.status == 202 || (400..=599).contains(&outcome.status))
+        })
+    {
+        return Err(eyre!(
+            "transaction batch outcomes differ from the exact requested identities"
+        ));
+    }
+    let accepted = outcomes
+        .iter()
+        .filter(|outcome| outcome.status == 202)
+        .count();
+    if response
+        .headers()
+        .get("x-iroha-transactions-accepted")
+        .and_then(|value| value.to_str().ok())
+        != Some(accepted.to_string().as_str())
+        || accepted == outcomes.len()
+    {
+        return Err(eyre!(
+            "transaction batch outcome count contradicts its acknowledgement"
+        ));
+    }
+    Ok(outcomes)
+}
+
 /// `QueuePlan` admission may have crossed its durability boundary, but the client could not
 /// determine whether the submitted transaction was applied, rejected, or expired.
 ///
@@ -17211,7 +17331,9 @@ impl AccountClient {
     /// # Errors
     /// Fails if sending the batch to the peer fails, if Torii returns a non-success response, if
     /// the accepted-count acknowledgement does not match the requested batch size, or if the submit
-    /// compatibility advert is missing or incompatible.
+    /// compatibility advert is missing or incompatible. After dispatch, partial results or a lost
+    /// response return [`TransactionBatchAdmissionError`] with original identities and any exact
+    /// per-entry outcomes. Batching does not provide atomic admission or execution.
     pub async fn submit_prepared_transaction_payload_batch(
         &self,
         payloads: &[PreparedTransactionPayload],
@@ -17238,28 +17360,58 @@ impl AccountClient {
                 join_torii_url(&client.torii_url, torii_uri::TRANSACTIONS_BATCH),
             )
             .header("Content-Type", APPLICATION_NORITO)
-            .header("Accept", client.wire_format_preference.accept_header())
+            .header("Accept", "application/json")
             .header("Prefer", "return=minimal")
-            .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
+            .max_response_bytes(1024 * 1024);
         request = request.headers(client.transaction_headers_without_content_type());
-        let response = request
-            .body(body)
-            .build()?
-            .send()
-            .await
-            .wrap_err("Failed to send transaction batch")?;
-        TransactionResponseHandler::handle(&response)?;
-        let accepted_count = response
+        let result = request.body(body).build()?.send().await;
+        let response = match result {
+            Ok(response) => response,
+            Err(cause) => {
+                return Err(TransactionBatchAdmissionError {
+                    hashes,
+                    outcomes: None,
+                    cause,
+                }
+                .into());
+            }
+        };
+        if response.status() == StatusCode::MULTI_STATUS {
+            let (outcomes, cause) = match transaction_batch_outcomes(&response, &hashes) {
+                Ok(outcomes) => (
+                    Some(outcomes),
+                    eyre!("one or more entries were not accepted"),
+                ),
+                Err(error) => (None, error),
+            };
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes,
+                cause,
+            }
+            .into());
+        }
+        if response.status() != StatusCode::ACCEPTED {
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes: None,
+                cause: TransactionResponseHandler::rejection_report(&response),
+            }
+            .into());
+        }
+        let expected_count = payloads.len().to_string();
+        if response
             .headers()
             .get("x-iroha-transactions-accepted")
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(0);
-        if accepted_count != payloads.len() {
-            return Err(eyre!(
-                "transaction batch accepted {accepted_count} item(s), expected {}",
-                payloads.len()
-            ));
+            != Some(expected_count.as_str())
+        {
+            return Err(TransactionBatchAdmissionError {
+                hashes,
+                outcomes: None,
+                cause: eyre!("batch acknowledgement count mismatch"),
+            }
+            .into());
         }
         Ok(hashes)
     }
@@ -17470,7 +17622,11 @@ impl Client {
                 );
                 return Ok(None);
             }
-            Err(error @ (QueryError::Validation(_) | QueryError::ResponseShape(_))) => {
+            Err(
+                error @ (QueryError::Http { .. }
+                | QueryError::Validation(_)
+                | QueryError::ResponseShape(_)),
+            ) => {
                 return Err(tx_confirmation_final_report(eyre::Report::new(error)));
             }
             Err(QueryError::Other(error)) => return Err(error),
@@ -23568,16 +23724,8 @@ fn rejection_reason_from_transaction_details(
     signed_hash: HashOf<SignedTransaction>,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<TransactionRejectionReason> {
+    crate::query::validate_transaction_details_bindings(details, entrypoint_hash)?;
     let transaction = &details.transaction;
-    if details.hash != entrypoint_hash.to_string()
-        || transaction.entrypoint_hash() != &entrypoint_hash
-        || transaction.entrypoint().hash() != entrypoint_hash
-        || transaction.result_hash() != &transaction.result().hash()
-    {
-        return Err(eyre!(
-            "transaction-details response does not match the requested entrypoint/result hash"
-        ));
-    }
     let TransactionEntrypoint::External(committed) = transaction.entrypoint() else {
         return Err(eyre!(
             "transaction-details response is not for an external signed transaction"
@@ -24585,7 +24733,6 @@ mod tx_confirmation_stream_tests {
                 height,
                 prev_block_hash: None,
                 merkle_root: None,
-                result_merkle_root: None,
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
@@ -25892,6 +26039,53 @@ mod tests {
         assert_eq!(body_b, b"transport-b");
         assert_eq!(sends_a.load(Ordering::Relaxed), 1);
         assert_eq!(sends_b.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn transaction_batch_outcomes_require_exact_order_status_and_count() {
+        use iroha_data_model::transaction::receipt::TransactionBatchEntryOutcome;
+        let hashes =
+            [0x51, 0x52].map(|byte| HashOf::from_untyped_unchecked(Hash::prehashed([byte; 32])));
+        let outcomes = vec![
+            TransactionBatchEntryOutcome {
+                signed_transaction_hash: hashes[0],
+                status: 202,
+                reject_code: None,
+            },
+            TransactionBatchEntryOutcome {
+                signed_transaction_hash: hashes[1],
+                status: 503,
+                reject_code: Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN".to_owned()),
+            },
+        ];
+        let response = |items: &Vec<TransactionBatchEntryOutcome>, count: &str| {
+            HttpResponse::builder()
+                .status(StatusCode::MULTI_STATUS)
+                .header("x-iroha-transactions-accepted", count)
+                .body(norito::json::to_vec(items).unwrap())
+                .unwrap()
+        };
+        assert_eq!(
+            transaction_batch_outcomes(&response(&outcomes, "1"), &hashes).unwrap(),
+            outcomes
+        );
+        assert!(transaction_batch_outcomes(&response(&outcomes, "2"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed.swap(0, 1);
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed[1].status = 200;
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let mut changed = outcomes.clone();
+        changed.pop();
+        assert!(transaction_batch_outcomes(&response(&changed, "1"), &hashes).is_err());
+        let error = TransactionBatchAdmissionError {
+            hashes: hashes.to_vec(),
+            outcomes: Some(outcomes.clone()),
+            cause: eyre!("partial"),
+        };
+        assert_eq!(error.hashes(), &hashes);
+        assert_eq!(error.outcomes(), Some(outcomes.as_slice()));
     }
 
     #[tokio::test]
@@ -30846,7 +31040,6 @@ mod tests {
             NonZeroU64::new(12).expect("nonzero height"),
             None,
             None,
-            None,
             1_700_000_000_000,
             0,
         );
@@ -30958,7 +31151,6 @@ mod tests {
             NonZeroU64::new(block_height).expect("nonzero height"),
             None,
             None,
-            None,
             timestamp_ms,
             0,
         );
@@ -31067,7 +31259,7 @@ mod tests {
         assert!(decoded.proof_backend.is_none());
         assert!(decoded.proof_call_hash.is_none());
         assert!(decoded.proof_envelope_hash.is_none());
-        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height"), None, None, 0, 0);
         let warning = PipelineWarning {
             header,
             kind: "test".to_string(),
@@ -31266,24 +31458,31 @@ mod tests {
         let mut builder = DataModelBlockBuilder::new(proposal.header());
         builder.set_da_proof_policies(proposal.da_proof_policies().cloned());
         builder.push_transaction(tx);
-        builder.push_result(Ok(
-            iroha_data_model::transaction::DataTriggerSequence::default(),
-        ));
-        let block = builder
+        let mut block = builder
             .try_build_with_signature(0, &private_key)
             .expect("sign canonical result-bearing block-stream fixture");
+        let proposal_header = block.header();
+        let proposal_hash = block.hash();
+        attach_client_fixture_outputs(
+            &mut block,
+            vec![client_fixture_network_output(
+                0,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()).into(),
+            )],
+            1,
+        );
         block
-            .validate_entrypoint_merkle_cache()
-            .expect("block-stream entrypoint Merkle cache must be canonical");
+            .validate_proposal_commitments()
+            .expect("canonical proposal commitments");
         block
-            .validate_result_merkle_cache()
-            .expect("block-stream result Merkle cache must be canonical");
+            .validate_output_merkle_cache()
+            .expect("canonical typed output cache");
         assert_eq!(block.committed_fragment_count(), Some(1));
+        assert_eq!(block.header(), proposal_header);
+        assert_eq!(block.hash(), proposal_hash);
         assert_eq!(
-            block.header().result_merkle_root(),
-            block
-                .result_merkle_commitment()
-                .map(|commitment| *commitment.root())
+            block.output_merkle_commitment().unwrap().leaf_count().get(),
+            1
         );
         let mut final_signatures = block.signatures();
         let final_signature = final_signatures

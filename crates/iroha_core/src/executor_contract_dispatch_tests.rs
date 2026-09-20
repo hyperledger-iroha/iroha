@@ -140,7 +140,7 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let contract_address = ContractAddress::derive(
@@ -277,7 +277,7 @@ fn execute_instruction_with_ivm() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain id");
@@ -441,7 +441,7 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
         query::store::LiveQueryStore::start_test(),
         ChainId::from("authority-binding"),
     );
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     let mut state_transaction = block.transaction();
     let transaction = TransactionBuilder::new(
         state.network_id,
@@ -479,7 +479,7 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_tx = block.transaction();
         *state_tx.world.executor.get_mut() = executor;
@@ -525,7 +525,7 @@ fn executor_validation_consumes_fuel_budget() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
@@ -548,7 +548,7 @@ fn executor_validation_rejects_when_budget_exhausted() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     state_tx.executor_fuel_remaining = 0;
@@ -799,7 +799,7 @@ fn validate_query_with_ivm() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let state_tx = block.transaction();
     let query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
@@ -818,7 +818,7 @@ fn initial_executor_mirrors_default_private_query_permissions() {
     let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
     let world = World::with([], [alice_account, bob_account], []);
-    let latest_block = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let latest_block = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),
@@ -1010,7 +1010,7 @@ fn validate_start_query_with_ivm() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let state_tx = block.transaction();
     let iter_query = QueryWithParams {
@@ -1037,7 +1037,7 @@ fn validate_query_rejected_by_executor() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let state_tx = block.transaction();
     let query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
@@ -1067,7 +1067,7 @@ fn migrate_invokes_entrypoint_and_swaps_executor() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     // Perform migration
@@ -1090,7 +1090,7 @@ fn migrate_rejects_unauthorized_non_genesis_callers_before_loading_bytecode() {
         query::store::LiveQueryStore::start_test(),
         ChainId::from("executor-mutation-boundary"),
     );
-    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_transaction = block.transaction();
     let error = executor
@@ -1166,7 +1166,7 @@ fn migrate_applies_data_model_from_entrypoint() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     executor
@@ -1214,7 +1214,7 @@ fn migrate_fails_on_invalid_bytecode() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
     let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let res = executor.migrate(raw, &mut state_tx, &ALICE_ID.clone());

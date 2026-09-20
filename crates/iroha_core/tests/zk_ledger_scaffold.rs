@@ -45,7 +45,7 @@ fn register_zk_asset_writes_policy_metadata() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     // Setup: domain and asset def
@@ -123,7 +123,7 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
@@ -196,7 +196,7 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id = DomainId::try_new("zkd", "universal").expect("domain id");
@@ -261,7 +261,7 @@ fn schedule_confidential_policy_transition_records_pending() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     // Setup base entities.
@@ -302,8 +302,7 @@ fn schedule_confidential_policy_transition_records_pending() {
         .commit_empty_block_for_testing()
         .expect("commit setup block");
     // New block for scheduling the transition.
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
@@ -365,7 +364,7 @@ fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id = DomainId::try_new("zkd", "universal").expect("valid domain");
@@ -414,7 +413,7 @@ fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
         .commit_empty_block_for_testing()
         .expect("commit stale pending transition");
     let transition_header =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     state
         .block(transition_header)
         .commit_empty_block_for_testing()
@@ -462,7 +461,7 @@ fn confidential_policy_transition_applies_at_effective_height() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
@@ -500,8 +499,7 @@ fn confidential_policy_transition_applies_at_effective_height() {
     block
         .commit_empty_block_for_testing()
         .expect("commit setup block");
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
@@ -527,7 +525,6 @@ fn confidential_policy_transition_applies_at_effective_height() {
     // New block at the scheduled effective height.
     let header3 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(effective_height).unwrap(),
-        None,
         None,
         None,
         0,
@@ -577,7 +574,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
@@ -615,8 +612,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
     block
         .commit_empty_block_for_testing()
         .expect("commit setup block");
-    let header2 =
-        iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
@@ -763,7 +759,7 @@ fn zk_roots_are_bounded_in_world_state() {
         })
         .expect("empty SCCP outbox accepts bounded-roots test configuration");
     // Begin block/transaction
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     // Setup domain/account/asset and mint
@@ -915,8 +911,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
     let (owner, _owner_key) = gen_account_in("zkd");
     // Block 1: bootstrap domain/account/asset and register policy.
     {
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         for instr in [
@@ -949,7 +944,6 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
     for h in 2_u64..=8 {
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(h).expect("block height must be non-zero"),
-            None,
             None,
             None,
             0,

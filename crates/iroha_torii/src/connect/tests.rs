@@ -2837,7 +2837,11 @@ async fn notify_close_updates_activity_without_touching_peer_seq() {
 #[tokio::test]
 async fn broadcasts_block_proofs_to_app_and_wallet() {
     use iroha_data_model::{
-        block::proofs::ExecutionReceiptProof, transaction::signed::TransactionResult,
+        block::{
+            execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+            proofs::ExecutionReceiptProof,
+        },
+        transaction::signed::TransactionResult,
     };
     let bus = Bus::new();
     let sid = [0xBCu8; 32];
@@ -2849,12 +2853,16 @@ async fn broadcasts_block_proofs_to_app_and_wallet() {
     let entry_commitment = entry_tree.commitment().expect("entry commitment");
     let entry_proof: BlockReceiptProof =
         BlockReceiptProof::new(entry_hash, entry_tree.get_proof(0).expect("entry proof"));
-    let result_hash =
-        HashOf::<TransactionResult>::from_untyped_unchecked(Hash::prehashed([0x23u8; 32]));
-    let result_tree: MerkleTree<TransactionResult> = [result_hash].into_iter().collect();
-    let result_commitment = result_tree.commitment().expect("result commitment");
-    let result_proof =
-        ExecutionReceiptProof::new(result_hash, result_tree.get_proof(0).expect("result proof"));
+    let output = ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+        input_index: 0,
+        result: TransactionResult::new(Ok(vec![])),
+        completions: vec![],
+    });
+    let output_tree: MerkleTree<ExecutionOutputV1> = [HashOf::new(&output)].into_iter().collect();
+    let output_commitment = output_tree.commitment().expect("output commitment");
+    let output_proof =
+        ExecutionReceiptProof::new(output, output_tree.get_proof(0).expect("output proof"));
+    assert!(output_proof.verify(&output_commitment));
     let proofs = BlockProofs {
         block_height: NonZeroU64::new(1).expect("non-zero height"),
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"connect carrier block")),
@@ -2862,8 +2870,8 @@ async fn broadcasts_block_proofs_to_app_and_wallet() {
         entry_hash,
         entry_commitment,
         entry_proof,
-        result_commitment,
-        result_proof,
+        output_commitment,
+        output_proof,
         fastpq_transcripts: BTreeMap::new(),
     };
     let expected_entry_hex = hex::encode(entry_hash.as_ref());

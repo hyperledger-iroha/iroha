@@ -8,7 +8,7 @@ const STRICT_JSON_MAX_NODES = 2_000_000;
  * above `Number.MAX_SAFE_INTEGER`. This writer emits bigint as a raw canonical
  * integer token, accepts only safe integer `number` values, rejects accessors,
  * symbols, sparse arrays, cycles, and unsupported object prototypes, and uses
- * the same structural budgets as the lossless decoder.
+ * the same Unicode scalar policy and structural budgets as the lossless decoder.
  *
  * @param {unknown} value JSON-compatible value containing integer numbers.
  * @param {string} context human-readable error context.
@@ -33,13 +33,28 @@ export function stringifyStrictLosslessIntegerJson(value, context) {
       fail(path, `value exceeds the ${STRICT_JSON_MAX_DEPTH}-level nesting limit`, RangeError);
     }
   };
+  const encodeString = (text, path) => {
+    for (let index = 0; index < text.length; index += 1) {
+      const codeUnit = text.charCodeAt(index);
+      if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+        const low = text.charCodeAt(index + 1);
+        if (!(low >= 0xdc00 && low <= 0xdfff)) {
+          fail(path, "strings must contain only Unicode scalar values");
+        }
+        index += 1;
+      } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+        fail(path, "strings must contain only Unicode scalar values");
+      }
+    }
+    return JSON.stringify(text);
+  };
 
   const encode = (current, depth, path) => {
     consumeNode(depth, path);
     if (current === null) return "null";
     switch (typeof current) {
       case "string":
-        return JSON.stringify(current);
+        return encodeString(current, path);
       case "boolean":
         return current ? "true" : "false";
       case "number":
@@ -60,10 +75,14 @@ export function stringifyStrictLosslessIntegerJson(value, context) {
           if (Array.isArray(current)) {
             const items = [];
             for (let index = 0; index < current.length; index += 1) {
-              if (!Object.prototype.hasOwnProperty.call(current, index)) {
+              const descriptor = Object.getOwnPropertyDescriptor(current, index);
+              if (!descriptor) {
                 fail(`${path}[${index}]`, "sparse arrays are forbidden");
               }
-              items.push(encode(current[index], depth + 1, `${path}[${index}]`));
+              if (!("value" in descriptor)) {
+                fail(`${path}[${index}]`, "accessor properties are forbidden");
+              }
+              items.push(encode(descriptor.value, depth + 1, `${path}[${index}]`));
             }
             return `[${items.join(",")}]`;
           }
@@ -79,7 +98,7 @@ export function stringifyStrictLosslessIntegerJson(value, context) {
               fail(`${path}.${key}`, "accessor properties are forbidden");
             }
             fields.push(
-              `${JSON.stringify(key)}:${encode(descriptor.value, depth + 1, `${path}.${key}`)}`,
+              `${encodeString(key, path)}:${encode(descriptor.value, depth + 1, `${path}.${key}`)}`,
             );
           }
           return `{${fields.join(",")}}`;

@@ -317,7 +317,9 @@ fn pair_counts_both_exact_vec_frames_and_total_reservations_before_any_stage() {
         }
         if kind == 1 {
             values.finality_bytes =
-                norito::canonical_frame_len(&Vec::<BridgeFinalityProof>::new()).unwrap() as u64 - 1;
+                norito::canonical_frame_len(&Vec::<FinalizedNativeContextV1>::new()).unwrap()
+                    as u64
+                    - 1;
         }
         if kind == 2 {
             values.query_bytes = norito::canonical_frame_len(&Vec::<CommittedTransaction>::new())
@@ -380,7 +382,7 @@ fn both_core_ancestries_and_original_context_alias_are_checked_before_any_stage(
 #[test]
 fn complete_pair_publishes_exact_typed_frames_after_both_fsync_readbacks_and_retains_descriptors() {
     let f = Fixture::new();
-    let finality = Vec::<BridgeFinalityProof>::new();
+    let finality = Vec::<FinalizedNativeContextV1>::new();
     let queries = Vec::<CommittedTransaction>::new();
     let mut events = Vec::new();
     let _ambient_flags = norito::core::DecodeFlagsGuard::enter(0);
@@ -422,7 +424,7 @@ fn complete_pair_publishes_exact_typed_frames_after_both_fsync_readbacks_and_ret
         assert!(!Fixture::stage(path).exists());
     }
     assert!(
-        norito::decode_canonical::<Vec<BridgeFinalityProof>>(&fs::read(&f.finality).unwrap())
+        norito::decode_canonical::<Vec<FinalizedNativeContextV1>>(&fs::read(&f.finality).unwrap())
             .unwrap()
             .is_empty()
     );
@@ -797,4 +799,21 @@ fn external_publication_guard_failure_never_returns_a_pair() {
             .is_err()
     );
     assert!(!f.finality.exists() && !f.queries.exists());
+}
+
+#[test]
+fn native_context_original_admits_its_own_bound_and_retains_source_identity() {
+    let fixture = Fixture::new();
+    let mut binding = fixture.binding();
+    binding.max_bytes = MAX_CONTEXT_BYTES + 1;
+    let original = RetainedOriginalInput::open_native_contexts(binding).unwrap();
+    assert_eq!(
+        original.identity().unwrap().raw_sha256,
+        iroha_crypto::sha256(CONTEXT)
+    );
+    let mut excessive = fixture.binding();
+    excessive.max_bytes = MAX_TRANSPORT_BYTES + 1;
+    assert!(RetainedOriginalInput::open_native_contexts(excessive).is_err());
+    fs::write(&fixture.context, b"changed Native archive").unwrap();
+    assert!(original.identity().is_err());
 }

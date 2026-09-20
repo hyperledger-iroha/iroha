@@ -2,6 +2,10 @@
 #[derive(Clone, Copy)]
 enum CanonicalBlockReadAuthority<'a, 'k> {
     Published,
+    PublishedBounded {
+        hash: &'a HashOf<BlockHeader>,
+        wire_len: u64,
+    },
     Apply(&'a crate::block::VerifiedV2FinalityArtifact),
     Startup(&'a V2StartupFinalityVerificationSession<'k>),
 }
@@ -272,6 +276,41 @@ impl Kura {
         self.read_block_body_under_prune_and_canonical_guards(height)
     }
 
+    /// Read the exact finalized body whose durable length the caller already charged.
+    ///
+    /// Recheck the hash and length under the canonical storage guards before
+    /// allocating body bytes. A changed slot cannot consume an earlier, smaller
+    /// reservation. Missing and corrupt bodies retain the ordinary read errors.
+    pub(crate) fn read_block_body_with_wire_bound(
+        &self,
+        height: NonZeroUsize,
+        hash: HashOf<BlockHeader>,
+        wire_len: u64,
+    ) -> Result<Option<Arc<SignedBlock>>> {
+        self.read_block_body_and_wire_with_wire_bound(height, hash, wire_len)
+            .map(|body| body.map(|(block, _)| block))
+    }
+
+    /// Return the original authenticated wire with its decoded body after size admission.
+    ///
+    /// Both values come from the same guarded exact-finality read. Proof transport
+    /// uses these bytes directly, avoiding a second complete carrier allocation or
+    /// a re-encoding which could differ from the QC-authenticated wire identity.
+    pub(crate) fn read_block_body_and_wire_with_wire_bound(
+        &self,
+        height: NonZeroUsize,
+        hash: HashOf<BlockHeader>,
+        wire_len: u64,
+    ) -> Result<Option<(Arc<SignedBlock>, Vec<u8>)>> {
+        let _prune = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical = self.canonical_chain_lock.lock();
+        self.read_block_body_and_wire_with_authority_under_guards(
+            height,
+            CanonicalBlockReadAuthority::PublishedBounded { hash: &hash, wire_len },
+        )
+    }
+
     /// Authenticate an Apply-owned durable append before finality publication.
     ///
     /// The opaque verified certificate selects the exact complete wire. Any
@@ -306,6 +345,15 @@ impl Kura {
         height: NonZeroUsize,
         authority: CanonicalBlockReadAuthority<'_, '_>,
     ) -> Result<Option<Arc<SignedBlock>>> {
+        self.read_block_body_and_wire_with_authority_under_guards(height, authority)
+            .map(|body| body.map(|(block, _)| block))
+    }
+
+    fn read_block_body_and_wire_with_authority_under_guards(
+        &self,
+        height: NonZeroUsize,
+        authority: CanonicalBlockReadAuthority<'_, '_>,
+    ) -> Result<Option<(Arc<SignedBlock>, Vec<u8>)>> {
         if let CanonicalBlockReadAuthority::Startup(startup) = authority
             && !std::ptr::eq(self, startup.kura)
         {
@@ -345,7 +393,8 @@ impl Kura {
             });
         }
         let artifact = match authority {
-            CanonicalBlockReadAuthority::Published => None,
+            CanonicalBlockReadAuthority::Published
+            | CanonicalBlockReadAuthority::PublishedBounded { .. } => None,
             CanonicalBlockReadAuthority::Apply(authority) => Some(authority.artifact()),
             CanonicalBlockReadAuthority::Startup(startup) => {
                 Some(startup.canonical_tip_finality_for_read(
@@ -397,8 +446,22 @@ impl Kura {
         if slot.length != wire_len {
             return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
         }
+        if let CanonicalBlockReadAuthority::PublishedBounded {
+            hash: expected_hash,
+            wire_len: charged_wire_len,
+        } = authority
+            && (hash != *expected_hash || wire_len != charged_wire_len)
+        {
+            return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
+        }
         let bytes = if slot.is_evicted() {
-            let Some(bytes) = store.read_optional_da_cache(height_u64)? else {
+            let Some(bytes) = Self::read_regular_sidecar_bytes_for(
+                &store.path_to_blockchain,
+                &store.da_block_path(height_u64),
+                &store.da_blocks_dir,
+                usize::try_from(wire_len)?,
+            )?
+            else {
                 if let CanonicalBlockReadAuthority::Startup(startup) = authority {
                     startup.canonical_tip_finality_for_read(
                         self,
@@ -440,7 +503,7 @@ impl Kura {
         if let CanonicalBlockReadAuthority::Startup(startup) = authority {
             startup.canonical_tip_finality_for_read(self, height_u64, &store.path_to_blockchain)?;
         }
-        Ok(Some(Arc::new(block)))
+        Ok(Some((Arc::new(block), bytes)))
     }
 
     /// Reattest a strictly decoded certificate before live lane completion.

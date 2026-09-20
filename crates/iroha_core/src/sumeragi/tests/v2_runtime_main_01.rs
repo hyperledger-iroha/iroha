@@ -163,7 +163,7 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
     assert!(runtime.active_view_producer.is_some());
     let deadline = start + Duration::from_secs(10);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(deadline),
+        runtime.step_and_take_scheduler_ownership_for_test(deadline, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     assert_eq!(runtime.driver.timeouts, vec![initial]);
@@ -390,11 +390,17 @@ fn absolute_timeout_fires_once_and_messages_never_reset_it() {
     )
     .expect("enqueue message");
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(1)),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(1),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(2)),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(2),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Advanced(_))
     ));
     assert_eq!(runtime.driver.retransmits, vec![initial]);
@@ -412,7 +418,10 @@ fn absolute_timeout_fires_once_and_messages_never_reset_it() {
         .and_then(|queued| queued.lifecycle_ordinal)
         .expect("the second message owns its immutable lifecycle ordinal");
     runtime
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(9),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the admitted message precedes the fresh periodic episode");
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
@@ -424,17 +433,26 @@ fn absolute_timeout_fires_once_and_messages_never_reset_it() {
         "the later runner freeze must mint a fresh periodic position after admitted work"
     );
     runtime
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(10),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("absolute timeout preempts the retained periodic episode");
     assert_eq!(runtime.driver.retransmits, vec![initial]);
     assert_eq!(runtime.driver.timeouts, vec![initial]);
     runtime
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(10),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the retained periodic episode runs immediately after timeout");
     assert_eq!(runtime.driver.timeouts, vec![initial]);
     assert_eq!(runtime.driver.retransmits, vec![initial, initial]);
     runtime
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(20))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(20),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("post-timeout scheduling succeeds");
     assert_eq!(
         runtime.driver.retransmits,
@@ -461,20 +479,20 @@ fn absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains() {
     .expect("enqueue newer runtime work");
     let due = start + Duration::from_secs(10);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(due),
+        runtime.step_and_take_scheduler_ownership_for_test(due, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     assert_eq!(runtime.driver.timeouts, vec![initial]);
     assert_eq!(runtime.driver.deferred_dispatches, 0);
     assert_eq!(runtime.queued_commands(), 1);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(due),
+        runtime.step_and_take_scheduler_ownership_for_test(due, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 2
     ));
     assert_eq!(runtime.driver.deferred_dispatches, 1);
     assert_eq!(runtime.queued_commands(), 1);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(due),
+        runtime.step_and_take_scheduler_ownership_for_test(due, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
     ));
     assert_eq!(runtime.driver.deferred_dispatches, 2);
@@ -482,13 +500,13 @@ fn absolute_timeout_preempts_serviceable_adapter_debt_then_debt_drains() {
     // Timeout preserves FIFO debt, so admitted work runs before the
     // still-due periodic retransmission once adapter debt is empty.
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(due),
+        runtime.step_and_take_scheduler_ownership_for_test(due, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
     ));
     assert_eq!(runtime.driver.delivered, vec![(initial, 9)]);
     assert_eq!(runtime.queued_commands(), 0);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(due),
+        runtime.step_and_take_scheduler_ownership_for_test(due, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     assert_eq!(runtime.driver.timeouts, vec![initial]);
@@ -503,12 +521,15 @@ fn serviceable_adapter_debt_runs_without_runtime_ingress() {
     let mut runtime = runtime(driver, start, RuntimeQueueConfig::new(8, 2, 2));
     assert_eq!(runtime.queued_commands(), 0);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start),
+        runtime.step_and_take_scheduler_ownership_for_test(start, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.len() == 1
     ));
     assert_eq!(runtime.driver.deferred_dispatches, 1);
     assert!(matches!(
-        runtime.step_and_take_scheduler_ownership_for_test(start),
+        runtime.step_and_take_scheduler_ownership_for_test(
+            start,
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Ok(RuntimeStep::Idle)
     ));
 }
@@ -564,14 +585,22 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
         }]
     ));
     runtime
-        .enqueue_network_with_ingress_ownership(message.clone(), first_ownership)
+        .enqueue_network_with_ingress_ownership(
+            message.clone(),
+            first_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue the first origin-specific PrepareQC");
     runtime
-        .enqueue_network_with_ingress_ownership(message, second_ownership)
+        .enqueue_network_with_ingress_ownership(
+            message,
+            second_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue the second origin before the first reaches Busy storage");
     assert_eq!(runtime.queued_commands(), 2);
     let first = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("first pacemaker selection remains valid")
         .expect("first PrepareQC owns one pacemaker turn");
     assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -592,7 +621,7 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
     );
     assert!(runtime.take_leader_wire_runtime_terminals().is_empty());
     let second = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("duplicate pacemaker selection must not fail closed")
         .expect("the prequeued duplicate owns one bounded retirement turn");
     assert!(matches!(second, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -633,10 +662,13 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
             signed_runtime_timeout_certificate(&context, &keys),
         ));
     runtime
-        .enqueue_network(timeout_certificate)
+        .enqueue_network(
+            timeout_certificate,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue certified progress which opens the signing fence");
     let certified = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("certified progress remains schedulable")
         .expect("the TC owns one pacemaker turn");
     let RuntimeStep::Advanced(certified_effects) = certified else {
@@ -650,7 +682,7 @@ fn pacemaker_escape_coalesces_prequeued_distinct_origin_prepare_qc_into_live_bus
         .expect("consume the TC effect ownership");
     assert!(runtime.driver().deferred_work_is_serviceable());
     let retired = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("canonical Busy owner remains schedulable")
         .expect("canonical Busy owner receives its terminal turn");
     let RuntimeStep::Advanced(retired_effects) = retired else {
@@ -750,7 +782,10 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         .checked_sub(Duration::from_nanos(1))
         .expect("round deadline has a prior instant");
     let periodic_step = runtime
-        .step(periodic_at)
+        .step(
+            periodic_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("service the one bounded retransmit turn before Timeout");
     let periodic_scheduling = runtime
         .take_last_scheduler_ownership()
@@ -767,7 +802,7 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         .expect("consume pre-timeout periodic effect ownership");
     assert!(runtime.deferred_lifecycle_ownership.is_empty());
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("absolute deadline opens TimeoutVote signing");
     runtime
         .take_last_scheduler_ownership()
@@ -790,9 +825,11 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         ] => (*tag, vote.signature_preimage()),
         effects => panic!("unexpected timeout effects: {effects:?}"),
     };
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
-        .expect("publish pending TimeoutVote signer owner");
+    let mut external_owners = vec![timeout_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let first_physical_ordinal = first_ownership
         .physical_admission_ordinal()
         .expect("checked target owns one receiver-local occurrence");
@@ -800,10 +837,20 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         .runtime_physical_cut()
         .expect("checked target freezes its predecessor cut");
     runtime
-        .enqueue_network_with_ingress_ownership(first, first_ownership)
+        .enqueue_network_with_ingress_ownership(
+            first,
+            first_ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("admit first pre-timeout peer owner after signing begins");
     runtime
-        .enqueue_network_with_ingress_ownership(second, second_ownership)
+        .enqueue_network_with_ingress_ownership(
+            second,
+            second_ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("admit the distinct-origin duplicate before either aggregate dispatches");
     assert_eq!(runtime.queued_commands(), 2);
     assert_eq!(
@@ -825,7 +872,7 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         .expect("later receiver activity advances only the global high-watermark");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(deadline)
+            .step_and_take_scheduler_ownership_for_test(deadline, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners"))
             .expect("move first peer owner into Busy-deferred state"),
         RuntimeStep::Advanced(ref effects) if effects.is_empty()
     ));
@@ -856,7 +903,11 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
     let queue_before_fenced_idle = runtime.ingress.ownership_snapshot();
     assert!(matches!(
         runtime
-            .step(deadline)
+            .step(
+                deadline,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners")
+            )
             .expect("the later duplicate cannot cross the active signing fence"),
         RuntimeStep::Idle
     ));
@@ -887,11 +938,17 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
     runtime
         .enqueue_signature_with_owner(sign_tag, signature, timeout_ownership)
         .expect("enqueue exact owned TimeoutVote completion");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire pending signer after completion enqueue");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let completion_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("exact completion crosses preowned fenced FIFO debt");
     let scheduling = runtime
         .take_last_scheduler_ownership()
@@ -1008,7 +1065,11 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         .take_effect_ownership(effects.len())
         .expect("consume TimeoutVote broadcast ownership");
     let deferred_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("the physically frozen Busy target owns the next turn");
     let deferred_scheduling = runtime
         .take_last_scheduler_ownership()
@@ -1125,7 +1186,11 @@ fn real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo() {
         "the first terminal cannot consume the later origin-specific receipt"
     );
     let second_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("the later duplicate runs only after the Busy owner terminalizes");
     let second_scheduling = runtime
         .take_last_scheduler_ownership()
@@ -1240,13 +1305,16 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         .arm_live_clocks(start)
         .expect("arm runtime after preowning mixed peer ingress");
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
                 signed_runtime_timeout_certificate_for_view(&context, &keys, 0),
-            ),
-        ))
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("admit actual TC0 after the three current-or-next owners");
-    let RuntimeStep::Advanced(view_effects) = runtime.step(start).expect("persist actual view one")
+    let RuntimeStep::Advanced(view_effects) = runtime
+        .step(start, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("persist actual view one")
     else {
         panic!("actual TC0 must install view one")
     };
@@ -1269,11 +1337,14 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         .expect("publish actual view-one consumer while preserving preowned receipts");
 
     runtime
-        .step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9))
+        .step_and_take_scheduler_ownership_for_test(
+            start + Duration::from_secs(9),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("service the pre-fence retransmission episode");
     let deadline = start + runtime.round_timeout();
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("absolute deadline opens TimeoutVote signing");
     runtime
         .take_last_scheduler_ownership()
@@ -1296,22 +1367,39 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         ] => (*tag, vote.signature_preimage()),
         effects => panic!("unexpected timeout effects: {effects:?}"),
     };
+    let mut external_owners = vec![timeout_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     runtime
-        .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
-        .expect("publish pending TimeoutVote signer owner");
-    runtime
-        .enqueue_network_with_ingress_ownership(target, target_ownership)
+        .enqueue_network_with_ingress_ownership(
+            target,
+            target_ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("admit deferred target from the shared cut");
     runtime
-        .enqueue_network_with_ingress_ownership(blocked, blocked_ownership)
+        .enqueue_network_with_ingress_ownership(
+            blocked,
+            blocked_ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("admit independently blocked peer input");
     runtime
-        .enqueue_network_with_ingress_ownership(safe, safe_ownership)
+        .enqueue_network_with_ingress_ownership(
+            safe,
+            safe_ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("admit far-future TimeoutVote which terminates before the reducer");
     assert_eq!(runtime.queued_commands(), 3);
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(deadline)
+            .step_and_take_scheduler_ownership_for_test(deadline, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners"))
             .expect("move target into Busy-deferred ownership"),
         RuntimeStep::Advanced(ref effects) if effects.is_empty()
     ));
@@ -1325,7 +1413,11 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         .expect("target retains one exact Busy occurrence");
     let deferred_target = deferred_target.clone();
     let predecessor_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("oldest safe pre-cut owner runs before the fence completion");
     let predecessor_scheduling = runtime
         .take_last_scheduler_ownership()
@@ -1393,11 +1485,17 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
     runtime
         .enqueue_signature_with_owner(sign_tag, signature, timeout_ownership)
         .expect("enqueue exact owned TimeoutVote completion");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire pending signer after completion enqueue");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let completion_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("completion follows the retired safe predecessor");
     let completion_scheduling = runtime
         .take_last_scheduler_ownership()
@@ -1414,7 +1512,11 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
         .take_effect_ownership(completion_effects.len())
         .expect("consume completion effects");
     let deferred_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("opened Busy target drains after its completion");
     let deferred_scheduling = runtime
         .take_last_scheduler_ownership()
@@ -1432,7 +1534,11 @@ fn real_adapter_fence_services_unblocked_predecessor_before_completion() {
     let target_terminals = runtime.take_leader_wire_runtime_terminals();
     assert_eq!(target_terminals.len(), 1);
     let blocked_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("blocked peer input runs normally after target retirement");
     let blocked_scheduling = runtime
         .take_last_scheduler_ownership()
@@ -1526,7 +1632,7 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
         .expect("arm runtime before opening the shared signing fence");
     let deadline = start + runtime.round_timeout();
     let timeout_step = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("absolute deadline opens TimeoutVote signing");
     runtime
         .take_last_scheduler_ownership()
@@ -1549,11 +1655,18 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
         ] => (*tag, vote.signature_preimage()),
         effects => panic!("unexpected timeout effects: {effects:?}"),
     };
+    let mut external_owners = vec![timeout_ownership.owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     runtime
-        .set_external_lifecycle_owners(vec![timeout_ownership.owner().clone()])
-        .expect("publish pending TimeoutVote signer owner");
-    runtime
-        .enqueue_network_with_ingress_ownership(target.clone(), target_ownership)
+        .enqueue_network_with_ingress_ownership(
+            target.clone(),
+            target_ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("admit the target before the physical replay");
     runtime
         .set_ingress_physical_cut(
@@ -1564,7 +1677,7 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
         .expect("later physical replay advances only the global high-watermark");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(deadline)
+            .step_and_take_scheduler_ownership_for_test(deadline, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners"))
             .expect("target crosses into Busy-deferred ownership"),
         RuntimeStep::Advanced(ref effects) if effects.is_empty()
     ));
@@ -1581,11 +1694,16 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
     );
     assert_eq!(target_deferred.physical_cut, target_physical_cut);
     runtime
-        .enqueue_network_with_ingress_ownership(replay.clone(), replay_ownership)
+        .enqueue_network_with_ingress_ownership(
+            replay.clone(),
+            replay_ownership,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("admit the old-logical replay at its fresh physical position");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(deadline)
+            .step_and_take_scheduler_ownership_for_test(deadline, &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).expect("valid borrowed executor owners"))
             .expect("replay reaches a distinct Busy-deferred lane"),
         RuntimeStep::Advanced(ref effects) if effects.is_empty()
     ));
@@ -1607,11 +1725,17 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
     runtime
         .enqueue_signature_with_owner(sign_tag, signature, timeout_ownership)
         .expect("enqueue the exact owned TimeoutVote completion");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire pending signer after completion enqueue");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let completion_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("the target-relative fence selector finds the exact completion");
     let completion_scheduling = runtime
         .take_last_scheduler_ownership()
@@ -1632,7 +1756,11 @@ fn post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target() {
         .take_effect_ownership(completion_effects.len())
         .expect("consume completion effect ownership");
     let target_step = runtime
-        .step(deadline)
+        .step(
+            deadline,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("the pre-cut target owns service before the replay");
     let target_scheduling = runtime
         .take_last_scheduler_ownership()

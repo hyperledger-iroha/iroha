@@ -595,6 +595,11 @@ fn progress_prepend_directory_failure_retries_without_corruption() {
         drop(kura);
         let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("reopen Kura after failed prepend");
+        assert!(reopened.recover_bound_progress_sidecar_artifacts(
+            &data_path,
+            &index_path,
+            "progress prepend test"
+        ));
         let namespace = reopened
             .open_bound_progress_namespace(&data_path, &index_path)
             .expect("bind reopened progress namespace");
@@ -1318,35 +1323,21 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         persist(&kura, &data_path, &index_path, 2, &height_two);
         let original_len = fs::metadata(&data_path).expect("main data metadata").len();
         let mut source_index = File::open(&index_path).expect("open main index");
-        let source_len = source_index.metadata().expect("main index metadata").len();
-        let layout = SidecarIndexLayout::read_from(&mut source_index, source_len)
-            .expect("decode main based index");
-        source_index
-            .seek(SeekFrom::Start(layout.entries_offset))
-            .expect("seek main entries");
-        let temp_index_path = index_path.with_extension("index.prepend.tmp");
-        let mut temp_index = File::create(&temp_index_path).expect("create prepend temp");
-        temp_index
-            .write_all(&SidecarIndexLayout::base_header(1))
-            .expect("write prepend V1 index header");
-        temp_index
-            .write_all(
-                &SidecarIndexEntry {
-                    offset: original_len,
-                    len: u64::try_from(height_one.len()).expect("height one length"),
-                }
-                .to_bytes(),
-            )
-            .expect("write prepended entry");
-        std::io::copy(
-            &mut source_index.take(
-                layout
-                    .entry_count
-                    .saturating_mul(PIPELINE_INDEX_ENTRY_SIZE_U64),
-            ),
-            &mut temp_index,
+        let namespace = kura
+            .open_bound_progress_namespace(&data_path, &index_path)
+            .unwrap();
+        let intent = BoundProgressAppendIntentV1::for_prepend(
+            &namespace,
+            &data_path,
+            &index_path,
+            1,
+            original_len,
+            &height_one,
+            &mut source_index,
         )
-        .expect("copy main index entries");
+        .unwrap();
+        let temp_index_path = Kura::bound_progress_append_intent_path(&index_path);
+        stage_intent(&index_path, &intent);
         let suffix_len = if complete_payload {
             height_one.len()
         } else {
@@ -1358,6 +1349,9 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
             .expect("open main data for prepend suffix")
             .write_all(&height_one[..suffix_len])
             .expect("stage prepend payload suffix");
+        let mut torn = fs::read(&index_path).unwrap();
+        torn[..8].fill(0x5a);
+        fs::write(&index_path, torn).unwrap();
         (
             temp_dir,
             kura,
@@ -1486,7 +1480,9 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
     // roll-forward mutation and retains the marker for diagnosis.
     {
         #[derive(norito::NoritoSchema)]
-        #[norito_schema(name = "iroha_core::kura::tests::bound_progress_recovery_handles_crash_phases_without_path_escape::PreNamespaceBoundProgressAppendIntentV1")]
+        #[norito_schema(
+            name = "iroha_core::kura::tests::bound_progress_recovery_handles_crash_phases_without_path_escape::PreNamespaceBoundProgressAppendIntentV1"
+        )]
         #[derive(Encode)]
         struct PreNamespaceBoundProgressAppendIntentV1 {
             version: u16,
@@ -2402,11 +2398,9 @@ fn application_receipt_snapshot_preserves_sparse_entries() {
 #[cfg(unix)]
 fn with_bound_progress_pair_fixture(check: impl FnOnce(&Kura, BoundProgressSidecar)) {
     let (_temp, config) = kura_storage_fixture("create bound-pair fixture", BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-        &config,
-        &RuntimeLaneConfig::default(),
-    )
-    .expect("init Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("init Kura");
     let directory = kura.store_root().join("pair-ancestor").join("pair-leaf");
     fs::create_dir_all(&directory).expect("create pair namespace");
     let data = directory.join("progress.data");
@@ -2460,10 +2454,9 @@ fn bound_progress_pair_revalidation_reuses_authenticated_directory_handles() {
             (&bound.namespace.data_path, &bound.data_metadata),
             (&bound.namespace.index_path, &bound.index_metadata),
         ] {
-            let current =
-                Kura::regular_sidecar_metadata_for(&kura.store_root(), path, directory)
-                    .expect("path metadata")
-                    .expect("existing file");
+            let current = Kura::regular_sidecar_metadata_for(&kura.store_root(), path, directory)
+                .expect("path metadata")
+                .expect("existing file");
             assert!(Kura::stable_sidecar_metadata_unchanged(expected, &current));
         }
         assert!(kura.bound_progress_namespace_unchanged(&bound.namespace));
@@ -2522,8 +2515,7 @@ fn bound_progress_pair_retains_directory_timestamps_before_and_after_file_checks
                     .expect("set an observably different directory timestamp");
                 assert!(!Kura::sidecar_directory_metadata_unchanged(
                     &bound.data_metadata.directory,
-                    &secure_file_metadata::from_file(&directory.file)
-                        .expect("current directory"),
+                    &secure_file_metadata::from_file(&directory.file).expect("current directory"),
                 ));
             };
             if point.is_none() {
@@ -2547,8 +2539,8 @@ fn bound_progress_pair_uses_each_file_directory_snapshot() {
         with_bound_progress_pair_fixture(|kura, bound| {
             let old = bound.data_metadata.directory.clone();
             let directory = &bound.namespace.directories[0];
-            let changed = old.modified().expect("old directory time")
-                + std::time::Duration::from_secs(60);
+            let changed =
+                old.modified().expect("old directory time") + std::time::Duration::from_secs(60);
             directory
                 .file
                 .set_times(std::fs::FileTimes::new().set_modified(changed))
@@ -2622,8 +2614,7 @@ fn bound_progress_file_revalidation_rejects_substitution_and_mutation() {
                         fs::rename(path, &displaced).expect("displace file");
                         symlink(&displaced, path).expect("symlink back to held inode");
                         // Isolate no-follow path admission from rename's ctime change.
-                        expected.file =
-                            secure_file_metadata::from_file(file).expect("held inode");
+                        expected.file = secure_file_metadata::from_file(file).expect("held inode");
                     }
                     "hardlink" => fs::hard_link(path, &displaced).expect("extra hardlink"),
                     "fifo" => {
@@ -2660,8 +2651,7 @@ fn bound_progress_file_revalidation_rejects_substitution_and_mutation() {
                             .expect("set different file timestamp");
                     }
                     "canonical_path" => {
-                        expected.canonical_path =
-                            expected.canonical_path.with_extension("other");
+                        expected.canonical_path = expected.canonical_path.with_extension("other");
                     }
                     "lexical_parent" => {
                         checked_path = kura.store_root().join(path.file_name().expect("name"));
@@ -2730,14 +2720,11 @@ fn bound_progress_pair_revalidation_rejects_replaced_ancestors() {
                         replace();
                     }
                     assert!(
-                        !kura.bound_progress_sidecar_unchanged_with_observer(
-                            &bound,
-                            |observed| {
-                                if point == Some(observed) {
-                                    replace();
-                                }
-                            },
-                        ),
+                        !kura.bound_progress_sidecar_unchanged_with_observer(&bound, |observed| {
+                            if point == Some(observed) {
+                                replace();
+                            }
+                        },),
                         "ancestor {ordinal}, point {point:?}, substitution {substitution}"
                     );
                     assert!(was_replaced, "the selected observation point must execute");
@@ -2746,8 +2733,7 @@ fn bound_progress_pair_revalidation_rejects_replaced_ancestors() {
                     } else {
                         fs::remove_file(&path).expect("remove symlink");
                     }
-                    fs::rename(&displaced, &path)
-                        .expect("restore original ancestor for cleanup");
+                    fs::rename(&displaced, &path).expect("restore original ancestor for cleanup");
                 });
             }
         }
@@ -3462,4 +3448,196 @@ fn sidecar_append_rejects_max_height_before_creating_files() {
     ));
     assert!(!data_path.exists());
     assert!(!index_path.exists());
+}
+
+#[test]
+fn sidecar_layout_uses_identical_parser_for_disk_and_authenticated_bytes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("layout.index");
+    for base in [0, 1, 17, u64::MAX - 1, u64::MAX] {
+        for length in [0, 16, 24, 32, 33, 48, 64] {
+            for corrupt in [false, true] {
+                let mut bytes = SidecarIndexLayout::base_header(base).to_vec();
+                bytes.resize(length, 0);
+                if corrupt && bytes.len() >= 32 {
+                    bytes[24] ^= 1;
+                }
+                fs::write(&path, &bytes).unwrap();
+                let mut disk = std::fs::File::open(&path).unwrap();
+                let mut captured = std::io::Cursor::new(&bytes);
+                // The parser owns positioning; a prior read must not alter the
+                // interpretation of either the live index or its owned image.
+                disk.seek(std::io::SeekFrom::Start(7)).unwrap();
+                captured.set_position(7);
+                let disk_layout = SidecarIndexLayout::read_from(&mut disk, length as u64);
+                let captured_layout = SidecarIndexLayout::read_from(&mut captured, length as u64);
+                assert_eq!(
+                    disk_layout, captured_layout,
+                    "base={base}, length={length}, corrupt={corrupt}"
+                );
+                if base == 17 && length == 48 && !corrupt {
+                    let layout = captured_layout.unwrap();
+                    assert_eq!(layout.base_height, 17);
+                    assert_eq!(layout.entry_count, 1);
+                }
+                if corrupt && length >= 32 {
+                    assert_eq!(
+                        captured_layout,
+                        Err("sidecar base-height checksum mismatch")
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bound_prepend_intent_sizes_match_canonical_frames_at_the_full_window_bound() {
+    let (_temp, config) = kura_storage_fixture("prepend size fixture", BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
+    let parent = kura
+        .store_root()
+        .join("blocks")
+        .join("sizing")
+        .join(LANE_ARTIFACTS_DIR_NAME);
+    fs::create_dir_all(&parent).unwrap();
+    let data = parent.join("window.data");
+    let index = parent.join("window.index");
+    let payload = norito::to_bytes(&DummySidecar { height: 1 }).unwrap();
+    fs::write(&data, &payload).unwrap();
+    for count in [1_u64, 4_095, 65_535] {
+        let len = INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + count * PIPELINE_INDEX_ENTRY_SIZE_U64;
+        let mut bytes = SidecarIndexLayout::base_header(2).to_vec();
+        bytes.resize(usize::try_from(len).unwrap(), 0);
+        let last = bytes.len() - PIPELINE_INDEX_ENTRY_SIZE;
+        bytes[last..].copy_from_slice(
+            &SidecarIndexEntry {
+                offset: 0,
+                len: payload.len() as u64,
+            }
+            .to_bytes(),
+        );
+        fs::write(&index, bytes).unwrap();
+        let namespace = kura.open_bound_progress_namespace(&data, &index).unwrap();
+        let mut file = std::fs::File::open(&index).unwrap();
+        let old = SidecarIndexLayout::read_from(&mut file, len).unwrap();
+        let intent = BoundProgressAppendIntentV1::for_prepend(
+            &namespace,
+            &data,
+            &index,
+            1,
+            payload.len() as u64,
+            &payload,
+            &mut file,
+        )
+        .unwrap();
+        let encoded = norito::encode_canonical(&intent).unwrap();
+        assert_eq!(
+            BoundProgressAppendIntentV1::prepend_encoded_len(
+                &namespace,
+                &data,
+                &index,
+                1,
+                old,
+                payload.len() as u64,
+                payload.len() as u64
+            )
+            .unwrap(),
+            encoded.len()
+        );
+        assert_eq!(
+            kura.bound_progress_publication_peak_locked(&namespace, 1, payload.len() as u64)
+                .unwrap(),
+            payload.len() as u64 + PIPELINE_INDEX_ENTRY_SIZE_U64 + encoded.len() as u64,
+            "physical admission charges both exact intent windows plus only actual index growth"
+        );
+        assert_eq!(intent.old_index_bytes.len() as u64, len);
+        assert_eq!(
+            intent.new_index_bytes.len() as u64,
+            len + PIPELINE_INDEX_ENTRY_SIZE_U64
+        );
+        assert_eq!(
+            norito::decode_canonical::<BoundProgressAppendIntentV1>(&encoded).unwrap(),
+            intent
+        );
+        let journal = Kura::bound_progress_append_intent_path(&index);
+        fs::write(&journal, &encoded).unwrap();
+        let mut file = std::fs::File::open(&journal).unwrap();
+        assert_eq!(
+            Kura::decode_bound_progress_append_intent(
+                &mut file,
+                &journal,
+                &namespace,
+                &data,
+                &index,
+                "max window decode"
+            )
+            .unwrap(),
+            intent
+        );
+        fs::remove_file(&journal).unwrap();
+        assert!(encoded.len() <= BOUND_PROGRESS_APPEND_INTENT_DECODE_MAX_BYTES);
+        if count == 65_535 {
+            assert!(encoded.len() > BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES);
+        }
+    }
+    // Sparse over-bound input is rejected from its header/length before the
+    // constructor allocates either complete old/new image.
+    let over_len = BOUND_PROGRESS_PREPEND_INDEX_MAX_BYTES as u64;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .read(true)
+        .open(&index)
+        .unwrap();
+    file.set_len(over_len).unwrap();
+    let namespace = kura.open_bound_progress_namespace(&data, &index).unwrap();
+    let before = fs::read(&index).unwrap();
+    assert!(
+        BoundProgressAppendIntentV1::for_prepend(
+            &namespace,
+            &data,
+            &index,
+            1,
+            payload.len() as u64,
+            &payload,
+            &mut file
+        )
+        .unwrap_err()
+        .contains("hard entry limit")
+    );
+    assert_eq!(fs::read(&index).unwrap(), before);
+    assert!(!Kura::bound_progress_append_intent_path(&index).exists());
+}
+
+#[test]
+fn bound_prepend_rejects_unjournaled_replacement_marker_without_mutation() {
+    let (_temp, config) = kura_storage_fixture("prepend marker fixture", BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .unwrap();
+    let parent = kura
+        .store_root()
+        .join("blocks")
+        .join("marker")
+        .join(LANE_ARTIFACTS_DIR_NAME);
+    fs::create_dir_all(&parent).unwrap();
+    let data = parent.join("window.data");
+    let index = parent.join("window.index");
+    let namespace = kura.open_bound_progress_namespace(&data, &index).unwrap();
+    let payload = norito::to_bytes(&DummySidecar { height: 2 }).unwrap();
+    assert!(Kura::append_indexed_progress_sidecar(
+        &data,
+        &index,
+        2,
+        &payload,
+        "marker test",
+        None,
+        &namespace
+    ));
+    fs::copy(&index, index.with_extension("index.prepend.tmp")).unwrap();
+    let before = snapshot_regular_test_tree(&kura.store_root());
+    assert!(!kura.recover_bound_progress_sidecar_artifacts(&data, &index, "marker test"));
+    assert_eq!(snapshot_regular_test_tree(&kura.store_root()), before);
 }

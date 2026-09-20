@@ -397,7 +397,14 @@ impl Kura {
         KuraRetainedBlockRecord::decode_all(&mut input)
             .ok()
             .filter(|record| {
-                record.format_version == RETAINED_BLOCK_RECORD_VERSION && record.encode() == bytes
+                let canonical_len = {
+                    let _flags =
+                        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+                    norito::core::encoded_payload_len(record).ok()
+                };
+                record.format_version == RETAINED_BLOCK_RECORD_VERSION
+                    && canonical_len == Some(bytes.len())
+                    && record.encode() == bytes
             })
             .ok_or_else(|| {
                 Error::IO(
@@ -615,9 +622,13 @@ impl Kura {
         };
         let archive =
             Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
+        // Evidence validation observes any available body without promoting it
+        // into derived query membership, hash indexes, or the resident cache.
+        // Callers requiring published body authority still use the fallible
+        // exact-wire reader after authenticating this retained record.
         if validate_live_body
             && let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?)
-            && let Some(block) = self.get_block(block_height)
+            && let Some(block) = self.get_block_without_merge_sidecar(block_height)
         {
             let (executed_block_wire_len, executed_block_wire_hash) =
                 Self::canonical_block_wire_identity(block.as_ref())?;

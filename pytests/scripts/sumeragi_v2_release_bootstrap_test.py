@@ -1615,6 +1615,7 @@ prebuilt_specs = (
     ("irohad_message_control", "message-control/release/iroha3d"),
     ("iroha", "release/iroha"),
     ("kagami", "release/kagami"),
+    ("irohad_taira", "release/iroha3d_taira"),
 )
 prebuilt_binaries = []
 for role, relative in prebuilt_specs:

@@ -8,7 +8,6 @@ fn genesis_commit_time_is_zero() {
         std::num::NonZeroU64::new(1).expect("non-zero height"),
         None,
         None,
-        None,
         creation_time_ms,
         0,
     );

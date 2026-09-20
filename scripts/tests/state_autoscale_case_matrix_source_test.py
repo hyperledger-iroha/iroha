@@ -27,17 +27,18 @@ TRIGGER_TESTS = (
 )
 COMMIT_TESTS = (
     "autoscale_scale_out_height_mismatch_does_not_publish_storage_or_da",
-    "autoscale_catalog_publication_failure_rolls_back_prepared_geometry_in_process",
+    "autoscale_catalog_publication_failure_retains_original_geometry_for_explicit_rollback",
     "autoscale_commit_rejects_tampered_pending_transition_metadata_before_storage_publish",
     "autoscale_commit_rejects_tampered_pending_catalog_update_before_storage_publish",
     "autoscale_commit_scale_in_rejects_tampered_pending_transition_metadata_before_storage_publish",
     "autoscale_commit_scale_in_rejects_tampered_pending_catalog_update_before_storage_publish",
-    "autoscale_commit_revalidates_disabled_autoscale_before_storage_publish",
+    "autoscale_commit_rejects_canonical_autoscale_disable_before_storage_publish",
     "autoscale_commit_rejects_committed_autoscale_setting_drift_before_storage_publish",
     "autoscale_commit_rejects_committed_routing_policy_drift_before_storage_publish",
-    "autoscale_commit_rejects_committed_dataspace_catalog_drift_before_storage_publish",
-    "autoscale_commit_rejects_committed_catalog_drift_before_storage_publish",
-    "autoscale_commit_rejects_committed_lane_config_drift_before_storage_publish",
+    "autoscale_commit_rejects_canonical_dataspace_catalog_drift_before_storage_publish",
+    "autoscale_commit_rejects_canonical_catalog_drift_before_storage_publish",
+    "autoscale_commit_rejects_canonical_lane_config_drift_before_storage_publish",
+    "autoscale_catalog_caches_cannot_replace_current_or_undo_runtime_owners",
     "autoscale_commit_failure_does_not_publish_staged_da_indexes",
     "autoscale_commit_kura_preflight_failure_does_not_publish_staged_da_or_tiered_state",
     "autoscale_commit_tiered_preflight_failure_does_not_publish_staged_da_or_kura_state",
@@ -57,12 +58,13 @@ EXPECTED_TESTS = TRIGGER_TESTS + COMMIT_TESTS + COMMITTEE_TESTS
 DIRECT_DECLARATION_TESTS = frozenset(
     (
         "autoscale_scale_in_triggered_rejects_public_window_shortfall_even_with_zero_metrics",
-        "autoscale_commit_revalidates_disabled_autoscale_before_storage_publish",
+        "autoscale_commit_rejects_canonical_autoscale_disable_before_storage_publish",
         "autoscale_commit_rejects_committed_autoscale_setting_drift_before_storage_publish",
         "autoscale_commit_rejects_committed_routing_policy_drift_before_storage_publish",
-        "autoscale_commit_rejects_committed_dataspace_catalog_drift_before_storage_publish",
-        "autoscale_commit_rejects_committed_catalog_drift_before_storage_publish",
-        "autoscale_commit_rejects_committed_lane_config_drift_before_storage_publish",
+        "autoscale_commit_rejects_canonical_dataspace_catalog_drift_before_storage_publish",
+        "autoscale_commit_rejects_canonical_catalog_drift_before_storage_publish",
+        "autoscale_commit_rejects_canonical_lane_config_drift_before_storage_publish",
+        "autoscale_catalog_caches_cannot_replace_current_or_undo_runtime_owners",
     )
 )
 GENERATED_DECLARATION_TESTS = frozenset(
@@ -74,11 +76,13 @@ GENERATED_DECLARATION_TESTS = frozenset(
     )
 )
 
+# The hashes retain the original matrices' assertions while tracking authenticated
+# storage identities, canonical runtime ownership, and typed local storage refusal.
 REGIONS = {
     "state_test_macro": (
         "macro_rules! state_test {",
         '#[path = "da_hydration_test_cases.rs"]',
-        "f6b402d7c4103c9c64eb7d49bf1bdc8ff5d6cc1c275712fb0574f281e550680d",
+        "f797fa141a1b987e7160758d273ba5120a36ca2df58dc2110459bdab8d2beb48",
     ),
     "trigger": (
         "state_test! { sync autoscale_scale_in_triggered_requires_window_and_low_utilization\n",
@@ -87,41 +91,41 @@ REGIONS = {
     ),
     "da_helpers": (
         "state_test! { sync autoscale_scale_out_height_mismatch_does_not_publish_storage_or_da\n",
-        "state_test! { sync autoscale_catalog_publication_failure_rolls_back_prepared_geometry_in_process\n",
-        "f42c4e960e0ff5e3750c485b492498f458b3df74a27dcf49c16c070abfeb43b3",
+        "state_test! { sync autoscale_catalog_publication_failure_retains_original_geometry_for_explicit_rollback\n",
+        "fc0aeeb83ab52b1425dbfc8d62c9566a991143797753a988e63853f8687eaff9",
     ),
     "pending_tamper": (
         "#[derive(Clone, Copy)]\nenum PendingAutoscaleTamper",
         "#[derive(Clone, Copy, Debug)]\nenum CommittedAutoscaleDrift",
-        "e11d330beeaf0b53dd71c6ada8635f46a0190c59899261e6c2496d202902039d",
+        "59f553ec4dbb638e9a2b2da90b8adc220b4f8572c872da8bb6db1fd0f95e8b86",
     ),
     "committed_drift": (
         "#[derive(Clone, Copy, Debug)]\nenum CommittedAutoscaleDrift",
         "state_test! { sync autoscale_commit_failure_does_not_publish_staged_da_indexes\n",
-        "a5e595a1b1ee34faa98e04b53c380d6d1f237a9e35dc859a1ef63ef9b0ebc07b",
+        "7d5c2e9cf5ed54da41c55865192762862519e139676c5f3e04a358b0f30a6561",
     ),
     "committee": (
         "state_test! { sync autoscale_scale_out_committee_preflight_rejects_three_peers_atomically\n",
         "state_test! { sync autoscale_transition_scale_out_fails_closed_when_id_range_exhausted\n",
-        "34998c54e0d0eb69c8d59aed3a8d091fed17e92170338f5e299d75c253236967",
+        "2ab571b5a7df36e725439b40c6060ac63a69415d77c98c39265b3efcecce030e",
     ),
     "scale_out_preflight": (
         "state_test! { sync autoscale_commit_failure_does_not_publish_staged_da_indexes\n",
         "fn assert_autoscale_scale_in_preflight_failure_is_atomic(",
-        "f59bf6e7d86f36758e8ab4a0c1b2b1d69a0463172cd75ad1c2c039e8df49fb9b",
+        "30e3df0ca919a2128a256ec780bd2c50f201b08a467d51a30899e3c9658da38c",
     ),
     "scale_in_preflight": (
         "fn assert_autoscale_scale_in_preflight_failure_is_atomic(",
         "#[derive(Clone, Copy, Debug)]\nenum AutoscaleNoopReason",
-        "84bafdeba8ba20f4f50edbaa8c16164f4ed2f98ca1ca572e0874430f959b55d1",
+        "60e60e86926a6d7b67f6b3255204cf1899016bee0ec6027bfcc8b7f5dff24789",
     ),
 }
 
 DIRECT_TEST_HASHES = {
     "autoscale_scale_out_height_mismatch_does_not_publish_storage_or_da":
-        "0136ec257914969aa2476db063212f51db8e67e3f86aeebbcb84cbf5c843af87",
-    "autoscale_catalog_publication_failure_rolls_back_prepared_geometry_in_process":
-        "bfff91ae2f8609d625dde3072a99c517b0f56e8a082012e180390a30c4f699ff",
+        "706f25515e56fdfd46abf7df1a6848498cddfad98ab71e082360f87204262de8",
+    "autoscale_catalog_publication_failure_retains_original_geometry_for_explicit_rollback":
+        "7e58f9202bf789a884e6b87fbe27117cd5e2b93a845b97666acce98a9d5b0416",
     "autoscale_commit_failure_does_not_publish_staged_da_indexes":
         "21ec5582995a345e66d23a870d5660e4fcb04dcb27af6d1db57dfa0d1ea73e91",
 }
@@ -173,6 +177,10 @@ REGION_TOKENS = {
         '"drifted-default-lane"',
         "TransactionsBlockError::AutoscaleLaneLifecycle",
         "assert_lane_ids!",
+        "assert_autoscale_rejects_canonical_catalog_tamper",
+        "state.canonical_runtime.view().get(), &retained",
+        "validate_canonical_runtime_projection",
+        "block_and_revert(header)",
     ),
     "committee": (
         "LaneLifecycleError::AutoscaleCommitteeUnavailable",
@@ -428,6 +436,27 @@ class AutoscaleCaseMatrixSourceTests(unittest.TestCase):
             "LaneLifecycleError::AutoscaleProposalHeightOverflow(_lane)",
         )
         with self.assertRaises(GuardError):
+            validate_source(mutated)
+
+    def test_canonical_disable_case_cannot_use_cache_drift_helper(self) -> None:
+        mutated = _replace_once(
+            self.source,
+            "assert_autoscale_rejects_canonical_catalog_tamper(CommittedAutoscaleDrift::Disabled);",
+            "assert_autoscale_catalog_cache_drift_is_not_authority(CommittedAutoscaleDrift::Disabled);",
+        )
+        with self.assertRaisesRegex(GuardError, "committed_drift: semantic hash changed"):
+            validate_source(mutated)
+
+    def test_explicit_rollback_call_mutation_is_rejected(self) -> None:
+        name = "autoscale_catalog_publication_failure_retains_original_geometry_for_explicit_rollback"
+        original = _test_source(self.source, name)
+        mutated_test = _replace_once(
+            original,
+            "state.rollback_lane_geometry_updates(",
+            "state.unchecked_geometry_update(",
+        )
+        mutated = _replace_once(self.source, original, mutated_test)
+        with self.assertRaisesRegex(GuardError, f"{name}: bespoke test body changed"):
             validate_source(mutated)
 
     def test_storage_preservation_mutation_is_rejected(self) -> None:

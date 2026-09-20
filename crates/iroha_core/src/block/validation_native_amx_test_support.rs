@@ -11,7 +11,7 @@ fn da_proof_policy_sidecar_hash_mismatch_reports_both_hashes() {
     assert!(message.contains(&format!("{expected:?}")));
     assert!(message.contains(&format!("{actual:?}")));
 }
-fn install_test_lane_manifests(state: &State) {
+pub(super) fn install_test_lane_manifests(state: &State) {
     let statuses = state
         .nexus_snapshot()
         .lane_catalog
@@ -42,7 +42,7 @@ fn test_confidential_features(state: &State, height: u64) -> Option<Confidential
 }
 /// Finalize preseeded fixture definitions at their exact genesis boundary before
 /// executing a successor. Later candidates must retain these registration tokens.
-fn finalize_test_genesis_assets(state: &State, genesis: &SignedBlock) {
+pub(super) fn finalize_test_genesis_assets(state: &State, genesis: &SignedBlock) {
     assert_eq!(genesis.header().height().get(), 1);
     assert!(genesis.header().prev_block_hash().is_none());
     assert!(state.block_hashes.view().is_empty());

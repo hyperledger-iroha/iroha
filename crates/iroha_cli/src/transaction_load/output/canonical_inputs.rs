@@ -1,7 +1,8 @@
 // Retained original context and two typed transport outputs. This owner grants no finality proof.
 use super::*;
 use iroha_core::kura::CanonicalKuraEvidenceComplete;
-use iroha_data_model::{bridge::BridgeFinalityProof, query::CommittedTransaction};
+use iroha_core::state::FinalizedNativeContextV1;
+use iroha_data_model::query::CommittedTransaction;
 use sha2::{Digest as _, Sha256};
 use std::{cell::Cell, io::Write as _, os::unix::fs::FileExt as _};
 
@@ -106,12 +107,23 @@ impl RetainedOriginalInput {
     pub(crate) fn open(binding: OriginalInputBinding) -> Result<Self> {
         Self::open_with_hook(binding, |_| Ok(()))
     }
+    /// Retain a complete canonical Native context archive under its independent byte reservation.
+    pub(crate) fn open_native_contexts(binding: OriginalInputBinding) -> Result<Self> {
+        Self::open_with_limit(binding, MAX_TRANSPORT_BYTES, |_| Ok(()))
+    }
     fn open_with_hook(
         binding: OriginalInputBinding,
+        hook: impl FnMut(Event) -> Result<()>,
+    ) -> Result<Self> {
+        Self::open_with_limit(binding, MAX_CONTEXT_BYTES, hook)
+    }
+    fn open_with_limit(
+        binding: OriginalInputBinding,
+        limit: u64,
         mut hook: impl FnMut(Event) -> Result<()>,
     ) -> Result<Self> {
         ensure!(
-            (1..=MAX_CONTEXT_BYTES).contains(&binding.max_bytes),
+            (1..=limit).contains(&binding.max_bytes),
             "invalid context allocation"
         );
         let (parent, name) =
@@ -362,7 +374,7 @@ impl CanonicalInputPair {
         self,
         context: RetainedOriginalInput,
         complete: CanonicalKuraEvidenceComplete,
-        finality: &Vec<BridgeFinalityProof>,
+        finality: &Vec<FinalizedNativeContextV1>,
         queries: &Vec<CommittedTransaction>,
         verify: &impl Fn() -> Result<()>,
     ) -> Result<PublishedCanonicalInputs> {
@@ -372,7 +384,7 @@ impl CanonicalInputPair {
         self,
         context: RetainedOriginalInput,
         complete: CanonicalKuraEvidenceComplete,
-        finality: &Vec<BridgeFinalityProof>,
+        finality: &Vec<FinalizedNativeContextV1>,
         queries: &Vec<CommittedTransaction>,
         mut hook: impl FnMut(Event) -> Result<()>,
     ) -> Result<PublishedCanonicalInputs> {

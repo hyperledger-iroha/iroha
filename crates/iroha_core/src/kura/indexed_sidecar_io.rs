@@ -553,6 +553,7 @@ impl Kura {
     /// This is an execution-cache boundary, not a source of canonical block authority. It permits
     /// a speculative executor to reuse metadata that it previously persisted for the same exact
     /// block while rejecting metadata from a competing candidate at the same height.
+    #[cfg(test)]
     pub(crate) fn read_pipeline_metadata_for_block(
         &self,
         height: u64,
@@ -737,7 +738,7 @@ impl Kura {
                 return Err(BoundProgressRecoveryFailure::from_io(&error));
             }
         };
-        if intent_len == 0 || intent_len > BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES {
+        if intent_len == 0 || intent_len > BOUND_PROGRESS_APPEND_INTENT_DECODE_MAX_BYTES {
             warn!(
                 intent_len,
                 ?intent_path,
@@ -769,7 +770,19 @@ impl Kura {
             );
             return Err(BoundProgressRecoveryFailure::from_io(&error));
         }
-        let intent = match norito::decode_canonical::<BoundProgressAppendIntentV1>(&bytes) {
+        // The schema retains two byte windows and shallow namespace strings;
+        // do not inherit a generic 64x allocation multiplier for the larger
+        // prepend frame. Both windows are bounded before their later hashing.
+        let limits = norito::DecodeLimits::new(
+            BOUND_PROGRESS_PREPEND_INDEX_MAX_BYTES,
+            BOUND_PROGRESS_APPEND_INTENT_DECODE_MAX_BYTES,
+            BOUND_PROGRESS_APPEND_INTENT_DECODE_MAX_BYTES,
+            4 * BOUND_PROGRESS_APPEND_INTENT_DECODE_MAX_BYTES,
+            RECOVERY_CONTROL_DECODE_DEPTH_V1,
+        );
+        let intent = match norito::decode_canonical_with_limits::<BoundProgressAppendIntentV1>(
+            &bytes, limits,
+        ) {
             Ok(intent) => intent,
             Err(error) => {
                 warn!(
@@ -781,6 +794,9 @@ impl Kura {
                 return Err(BoundProgressRecoveryFailure::InvalidData);
             }
         };
+        if intent_len > intent.encoded_byte_limit() {
+            return Err(BoundProgressRecoveryFailure::InvalidData);
+        }
         if let Err(reason) = intent.validate_for(namespace, data_path, index_path) {
             warn!(
                 reason,
@@ -803,6 +819,8 @@ impl Kura {
         intent_path: &Path,
         mut intent_file: std::fs::File,
         kind: &str,
+        certified_reset: Option<&AdmittedCertifiedResetRecovery>,
+        expected_receipt: Option<&LaneBlockApplicationReceiptArtifact>,
     ) -> bool {
         let Ok(intent) = Self::decode_bound_progress_append_intent(
             &mut intent_file,
@@ -814,6 +832,43 @@ impl Kura {
         ) else {
             return false;
         };
+        if let Some(admitted) = certified_reset
+            && admitted
+                .append
+                .as_ref()
+                .is_none_or(|append| append.intent != intent)
+        {
+            warn!(
+                ?intent_path,
+                kind, "opened certified append differs from its admitted recovery"
+            );
+            return false;
+        }
+        if let Some(receipt) = expected_receipt {
+            // The receipt writer has already authenticated this exact carrier
+            // and execution under prune/canonical guards. Bind the decoded
+            // durable operation before even removing a superseded build file.
+            let Ok(payload) = receipt.encode_framed() else {
+                return false;
+            };
+            if intent.height != receipt.proposal.descriptor.lane_block_height
+                || intent.payload_len() != u64::try_from(payload.len()).ok()
+                || intent.payload_hash != BoundProgressAppendIntentV1::payload_digest(&payload)
+            {
+                warn!(
+                    ?intent_path,
+                    kind, "receipt append intent differs from its authenticated writer"
+                );
+                return false;
+            }
+        }
+        // Recovery can roll forward or restore the exact old image. Account
+        // every stable/temp path only after the expected receipt is bound; a
+        // failed attempt invalidates observations instead of releasing bytes.
+        let receipt_accounting = expected_receipt.map(|_| {
+            self.begin_total_disk_usage_mutation()
+                .with_resource_paths(Self::sidecar_physical_resource_paths(data_path, index_path))
+        });
         if let Some(build) = build {
             drop(build);
             if let Err(error) = Self::remove_bound_progress_temp_if_present(namespace, build_path) {
@@ -948,6 +1003,19 @@ impl Kura {
             }
             let old_layout = if intent.old_index_len == 0 {
                 None
+            } else if intent.is_prepend() {
+                match intent.prepend_old_layout() {
+                    Ok(layout) => Some(layout),
+                    Err(reason) => {
+                        warn!(
+                            reason,
+                            ?index_path,
+                            kind,
+                            "invalid durable prepend preimage"
+                        );
+                        return false;
+                    }
+                }
             } else {
                 match SidecarIndexLayout::read_from(index, intent.old_index_len) {
                     Ok(layout) => Some(layout),
@@ -1171,7 +1239,13 @@ impl Kura {
             );
             return false;
         }
-        Self::progress_mutation_namespace_unchanged(namespace)
+        if !Self::progress_mutation_namespace_unchanged(namespace) {
+            return false;
+        }
+        if let Some(accounting) = receipt_accounting {
+            accounting.finish_resources_before_disk_rescan();
+        }
+        true
     }
     #[must_use]
     fn recover_bound_progress_sidecar_artifacts(
@@ -1232,7 +1306,7 @@ impl Kura {
         kind: &str,
     ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
         if self.recover_bound_progress_sidecar_artifacts_in_namespace_impl(
-            namespace, data_path, index_path, kind,
+            namespace, data_path, index_path, kind, None, None,
         ) {
             Ok(())
         } else {
@@ -1247,6 +1321,8 @@ impl Kura {
         data_path: &Path,
         index_path: &Path,
         kind: &str,
+        certified_reset: Option<&AdmittedCertifiedResetRecovery>,
+        certified_rewrite: Option<&AdmittedCertifiedHistoryRewrite<'_>>,
     ) -> bool {
         let temp_data_path = data_path.with_extension("norito.tmp");
         let temp_index_path = index_path.with_extension("index.tmp");
@@ -1275,12 +1351,72 @@ impl Kura {
         let Some(prepend_index) = open_optional(&prepend_index_path) else {
             return false;
         };
+        if prepend_index.is_some() {
+            warn!(
+                ?prepend_index_path,
+                kind, "bound prepend requires its authenticated append intent"
+            );
+            return false;
+        }
         let Some(append_build) = open_optional(&append_build_path) else {
             return false;
         };
         let Some(append_intent) = open_optional(&append_intent_path) else {
             return false;
         };
+        if temp_index.is_some()
+            && data_path.file_name().and_then(std::ffi::OsStr::to_str)
+                == Some(CERTIFIED_LANE_BLOCKS_DATA_FILE)
+            && certified_rewrite.is_none_or(|admitted| {
+                append_intent.is_some()
+                    || append_build.is_some()
+                    || prepend_index.is_some()
+                    || self
+                        .recheck_admitted_certified_history_rewrite_locked(
+                            admitted, data_path, index_path,
+                        )
+                        .is_err()
+            })
+        {
+            warn!(
+                ?data_path,
+                kind, "certified rewrite requires its authenticated terminal owner"
+            );
+            return false;
+        }
+        // Only a committed append or prepend can overwrite certified history.
+        // A lone build or data temporary precedes publication: its existing
+        // namespace-bound cleanup grants no permission to change the main pair.
+        let observed_certified = if append_intent.is_some() || prepend_index.is_some() {
+            if let Some(admitted) = certified_reset {
+                if self
+                    .recheck_admitted_certified_reset_recovery_locked(
+                        admitted, data_path, index_path,
+                    )
+                    .is_err()
+                {
+                    return false;
+                }
+                None
+            } else {
+                match self.require_certified_reset_recovery_admission_locked(data_path, index_path)
+                {
+                    Ok(admitted) => admitted,
+                    Err(error) => {
+                        warn!(
+                            ?error,
+                            ?data_path,
+                            kind,
+                            "certified reset recovery remains pending State authorization"
+                        );
+                        return false;
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let certified_reset = certified_reset.or(observed_certified.as_ref());
         if append_intent.is_some()
             && (temp_data.is_some() || temp_index.is_some() || prepend_index.is_some())
         {
@@ -1302,6 +1438,8 @@ impl Kura {
                 &append_intent_path,
                 append_intent,
                 kind,
+                certified_reset,
+                None,
             );
         }
         if let Some(append_build) = append_build {
@@ -1313,25 +1451,6 @@ impl Kura {
             {
                 return false;
             }
-        }
-        if prepend_index.is_some() && (temp_data.is_some() || temp_index.is_some()) {
-            warn!(
-                ?data_path,
-                ?index_path,
-                kind,
-                "progress sidecar has conflicting rewrite and prepend recovery artifacts"
-            );
-            return false;
-        }
-        if let Some(prepend_index) = prepend_index {
-            return self.recover_bound_progress_prepend_temp(
-                namespace,
-                data_path,
-                index_path,
-                &prepend_index_path,
-                prepend_index,
-                kind,
-            );
         }
         let Some(mut temp_index) = temp_index else {
             if let Some(temp_data) = temp_data {
@@ -1779,217 +1898,6 @@ impl Kura {
             }
         }
         Self::sync_bound_progress_mutation_directories(namespace, kind)
-    }
-    fn rollback_bound_progress_prepend(
-        namespace: &BoundProgressNamespace,
-        data: &std::fs::File,
-        index: &std::fs::File,
-        prepend_index_path: &Path,
-        indexed_end: u64,
-        kind: &str,
-    ) -> bool {
-        if let Err(error) = data.set_len(indexed_end) {
-            warn!(
-                ?error,
-                ?prepend_index_path,
-                indexed_end,
-                kind,
-                "failed to truncate an unpublished progress prepend payload"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_data(data) {
-            warn!(
-                ?error,
-                indexed_end, kind, "failed to sync rolled-back progress payload"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_index(index) {
-            warn!(
-                ?error,
-                kind, "failed to sync authoritative progress index after rollback"
-            );
-            return false;
-        }
-        Self::discard_bound_progress_temps(namespace, &[prepend_index_path], kind)
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn recover_bound_progress_prepend_temp(
-        &self,
-        namespace: &BoundProgressNamespace,
-        data_path: &Path,
-        index_path: &Path,
-        prepend_index_path: &Path,
-        mut prepend_index: std::fs::File,
-        kind: &str,
-    ) -> bool {
-        let data = match self.open_optional_bound_progress_file(namespace, data_path) {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                warn!(
-                    ?data_path,
-                    kind, "progress prepend temp has no main payload"
-                );
-                return false;
-            }
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    kind,
-                    "failed to bind progress prepend payload"
-                );
-                return false;
-            }
-        };
-        let mut index = match self.open_optional_bound_progress_file(namespace, index_path) {
-            Ok(Some(index)) => index,
-            Ok(None) => {
-                warn!(?index_path, kind, "progress prepend temp has no main index");
-                return false;
-            }
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?index_path,
-                    kind,
-                    "failed to bind progress prepend index"
-                );
-                return false;
-            }
-        };
-        let data_len = match data.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(error) => {
-                warn!(
-                    ?error,
-                    ?data_path,
-                    kind,
-                    "failed to stat progress prepend payload"
-                );
-                return false;
-            }
-        };
-        let Some(main_snapshot) = Self::bound_sidecar_index_snapshot(
-            &mut index,
-            index_path,
-            data_len,
-            kind,
-            "prepend main",
-        ) else {
-            return false;
-        };
-        if main_snapshot.indexed_end == data_len {
-            drop(prepend_index);
-            return Self::rollback_bound_progress_prepend(
-                namespace,
-                &data,
-                &index,
-                prepend_index_path,
-                main_snapshot.indexed_end,
-                kind,
-            );
-        }
-        let prepend_snapshot = Self::bound_sidecar_index_snapshot(
-            &mut prepend_index,
-            prepend_index_path,
-            data_len,
-            kind,
-            "prepend temp",
-        );
-        let Some(prepend_snapshot) = prepend_snapshot else {
-            drop(prepend_index);
-            return Self::rollback_bound_progress_prepend(
-                namespace,
-                &data,
-                &index,
-                prepend_index_path,
-                main_snapshot.indexed_end,
-                kind,
-            );
-        };
-        let prepend_count = main_snapshot
-            .layout
-            .base_height
-            .checked_sub(prepend_snapshot.layout.base_height)
-            .and_then(|count| usize::try_from(count).ok())
-            .filter(|count| *count > 0);
-        let first = prepend_snapshot.entries.first().copied();
-        let structurally_valid = prepend_count.is_some_and(|prepend_count| {
-            prepend_count
-                .checked_add(main_snapshot.entries.len())
-                .is_some_and(|expected_len| {
-                    prepend_snapshot.entries.len() == expected_len
-                        && prepend_snapshot.entries[prepend_count..] == main_snapshot.entries
-                        && prepend_snapshot.entries[1..prepend_count]
-                            .iter()
-                            .all(|entry| entry.offset == 0 && entry.len == 0)
-                        && first.is_some_and(|entry| {
-                            entry.len > 0
-                                && entry.offset == main_snapshot.indexed_end
-                                && entry.offset.checked_add(entry.len) == Some(data_len)
-                        })
-                        && prepend_snapshot.indexed_end == data_len
-                })
-        });
-        if !structurally_valid {
-            warn!(
-                ?prepend_index_path,
-                ?index_path,
-                indexed_end = main_snapshot.indexed_end,
-                data_len,
-                kind,
-                "refusing a progress prepend temp that is not an exact extension of the main index"
-            );
-            drop(prepend_index);
-            return Self::rollback_bound_progress_prepend(
-                namespace,
-                &data,
-                &index,
-                prepend_index_path,
-                main_snapshot.indexed_end,
-                kind,
-            );
-        }
-        if let Err(error) = sync_indexed_sidecar_data(&data) {
-            warn!(
-                ?error,
-                ?data_path,
-                kind,
-                "failed to sync recovered prepend payload"
-            );
-            return false;
-        }
-        if let Err(error) = sync_indexed_sidecar_index(&prepend_index) {
-            warn!(
-                ?error,
-                ?prepend_index_path,
-                kind,
-                "failed to sync recovered prepend index"
-            );
-            return false;
-        }
-        if !Self::sync_bound_progress_mutation_directories(namespace, kind) {
-            return false;
-        }
-        if let Err(error) = Self::promote_bound_progress_temp(
-            namespace,
-            prepend_index_path,
-            index_path,
-            &prepend_index,
-        ) {
-            warn!(
-                source = ?error.source,
-                published = error.published,
-                ?prepend_index_path,
-                ?index_path,
-                kind,
-                "failed to promote recovered bound progress prepend index"
-            );
-            return false;
-        }
-        Self::sync_indexed_sidecar_bound_mutation(&data, &prepend_index, namespace, kind)
     }
     #[must_use]
     fn recover_indexed_sidecar_artifacts(data_path: &Path, index_path: &Path, kind: &str) -> bool {
@@ -2902,11 +2810,107 @@ impl Kura {
             data_path, index_path, height, payload, kind, fsync_mode, retention, None, None,
         )
     }
+    /// Account the exact larger journal only for a backward prepend. Ordinary
+    /// writes retain their existing fixed envelope. The caller holds sidecar
+    /// ownership through this read-only admission and the subsequent write.
+    fn bound_progress_publication_peak_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        height: u64,
+        payload_len: u64,
+    ) -> Result<u64> {
+        self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+            namespace,
+            &namespace.data_path,
+            &namespace.index_path,
+            "bound publication peak",
+        )?;
+        let mut pair =
+            self.open_bound_progress_pair(&namespace.data_path, &namespace.index_path)?;
+        let prepend = match &mut pair {
+            BoundProgressPair::Absent(_) => None,
+            BoundProgressPair::Present(bound) => {
+                let index_len = bound
+                    .index
+                    .metadata()
+                    .map_err(|error| Error::IO(error, namespace.index_path.clone()))?
+                    .len();
+                let layout = SidecarIndexLayout::read_from(&mut bound.index, index_len).map_err(
+                    |reason| {
+                        Self::invalid_lane_artifact_error(namespace.index_path.clone(), reason)
+                    },
+                )?;
+                if layout.aligned_len != index_len {
+                    return Err(Self::invalid_lane_artifact_error(
+                        namespace.index_path.clone(),
+                        "publication peak index is partially aligned",
+                    ));
+                }
+                let result = if height < layout.base_height {
+                    let new = BoundProgressAppendIntentV1::prepend_layout(layout, height).map_err(
+                        |reason| {
+                            Self::invalid_lane_artifact_error(namespace.index_path.clone(), reason)
+                        },
+                    )?;
+                    let data_len = bound
+                        .data
+                        .metadata()
+                        .map_err(|error| Error::IO(error, namespace.data_path.clone()))?
+                        .len();
+                    let intent_len = BoundProgressAppendIntentV1::prepend_encoded_len(
+                        namespace,
+                        &namespace.data_path,
+                        &namespace.index_path,
+                        height,
+                        layout,
+                        data_len,
+                        payload_len,
+                    )
+                    .map_err(|reason| {
+                        Self::invalid_lane_artifact_error(namespace.index_path.clone(), reason)
+                    })?;
+                    Some((
+                        new.aligned_len - layout.aligned_len,
+                        u64::try_from(intent_len)?,
+                    ))
+                } else {
+                    None
+                };
+                if !self.bound_progress_sidecar_unchanged(bound) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        namespace.index_path.clone(),
+                        "publication peak pair changed during observation",
+                    ));
+                }
+                result
+            }
+        };
+        if !Self::progress_mutation_namespace_unchanged(namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "publication peak namespace changed during observation",
+            ));
+        }
+        let (growth, transient) = prepend.unwrap_or((
+            Self::maximum_index_growth_for_unresolved_sidecar_write(height),
+            u64::try_from(BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES)?,
+        ));
+        payload_len
+            .checked_add(growth)
+            .and_then(|bytes| bytes.checked_add(transient))
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    namespace.data_path.clone(),
+                    "bound publication peak overflowed",
+                )
+            })
+    }
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn append_indexed_bound_progress_sidecar(
         data_path: &Path,
         index_path: &Path,
         height: u64,
+        initial_base_height: u64,
         payload: &[u8],
         kind: &str,
         namespace: &BoundProgressNamespace,
@@ -2922,6 +2926,8 @@ impl Kura {
             || namespace.index_path != index_path
             || height == 0
             || height == u64::MAX
+            || initial_base_height == 0
+            || initial_base_height > height
             || payload_len == 0
             || payload_len > STRICT_INIT_MAX_BLOCK_BYTES
             || !Self::progress_mutation_namespace_unchanged(namespace)
@@ -3156,39 +3162,55 @@ impl Kura {
         if let Some(layout) = layout
             && height < layout.base_height
         {
-            drop(index);
-            drop(data);
-            return Self::append_preceding_indexed_sidecar(
+            let Some(index_file) = index.as_mut() else {
+                return false;
+            };
+            let intent = match BoundProgressAppendIntentV1::for_prepend(
+                namespace,
                 data_path,
                 index_path,
                 height,
+                old_data_len,
                 payload,
-                kind,
-                true,
-                None,
-                layout,
-                Some(namespace),
+                index_file,
+            ) {
+                Ok(intent) => intent,
+                Err(reason) => {
+                    warn!(
+                        reason,
+                        ?index_path,
+                        kind,
+                        "cannot admit bounded progress prepend"
+                    );
+                    return false;
+                }
+            };
+            return Self::execute_bound_progress_append(
+                data_path, index_path, payload, kind, namespace, intent, data, index,
             );
         }
         let mut new_index_bytes = Vec::new();
         let (layout, index_write_offset) = match layout {
             Some(layout) => (layout, old_index_len),
             None => {
-                new_index_bytes.extend_from_slice(&SidecarIndexLayout::base_header(height));
-                let layout =
-                    match SidecarIndexLayout::based(height, INDEXED_SIDECAR_BASE_HEADER_SIZE_U64) {
-                        Ok(layout) => layout,
-                        Err(reason) => {
-                            warn!(
-                                reason,
-                                height,
-                                ?index_path,
-                                kind,
-                                "invalid initial progress index base"
-                            );
-                            return false;
-                        }
-                    };
+                new_index_bytes
+                    .extend_from_slice(&SidecarIndexLayout::base_header(initial_base_height));
+                let layout = match SidecarIndexLayout::based(
+                    initial_base_height,
+                    INDEXED_SIDECAR_BASE_HEADER_SIZE_U64,
+                ) {
+                    Ok(layout) => layout,
+                    Err(reason) => {
+                        warn!(
+                            reason,
+                            height,
+                            ?index_path,
+                            kind,
+                            "invalid initial progress index base"
+                        );
+                        return false;
+                    }
+                };
                 (layout, 0)
             }
         };
@@ -3492,7 +3514,7 @@ impl Kura {
             return false;
         }
         let wrote = Self::append_indexed_bound_progress_sidecar(
-            data_path, index_path, height, payload, kind, namespace,
+            data_path, index_path, height, height, payload, kind, namespace,
         );
         wrote && Self::progress_mutation_namespace_unchanged(namespace)
     }

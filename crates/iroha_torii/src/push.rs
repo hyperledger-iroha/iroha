@@ -12,6 +12,8 @@ use dashmap::DashMap;
 use iroha_config::parameters::actual;
 use iroha_core::{EventsSender, kura::Kura};
 use iroha_crypto::HashOf;
+#[cfg(test)]
+use iroha_data_model::transaction::SignedTransaction;
 use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, SignedBlock},
@@ -19,7 +21,6 @@ use iroha_data_model::{
         EventBox,
         pipeline::{BlockStatus, PipelineEventBox},
     },
-    transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use jsonwebtoken::{Algorithm, EncodingKey};
@@ -877,7 +878,9 @@ impl PushBridge {
     fn enqueue_block_activities_locked(&self, block: &SignedBlock) -> Result<(), PushReplayError> {
         let block_height = block.header().height().get();
         let mut jobs = BTreeMap::<String, DeliveryJob>::new();
-        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block) {
+        for (entrypoint_hash, tx, result) in crate::canonical_history::signed_calls(block)
+            .map_err(|error| PushError::Storage(error.to_string()))?
+        {
             if result.is_err() {
                 continue;
             }
@@ -1630,12 +1633,18 @@ fn kura_block_at_height(kura: &Kura, height: u64) -> Result<Arc<SignedBlock>, Pu
         .map_err(|_| PushError::Storage(format!("Kura block height {height} exceeds usize")))?;
     let height = NonZeroUsize::new(height_usize)
         .ok_or_else(|| PushError::Storage("Kura block height must be nonzero".to_owned()))?;
-    kura.get_block(height).ok_or_else(|| {
-        PushError::Storage(format!(
-            "authoritative Kura block {} is unavailable",
-            height.get()
-        ))
-    })
+    let hash = kura
+        .get_durable_block_hash(height)
+        .ok_or_else(|| PushError::Storage("durable push carrier hash is unavailable".into()))?;
+    let work = crate::routing::app_query_limits().max_fetch_size;
+    crate::canonical_history::read_carrier(
+        kura,
+        height,
+        hash,
+        work,
+        iroha_core::smartcontracts::isi::tx::transaction_history_byte_limit(work),
+    )
+    .map_err(|error| PushError::Storage(error.to_string()))
 }
 fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -2066,32 +2075,6 @@ fn applied_block_heights(event: &EventBox) -> BTreeSet<u64> {
         _ => {}
     }
     heights
-}
-fn external_signed_transaction_results(
-    block: &SignedBlock,
-) -> impl Iterator<
-    Item = (
-        HashOf<TransactionEntrypoint>,
-        SignedTransaction,
-        &TransactionResult,
-    ),
-> + '_ {
-    let external_total = block.external_entrypoint_count();
-    block
-        .external_entrypoints_cloned()
-        .take(external_total)
-        .zip(block.results().take(external_total))
-        .filter_map(|(entrypoint, result)| {
-            let entrypoint_hash = entrypoint.hash();
-            let signed = match entrypoint {
-                TransactionEntrypoint::External(signed) => signed,
-                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                    return None;
-                }
-            };
-            Some((entrypoint_hash, signed, result))
-        })
 }
 async fn send_fcm_http_v1(
     project_id: &str,
@@ -2551,7 +2534,6 @@ mod tests {
                 std::num::NonZeroU64::new(height).expect("nonzero block event height"),
                 None,
                 None,
-                None,
                 0,
                 0,
             ),
@@ -2575,43 +2557,61 @@ mod tests {
             std::num::NonZeroU64::new(height).expect("push block fixture height is nonzero"),
             previous.map(SignedBlock::hash),
             None,
-            None,
             height,
             0,
         );
-        let signature =
-            iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), header.hash())
-                .expect("sign provisional push block fixture header");
-        let entrypoint_hashes = transactions
-            .iter()
-            .map(SignedTransaction::hash_as_entrypoint)
-            .collect::<Vec<_>>();
-        let results = entrypoint_hashes
-            .iter()
-            .map(|_| iroha_data_model::transaction::TransactionResultInner::Ok(Vec::new()))
-            .collect();
-        let mut block = SignedBlock::presigned(
-            iroha_data_model::block::BlockSignature::new(0, signature),
-            header,
-            transactions,
-        );
-        block
-            .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
-            .expect("push block fixture results align with entrypoints");
-        let final_signature =
-            iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), block.header().hash())
-                .expect("sign finalized push block fixture header");
-        block
-            .replace_signatures(
-                [iroha_data_model::block::BlockSignature::new(
-                    0,
-                    final_signature,
-                )]
-                .into_iter()
-                .collect(),
-            )
-            .expect("replace provisional push block fixture signature");
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        let mut outputs = Vec::with_capacity(transactions.len());
+        for (index, transaction) in transactions.into_iter().enumerate() {
+            builder.push_transaction(transaction);
+            outputs.push(
+                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
+                    iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
+                        input_index: u32::try_from(index).expect("fixture input count fits u32"),
+                        result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
+                        completions: vec![],
+                    },
+                ),
+            );
+        }
+        let mut block = builder.build_with_signature(0, signer.private_key());
+        crate::test_utils::attach_fixture_execution_outputs(&mut block, outputs);
         Arc::new(block)
+    }
+    // Stored replay fixtures own actual parent-linked finality. Their structural
+    // successful rows model notification inputs, not execution of State economics.
+    fn store_finalized_push_block(kura: &Kura, block: Arc<SignedBlock>) {
+        let height = block.header().height().get();
+        let parent = height
+            .checked_sub(1)
+            .filter(|height| *height > 0)
+            .map(|height| {
+                kura.v2_finality_artifact(height)
+                    .expect("read preceding push finality")
+                    .expect("complete push fixture finality prefix")
+            });
+        let artifact = crate::test_utils::torii_proof_finality_for_block(
+            &block,
+            crate::test_utils::signed_query_network_id(),
+            parent.as_ref(),
+        );
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical push body");
+        let receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist genuine push finality");
+        assert_eq!(
+            receipt.artifact_hash(),
+            iroha_crypto::HashOf::new(&artifact)
+        );
+        assert_eq!(receipt.context_id(), artifact.context_id());
+        // Enter the same authenticated production read before testing queue effects.
+        let authenticated = kura_block_at_height(kura, height).expect("authenticated push carrier");
+        assert_eq!(authenticated.hash(), block.hash());
+        assert_eq!(
+            authenticated.encode_wire().unwrap(),
+            block.encode_wire().unwrap()
+        );
     }
     fn activity_transaction(account: &AccountId) -> SignedTransaction {
         use iroha_data_model::prelude::{Account, Register, TransactionBuilder};
@@ -2900,22 +2900,48 @@ mod tests {
 
         assert!(matches!(error, PushError::Storage(_)));
     }
+    #[test]
+    fn replay_refuses_unfinalized_body_before_queue_side_effects() {
+        let kura = Kura::blank_kura_for_testing();
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
+        let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
+        kura.store_block(block)
+            .expect("deliberately store without finality");
+        assert!(kura.v2_finality_artifact(1).unwrap().is_none());
+        let temp = tempfile::tempdir().expect("push tempdir");
+        let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
+            .expect("valid empty push store");
+        bridge
+            .register_device(register_request("unfinalized-activity-token"))
+            .expect("register push activity target");
+        let error = bridge
+            .reconcile_to_authoritative_height(&kura)
+            .expect_err("a durable body alone is not finalized push history");
+        let PushReplayError::Fatal(PushError::Storage(reason)) = error else {
+            panic!("expected unavailable finality, got {error:?}");
+        };
+        assert!(
+            reason.contains("finalized carrier is unavailable"),
+            "{reason}"
+        );
+        assert_eq!(bridge.applied_block_cursor.lock().height, 0);
+        assert_eq!(bridge.queued_count(), 0);
+    }
     #[tokio::test]
     async fn event_worker_replays_durable_kura_backlog_before_serving_events() {
         let kura = Kura::blank_kura_for_testing();
         let first = signed_push_block(1, None, Vec::new());
         let second = signed_push_block(2, Some(first.as_ref()), Vec::new());
-        kura.store_block(Arc::clone(&first))
-            .expect("store first push replay block");
-        kura.store_block(Arc::clone(&second))
-            .expect("store second push replay block");
+        store_finalized_push_block(&kura, Arc::clone(&first));
+        store_finalized_push_block(&kura, Arc::clone(&second));
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
             .expect("valid empty push store");
         let (events, _) = tokio::sync::broadcast::channel(4);
         let shutdown = ShutdownSignal::new();
+        // Keep the event source alive until shutdown; channel closure is a separate failure.
         let worker = bridge
-            .start_event_worker(Arc::clone(&kura), events, shutdown.clone())
+            .start_event_worker(Arc::clone(&kura), events.clone(), shutdown.clone())
             .expect("enabled push worker");
 
         wait_for_cursor(&bridge, 2).await;
@@ -2932,13 +2958,13 @@ mod tests {
             worker.await.expect("push replay worker joins"),
             crate::ToriiCriticalWorkerExit::StoppedByShutdown
         );
+        drop(events);
     }
     #[tokio::test]
     async fn observed_applied_height_gap_is_replayed_from_kura() {
         let kura = Kura::blank_kura_for_testing();
         let first = signed_push_block(1, None, Vec::new());
-        kura.store_block(Arc::clone(&first))
-            .expect("store first push gap block");
+        store_finalized_push_block(&kura, Arc::clone(&first));
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
             .expect("valid empty push store");
@@ -2951,10 +2977,8 @@ mod tests {
 
         let second = signed_push_block(2, Some(first.as_ref()), Vec::new());
         let third = signed_push_block(3, Some(second.as_ref()), Vec::new());
-        kura.store_block(Arc::clone(&second))
-            .expect("store skipped push gap block");
-        kura.store_block(Arc::clone(&third))
-            .expect("store observed push gap block");
+        store_finalized_push_block(&kura, Arc::clone(&second));
+        store_finalized_push_block(&kura, Arc::clone(&third));
         events
             .send(applied_event(3))
             .expect("send height-three event");
@@ -2975,8 +2999,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
         let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
-        kura.store_block(Arc::clone(&block))
-            .expect("store push activity block");
+        store_finalized_push_block(&kura, Arc::clone(&block));
         let temp = tempfile::tempdir().expect("push tempdir");
         let dispatcher = Arc::new(MockDispatcher::new(vec![DispatchOutcome::Sent]));
         let bridge = PushBridge::with_dispatcher_and_limits_in(
@@ -2997,15 +3020,21 @@ mod tests {
 
         assert!(matches!(
             bridge.reconcile_to_authoritative_height(&kura),
-            Err(PushReplayError::Backpressure { height: 1, .. })
+            Err(PushReplayError::Backpressure {
+                height: 1,
+                queued: 1,
+                required: 1,
+                maximum: 1,
+            })
         ));
         assert_eq!(bridge.applied_block_cursor.lock().height, 0);
         assert_eq!(bridge.queued_count(), 1);
 
         let (events, _) = tokio::sync::broadcast::channel(4);
         let shutdown = ShutdownSignal::new();
+        // Keep the event source alive until shutdown; channel closure is a separate failure.
         let worker = bridge
-            .start_event_worker(Arc::clone(&kura), events, shutdown.clone())
+            .start_event_worker(Arc::clone(&kura), events.clone(), shutdown.clone())
             .expect("enabled push worker");
         wait_for_cursor(&bridge, 1).await;
         shutdown.send();
@@ -3013,13 +3042,14 @@ mod tests {
             worker.await.expect("backpressured push worker joins"),
             crate::ToriiCriticalWorkerExit::StoppedByShutdown
         );
+        drop(events);
     }
     #[test]
     fn single_block_larger_than_queue_capacity_fails_explicitly() {
         let kura = Kura::blank_kura_for_testing();
         let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
         let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
-        kura.store_block(block).expect("store push activity block");
+        store_finalized_push_block(&kura, block);
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::with_dispatcher_and_limits_in(
             test_bridge_config(),
@@ -3039,10 +3069,13 @@ mod tests {
             .reconcile_to_authoritative_height(&kura)
             .expect_err("one block cannot exceed the durable queue geometry");
 
-        assert!(matches!(
-            error,
-            PushReplayError::Fatal(PushError::Storage(_))
-        ));
+        let PushReplayError::Fatal(PushError::Storage(reason)) = error else {
+            panic!("expected actual queue-capacity refusal, got {error:?}");
+        };
+        assert_eq!(
+            reason,
+            "push block 1 requires 2 delivery jobs, exceeding the configured durable queue capacity 1"
+        );
         assert_eq!(bridge.applied_block_cursor.lock().height, 0);
         assert_eq!(bridge.queued_count(), 0);
     }
@@ -3051,7 +3084,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let account = AccountId::parse_encoded(TEST_ACCOUNT_I105).expect("fixture account");
         let block = signed_push_block(1, None, vec![activity_transaction(&account)]);
-        kura.store_block(block).expect("store push activity block");
+        store_finalized_push_block(&kura, block);
         let temp = tempfile::tempdir().expect("push tempdir");
         let bridge = PushBridge::new_in(test_bridge_config(), temp.path().to_path_buf())
             .expect("valid empty push store");
@@ -3061,11 +3094,23 @@ mod tests {
         fs::write(bridge.data_dir.join(QUEUE_DIR), b"not a directory")
             .expect("block push queue directory creation");
 
-        assert!(matches!(
-            bridge.reconcile_to_authoritative_height(&kura),
-            Err(PushReplayError::Fatal(PushError::Storage(_)))
-        ));
+        let expected_io = fs::create_dir_all(bridge.data_dir.join(QUEUE_DIR))
+            .expect_err("the actual queue parent is a file");
+        let error = bridge
+            .reconcile_to_authoritative_height(&kura)
+            .expect_err("queue persistence must fail after authenticating the carrier");
+        let PushReplayError::Fatal(PushError::Storage(reason)) = error else {
+            panic!("expected actual queue-persistence refusal, got {error:?}");
+        };
+        assert_eq!(reason, expected_io.to_string());
         assert_eq!(bridge.applied_block_cursor.lock().height, 0);
+        assert_eq!(bridge.queued_count(), 0);
+        fs::remove_file(bridge.data_dir.join(QUEUE_DIR)).expect("repair queue parent");
+        bridge
+            .reconcile_to_authoritative_height(&kura)
+            .expect("the same authenticated carrier proceeds after persistence repair");
+        assert_eq!(bridge.applied_block_cursor.lock().height, 1);
+        assert_eq!(bridge.queued_count(), 1);
     }
     fn register_request(token: &str) -> RegisterDeviceRequest {
         RegisterDeviceRequest {

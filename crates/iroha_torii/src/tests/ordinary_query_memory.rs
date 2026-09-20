@@ -93,7 +93,6 @@ mod ordinary_query_memory_tests {
             NonZeroU64::new(1).expect("nonzero proof fixture height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -395,7 +394,6 @@ mod ordinary_query_memory_tests {
         let app = tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("nonzero cursor-cleanup height"),
-            None,
             None,
             None,
             0,

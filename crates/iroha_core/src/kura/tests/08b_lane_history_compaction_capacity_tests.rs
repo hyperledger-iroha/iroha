@@ -1,6 +1,6 @@
 struct MergeReceiptCompactionFixture {
     temp_dir: TempDir,
-    lane_entry: LaneConfigEntry,
+    lane_entry: LaneStorageEntry,
     kura: Arc<Kura>,
     descriptor: LaneBlockDescriptorV1,
     lane_artifact: LaneBlockArtifact,
@@ -51,11 +51,20 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
         .and_then(|batch| batch.lanes.first())
         .expect("merge execution fixture");
     let descriptor = execution.proposal.descriptor.clone();
-    kura.install_lane_incarnation_marker_for_test(&lane_entry, descriptor.lane_incarnation, 0)
-        .expect("install merge receipt lane marker");
+    publish_initial_configured_lane_geometry_for_test(
+        &kura,
+        &lane_config,
+        &BTreeMap::from([(descriptor.lane_id, descriptor.lane_incarnation)]),
+    );
+    kura.restore_published_lane_geometry_for_test(&lane_config)
+        .expect("publish the exact initial merge receipt instance");
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
-    let raw_carrier = blocks.next();
+    let header = crate::merge::merge_application_header_from_carrier(&blocks.next().header());
+    let raw_carrier = Arc::new(
+        iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(0, SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key()),
+    );
     let batch = merge_entry
         .execution_batch
         .as_mut()
@@ -63,18 +72,25 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
     batch.application_block_header =
         crate::merge::merge_application_header_from_carrier(&raw_carrier.header());
     batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
-    let mut executed_carrier = raw_carrier.as_ref().clone();
+    let bound_carrier = bind_merge_entry_to_carrier(raw_carrier, &mut merge_entry);
+    let mut executed_carrier = bound_carrier.as_ref().clone();
     attach_ok_results_to_block(&mut executed_carrier);
-    let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut merge_entry);
+    crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
+        &executed_carrier,
+        Some(&merge_entry),
+    )
+    .expect("compaction carrier must satisfy the canonical certified source join");
+    let carrier = Arc::new(executed_carrier);
     assert!(
         carrier.has_results(),
         "a canonical merge receipt carrier must contain execution results"
     );
     assert_eq!(
-        carrier.results().count(),
         carrier.external_entrypoints_cloned().count(),
-        "the merge receipt carrier must contain one result per ordinary entrypoint"
+        0,
+        "the merge receipt carrier must keep certified external execution in its sidecar"
     );
+    assert_eq!(carrier.output_results().count(), 0);
     assert_eq!(
         merge_entry
             .execution_batch
@@ -108,6 +124,9 @@ fn merge_receipt_compaction_fixture() -> MergeReceiptCompactionFixture {
             .format,
         LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
     );
+    let lane_entry = kura
+        .lane_storage_entry(lane_entry.lane_id)
+        .expect("capture the exact journal-published fixture identity");
     let frontier_path =
         Kura::lane_merge_application_frontier_path_for_entry(&lane_entry, &kura.store_root());
     let frontier = kura
@@ -296,7 +315,7 @@ fn lane_history_retention_authenticates_remote_only_carrier_without_reverse_inde
 
 fn compact_fixture_lane_histories(
     kura: &Kura,
-    lane_entry: &LaneConfigEntry,
+    lane_entry: &LaneStorageEntry,
     frontier: &LaneMergeApplicationFrontierV1,
 ) -> Result<LaneHistoryCompactionOutcome> {
     let _prune_guard = kura.prune_lock.lock();
@@ -522,6 +541,7 @@ fn lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal() 
 
 struct AutonomousHistoryCompactionFixture {
     temp_dir: TempDir,
+    lane_entry: LaneStorageEntry,
     config: KuraConfig,
     lane_config: RuntimeLaneConfig,
     kura: Arc<Kura>,
@@ -531,13 +551,13 @@ struct AutonomousHistoryCompactionFixture {
 }
 
 fn linked_compaction_payload(
-    lane: &LaneConfigEntry,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
     height: u64,
     predecessor: Option<Hash>,
     signer: &KeyPair,
 ) -> LaneExecutablePayloadV1 {
-    let template =
-        autonomous_capacity_payload_at(lane.lane_id, lane.dataspace_id, height, height, signer);
+    let template = autonomous_capacity_payload_at(lane_id, dataspace_id, height, height, signer);
     let mut proposal = template.origin_proposal.clone();
     proposal.descriptor.previous_lane_block_descriptor_hash = predecessor;
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
@@ -585,7 +605,13 @@ fn autonomous_history_compaction_fixture_with_observer_append(
     let mut sources = Vec::new();
     let mut predecessor = None;
     for height in 1..=3 {
-        let payload = linked_compaction_payload(lane, height, predecessor, &signer);
+        let payload = linked_compaction_payload(
+            lane.lane_id,
+            lane.dataspace_id,
+            height,
+            predecessor,
+            &signer,
+        );
         predecessor = Some(payload.origin_proposal.descriptor.descriptor_hash);
         let prepared = prepare_cold_autonomous_certification_for_capacity_payload(
             &kura,
@@ -608,7 +634,8 @@ fn autonomous_history_compaction_fixture_with_observer_append(
         &payloads[1],
         sources[1].clone(),
     );
-    let (parent, carrier, merge_entry) = canonical_terminal_merge_carrier_for_test(execution, 1);
+    let (parent, carrier, merge_entry) =
+        canonical_terminal_merge_carrier_for_test(vec![execution], 1);
     // An observer can apply a canonical carrier without having certified its
     // source locally. Keep the producer's authenticated source in the carrier,
     // while the observer has only the earlier local singleton certificate.
@@ -630,8 +657,13 @@ fn autonomous_history_compaction_fixture_with_observer_append(
             observer_kura
                 .persist_committed_lane_block_session(&local.session, &local.signer_pops)
                 .expect_err("observer crashes while appending its old local bundle");
-            let (_, index) =
-                Kura::autonomous_lane_merge_bundle_paths_for_entry(lane, &observer_kura.store_root);
+            let observer_lane = observer_kura
+                .lane_storage_entry(lane.lane_id)
+                .expect("capture the observer's independently published exact instance");
+            let (_, index) = Kura::autonomous_lane_merge_bundle_paths_for_entry(
+                &observer_lane,
+                &observer_kura.store_root,
+            );
             assert!(Kura::bound_progress_append_intent_path(&index).is_file());
         } else {
             observer_kura
@@ -655,6 +687,10 @@ fn autonomous_history_compaction_fixture_with_observer_append(
         carrier.hash(),
     )
     .expect("publish authenticated application frontier after source slot two");
+    let lane_entry = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the actual producer or observer compaction instance");
+    let lane = &lane_entry;
     let path = Kura::lane_merge_application_frontier_path_for_entry(lane, &kura.store_root);
     let frontier = kura
         .decode_lane_merge_application_frontier(lane, &path)
@@ -670,6 +706,7 @@ fn autonomous_history_compaction_fixture_with_observer_append(
     );
     AutonomousHistoryCompactionFixture {
         temp_dir: producer_dir.unwrap_or(temp_dir),
+        lane_entry,
         config,
         lane_config,
         kura,
@@ -682,7 +719,7 @@ fn autonomous_history_compaction_fixture_with_observer_append(
 fn compaction_source_pairs(
     fixture: &AutonomousHistoryCompactionFixture,
 ) -> [((PathBuf, PathBuf), &'static str); 3] {
-    let lane = fixture.lane_config.primary();
+    let lane = &fixture.lane_entry;
     [
         (
             Kura::lane_block_execution_input_paths_for_entry(lane, &fixture.kura.store_root),
@@ -713,7 +750,7 @@ fn cold_compaction_capacity_reservations(
         let _geometry_guard = kura.lane_geometry_lock.lock();
         let _sidecar_guard = kura.sidecar_lock.lock();
         let inventory = kura
-            .autonomous_lane_attempt_inventory_counts_locked(fixture.lane_config.primary(), 1)
+            .autonomous_lane_attempt_inventory_counts_locked(&fixture.lane_entry, 1)
             .expect("read actual incomplete local lifecycle identities");
         let identity = (
             fixture.frontier.lane_block_height,
@@ -798,7 +835,7 @@ fn lane_history_cold_restore_accepts_independent_authenticated_prefix_cuts() {
             ..
         } = fixture;
         drop(kura);
-        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        let (reopened, _) = reopen_test_kura_with_default_lane_geometry(&config, &lane_config)
             .expect("cold recovery accepts one completed pair cut under authenticated retention");
         assert_compaction_retained_sources(&reopened, &sources);
         assert!(
@@ -817,7 +854,7 @@ fn lane_history_cold_restore_recovers_certified_and_bundle_rewrite_cuts() {
             for (data_promoted, index_pending) in [(false, true), (true, true), (false, false)] {
                 let fixture = autonomous_history_compaction_fixture(observer);
                 let (frontier_path, _) = Kura::latest_certified_lane_block_frontier_paths_for_entry(
-                    fixture.lane_config.primary(),
+                    &fixture.lane_entry,
                     &fixture.kura.store_root,
                 );
                 let singleton_before =
@@ -870,7 +907,7 @@ fn lane_history_cold_restore_recovers_certified_and_bundle_rewrite_cuts() {
                     ..
                 } = fixture;
                 drop(kura);
-                let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+                let (reopened, _) = reopen_test_kura_with_default_lane_geometry(&config, &lane_config)
                     .expect("cold recovery finishes committed rewrites or discards uncommitted data before inventory");
                 assert!(!temp_data.exists() && !temp_index.exists());
                 assert_eq!(
@@ -908,7 +945,7 @@ fn lane_history_cold_restore_rejects_untrusted_frontier_and_retained_evidence_lo
             frontier.application_block_hash =
                 HashOf::from_untyped_unchecked(Hash::new(b"untrusted carrier"));
             let path = Kura::lane_merge_application_frontier_path_for_entry(
-                fixture.lane_config.primary(),
+                &fixture.lane_entry,
                 &fixture.kura.store_root,
             );
             fs::write(
@@ -960,7 +997,7 @@ fn lane_history_cold_restore_rejects_untrusted_frontier_and_retained_evidence_lo
         } = fixture;
         drop(kura);
         let before = snapshot_regular_test_tree(temp_dir.path());
-        let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
+        let error = match reopen_test_kura_with_default_lane_geometry(&config, &lane_config) {
             Ok(_) => {
                 panic!("untrusted frontier or retained evidence loss must reject cold startup")
             }
@@ -1037,12 +1074,8 @@ fn lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix() {
         .max_disk_usage_bytes = fixture.config.max_disk_usage_bytes.0;
     let before = snapshot_regular_test_tree(fixture.temp_dir.path());
     assert_eq!(
-        compact_fixture_lane_histories(
-            &fixture.kura,
-            fixture.lane_config.primary(),
-            &fixture.frontier,
-        )
-        .expect("capacity refusal remains optional"),
+        compact_fixture_lane_histories(&fixture.kura, &fixture.lane_entry, &fixture.frontier,)
+            .expect("capacity refusal remains optional"),
         LaneHistoryCompactionOutcome::CapacityBlocked
     );
     assert_eq!(snapshot_regular_test_tree(fixture.temp_dir.path()), before);
@@ -1055,7 +1088,7 @@ fn lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix() {
         ..
     } = fixture;
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+    let (reopened, _) = reopen_test_kura_with_default_lane_geometry(&config, &lane_config)
         .expect("capacity-blocked compaction still permits valid startup");
     assert_eq!(
         reopened
@@ -1088,7 +1121,7 @@ fn lane_history_cold_restore_does_not_resurrect_terminal_local_frontier() {
         .expect("observer retains its earlier local certificate");
     assert_eq!(original_frontier.proposal.descriptor.lane_block_height, 1);
     let (singleton_path, _) = Kura::latest_certified_lane_block_frontier_paths_for_entry(
-        fixture.lane_config.primary(),
+        &fixture.lane_entry,
         &fixture.kura.store_root,
     );
     let singleton_bytes = fs::read(&singleton_path).expect("retain exact original singleton");
@@ -1111,7 +1144,7 @@ fn lane_history_cold_restore_does_not_resurrect_terminal_local_frontier() {
         ..
     } = fixture;
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+    let (reopened, _) = reopen_test_kura_with_default_lane_geometry(&config, &lane_config)
         .expect("applied frontier ahead of local certification is valid after compaction");
     assert_eq!(
         reopened
@@ -1137,7 +1170,10 @@ fn lane_history_cold_restore_does_not_resurrect_terminal_local_frontier() {
             .is_err(),
         "discarded local payload is not re-created as a new publication"
     );
-    let lane = lane_config.primary();
+    let reopened_lane = reopened
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("capture the restored exact instance");
+    let lane = &reopened_lane;
     let (incarnation, activation_height) = reopened
         .active_lane_incarnation_marker(lane)
         .expect("authenticate reopened primary incarnation");
@@ -1194,7 +1230,7 @@ fn lane_history_cold_restore_admits_obsolete_append_at_exact_capacity() {
             ..
         } = fixture;
         drop(kura);
-        let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        let (reopened, _) = reopen_test_kura_with_default_lane_geometry(&config, &lane_config)
             .expect("repair retained current append before compacting the older applied prefix");
         assert!(!intent.exists());
         assert_compaction_retained_sources(&reopened, &sources);
@@ -1230,7 +1266,7 @@ fn lane_history_cold_restore_admits_obsolete_append_at_exact_capacity() {
             let before_plan = snapshot_regular_test_tree(fixture.temp_dir.path());
             let remaining_index_growth = {
                 let _prune_guard = fixture.kura.prune_lock.lock();
-                let lane = fixture.lane_config.primary();
+                let lane = &fixture.lane_entry;
                 let proof = fixture
                     .kura
                     .authenticated_lane_history_retention_under_prune_guard(lane)
@@ -1254,6 +1290,57 @@ fn lane_history_cold_restore_admits_obsolete_append_at_exact_capacity() {
             assert_eq!(
                 snapshot_regular_test_tree(fixture.temp_dir.path()),
                 before_plan
+            );
+            let descriptor = &fixture.sources[0].bundle.certified.proposal.descriptor;
+            let authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                None,
+            );
+            let reservations_before = fixture
+                .kura
+                .certified_bundle_capacity_reservations
+                .lock()
+                .clone();
+            let revision_before = fixture.kura.committed_lane_status_revision();
+            assert!(
+                fixture
+                    .kura
+                    .preflight_latest_certified_lane_block_frontier_with_authority(
+                        descriptor.lane_id,
+                        &authority,
+                    )
+                    .expect("terminal pending append is not State pair-repair work")
+                    .is_none()
+            );
+            let foreign = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                Hash::new(b"foreign-terminal-preflight-incarnation"),
+                None,
+            );
+            assert!(
+                fixture
+                    .kura
+                    .preflight_latest_certified_lane_block_frontier_with_authority(
+                        descriptor.lane_id,
+                        &foreign,
+                    )
+                    .is_err(),
+                "terminal retention does not waive exact State lifecycle authority"
+            );
+            assert_eq!(
+                snapshot_regular_test_tree(fixture.temp_dir.path()),
+                before_plan
+            );
+            assert_eq!(
+                *fixture.kura.certified_bundle_capacity_reservations.lock(),
+                reservations_before
+            );
+            assert_eq!(
+                fixture.kura.committed_lane_status_revision(),
+                revision_before
             );
             let (persisted, unindexed) = fixture
                 .kura
@@ -1284,7 +1371,7 @@ fn lane_history_cold_restore_admits_obsolete_append_at_exact_capacity() {
             } = fixture;
             drop(kura);
             let before_open = snapshot_regular_test_tree(temp_dir.path());
-            let reopened = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config);
+            let reopened = reopen_test_kura_with_default_lane_geometry(&config, &lane_config);
             if one_under {
                 let error = match reopened {
                     Ok(_) => panic!("one byte below obsolete append completion must reject"),

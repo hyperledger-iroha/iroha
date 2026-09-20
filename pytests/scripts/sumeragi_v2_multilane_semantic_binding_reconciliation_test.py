@@ -31,7 +31,7 @@ sys.modules[spec.name] = checker
 spec.loader.exec_module(checker)
 
 # Each moved owner is explicit: deleting its declaration cannot shrink this census.
-KEYS = (('crates/iroha_core/src/kura/lane_artifact_budget.rs', 'fn', 'lane_artifact_required_bytes_for_block'), ('crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_apply_cases.rs', 'fn', 'validator_apply_drains_exact_suffix_after_delayed_commit_qc_admission'), ('crates/iroha_core/src/sumeragi/lane_planner.rs', 'fn', 'v2_known_lane_tip_for_route'), ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs', 'method', 'ApplyFixture::new_with_options_and_retention'), ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs', 'method', 'ApplyFixture::new_with_options_and_retention_and_genesis'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::lane_publication_budget_reserved_bytes'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_publication_capacity_reserved_bytes'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'NativeAmxPublicationCapacityReservation::reserved_bytes'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'NativeAmxRoutePublicationCapacity::reserved_bytes'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_publication_plan_under_prune_and_canonical_guards'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_publication_plan_for_storage_under_prune_and_canonical_guards'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_route_publication_capacity_for_storage_locked'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_route_publication_capacity_at_target_locked'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::admit_native_amx_publication_capacity_plan'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::ensure_native_amx_publication_capacity_under_publication_guard'), ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs', 'fn', 'run_autonomous_merge_frontier_fixture'), ('crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_apply_cases.rs', 'fn', 'ready_validate_apply_actor_global_child_fixture'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::begin_native_amx_store_capacity_under_prune_and_canonical_guards'), ('crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs', 'method', 'Kura::store_block_durable'), ('crates/iroha_core/src/kura.rs', 'method', 'Kura::replace_top_block'), ('crates/iroha_core/src/kura.rs', 'method', 'Kura::check_storage_budget'), ('crates/iroha_core/src/kura.rs', 'method', 'Kura::check_replace_storage_budget'), ('crates/iroha_core/src/kura/autonomous_terminal_capacity.rs', 'method', 'Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked'), ('crates/iroha_core/src/kura/lane_artifact_budget.rs', 'method', 'Kura::lane_artifact_required_bytes_for_block'), ('crates/iroha_core/src/queue.rs', 'method', 'Queue::complete_lane_reservation_startup_reconciliation'))
+KEYS = (('crates/iroha_core/src/kura/lane_artifact_budget.rs', 'fn', 'lane_artifact_required_bytes_for_block'), ('crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_apply_cases.rs', 'fn', 'validator_apply_drains_exact_suffix_after_delayed_commit_qc_admission'), ('crates/iroha_core/src/sumeragi/lane_planner.rs', 'fn', 'v2_known_lane_tip_for_route'), ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs', 'method', 'ApplyFixture::new_with_options_and_retention'), ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs', 'method', 'ApplyFixture::new_with_options_and_retention_and_genesis'), ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs', 'method', 'ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::lane_publication_budget_reserved_bytes'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_publication_capacity_reserved_bytes'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'NativeAmxPublicationCapacityReservation::reserved_bytes'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'NativeAmxRoutePublicationCapacity::reserved_bytes'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_publication_plan_under_prune_and_canonical_guards'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_publication_plan_for_storage_under_prune_and_canonical_guards'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_route_publication_capacity_for_storage_locked'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::native_amx_route_publication_capacity_at_target_locked'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::admit_native_amx_publication_capacity_plan'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::ensure_native_amx_publication_capacity_under_publication_guard'), ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01c_historical_recovery.rs', 'fn', 'run_autonomous_merge_frontier_fixture'), ('crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_validate_apply_cases.rs', 'fn', 'ready_validate_apply_actor_global_child_fixture'), ('crates/iroha_core/src/kura/native_amx_publication_capacity.rs', 'method', 'Kura::begin_native_amx_store_capacity_under_prune_and_canonical_guards'), ('crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs', 'method', 'Kura::store_block_durable'), ('crates/iroha_core/src/kura.rs', 'method', 'Kura::replace_top_block'), ('crates/iroha_core/src/kura.rs', 'method', 'Kura::check_storage_budget'), ('crates/iroha_core/src/kura.rs', 'method', 'Kura::check_replace_storage_budget'), ('crates/iroha_core/src/kura/autonomous_terminal_capacity.rs', 'method', 'Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked'), ('crates/iroha_core/src/kura/lane_artifact_budget.rs', 'method', 'Kura::lane_artifact_required_bytes_for_block'), ('crates/iroha_core/src/queue.rs', 'method', 'Queue::complete_lane_reservation_startup_reconciliation'))
 
 
 def bindings():
@@ -104,8 +104,8 @@ MUTATIONS = (
     ("Kura::check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards", "if required > self.max_disk_usage_bytes", "if false"),
     ("Kura::ensure_native_amx_publication_capacity_under_publication_guard", "self.check_native_amx_existing_carrier_capacity_under_prune_and_canonical_guards()?;", "let _ = ();"),
     ("ApplyFixture::new_with_options_and_retention", "blocks_in_memory,\n            false,", "blocks_in_memory,\n            true,"),
-    ("ApplyFixture::new_with_options_and_retention_and_genesis", "(1_u8..=4)", "(1_u8..=1)"),
-    ("ApplyFixture::new_with_options_and_retention_and_genesis", "install_fixture_validator_authority(&state, &context, &validator_set_pops);", "let _ = &validator_set_pops;"),
+    ("ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura", "(1_u8..=4)", "(1_u8..=1)"),
+    ("ApplyFixture::new_with_options_and_retention_and_genesis_and_archival_kura", "install_fixture_validator_authority(&state, &context, &validator_set_pops);", "let _ = &validator_set_pops;"),
     ("v2_known_lane_tip_for_route", "NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)", "NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_)"),
     ("Queue::complete_lane_reservation_startup_reconciliation", "|| !reconciliation_pending", "|| (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)"),
     ("ready_validate_apply_actor_global_child_fixture", "successor_case == ApplySuccessorCase::ValidatorRetained", "false"),
@@ -138,7 +138,7 @@ def test_historical_macro_requires_its_exact_case(tmp_path):
     destination.write_text(source.replace(before, "run_autonomous_merge_frontier_fixture(MergeFrontierFixtureCase::SuccessfulApply);", 1))
     errors = []
     native._validate_native_merge_manifest_raw_tests(tmp_path, errors)
-    assert any("missing or reorders" in e for e in errors)
+    assert any("must dispatch exactly" in e for e in errors)
 
 
 def test_extracted_historical_helper_requires_actual_assertions(tmp_path):
@@ -146,8 +146,8 @@ def test_extracted_historical_helper_requires_actual_assertions(tmp_path):
     errors = []
     item = actual_item(ROOT, *key, "historical helper", errors)
     assert errors == [] and item is not None
-    token = '"startup evidence repair must not mutate canonical WSV"'
-    changed_provider(tmp_path, key, item, item.replace(token, '"removed WSV assertion"', 1))
+    token = "assert_eq!(queue.live_lane_reservations(), reservations);"
+    changed_provider(tmp_path, key, item, item.replace(token, 'let _ = reservations;', 1))
     assert any("missing semantic token" in e for e in check_owner(tmp_path, key))
 
 
@@ -176,7 +176,8 @@ def test_release_component_pin_joins_actual_owner_and_canonical_fixture_checks()
     for source_check in mutation["source_checks"]:
         source = (ROOT / source_check["path"]).read_text()
         assert all(token in source for token in source_check["required_tokens"])
-    assert ("crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs", "add `--check`") not in checker._RELEASE_SOURCE_TOKEN_REBINDINGS
+    assert not hasattr(checker, "_RELEASE_SOURCE_TOKEN_REBINDINGS")
+    assert not hasattr(checker, "_PRODUCTION_TOKEN_REBINDINGS")
     errors = []
     checker.reviewed_source._validate_exact_release_invariant_source_checks(mutation["id"], mutation["source_checks"], errors)
     assert errors == []
@@ -271,7 +272,7 @@ STATE_MERGE_MUTATIONS = (
     ("merge_execution_proposal_gas", "total.checked_add(gas)", "total.saturating_add(gas)"),
     ("build_merge_execution_batch_from_source_prefix", "merge_execution_canonical_order_key(&source.certified.proposal)", "source.origin_proposal.descriptor.proposal_height"),
     ("build_merge_execution_batch_from_source_prefix", "validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)", "validate_merge_execution_commit_surface(MergeExecutionCommitSurface::PostBlockPreVote)"),
-    ("validate_merge_execution_predecessor_against_frontier", "lane_incarnation: descriptor.lane_incarnation,", "lane_incarnation: foreign_incarnation,"),
+    ("validate_merge_execution_predecessor_against_frontier", "descriptor.lane_incarnation,", "foreign_incarnation,"),
     ("validate_lane_frontier_successor", "if actual_predecessor != expected_predecessor", "if false"),
     ("validate_lane_frontier_successor", "expected_predecessor.0.checked_add(1)", "expected_predecessor.0.checked_add(2)"),
     ("preexecute_merge_execution_sources", "Self::preexecute_merge_execution_sources_into(&mut state_block, sources)?", "Vec::new()"),

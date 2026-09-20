@@ -1,6 +1,8 @@
 //! This module contains `Block` and related implementations.
 //!
 //! `Block`s are organized into a linear sequence over time (also known as the block chain).
+#[cfg(feature = "transparent_api")]
+use self::execution_output::ExecutionOutputV1;
 use self::proofs::{BlockReceiptProof, ExecutionReceiptProof};
 use crate::da::commitment::{
     DaCommitmentBundle, DaProofPolicy, DaProofPolicyBundle, DaProofScheme,
@@ -48,19 +50,28 @@ pub mod consensus;
 pub mod consensus_v2;
 #[doc = "Durable execution context committed by block headers."]
 pub mod execution_context;
+/// Canonical network and invocation outputs; execution authority remains with finality.
+pub mod execution_output;
 #[doc = "Block header structures and helpers."]
 pub mod header;
+/// Canonical routing and QueuePlan admission input values.
+pub mod lane_admission;
+/// Native lane consensus messages and immutable frozen authority values.
+pub mod lane_consensus;
+/// Ordered native Decision sources and their exact applying pre-State.
+pub mod lane_decision_batch;
+/// Immutable complete admitted inputs and exact distinct route slots.
+pub mod lane_input;
+mod native_results;
+/// Explicit applying output policy and bounded reservation arithmetic.
+pub mod output_budget;
+#[cfg(test)]
+pub(crate) mod output_test_support;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
-#[cfg(feature = "transparent_api")]
-use crate::transaction::signed::TransactionResult;
-#[cfg(feature = "transparent_api")]
-use crate::transaction::signed::TransactionResultInner;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
-#[cfg(feature = "transparent_api")]
-use crate::trigger::TimeTriggerEntrypoint;
 pub use execution_context::{
     AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
     BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
@@ -103,143 +114,66 @@ mod model {
     }
 }
 pub use self::model::*;
-/// Error returned when attaching transaction results would make block Merkle roots inconsistent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetTransactionResultsError {
-    /// The provided entrypoint hash list did not include all external entrypoints.
-    TooFewEntrypointHashes {
-        /// Number of external entrypoint hashes required by the block payload.
-        expected: usize,
-        /// Number of hashes supplied by the caller.
-        actual: usize,
-    },
-    /// A caller-provided external entrypoint hash differed from the block payload hash.
-    ExternalHashMismatch {
-        /// Mismatched external entrypoint index.
-        index: usize,
-        /// Hash recomputed from the block payload.
-        expected: HashOf<TransactionEntrypoint>,
-        /// Hash supplied by the caller.
-        actual: HashOf<TransactionEntrypoint>,
-    },
-    /// The provided transaction result list did not align with the entrypoint hash list.
-    ResultCountMismatch {
-        /// Number of results required by the canonical entrypoint list.
-        expected: usize,
-        /// Number of results supplied by the caller.
-        actual: usize,
-    },
-    /// The existing consensus Merkle root in the header did not match the external entrypoints.
-    ExistingHeaderMerkleRootMismatch {
-        /// Merkle root recomputed from the external entrypoints in the block payload.
-        expected: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-        /// Merkle root already present in the block header.
-        actual: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
-    },
-    /// The supplied AXT policy snapshot was not canonical.
+/// Failure to atomically install the one full canonical execution-output collection.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SetExecutionOutputsError {
+    /// The proposal's existing immutable commitments differ from its payload.
+    #[error("invalid proposal commitments: {0}")]
+    InvalidProposal(String),
+    /// Output source, ordering, receipt or transcript structure is inconsistent.
+    #[error("invalid execution outputs: {0}")]
+    InvalidOutputs(String),
+    /// The supplied applying policy or exact output costs are invalid.
+    #[error("invalid execution output limits: {0}")]
+    InvalidLimits(String),
+    /// The AXT snapshot is not canonical.
+    #[error("invalid AXT policy snapshot: {0}")]
     InvalidAxtPolicySnapshot(crate::nexus::AxtPolicySnapshotValidationError),
+    /// Actual canonical serialization failed while checking the complete wire.
+    #[error("cannot encode executed block: {0}")]
+    Encoding(String),
+    /// The actual complete wire exceeds applying policy.
+    #[error("executed block wire is {actual} bytes, above limit {limit}")]
+    ExecutedWireTooLarge {
+        /// Exact canonical wire length including version and frame.
+        actual: u64,
+        /// Explicit applying-policy ceiling.
+        limit: u64,
+    },
 }
-impl fmt::Display for SetTransactionResultsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TooFewEntrypointHashes { expected, actual } => write!(
-                f,
-                "entrypoint hash list is too short for external entrypoints: expected at least {expected}, got {actual}",
-            ),
-            Self::ExternalHashMismatch {
-                index,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "external entrypoint hash mismatch at index {index}: expected {expected}, got {actual}",
-            ),
-            Self::ResultCountMismatch { expected, actual } => write!(
-                f,
-                "transaction result count mismatch: expected {expected}, got {actual}",
-            ),
-            Self::ExistingHeaderMerkleRootMismatch { expected, actual } => write!(
-                f,
-                "existing block header Merkle root mismatch: expected {expected:?}, got {actual:?}",
-            ),
-            Self::InvalidAxtPolicySnapshot(error) => {
-                write!(f, "invalid AXT policy snapshot: {error}")
-            }
-        }
+/// Private payload-only forwarding adapter; no extra codec field/frame is introduced.
+#[cfg(feature = "transparent_api")]
+struct OutputFieldRef<'a, T>(&'a T);
+#[cfg(feature = "transparent_api")]
+impl<T: norito::core::SerializePayload> norito::core::SerializePayload for OutputFieldRef<'_, T> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoFrameError> {
+        norito::core::SerializePayload::serialize(self.0, writer)
+    }
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::SerializePayload::encoded_len_hint(self.0)
+    }
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::SerializePayload::encoded_len_exact(self.0)
     }
 }
-impl std::error::Error for SetTransactionResultsError {}
-/// Error returned when lane-finality statements are attached before execution results exist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetLaneFinalityStatementsError {
-    /// The block does not yet carry transaction results and therefore has no final header hash.
-    MissingTransactionResults,
+/// Encode-only borrow of the sole SignedBlock layout for pre-mutation sizing.
+/// No raw source constructor or alternate accepted decoder is exposed.
+#[cfg(feature = "transparent_api")]
+#[derive(Encode)]
+struct SignedBlockOutputCandidate<'a> {
+    signatures: OutputFieldRef<'a, BTreeSet<BlockSignature>>,
+    payload: OutputFieldRef<'a, BlockPayload>,
+    result: Option<OutputFieldRef<'a, BlockResult>>,
 }
-impl fmt::Display for SetLaneFinalityStatementsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingTransactionResults => {
-                f.write_str("cannot attach lane-finality statements before transaction results")
-            }
-        }
+#[cfg(feature = "transparent_api")]
+impl norito::NoritoSchema for SignedBlockOutputCandidate<'_> {
+    fn nominal_name() -> String {
+        <SignedBlock as norito::NoritoSchema>::nominal_name()
+    }
+    fn frame_name() -> String {
+        <SignedBlock as norito::NoritoSchema>::frame_name()
     }
 }
-impl std::error::Error for SetLaneFinalityStatementsError {}
-/// Error returned when independent-batch receipts cannot be attached to result leaves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetBatchTransferOutcomesError {
-    /// The block does not yet carry transaction results.
-    MissingTransactionResults,
-    /// Entrypoint and result counts differ.
-    ResultCountMismatch {
-        /// Number of canonical entrypoint hashes.
-        entrypoints: usize,
-        /// Number of canonical transaction results.
-        results: usize,
-    },
-    /// An outcome row references an entrypoint absent from this block.
-    UnknownEntrypoint {
-        /// Unknown canonical entrypoint hash.
-        hash: HashOf<TransactionEntrypoint>,
-    },
-    /// One outcome key could identify more than one result leaf.
-    AmbiguousEntrypoint {
-        /// Canonical or sealed-reveal alias that is not uniquely bound.
-        hash: HashOf<TransactionEntrypoint>,
-    },
-    /// More than one outcome row resolves to the same result leaf.
-    DuplicateResultAssignment {
-        /// Canonical transaction-result index.
-        index: usize,
-    },
-}
-impl fmt::Display for SetBatchTransferOutcomesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingTransactionResults => {
-                f.write_str("cannot attach batch outcomes before transaction results")
-            }
-            Self::ResultCountMismatch {
-                entrypoints,
-                results,
-            } => write!(
-                f,
-                "cannot attach batch outcomes to misaligned block results: {entrypoints} entrypoints, {results} results",
-            ),
-            Self::UnknownEntrypoint { hash } => {
-                write!(f, "batch outcomes reference unknown entrypoint {hash}")
-            }
-            Self::AmbiguousEntrypoint { hash } => {
-                write!(f, "batch outcome entrypoint alias {hash} is ambiguous")
-            }
-            Self::DuplicateResultAssignment { index } => write!(
-                f,
-                "multiple batch outcome rows resolve to transaction result index {index}",
-            ),
-        }
-    }
-}
-impl std::error::Error for SetBatchTransferOutcomesError {}
 impl SignedBlock {
     /// Create new block with a given signature
     ///
@@ -314,213 +248,111 @@ impl SignedBlock {
             result: None,
         }
     }
-    /// Set this block's transaction results and update the Merkle roots accordingly.
+    /// Atomically install actual typed outputs and their one checked Merkle cache.
+    ///
+    /// This validates structural source ownership and explicit applying-policy costs.
+    /// It does not authenticate execution, callbacks, State policy or finality. Every
+    /// proposal commitment, header byte and signature remains unchanged. The actual
+    /// fragment count is supplied by the execution owner, never inferred from leaves.
     ///
     /// # Errors
-    ///
-    /// Returns [`SetTransactionResultsError`] when the supplied entrypoint hashes do not cover
-    /// the block payload, do not match external entrypoints, would make the existing header
-    /// consensus Merkle root inconsistent, or the AXT policy snapshot is not canonical.
+    /// Rejects malformed proposal/output structure, noncanonical policy, or any
+    /// row/aggregate/complete-wire limit before changing this block.
     #[cfg(feature = "transparent_api")]
-    pub fn set_transaction_results(
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_execution_outputs(
         &mut self,
-        time_triggers: Vec<TimeTriggerEntrypoint>,
-        hashes: &[HashOf<TransactionEntrypoint>],
-        results: Vec<TransactionResultInner>,
-    ) -> Result<(), SetTransactionResultsError> {
-        self.set_transaction_results_with_transcripts(
-            time_triggers,
-            hashes,
-            results,
-            BTreeMap::new(),
-            Vec::new(),
-            crate::nexus::AxtPolicySnapshot::default(),
-        )
-    }
-    /// Set this block's transaction results, including any FASTPQ transfer transcripts, and update the Merkle roots accordingly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SetTransactionResultsError`] when the supplied entrypoint hashes do not cover
-    /// the block payload, do not match external entrypoints, or would make the existing header
-    /// consensus Merkle root inconsistent.
-    #[cfg(feature = "transparent_api")]
-    pub fn set_transaction_results_with_transcripts(
-        &mut self,
-        time_triggers: Vec<TimeTriggerEntrypoint>,
-        hashes: &[HashOf<TransactionEntrypoint>],
-        results: Vec<TransactionResultInner>,
+        outputs: Vec<ExecutionOutputV1>,
+        committed_fragment_count: u64,
         fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
         axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
         axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
-    ) -> Result<(), SetTransactionResultsError> {
-        self.set_transaction_results_with_transcripts_phase_one(
-            time_triggers,
-            hashes,
-            results,
-            fastpq_transcripts,
-            axt_envelopes,
-            axt_policy_snapshot,
-        )
-    }
-    // Phase one fixes the result-bearing header while keeping the required
-    // lane-finality field explicitly empty. Phase two attaches statements that
-    // bind that final header via `set_lane_finality_statements`.
-    #[cfg(feature = "transparent_api")]
-    fn set_transaction_results_with_transcripts_phase_one(
-        &mut self,
-        time_triggers: Vec<TimeTriggerEntrypoint>,
-        hashes: &[HashOf<TransactionEntrypoint>],
-        results: Vec<TransactionResultInner>,
-        fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
-        axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
-        axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
-    ) -> Result<(), SetTransactionResultsError> {
+        axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
+        lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
+        limits: &output_budget::ExecutionOutputLimits,
+    ) -> Result<(), SetExecutionOutputsError> {
+        self.validate_proposal_commitments()
+            .map_err(SetExecutionOutputsError::InvalidProposal)?;
+        self.validate_output_rows(&outputs, &fastpq_transcripts)
+            .map_err(SetExecutionOutputsError::InvalidOutputs)?;
         axt_policy_snapshot
             .validate()
-            .map_err(SetTransactionResultsError::InvalidAxtPolicySnapshot)?;
-        let result_hashes = results.iter().map(TransactionResult::hash_from_inner);
-        let external_hashes = self
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
-            .collect::<Vec<_>>();
-        let external_count = external_hashes.len();
-        if hashes.len() < external_count {
-            return Err(SetTransactionResultsError::TooFewEntrypointHashes {
-                expected: external_count,
-                actual: hashes.len(),
-            });
-        }
-        if !hashes.is_empty() && results.len() != hashes.len() {
-            return Err(SetTransactionResultsError::ResultCountMismatch {
-                expected: hashes.len(),
-                actual: results.len(),
-            });
-        }
-        for (index, (expected, actual)) in external_hashes
-            .iter()
-            .copied()
-            .zip(hashes.iter().copied())
-            .enumerate()
-        {
-            if expected != actual {
-                return Err(SetTransactionResultsError::ExternalHashMismatch {
-                    index,
-                    expected,
-                    actual,
-                });
-            }
-        }
-        let canonical_hashes = external_hashes
-            .iter()
-            .copied()
-            .chain(hashes.iter().copied().skip(external_count))
-            .collect::<Vec<_>>();
-        // Merkle tree over all entrypoints (external transactions first, then time triggers).
-        let merkle = MerkleTree::from_iter(canonical_hashes);
-        // Ensure the consensus merkle root covering only external transactions remains intact.
-        let external_merkle: MerkleTree<TransactionEntrypoint> =
-            external_hashes.iter().copied().collect();
-        let external_root = external_merkle.root();
-        if self.payload.header.merkle_root.is_none() {
-            // Allow tests that construct raw headers without setting merkle roots.
-            self.payload.header.merkle_root = external_root;
-        } else if self.payload.header.merkle_root != external_root {
-            return Err(
-                SetTransactionResultsError::ExistingHeaderMerkleRootMismatch {
-                    expected: external_root,
-                    actual: self.payload.header.merkle_root,
-                },
-            );
-        }
-        let trigger_completions = self
-            .result
-            .as_ref()
-            .map_or_else(Vec::new, |result| result.trigger_completions.clone());
-        let result_merkle: MerkleTree<TransactionResult> = result_hashes.collect();
-        let transaction_results: Vec<_> =
-            results.into_iter().map(TransactionResult::from).collect();
-        let committed_fragment_count = u64::try_from(
-            transaction_results
-                .iter()
-                .filter(|result| result.as_ref().is_ok())
-                .count(),
-        )
-        .unwrap_or(u64::MAX);
-        self.payload.header.result_merkle_root = result_merkle.root();
-        self.result = Some(BlockResult {
-            time_triggers,
-            merkle,
-            result_merkle,
-            transaction_results,
+            .map_err(SetExecutionOutputsError::InvalidAxtPolicySnapshot)?;
+        limits
+            .validate_outputs(&outputs)
+            .map_err(SetExecutionOutputsError::InvalidLimits)?;
+        let output_merkle = outputs.iter().map(HashOf::new).collect();
+        let result = BlockResult {
+            outputs,
+            output_merkle,
             committed_fragment_count,
             fastpq_transcripts,
             axt_envelopes,
-            axt_transitioned_dataspaces: BTreeSet::new(),
-            lane_finality_statements: Vec::new(),
-            trigger_completions,
             axt_policy_snapshot,
-        });
-        Ok(())
-    }
-    /// Replace trigger completion events captured while executing this block.
-    #[cfg(feature = "transparent_api")]
-    pub fn set_trigger_completions(
-        &mut self,
-        trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
-    ) {
-        if let Some(result) = self.result.as_mut() {
-            result.trigger_completions = trigger_completions;
+            axt_transitioned_dataspaces,
+            lane_finality_statements,
+        };
+        let candidate = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: Some(OutputFieldRef(&result)),
+        };
+        let frame_len = norito::canonical_frame_len(&candidate)
+            .map_err(|error| SetExecutionOutputsError::Encoding(error.to_string()))?;
+        let actual = u64::try_from(frame_len)
+            .ok()
+            .and_then(|len| len.checked_add(1))
+            .ok_or_else(|| {
+                SetExecutionOutputsError::Encoding("executed wire length overflows u64".into())
+            })?;
+        let limit = limits
+            .max_executed_wire_bytes
+            .min(consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES);
+        if actual > limit {
+            return Err(SetExecutionOutputsError::ExecutedWireTooLarge { actual, limit });
         }
-    }
-    /// Finalize the canonical post-execution lane effects after the result Merkle root is fixed.
-    ///
-    /// Lane-finality statements bind [`Self::hash`], so production construction must call this
-    /// only after transaction results, every result-leaf mutation, and result metadata such as
-    /// the committed-fragment count have been finalized. The executed block wire and its
-    /// execution commitment must be derived only after this method returns.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SetLaneFinalityStatementsError::MissingTransactionResults`] when the block does
-    /// not yet carry a [`BlockResult`].
-    #[cfg(feature = "transparent_api")]
-    pub fn set_lane_finality_statements(
-        &mut self,
-        lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
-    ) -> Result<(), SetLaneFinalityStatementsError> {
-        let result = self
-            .result
-            .as_mut()
-            .ok_or(SetLaneFinalityStatementsError::MissingTransactionResults)?;
-        result.lane_finality_statements = lane_finality_statements;
+        enforce_payload_len_limit(frame_len.saturating_sub(norito::core::Header::SIZE))
+            .map_err(|error| SetExecutionOutputsError::Encoding(error.to_string()))?;
+        self.result = Some(result);
         Ok(())
     }
-    /// Install the canonical sticky AXT authorization-transition set.
+    /// Revalidate exact complete executed wire at the publication/proof boundary.
     ///
-    /// The set must be attached before lane-finality statements are signed so
-    /// Kura replay can reproduce nonce revocation for transient rotations.
-    ///
+    /// Attachment does not freeze signatures or authenticate execution. Callers must
+    /// check the final bytes again after signature changes and bind them to actual finality.
     /// # Errors
-    ///
-    /// Returns [`SetLaneFinalityStatementsError::MissingTransactionResults`] when the block does
-    /// not yet carry a [`BlockResult`].
-    #[cfg(feature = "transparent_api")]
-    pub fn set_axt_transitioned_dataspaces(
-        &mut self,
-        dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
-    ) -> Result<(), SetLaneFinalityStatementsError> {
-        let result = self
-            .result
-            .as_mut()
-            .ok_or(SetLaneFinalityStatementsError::MissingTransactionResults)?;
-        result.axt_transitioned_dataspaces = dataspaces;
+    /// Rejects invalid source/output/cache/policy or row, aggregate, protocol or wire limits.
+    pub fn validate_execution_outputs(
+        &self,
+        limits: &output_budget::ExecutionOutputLimits,
+    ) -> Result<(), SetExecutionOutputsError> {
+        self.validate_output_merkle_cache()
+            .map_err(|error| SetExecutionOutputsError::InvalidOutputs(error.to_string()))?;
+        limits
+            .validate_outputs(self.execution_outputs())
+            .map_err(SetExecutionOutputsError::InvalidLimits)?;
+        let frame_len = norito::canonical_frame_len(self)
+            .map_err(|error| SetExecutionOutputsError::Encoding(error.to_string()))?;
+        let actual = u64::try_from(frame_len)
+            .ok()
+            .and_then(|len| len.checked_add(1))
+            .ok_or_else(|| {
+                SetExecutionOutputsError::Encoding("executed wire length overflows u64".into())
+            })?;
+        let limit = limits
+            .max_executed_wire_bytes
+            .min(consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES);
+        if actual > limit {
+            return Err(SetExecutionOutputsError::ExecutedWireTooLarge { actual, limit });
+        }
+        enforce_payload_len_limit(frame_len.saturating_sub(norito::core::Header::SIZE))
+            .map_err(|error| SetExecutionOutputsError::Encoding(error.to_string()))?;
         Ok(())
     }
     /// Replace the embedded AXT policy snapshot for adversarial validation fixtures.
     ///
     /// Production block construction must use
-    /// [`Self::set_transaction_results_with_transcripts`], which rejects
+    /// [`Self::set_execution_outputs`], which rejects
     /// non-canonical snapshots.
     #[cfg(any(test, feature = "test-fixtures"))]
     pub fn replace_axt_policy_snapshot_for_testing(
@@ -530,85 +362,6 @@ impl SignedBlock {
         self.result
             .as_mut()
             .map(|result| core::mem::replace(&mut result.axt_policy_snapshot, snapshot))
-    }
-    /// Replace durable independent-batch outcomes captured while executing this block.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SetBatchTransferOutcomesError`] when transaction results are absent,
-    /// their count differs from the entrypoint count, an outcome references an
-    /// entrypoint that is not present in this block, or canonical/SealedReveal aliases do not
-    /// resolve one-to-one onto result leaves.
-    #[cfg(feature = "transparent_api")]
-    pub fn set_batch_transfer_outcomes(
-        &mut self,
-        outcomes: BTreeMap<
-            HashOf<crate::transaction::signed::TransactionEntrypoint>,
-            Vec<crate::events::data::prelude::AssetBatchTransferOutcome>,
-        >,
-    ) -> Result<(), SetBatchTransferOutcomesError> {
-        let entrypoints = self.entrypoints_cloned().collect::<Vec<_>>();
-        let result = self
-            .result
-            .as_mut()
-            .ok_or(SetBatchTransferOutcomesError::MissingTransactionResults)?;
-        if entrypoints.len() != result.transaction_results.len() {
-            return Err(SetBatchTransferOutcomesError::ResultCountMismatch {
-                entrypoints: entrypoints.len(),
-                results: result.transaction_results.len(),
-            });
-        }
-        let mut result_index_by_outcome_key = BTreeMap::new();
-        for (index, entrypoint) in entrypoints.iter().enumerate() {
-            let outer_hash = entrypoint.hash();
-            if result_index_by_outcome_key
-                .insert(outer_hash, index)
-                .is_some()
-            {
-                return Err(SetBatchTransferOutcomesError::AmbiguousEntrypoint {
-                    hash: outer_hash,
-                });
-            }
-        }
-        for (index, entrypoint) in entrypoints.iter().enumerate() {
-            let TransactionEntrypoint::SealedReveal(_) = entrypoint else {
-                continue;
-            };
-            let inner_hash = entrypoint.execution_call_hash();
-            if result_index_by_outcome_key
-                .insert(inner_hash, index)
-                .is_some()
-            {
-                return Err(SetBatchTransferOutcomesError::AmbiguousEntrypoint {
-                    hash: inner_hash,
-                });
-            }
-        }
-        let mut assigned_results = BTreeSet::new();
-        let mut assignments = Vec::with_capacity(outcomes.len());
-        for (hash, receipts) in outcomes {
-            let index = result_index_by_outcome_key
-                .get(&hash)
-                .copied()
-                .ok_or(SetBatchTransferOutcomesError::UnknownEntrypoint { hash })?;
-            if !assigned_results.insert(index) {
-                return Err(SetBatchTransferOutcomesError::DuplicateResultAssignment { index });
-            }
-            assignments.push((index, receipts));
-        }
-        for transaction_result in &mut result.transaction_results {
-            transaction_result.set_batch_transfer_outcomes(Vec::new());
-        }
-        for (index, receipts) in assignments {
-            result.transaction_results[index].set_batch_transfer_outcomes(receipts);
-        }
-        result.result_merkle = result
-            .transaction_results
-            .iter()
-            .map(TransactionResult::hash)
-            .collect();
-        self.payload.header.result_merkle_root = result.result_merkle.root();
-        Ok(())
     }
     /// Number of successful execution fragments recorded with this block result.
     #[inline]
@@ -624,79 +377,34 @@ impl SignedBlock {
             .as_ref()
             .map_or(&[], |result| result.lane_finality_statements.as_slice())
     }
-    /// Set the number of successful execution fragments recorded with this block result.
-    pub fn set_committed_fragment_count(&mut self, count: u64) {
-        if let Some(result) = self.result.as_mut() {
-            result.committed_fragment_count = count;
-        }
-    }
-    /// Incrementally update a single transaction result at `index`.
-    #[cfg(feature = "transparent_api")]
-    pub fn update_transaction_result(
-        &mut self,
-        index: usize,
-        result: &TransactionResultInner,
-    ) -> bool {
-        use crate::transaction::signed::TransactionResult;
-        let Some(result_state) = self.result.as_mut() else {
-            return false;
-        };
-        if index >= result_state.transaction_results.len() {
-            return false;
-        }
-        result_state.transaction_results[index] = TransactionResult::from(result.clone());
-        let hash = TransactionResult::hash_from_inner(result);
-        result_state.result_merkle.update_typed_leaf(index, hash);
-        self.payload.header.result_merkle_root = result_state.result_merkle.root();
-        true
-    }
-    /// Produce Merkle proofs for the specified transaction entrypoint hash when available.
+    /// Produce a network-input proof joined to its exact typed Network output.
+    /// The output position and complete input position are independent indices.
     #[must_use]
-    pub fn proofs_for_entry_hash(
+    pub fn network_execution_proof(
         &self,
-        entry_hash: &HashOf<TransactionEntrypoint>,
-    ) -> Option<crate::block::proofs::BlockProofs> {
-        let result_state = self.result.as_ref()?;
-        self.validate_entrypoint_merkle_cache().ok()?;
-        self.validate_result_merkle_cache().ok()?;
-        let (idx, _) = self
-            .entrypoint_hashes()
-            .enumerate()
-            .find(|(_, hash)| hash == entry_hash)?;
-        let idx_u32: u32 = idx.try_into().ok()?;
-        // The execution commitment authenticates the exact result-bearing
-        // block wire, so every entrypoint (including external transactions)
-        // uses the same full executed-entry tree. This avoids two proof-root
-        // semantics selected by an untrusted entry index.
-        let expected_entry_root = self.full_entry_merkle_root()?;
-        let entry_commitment = result_state.merkle.commitment()?;
-        if entry_commitment.root() != &expected_entry_root {
-            return None;
-        }
-        let entry_merkle_proof = result_state.merkle.get_proof(idx_u32)?;
-        let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
-        let expected_result_root = self.payload.header.result_merkle_root?;
-        let result_commitment = result_state.result_merkle.commitment()?;
-        if result_commitment.root() != &expected_result_root
-            || result_commitment.leaf_count() != entry_commitment.leaf_count()
-        {
-            return None;
-        }
-        let tx_result = result_state.transaction_results.get(idx)?;
-        let result_hash = tx_result.hash();
-        let proof = result_state.result_merkle.get_proof(idx_u32)?;
-        let result_proof = ExecutionReceiptProof::new(result_hash, proof);
-        let block_hash = self.hash();
-        let executed_block_wire_hash = self.executed_block_wire_hash().ok()?;
-        Some(crate::block::proofs::BlockProofs {
-            block_height: self.payload.header.height(),
-            block_hash,
-            executed_block_wire_hash,
-            entry_hash: *entry_hash,
-            entry_commitment,
-            entry_proof,
-            result_commitment,
-            result_proof,
+        input_hash: &HashOf<TransactionEntrypoint>,
+    ) -> Option<proofs::BlockProofs> {
+        self.validate_output_merkle_cache().ok()?;
+        let input_index = u32::try_from(
+            self.network_input_hashes()
+                .position(|hash| hash == *input_hash)?,
+        )
+        .ok()?;
+        let (output_index, _) = self.network_output_at(input_index)?;
+        let output = self
+            .execution_outputs()
+            .get(usize::try_from(output_index).ok()?)?
+            .clone();
+        let tree = self.network_input_merkle_tree();
+        Some(proofs::BlockProofs {
+            block_height: self.header().height(),
+            block_hash: self.hash(),
+            executed_block_wire_hash: self.executed_block_wire_hash().ok()?,
+            entry_hash: *input_hash,
+            entry_commitment: tree.commitment()?,
+            entry_proof: BlockReceiptProof::new(*input_hash, tree.get_proof(input_index)?),
+            output_commitment: self.output_merkle_commitment()?,
+            output_proof: ExecutionReceiptProof::new(output, self.output_proof(output_index)?),
             fastpq_transcripts: self.fastpq_transcripts().clone(),
         })
     }
@@ -708,23 +416,21 @@ impl SignedBlock {
     }
     /// Whether this block is in the exact resultless shape accepted as a consensus proposal.
     ///
-    /// Execution results and their derived header root are both absent from a canonical
-    /// proposal. The result root remains outside the consensus header hash, but it is part of
+    /// Execution outputs are absent from a canonical proposal. The full output collection is part of
     /// the encoded block and therefore must not be supplied by proposal ingress.
     #[inline]
     #[must_use]
     pub fn is_resultless_proposal(&self) -> bool {
-        self.result.is_none() && self.payload.header.result_merkle_root.is_none()
+        self.result.is_none()
     }
     /// Return the canonical resultless proposal corresponding to this block.
     ///
-    /// This removes the deterministic execution result and the result Merkle root derived from
-    /// it while preserving the proposal payload, signatures, and consensus header identity.
+    /// This removes the sole execution-output owner while preserving the complete proposal
+    /// payload, signatures, and proposal-only header.
     #[must_use]
     pub fn canonical_resultless_proposal(&self) -> Self {
         let mut proposal = self.clone();
         proposal.result = None;
-        proposal.payload.header.result_merkle_root = None;
         proposal
     }
     /// Hash the canonical resultless proposal wire used by [`consensus_v2::BlockSubject`].
@@ -945,7 +651,6 @@ impl SignedBlock {
             height: nonzero!(1_u64),
             prev_block_hash: None,
             merkle_root: Some(merkle_root),
-            result_merkle_root: None,
             da_proof_policies_hash: Some(proof_policy_hash),
             da_commitments_hash,
             da_pin_intents_hash: None,
@@ -1661,6 +1366,21 @@ fn decode_framed_versioned_signed_block_inner(
     }
     let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
     let block = view.decode::<SignedBlock>().map_err(VersionError::from)?;
+    // Count under the canonical writer's flags before allocating its payload,
+    // versioned copy and frame. Malformed alternate-layout input must not expand
+    // beyond the already bounded source frame during canonical authentication.
+    let canonical_len = {
+        let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());
+        norito::core::encoded_payload_len(&block)
+            .map_err(VersionError::from)?
+            .checked_add(1 + norito::core::Header::SIZE)
+            .ok_or_else(|| VersionError::from(norito::core::Error::LengthMismatch))?
+    };
+    if canonical_len != raw_for_error.len() {
+        return Err(VersionError::from(
+            norito::core::Error::NonCanonicalEncoding,
+        ));
+    }
     let canonical = block
         .canonical_wire()
         .map_err(|error| VersionError::NoritoCodec(error.to_string()))?;
@@ -1685,13 +1405,11 @@ mod tests {
     use std::num::NonZeroU64;
     // Bring commonly used types referenced in transparent API tests.
     #[cfg(feature = "transparent_api")]
+    use super::output_test_support::{self as fixture, network, simple_time};
+    #[cfg(feature = "transparent_api")]
     use crate::ValidationFail;
     #[cfg(feature = "transparent_api")]
-    use crate::transaction::signed::TransactionResultInner;
-    #[cfg(feature = "transparent_api")]
     use crate::trigger::DataTriggerSequence;
-    #[cfg(feature = "transparent_api")]
-    use crate::trigger::TimeTriggerEntrypoint;
     use crate::{
         block::consensus::SumeragiLanePayloadOwnership,
         da::{
@@ -1911,7 +1629,7 @@ mod tests {
         )
     }
     fn block_with_execution_context(execution_context: BlockExecutionContextBundle) -> SignedBlock {
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 1, 0);
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 0);
         SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -1928,7 +1646,7 @@ mod tests {
     }
     #[test]
     fn block_payload_ordering_includes_execution_context() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let payload = BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -1953,7 +1671,7 @@ mod tests {
     }
     #[test]
     fn signed_block_is_empty_without_entrypoints_or_artifacts() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2006,7 +1724,7 @@ mod tests {
         };
         let execution_context = BlockExecutionContextBundle::new(Vec::new())
             .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 1, 0);
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2084,7 +1802,7 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn signed_block_try_sign_adds_verifiable_signature() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2122,7 +1840,7 @@ mod tests {
         )
         .sign(key_pair.private_key());
         let entrypoint = TransactionEntrypoint::from(tx.clone());
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2186,7 +1904,7 @@ mod tests {
             #[norito(required)]
             execution_context: Option<BlockExecutionContextBundle>,
         }
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0);
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 10, 0);
         let pre_release = PreReleaseBlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -2208,7 +1926,7 @@ mod tests {
     #[test]
     fn block_payload_current_layout_roundtrips_empty_required_values() {
         let payload = BlockPayload {
-            header: BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0),
+            header: BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 10, 0),
             external_entrypoints: Vec::new(),
             da_commitments: None,
             da_proof_policies: None,
@@ -2225,26 +1943,20 @@ mod tests {
     fn block_result_rejects_wire_omitting_required_axt_policy_snapshot() {
         #[derive(norito::codec::Encode)]
         struct BlockResultWithoutAxtPolicySnapshot {
-            time_triggers: Vec<crate::trigger::TimeTriggerEntrypoint>,
-            merkle: MerkleTree<TransactionEntrypoint>,
-            result_merkle: MerkleTree<crate::transaction::signed::TransactionResult>,
-            transaction_results: Vec<crate::transaction::signed::TransactionResult>,
+            outputs: Vec<execution_output::ExecutionOutputV1>,
+            output_merkle: MerkleTree<execution_output::ExecutionOutputV1>,
             committed_fragment_count: u64,
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
-            trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
             axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
             lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         }
         let omitted_snapshot = BlockResultWithoutAxtPolicySnapshot {
-            time_triggers: Vec::new(),
-            merkle: MerkleTree::default(),
-            result_merkle: MerkleTree::default(),
-            transaction_results: Vec::new(),
+            outputs: Vec::new(),
+            output_merkle: MerkleTree::default(),
             committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
-            trigger_completions: Vec::new(),
             axt_transitioned_dataspaces: BTreeSet::new(),
             lane_finality_statements: Vec::new(),
         };
@@ -2259,26 +1971,20 @@ mod tests {
     fn block_result_rejects_wire_omitting_required_lane_finality_statements() {
         #[derive(norito::codec::Encode)]
         struct BlockResultWithoutLaneFinalityStatements {
-            time_triggers: Vec<crate::trigger::TimeTriggerEntrypoint>,
-            merkle: MerkleTree<TransactionEntrypoint>,
-            result_merkle: MerkleTree<crate::transaction::signed::TransactionResult>,
-            transaction_results: Vec<crate::transaction::signed::TransactionResult>,
+            outputs: Vec<execution_output::ExecutionOutputV1>,
+            output_merkle: MerkleTree<execution_output::ExecutionOutputV1>,
             committed_fragment_count: u64,
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
-            trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
             axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
         }
         let omitted_lane_finality = BlockResultWithoutLaneFinalityStatements {
-            time_triggers: Vec::new(),
-            merkle: MerkleTree::default(),
-            result_merkle: MerkleTree::default(),
-            transaction_results: Vec::new(),
+            outputs: Vec::new(),
+            output_merkle: MerkleTree::default(),
             committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
-            trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot {
                 version: 1,
                 entries: Vec::new(),
@@ -2296,26 +2002,20 @@ mod tests {
     fn block_result_rejects_wire_omitting_required_axt_transition_set() {
         #[derive(norito::codec::Encode)]
         struct BlockResultWithoutAxtTransitionSet {
-            time_triggers: Vec<crate::trigger::TimeTriggerEntrypoint>,
-            merkle: MerkleTree<TransactionEntrypoint>,
-            result_merkle: MerkleTree<crate::transaction::signed::TransactionResult>,
-            transaction_results: Vec<crate::transaction::signed::TransactionResult>,
+            outputs: Vec<execution_output::ExecutionOutputV1>,
+            output_merkle: MerkleTree<execution_output::ExecutionOutputV1>,
             committed_fragment_count: u64,
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
-            trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
             lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         }
         let omitted_transition_set = BlockResultWithoutAxtTransitionSet {
-            time_triggers: Vec::new(),
-            merkle: MerkleTree::default(),
-            result_merkle: MerkleTree::default(),
-            transaction_results: Vec::new(),
+            outputs: Vec::new(),
+            output_merkle: MerkleTree::default(),
             committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
-            trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot {
                 version: 1,
                 entries: Vec::new(),
@@ -2332,7 +2032,7 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn presigned_with_payload_preserves_payload_and_signature() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let payload = BlockPayload {
             header,
             external_entrypoints: Vec::new(),
@@ -2355,7 +2055,7 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn presigned_constructors_normalize_empty_da_bundles() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let key_pair = checked_bls_keypair();
         let signature = checked_block_signature(0, &key_pair, &header);
         let with_da = SignedBlock::presigned_with_da(
@@ -2391,7 +2091,7 @@ mod tests {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(key_pair.private_key());
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let payload = BlockPayload {
             header,
             external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
@@ -2405,63 +2105,20 @@ mod tests {
         let block = SignedBlock::presigned_with_payload(signature, payload);
         assert_eq!(block.external_transactions().next(), Some(&tx));
     }
+    #[cfg(feature = "transparent_api")]
     #[test]
-    fn signed_block_is_not_empty_with_time_triggers() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-        let authority = crate::account::AccountId::new(
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
-                .parse()
-                .expect("public key"),
-        );
-        let entrypoint = crate::trigger::TimeTriggerEntrypoint {
-            id: "time_trigger".parse().expect("trigger id parses"),
-            instructions: crate::transaction::ExecutionStep(
-                iroha_primitives::const_vec::ConstVec::new_empty(),
-            ),
-            authority,
-        };
-        let entry_hash = entrypoint.hash_as_entrypoint();
-        let mut entry_merkle = iroha_crypto::MerkleTree::default();
-        entry_merkle.add(entry_hash);
-        let result_inner = crate::transaction::signed::TransactionResultInner::Ok(
-            crate::trigger::DataTriggerSequence::default(),
-        );
-        let mut result_merkle = iroha_crypto::MerkleTree::default();
-        result_merkle
-            .add(crate::transaction::signed::TransactionResult::hash_from_inner(&result_inner));
-        let result = BlockResult {
-            time_triggers: vec![entrypoint],
-            merkle: entry_merkle,
-            result_merkle,
-            transaction_results: vec![crate::transaction::signed::TransactionResult::from(
-                result_inner,
-            )],
-            committed_fragment_count: 1,
-            fastpq_transcripts: std::collections::BTreeMap::new(),
-            axt_envelopes: Vec::new(),
-            axt_transitioned_dataspaces: BTreeSet::new(),
-            lane_finality_statements: Vec::new(),
-            trigger_completions: Vec::new(),
-            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
-        };
-        let block = SignedBlock {
-            signatures: BTreeSet::new(),
-            payload: BlockPayload {
-                header,
-                external_entrypoints: Vec::new(),
-                execution_context: None,
-                da_commitments: None,
-                da_proof_policies: None,
-                da_pin_intents: None,
-                npos_consensus_effects: None,
-            },
-            result: Some(result),
-        };
+    fn signed_block_is_not_empty_with_internal_outputs() {
+        let mut block = fixture::proposal(0);
+        assert!(block.is_empty());
+        let time = simple_time(&block, 0);
+        fixture::install(&mut block, vec![time], 1).unwrap();
         assert!(!block.is_empty());
+        assert_eq!(block.network_entrypoint_count(), 0);
+        assert_eq!(block.execution_outputs().len(), 1);
     }
     #[test]
     fn signed_block_is_not_empty_with_da_commitments() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2480,7 +2137,7 @@ mod tests {
     }
     #[test]
     fn signed_block_is_not_empty_with_da_pin_intents() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2510,33 +2167,25 @@ mod tests {
         assert_predicate::<BlockHeader>();
         assert_selector::<BlockHeader>();
     }
+    #[cfg(feature = "transparent_api")]
     #[test]
-    fn result_merkle_root_does_not_affect_block_hash() {
-        let mut header = BlockHeader {
-            height: NonZeroU64::new(123_456).unwrap(),
-            prev_block_hash: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-                b"prev_block_hash",
-            ))),
-            merkle_root: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-                b"merkle_root",
-            ))),
-            result_merkle_root: None,
-            da_proof_policies_hash: None,
-            da_commitments_hash: None,
-            da_pin_intents_hash: None,
-            npos_effects_hash: None,
-            execution_context_hash: None,
-            sccp_commitment_root: None,
-            creation_time_ms: 123_456_789_000,
-            view_change_index: 123,
-            confidential_features: None,
-        };
-        let hash0 = header.hash();
-        header.result_merkle_root = Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-            b"result_merkle_root",
-        )));
-        let hash1 = header.hash();
-        assert_eq!(hash0, hash1);
+    fn output_assignment_preserves_complete_proposal_header() {
+        let mut block = fixture::proposal(1);
+        let proposal = block.clone();
+        let header = block.header();
+        let proposal_wire_hash = block.canonical_proposal_wire_hash().unwrap();
+        fixture::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
+        assert_eq!(block.header(), header);
+        assert_eq!(block.hash(), proposal.hash());
+        assert_eq!(
+            block.canonical_proposal_wire_hash().unwrap(),
+            proposal_wire_hash
+        );
+        assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_ne!(
+            block.encode_wire().unwrap(),
+            proposal.encode_wire().unwrap()
+        );
     }
     #[test]
     fn sccp_commitment_root_affects_block_hash() {
@@ -2548,7 +2197,6 @@ mod tests {
             merkle_root: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
                 b"merkle_root",
             ))),
-            result_merkle_root: None,
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
@@ -2566,7 +2214,7 @@ mod tests {
     }
     #[test]
     fn block_header_new_and_display() {
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         assert_eq!(header.to_string(), format!("{} (№1)", header.hash()));
     }
     #[test]
@@ -2584,7 +2232,6 @@ mod tests {
             NonZeroU64::new(2).expect("nonzero height"),
             Some(original.hash()),
             original.merkle_root(),
-            original.result_merkle_root(),
             1,
             0,
         );
@@ -2642,7 +2289,7 @@ mod tests {
     #[test]
     fn encode_versioned_prefixes_norito_payload() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2673,7 +2320,7 @@ mod tests {
         };
         let key_pair = checked_random_keypair();
         let authority = AccountId::new(key_pair.public_key().clone());
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let ordered = vec![
             crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
                 SumeragiParameter::MaxClockDriftMs(667),
@@ -2735,7 +2382,7 @@ mod tests {
     fn deframe_rejects_payload_exceeding_max_len() {
         use nonzero_ext::nonzero;
         const LENGTH_OFFSET: usize = 1 + 4 + 1 + 1 + 16 + 1;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2775,7 +2422,7 @@ mod tests {
     #[test]
     fn decode_versioned_signed_block_rejects_trailing_bytes() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2809,7 +2456,7 @@ mod tests {
     #[test]
     fn frame_deframe_versioned_bytes_roundtrip() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2850,7 +2497,7 @@ mod tests {
     #[test]
     fn canonical_wire_matches_framed_payload() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2896,7 +2543,7 @@ mod tests {
             TransactionEntrypoint::from(transaction.clone()).encode_versioned();
         let alternate_entrypoint = external_entrypoint_wire(&alternate_transaction);
 
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2972,9 +2619,34 @@ mod tests {
         assert_eq!(decoded, block);
     }
     #[test]
+    fn framed_decode_counts_canonical_size_before_materialization() {
+        let keypair = checked_random_keypair();
+        let block = builder::BlockBuilder::new(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0))
+            .build_with_signature(0, keypair.private_key());
+        let wire = block.encode_wire().unwrap();
+        assert_eq!(decode_framed_signed_block(&wire).unwrap(), block);
+        // Give the actual layered decoder a complete, valid payload but a
+        // smaller claimed original frame. Its canonical output would expand
+        // beyond that source: refuse before constructing comparison buffers.
+        let error = decode_framed_versioned_signed_block_inner(
+            wire[0],
+            &wire[1..],
+            &wire[..wire.len() - 1],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("canonical"), "{error}");
+        let mut wrong_identity = wire.clone();
+        wrong_identity[0] ^= 1;
+        assert!(
+            decode_framed_versioned_signed_block_inner(wire[0], &wire[1..], &wrong_identity,)
+                .is_err(),
+            "equal byte count never substitutes for exact canonical equality"
+        );
+    }
+    #[test]
     fn set_da_commitments_updates_header_hash() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -3052,7 +2724,7 @@ mod tests {
     #[test]
     fn decode_versioned_signed_block_accepts_framed_payload() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -3079,7 +2751,7 @@ mod tests {
     #[test]
     fn framed_signed_block_uses_v1_layout_flags() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -3102,7 +2774,7 @@ mod tests {
     #[test]
     fn signed_block_da_commitments_roundtrip() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -3131,7 +2803,7 @@ mod tests {
     #[test]
     fn set_da_pin_intents_updates_header_hash() {
         use nonzero_ext::nonzero;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -3271,7 +2943,7 @@ mod tests {
         .expect("checked genesis signing should succeed");
         assert!(block.is_resultless_proposal());
         assert_eq!(block.committed_fragment_count(), None);
-        assert_eq!(block.header().result_merkle_root(), None);
+        assert!(block.execution_outputs().is_empty());
         let signature = block.signatures().next().expect("genesis signature");
         signature
             .signature()
@@ -3287,66 +2959,21 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn signed_block_has_results_only_after_assignment() {
-        use crate::transaction::signed::TransactionEntrypoint;
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let keypair = checked_random_keypair();
-        let mut block = SignedBlock::presigned(
-            checked_block_signature(0, &keypair, &header),
-            header,
-            Vec::new(),
-        );
-        assert!(!block.has_results(), "fresh blocks must not have results");
-        assert!(block.is_resultless_proposal());
+        let mut block = fixture::proposal(0);
         let proposal = block.clone();
-        let proposal_hash = block
-            .canonical_proposal_wire_hash()
-            .expect("hash canonical proposal wire");
-        assert_eq!(
-            block
-                .executed_block_wire_hash()
-                .expect("hash resultless block wire"),
-            proposal_hash
-        );
-        let entry_hashes: &[HashOf<TransactionEntrypoint>] = &[];
-        block
-            .set_transaction_results(Vec::new(), entry_hashes, Vec::new())
-            .expect("empty block has no external hash prefix to validate");
-        assert!(
-            block.has_results(),
-            "setting results should mark block as executed"
-        );
+        let proposal_hash = block.canonical_proposal_wire_hash().unwrap();
+        assert!(!block.has_results());
+        assert!(block.is_resultless_proposal());
+        assert_eq!(block.executed_block_wire_hash().unwrap(), proposal_hash);
+        fixture::install(&mut block, vec![], 0).unwrap();
+        assert!(block.has_results());
         assert!(!block.is_resultless_proposal());
-        assert_eq!(
-            block
-                .canonical_proposal_wire_hash()
-                .expect("hash normalized proposal wire"),
-            proposal_hash,
-            "execution results must not change the proposal wire hash"
-        );
-        assert_eq!(
-            block.canonical_resultless_proposal(),
-            proposal,
-            "normalization must recover the exact resultless proposal"
-        );
-        let executed_hash = block
-            .executed_block_wire_hash()
-            .expect("hash executed block wire");
-        assert_ne!(executed_hash, proposal_hash);
-        block.set_committed_fragment_count(1);
-        assert_ne!(
-            block
-                .executed_block_wire_hash()
-                .expect("hash mutated executed block wire"),
-            executed_hash,
-            "changing deterministic execution bytes must change the executed wire hash"
-        );
-        assert_eq!(
-            block
-                .canonical_proposal_wire_hash()
-                .expect("rehash normalized proposal wire"),
-            proposal_hash,
-            "execution-only mutations must leave the normalized proposal hash unchanged"
-        );
+        assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_eq!(block.canonical_proposal_wire_hash().unwrap(), proposal_hash);
+        let executed = block.executed_block_wire_hash().unwrap();
+        fixture::install(&mut block, vec![], 1).unwrap();
+        assert_ne!(block.executed_block_wire_hash().unwrap(), executed);
+        assert_eq!(block.canonical_proposal_wire_hash().unwrap(), proposal_hash);
     }
     #[cfg(feature = "transparent_api")]
     #[test]
@@ -3364,7 +2991,7 @@ mod tests {
             let keypair = checked_random_keypair();
             AccountId::new(keypair.public_key().clone())
         }
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
@@ -3398,78 +3025,70 @@ mod tests {
         let mut transcripts = BTreeMap::new();
         transcripts.insert(batch_hash, vec![transcript]);
         block
-            .set_transaction_results_with_transcripts(
+            .set_execution_outputs(
                 Vec::new(),
-                &[],
-                Vec::new(),
+                0,
                 transcripts.clone(),
                 Vec::new(),
                 crate::nexus::AxtPolicySnapshot::default(),
+                BTreeSet::new(),
+                vec![],
+                &fixture::limits(),
             )
             .expect("empty block has no external hash prefix to validate");
         assert_eq!(block.fastpq_transcripts(), &transcripts);
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn lane_finality_can_only_be_attached_after_results_fix_the_header() {
-        use std::num::NonZeroU64;
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let keypair = checked_random_keypair();
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, Vec::new());
-        assert_eq!(
-            block.set_lane_finality_statements(Vec::new()),
-            Err(SetLaneFinalityStatementsError::MissingTransactionResults)
-        );
+    fn full_output_metadata_is_attached_atomically() {
+        let mut block = fixture::proposal(1);
+        let header = block.header();
+        let proposal = block.canonical_proposal_wire_hash().unwrap();
+        assert!(block.lane_finality_statements().is_empty());
         block
-            .set_transaction_results_with_transcripts(
-                Vec::new(),
-                &[],
-                Vec::new(),
-                BTreeMap::new(),
-                Vec::new(),
-                crate::nexus::AxtPolicySnapshot::default(),
+            .set_execution_outputs(
+                vec![network(0, Ok(Default::default()))],
+                3,
+                Default::default(),
+                vec![],
+                Default::default(),
+                BTreeSet::from([iroha_model_base::topology::DataSpaceId::new(9)]),
+                vec![],
+                &fixture::limits(),
             )
-            .expect("empty result set fixes the result-bearing header");
-        block
-            .set_lane_finality_statements(Vec::new())
-            .expect("lane-finality finalization follows result construction");
+            .unwrap();
+        assert!(block.lane_finality_statements().is_empty());
+        assert_eq!(block.axt_transitioned_dataspaces().unwrap().len(), 1);
+        assert_eq!(block.committed_fragment_count(), Some(3));
+        assert_eq!(block.header(), header);
+        assert_eq!(block.canonical_proposal_wire_hash().unwrap(), proposal);
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_records_committed_fragment_count() {
-        use crate::transaction::TransactionResultInner;
-        use std::num::NonZeroU64;
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let keypair = checked_random_keypair();
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, Vec::new());
-        block
-            .set_transaction_results_with_transcripts(
-                Vec::new(),
-                &[],
-                vec![
-                    TransactionResultInner::Ok(crate::trigger::DataTriggerSequence::default()),
-                    TransactionResultInner::Err(
-                        crate::transaction::error::TransactionRejectionReason::Validation(
-                            crate::ValidationFail::NotPermitted("fixture".to_owned()),
-                        ),
+        let mut block = fixture::proposal(2);
+        let rows = vec![
+            network(0, Ok(Default::default())),
+            network(
+                1,
+                Err(
+                    crate::transaction::error::TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted("fixture".into()),
                     ),
-                ],
-                BTreeMap::new(),
-                Vec::new(),
-                crate::nexus::AxtPolicySnapshot::default(),
-            )
-            .expect("empty block has no external hash prefix to validate");
-        assert_eq!(block.committed_fragment_count(), Some(1));
-        block.set_committed_fragment_count(3);
+                ),
+            ),
+        ];
+        fixture::install(&mut block, rows.clone(), 3).unwrap();
         assert_eq!(block.committed_fragment_count(), Some(3));
+        assert_eq!(block.execution_outputs(), rows);
+        fixture::install(&mut block, rows, 7).unwrap();
+        assert_eq!(block.committed_fragment_count(), Some(7));
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_noncanonical_snapshot_without_mutation() {
         use std::num::NonZeroU64;
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
@@ -3488,25 +3107,27 @@ mod tests {
             version: crate::nexus::AxtPolicySnapshot::compute_version(&entries),
             entries,
         };
-        let original_result_root = block.header().result_merkle_root();
+        let original_wire = block.encode_wire().unwrap();
         let error = block
-            .set_transaction_results_with_transcripts(
+            .set_execution_outputs(
                 Vec::new(),
-                &[],
-                Vec::new(),
+                0,
                 BTreeMap::new(),
                 Vec::new(),
                 snapshot,
+                BTreeSet::new(),
+                vec![],
+                &fixture::limits(),
             )
             .unwrap_err();
         assert!(matches!(
             error,
-            SetTransactionResultsError::InvalidAxtPolicySnapshot(
+            SetExecutionOutputsError::InvalidAxtPolicySnapshot(
                 crate::nexus::AxtPolicySnapshotValidationError::DuplicateDataspaceId(_)
             )
         ));
         assert!(!block.has_results());
-        assert_eq!(block.header().result_merkle_root(), original_result_root);
+        assert_eq!(block.encode_wire().unwrap(), original_wire);
     }
     #[cfg(feature = "transparent_api")]
     #[test]
@@ -3516,7 +3137,7 @@ mod tests {
             account::AccountId,
             asset::id::AssetDefinitionId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
-            transaction::{TransactionResultInner, signed::TransactionBuilder},
+            transaction::signed::TransactionBuilder,
         };
         use iroha_crypto::Hash;
         use iroha_model_base::domain::DomainId;
@@ -3532,7 +3153,13 @@ mod tests {
         )
         .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
-        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            [entry_hash].into_iter().collect::<MerkleTree<_>>().root(),
+            0,
+            0,
+        );
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         let asset: AssetDefinitionId =
@@ -3592,19 +3219,19 @@ mod tests {
         .expect("test policy snapshot is canonical");
         let expected_policy_snapshot = policy_snapshot.clone();
         block
-            .set_transaction_results_with_transcripts(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(
-                    crate::trigger::DataTriggerSequence::default(),
-                )],
+            .set_execution_outputs(
+                vec![network(0, Ok(Default::default()))],
+                1,
                 transcripts.clone(),
                 vec![axt_envelope.clone()],
                 policy_snapshot,
+                BTreeSet::new(),
+                vec![],
+                &fixture::limits(),
             )
             .expect("entrypoint hash should match payload");
         let proofs = block
-            .proofs_for_entry_hash(&entry_hash)
+            .network_execution_proof(&entry_hash)
             .expect("proofs present");
         assert_eq!(proofs.fastpq_transcripts, transcripts);
         let bytes = norito::to_bytes(&block).expect("encode block");
@@ -3621,526 +3248,157 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
-        use crate::{
-            account::AccountId,
-            transaction::{
-                ExecutionStep,
-                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
-            },
-            trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
-        };
-        use iroha_crypto::MerkleTree;
-        use iroha_model_base::domain::DomainId;
-        use iroha_primitives::const_vec::ConstVec;
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let time_trigger = TimeTriggerEntrypoint {
-            id: "housekeeping".parse().expect("trigger id"),
-            instructions: ExecutionStep(ConstVec::new_empty()),
-            authority: authority.clone(),
-        };
-        let external_hash = tx.hash_as_entrypoint();
-        let entry_hashes = vec![external_hash, time_trigger.hash_as_entrypoint()];
-        let expected_consensus_root = MerkleTree::from_iter([external_hash]).root();
-        let expected_entry_root = entry_hashes
-            .iter()
-            .copied()
-            .collect::<MerkleTree<_>>()
-            .root();
-        let results_inner = vec![
-            TransactionResultInner::Ok(DataTriggerSequence::default()),
-            TransactionResultInner::Ok(DataTriggerSequence::default()),
-        ];
-        let expected_result_root = {
-            let hashes = results_inner.iter().map(TransactionResult::hash_from_inner);
-            let tree: MerkleTree<TransactionResult> = hashes.collect();
-            tree.root()
-        };
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block
-            .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
-            .expect("entrypoint hashes should match payload");
+        let mut block = fixture::proposal(1);
+        let header = block.header();
+        let rows = vec![network(0, Ok(Default::default())), simple_time(&block, 0)];
+        let expected: MerkleTree<execution_output::ExecutionOutputV1> =
+            rows.iter().map(HashOf::new).collect();
+        fixture::install(&mut block, rows.clone(), 2).unwrap();
+        assert_eq!(block.header(), header);
+        assert_eq!(block.execution_outputs(), rows);
+        assert_eq!(block.output_merkle_commitment(), expected.commitment());
         assert_eq!(
-            block.entrypoint_hashes().collect::<Vec<_>>(),
-            entry_hashes,
-            "entrypoint iteration must preserve external-then-trigger execution order"
+            block
+                .network_input_merkle_commitment()
+                .unwrap()
+                .leaf_count()
+                .get(),
+            1
         );
-        assert_eq!(block.header().merkle_root(), expected_consensus_root);
         assert_eq!(
-            block.full_entry_merkle_root(),
-            expected_entry_root,
-            "full entry root should cover time triggers"
+            block.output_merkle_commitment().unwrap().leaf_count().get(),
+            2
         );
-        assert_eq!(block.header().result_merkle_root(), expected_result_root);
+        block.validate_output_merkle_cache().unwrap();
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn entrypoint_cloned_at_crosses_external_time_trigger_boundary() {
-        use crate::{
-            account::AccountId,
-            transaction::{
-                ExecutionStep,
-                signed::{TransactionBuilder, TransactionEntrypoint, TransactionResultInner},
-            },
-            trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
-        };
-        use iroha_primitives::const_vec::ConstVec;
-        use std::num::NonZeroU64;
-
-        let keypair = checked_random_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new(
-            test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    fn network_inputs_are_distinct_from_internal_outputs() {
+        let mut block = fixture::proposal(1);
+        let entry = block.network_entrypoint_at(0).unwrap().clone();
+        let time = simple_time(&block, 0);
+        fixture::install(
+            &mut block,
+            vec![network(0, Ok(Default::default())), time.clone()],
+            2,
         )
-        .sign(keypair.private_key());
-        let time_trigger = TimeTriggerEntrypoint {
-            id: "entrypoint-boundary".parse().expect("trigger id"),
-            instructions: ExecutionStep(ConstVec::new_empty()),
-            authority,
-        };
-        let expected_external = TransactionEntrypoint::from(transaction.clone());
-        let expected_time = TransactionEntrypoint::from(time_trigger.clone());
-        let entrypoint_hashes = [expected_external.hash(), expected_time.hash()];
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![transaction]);
-        block
-            .set_transaction_results(
-                vec![time_trigger],
-                &entrypoint_hashes,
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect("entrypoint hashes should match payload");
-
-        assert_eq!(block.entrypoint_cloned_at(0), Some(expected_external));
-        assert_eq!(block.entrypoint_cloned_at(1), Some(expected_time));
-        assert_eq!(block.entrypoint_cloned_at(2), None);
+        .unwrap();
+        assert_eq!(block.network_entrypoint_at(0), Some(&entry));
+        assert_eq!(block.network_entrypoint_at(1), None);
+        assert_eq!(block.execution_outputs().get(1), Some(&time));
+        assert_eq!(block.network_output_at(0).unwrap().1.input_index, 0);
+        assert!(block.network_output_at(1).is_none());
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
-        use crate::{
-            account::AccountId, transaction::signed::TransactionBuilder,
-            trigger::DataTriggerSequence,
-        };
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        let err = block
-            .set_transaction_results(
-                Vec::new(),
-                &[],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect_err("external entrypoint hash is required");
-        assert_eq!(
-            err,
-            SetTransactionResultsError::TooFewEntrypointHashes {
-                expected: 1,
-                actual: 0,
-            }
-        );
+        let mut block = fixture::proposal(2);
+        let before = block.encode_wire().unwrap();
+        assert!(fixture::install(&mut block, vec![network(0, Ok(Default::default()))], 1).is_err());
+        assert_eq!(block.encode_wire().unwrap(), before);
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_result_count_mismatch() {
-        use crate::{
-            account::AccountId,
-            transaction::signed::{TransactionBuilder, TransactionResultInner},
-            trigger::DataTriggerSequence,
-        };
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut missing_result_block =
-            SignedBlock::presigned(signature.clone(), header, vec![tx.clone()]);
-        let err = missing_result_block
-            .set_transaction_results(Vec::new(), &[entry_hash], Vec::new())
-            .expect_err("missing external result must be rejected");
-        assert_eq!(
-            err,
-            SetTransactionResultsError::ResultCountMismatch {
-                expected: 1,
-                actual: 0,
-            }
-        );
-        let mut extra_result_block = SignedBlock::presigned(signature, header, vec![tx]);
-        let err = extra_result_block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                    TransactionResultInner::Ok(DataTriggerSequence::default()),
-                ],
-            )
-            .expect_err("extra result without an entrypoint must be rejected");
-        assert_eq!(
-            err,
-            SetTransactionResultsError::ResultCountMismatch {
-                expected: 1,
-                actual: 2,
-            }
-        );
+        for rows in [
+            vec![],
+            vec![
+                network(0, Ok(Default::default())),
+                network(1, Ok(Default::default())),
+            ],
+        ] {
+            let mut block = fixture::proposal(1);
+            let before = block.encode_wire().unwrap();
+            assert!(fixture::install(&mut block, rows, 0).is_err());
+            assert_eq!(block.encode_wire().unwrap(), before);
+        }
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_external_hash_mismatch() {
-        use crate::{
-            account::AccountId, transaction::signed::TransactionBuilder,
-            trigger::DataTriggerSequence,
-        };
-        use iroha_crypto::Hash;
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let expected = tx.hash_as_entrypoint();
-        let actual = HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        let err = block
-            .set_transaction_results(
-                Vec::new(),
-                &[actual],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect_err("mismatched external entrypoint hash should be rejected");
-        assert_eq!(
-            err,
-            SetTransactionResultsError::ExternalHashMismatch {
-                index: 0,
-                expected,
-                actual,
-            }
-        );
+        let mut block = fixture::proposal(1);
+        let before = block.encode_wire().unwrap();
+        assert!(fixture::install(&mut block, vec![network(1, Ok(Default::default()))], 1).is_err());
+        assert_eq!(block.encode_wire().unwrap(), before);
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_existing_header_merkle_mismatch() {
-        use crate::{
-            account::AccountId, transaction::signed::TransactionBuilder,
-            trigger::DataTriggerSequence,
-        };
-        use iroha_crypto::{Hash, MerkleTree};
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
-        let expected = MerkleTree::from_iter([entry_hash]).root();
-        let actual = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
-            [0xCD; Hash::LENGTH],
+        let mut block = fixture::proposal(1);
+        block.payload.header.merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"foreign input root",
         )));
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, actual, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        let err = block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect_err("existing header Merkle root mismatch should be rejected");
-        assert_eq!(
-            err,
-            SetTransactionResultsError::ExistingHeaderMerkleRootMismatch { expected, actual }
-        );
+        let before = block.encode_wire().unwrap();
+        assert!(matches!(
+            fixture::install_network(&mut block, vec![Ok(Default::default())]),
+            Err(SetExecutionOutputsError::InvalidProposal(_))
+        ));
+        assert_eq!(block.encode_wire().unwrap(), before);
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_entry_hash_matches_merkle_roots() {
-        use crate::{
-            account::AccountId,
-            transaction::signed::{TransactionBuilder, TransactionResultInner},
-        };
-        use iroha_crypto::MerkleTree;
-        use iroha_model_base::domain::DomainId;
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        let mut block = fixture::proposal(2);
+        fixture::install_network(
+            &mut block,
+            vec![Ok(Default::default()), Ok(Default::default())],
         )
-        .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
-        let entry_hashes = vec![entry_hash];
-        let results_inner = vec![TransactionResultInner::Ok(
-            crate::trigger::DataTriggerSequence::default(),
-        )];
-        let expected_entry_root = entry_hashes
-            .iter()
-            .copied()
-            .collect::<MerkleTree<_>>()
-            .root()
-            .expect("entry root");
-        let expected_result_root = {
-            let result_hashes = results_inner.iter().map(TransactionResult::hash_from_inner);
-            let tree: MerkleTree<TransactionResult> = result_hashes.collect();
-            tree.root().expect("result root")
-        };
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block
-            .set_transaction_results(Vec::new(), &entry_hashes, results_inner)
-            .expect("entrypoint hashes should match payload");
-        let proofs = block
-            .proofs_for_entry_hash(&entry_hash)
-            .expect("proofs should exist");
-        assert_eq!(proofs.block_hash, block.hash());
-        assert_eq!(
-            proofs.executed_block_wire_hash,
-            block
-                .executed_block_wire_hash()
-                .expect("executed block wire hash")
-        );
-        let entry_commitment = &proofs.entry_commitment;
-        assert_eq!(
-            entry_commitment.root(),
-            &block.header().merkle_root().expect("entry root"),
-            "without scheduled entries the full executed root equals the consensus root"
-        );
-        assert_eq!(entry_commitment.leaf_count().get(), 1);
-        assert!(proofs.entry_proof.verify(entry_commitment));
-        assert_eq!(entry_commitment.root(), &expected_entry_root);
-        let result_commitment = &proofs.result_commitment;
-        assert_eq!(
-            result_commitment.root(),
-            &block
-                .header()
-                .result_merkle_root()
-                .expect("result root in header")
-        );
-        assert_eq!(result_commitment.leaf_count().get(), 1);
-        let result_proof = &proofs.result_proof;
-        assert!(result_proof.verify(result_commitment));
-        assert_eq!(result_commitment.root(), &expected_result_root);
+        .unwrap();
+        for (index, hash) in block.network_input_hashes().enumerate() {
+            let proof = block.network_execution_proof(&hash).unwrap();
+            assert_eq!(proof.entry_proof.proof().leaf_index(), index as u32);
+            assert!(
+                proof
+                    .entry_proof
+                    .verify(&block.network_input_merkle_commitment().unwrap())
+            );
+            assert!(
+                proof
+                    .output_proof
+                    .verify(&block.output_merkle_commitment().unwrap())
+            );
+            assert!(
+                matches!(proof.output_proof.output(), execution_output::ExecutionOutputV1::Network(row) if row.input_index == index as u32)
+            );
+        }
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_external_entry_with_time_trigger_use_full_executed_root() {
-        use crate::{
-            account::AccountId,
-            transaction::{
-                ExecutionStep,
-                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
-            },
-            trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
-        };
-        use iroha_crypto::MerkleTree;
-        use iroha_primitives::const_vec::ConstVec;
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let time_trigger = TimeTriggerEntrypoint {
-            id: "cleanup".parse().expect("trigger id"),
-            instructions: ExecutionStep(ConstVec::new_empty()),
-            authority,
-        };
-        let external_hash = tx.hash_as_entrypoint();
-        let time_hash = time_trigger.hash_as_entrypoint();
-        let entry_hashes = vec![external_hash, time_hash];
-        let results_inner = vec![
-            TransactionResultInner::Ok(DataTriggerSequence::default()),
-            TransactionResultInner::Ok(DataTriggerSequence::default()),
-        ];
-        let expected_result_root = {
-            let result_hashes = results_inner.iter().map(TransactionResult::hash_from_inner);
-            let tree: MerkleTree<TransactionResult> = result_hashes.collect();
-            tree.root().expect("result root")
-        };
-        let header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block
-            .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
-            .expect("entrypoint hashes should match payload");
-        let proofs = block
-            .proofs_for_entry_hash(&external_hash)
-            .expect("external proof exists");
-        let consensus_root = block.header().merkle_root().expect("consensus root");
-        let full_root = block.full_entry_merkle_root().expect("full root");
-        assert_ne!(consensus_root, full_root);
-        assert_eq!(proofs.entry_commitment.root(), &full_root);
-        assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
-        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
-        let result_commitment = &proofs.result_commitment;
-        assert_eq!(result_commitment.root(), &expected_result_root);
-        assert_eq!(result_commitment.leaf_count().get(), 2);
-        assert_eq!(
-            result_commitment.leaf_count(),
-            proofs.entry_commitment.leaf_count(),
-            "full entry and result geometries must stay aligned"
-        );
-        let result_proof = &proofs.result_proof;
-        assert!(result_proof.verify(result_commitment));
+        let mut block = fixture::proposal(1);
+        let rows = vec![network(0, Ok(Default::default())), simple_time(&block, 0)];
+        fixture::install(&mut block, rows, 2).unwrap();
+        let hash = block.network_input_hashes().next().unwrap();
+        let proof = block.network_execution_proof(&hash).unwrap();
+        assert_eq!(proof.entry_commitment.leaf_count().get(), 1);
+        assert_eq!(proof.output_commitment.leaf_count().get(), 2);
+        assert!(proof.entry_proof.verify(&proof.entry_commitment));
+        assert!(proof.output_proof.verify(&proof.output_commitment));
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn proofs_for_time_trigger_use_extended_root() {
-        use crate::{
-            account::AccountId,
-            transaction::{
-                ExecutionStep,
-                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
-            },
-            trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
-        };
-        use iroha_crypto::MerkleTree;
-        use iroha_model_base::domain::DomainId;
-        use iroha_primitives::const_vec::ConstVec;
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let time_trigger = TimeTriggerEntrypoint {
-            id: "cleanup".parse().expect("trigger id"),
-            instructions: ExecutionStep(ConstVec::new_empty()),
-            authority: authority.clone(),
-        };
-        let external_hash = tx.hash_as_entrypoint();
-        let time_hash = time_trigger.hash_as_entrypoint();
-        let entry_hashes = vec![external_hash, time_hash];
-        let expected_full_root = entry_hashes
-            .iter()
-            .copied()
-            .collect::<MerkleTree<_>>()
-            .root()
-            .expect("full root");
-        let results_inner = vec![
-            TransactionResultInner::Ok(DataTriggerSequence::default()),
-            TransactionResultInner::Ok(DataTriggerSequence::default()),
-        ];
-        let expected_result_root = {
-            let result_hashes = results_inner.iter().map(TransactionResult::hash_from_inner);
-            let tree: MerkleTree<TransactionResult> = result_hashes.collect();
-            tree.root().expect("result root")
-        };
-        let header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block
-            .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
-            .expect("entrypoint hashes should match payload");
-        let proofs = block
-            .proofs_for_entry_hash(&time_hash)
-            .expect("time trigger proof exists");
-        let consensus_root = block.header().merkle_root().expect("consensus root");
-        let full_root = block.full_entry_merkle_root().expect("full root");
-        assert_ne!(
-            consensus_root, full_root,
-            "time triggers extend the entrypoint root beyond consensus root"
-        );
-        assert_eq!(
-            proofs.entry_commitment.root(),
-            &full_root,
-            "entry root for time trigger should match extended root"
-        );
-        assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
-        assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
-        assert_eq!(proofs.entry_commitment.root(), &expected_full_root);
-        let result_commitment = &proofs.result_commitment;
-        assert_eq!(result_commitment.root(), &expected_result_root);
-        assert_eq!(result_commitment.leaf_count().get(), 2);
-        let result_proof = &proofs.result_proof;
-        assert!(result_proof.verify(result_commitment));
+    fn time_invocation_has_only_an_output_proof() {
+        let mut block = fixture::proposal(0);
+        let time = simple_time(&block, 0);
+        fixture::install(&mut block, vec![time.clone()], 1).unwrap();
+        assert!(block.network_input_merkle_commitment().is_none());
+        assert!(block.network_input_proof(0).is_none());
+        assert!(block.output_proof(0).unwrap().verify(
+            &HashOf::new(&time),
+            &block.output_merkle_commitment().unwrap()
+        ));
+        assert!(block.output_proof(1).is_none());
     }
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_entry_hash_missing_returns_none() {
-        use crate::{
-            account::AccountId,
-            transaction::signed::{TransactionBuilder, TransactionResultInner},
-        };
-        use iroha_crypto::Hash;
-        use iroha_model_base::domain::DomainId;
-        use std::num::NonZeroU64;
-        let keypair = checked_random_keypair();
-        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .sign(keypair.private_key());
-        let entry_hash = tx.hash_as_entrypoint();
-        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
-        let signature = checked_block_signature(0, &keypair, &header);
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-        block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(
-                    crate::trigger::DataTriggerSequence::default(),
-                )],
-            )
-            .expect("entrypoint hash should match payload");
-        let mut missing_bytes = *entry_hash.as_ref();
-        missing_bytes[0] ^= 0xFF;
-        let missing = HashOf::from_untyped_unchecked(Hash::prehashed(missing_bytes));
-        assert!(block.proofs_for_entry_hash(&missing).is_none());
+        let mut block = fixture::proposal(1);
+        fixture::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
+        assert!(
+            block
+                .network_execution_proof(&HashOf::from_untyped_unchecked(Hash::new(b"missing")))
+                .is_none()
+        );
     }
     #[test]
     fn canonical_wire_and_deframe_preserve_layout_flags() {
@@ -4217,7 +3475,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         ))
@@ -4269,107 +3526,78 @@ mod tests {
         };
         let mut builder = sealed_alias_block_builder();
         builder.push_sealed_transaction_reveal(first_reveal.clone());
-        builder.push_result(Ok(DataTriggerSequence::default()));
         let mut positive = builder.build(BTreeSet::new());
-        positive
-            .set_batch_transfer_outcomes(BTreeMap::from([(inner_hash, vec![outcome.clone()])]))
-            .expect("the inner signed call hash must resolve to the outer reveal result");
+        let mut result =
+            crate::transaction::TransactionResult::new(Ok(DataTriggerSequence::default()));
+        result.set_batch_transfer_outcomes(vec![outcome.clone()]);
+        fixture::install(&mut positive, vec![network(0, result)], 1).unwrap();
         assert_eq!(
             positive.batch_transfer_outcomes_for(&first_outer_hash),
             std::slice::from_ref(&outcome)
         );
-
-        let mut duplicate_assignment = positive.clone();
-        let error = duplicate_assignment
-            .set_batch_transfer_outcomes(BTreeMap::from([
-                (inner_hash, vec![outcome.clone()]),
-                (first_outer_hash, vec![outcome.clone()]),
-            ]))
-            .expect_err("outer and inner rows must not overwrite one result leaf");
-        assert_eq!(
-            error,
-            SetBatchTransferOutcomesError::DuplicateResultAssignment { index: 0 }
+        assert!(
+            positive.batch_transfer_outcomes_for(&inner_hash).is_empty(),
+            "outer input lookup is not an implicit signed alias"
         );
-        assert_eq!(
-            duplicate_assignment.batch_transfer_outcomes_for(&first_outer_hash),
-            std::slice::from_ref(&outcome),
-            "a rejected reassignment must not mutate the prior result leaf"
+        let before = positive.encode_wire().unwrap();
+        assert!(
+            fixture::install(
+                &mut positive,
+                vec![
+                    network(0, Ok(Default::default())),
+                    network(0, Ok(Default::default()))
+                ],
+                1
+            )
+            .is_err()
         );
-
-        let second_reveal = SealedTransactionReveal::new(
-            Hash::new(b"sealed batch outcome alias two"),
-            signed,
-            [0x42; 32],
-        );
-        let mut ambiguous_builder = sealed_alias_block_builder();
-        ambiguous_builder.push_sealed_transaction_reveal(first_reveal);
-        ambiguous_builder.push_result(Ok(DataTriggerSequence::default()));
-        ambiguous_builder.push_sealed_transaction_reveal(second_reveal);
-        ambiguous_builder.push_result(Ok(DataTriggerSequence::default()));
-        let mut ambiguous = ambiguous_builder.build(BTreeSet::new());
-        let error = ambiguous
-            .set_batch_transfer_outcomes(BTreeMap::new())
-            .expect_err("two outer leaves must not share one inner signed-call alias");
-        assert_eq!(
-            error,
-            SetBatchTransferOutcomesError::AmbiguousEntrypoint { hash: inner_hash }
+        assert_eq!(positive.encode_wire().unwrap(), before);
+        let second_reveal = SealedTransactionReveal::new(Hash::new(b"second"), signed, [0x42; 32]);
+        let mut builder = sealed_alias_block_builder();
+        builder.push_sealed_transaction_reveal(first_reveal);
+        builder.push_sealed_transaction_reveal(second_reveal);
+        let mut ambiguous = builder.build(BTreeSet::new());
+        assert!(
+            fixture::install(
+                &mut ambiguous,
+                vec![
+                    network(0, Ok(Default::default())),
+                    network(1, Ok(Default::default()))
+                ],
+                2
+            )
+            .is_err()
         );
     }
     #[cfg(feature = "transparent_api")]
     #[test]
-    fn update_transaction_result_incremental_matches_full_rebuild() {
-        use nonzero_ext::nonzero;
-        // Prepare a small block with a few transactions and empty triggers.
-        let txs: Vec<crate::transaction::signed::SignedTransaction> = Vec::new();
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let keypair = checked_random_keypair();
-        let mut block =
-            SignedBlock::presigned(checked_block_signature(0, &keypair, &header), header, txs);
-        // Seed with 4 entrypoints (2 external hashes, 2 time triggers) and 4 results
-        let tx_hashes: Vec<HashOf<TransactionEntrypoint>> = (0..4)
-            .map(|i| {
-                let byte = u8::try_from(i).expect("transaction index fits in u8");
-                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(iroha_crypto::Hash::new([
-                    byte,
-                ]))
-            })
-            .collect();
-        let results_inner: Vec<TransactionResultInner> = vec![
-            TransactionResultInner::Ok(DataTriggerSequence::default()),
-            TransactionResultInner::Err(
-                crate::transaction::error::TransactionRejectionReason::Validation(
-                    ValidationFail::InternalError("bad_query".into()),
-                ),
-            ),
-            TransactionResultInner::Ok(DataTriggerSequence::default()),
-            TransactionResultInner::Err(
-                crate::transaction::error::TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted("no".into()),
+    fn full_output_replacement_rebuilds_exact_cache() {
+        let mut block = fixture::proposal(2);
+        let rows = vec![
+            network(0, Ok(Default::default())),
+            network(
+                1,
+                Err(
+                    crate::transaction::error::TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted("no".into()),
+                    ),
                 ),
             ),
         ];
-        block
-            .set_transaction_results(
-                Vec::<TimeTriggerEntrypoint>::new(),
-                &tx_hashes,
-                results_inner.clone(),
-            )
-            .expect("block has no external hash prefix to validate");
-        let root_initial = block.header().result_merkle_root;
-        // Update one result incrementally
-        let idx = 1usize;
-        let new_inner = TransactionResultInner::Ok(DataTriggerSequence::default());
-        assert!(block.update_transaction_result(idx, &new_inner));
-        let root_after_inc = block.header().result_merkle_root;
-        // Rebuild a fresh block with the updated results and compare roots
-        let mut rebuilt = block.clone();
-        let mut new_results = results_inner;
-        new_results[idx] = new_inner.clone();
-        rebuilt
-            .set_transaction_results(Vec::<TimeTriggerEntrypoint>::new(), &tx_hashes, new_results)
-            .expect("block has no external hash prefix to validate");
-        let root_rebuilt = rebuilt.header().result_merkle_root;
-        assert_ne!(root_initial, root_after_inc);
-        assert_eq!(root_after_inc, root_rebuilt);
+        fixture::install(&mut block, rows.clone(), 1).unwrap();
+        let first = block.output_merkle_commitment();
+        let header = block.header();
+        let replacement = vec![rows[0].clone(), network(1, Ok(Default::default()))];
+        let expected: MerkleTree<execution_output::ExecutionOutputV1> =
+            replacement.iter().map(HashOf::new).collect();
+        fixture::install(&mut block, replacement, 2).unwrap();
+        assert_ne!(block.output_merkle_commitment(), first);
+        assert_eq!(block.output_merkle_commitment(), expected.commitment());
+        assert_eq!(block.header(), header);
+        block.validate_output_merkle_cache().unwrap();
     }
 }
+
+#[cfg(all(test, feature = "transparent_api"))]
+#[path = "output_attachment_tests.rs"]
+mod output_attachment_tests;

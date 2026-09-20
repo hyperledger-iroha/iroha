@@ -11,7 +11,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
             .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         if !next.monotonically_extends(self.leader_wire_recovery_authority) {
             return Err(
                 "production ingress reconciliation regressed the adapter WAL authority".to_owned(),
@@ -39,7 +39,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         let restore_outbound_payload = match task.request() {
             super::v2::SignRequest::Proposal(proposal) => !self
                 .outbound_chunks
@@ -116,7 +116,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         message
             .validate_version()
             .map_err(|error| error.to_string())?;
@@ -216,7 +216,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         let signature = Signature::try_new(self.key_pair.private_key(), preimage)
             .map(|signature| signature.payload().to_vec())
             .map_err(|error| error.to_string())?;
@@ -225,9 +225,9 @@ impl V2EffectServices for ProductionV2Services {
     }
     fn enqueue_body_fetch(&mut self, task: BodyFetchTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
-        })?;
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| output_guard.restart_error())?;
         match self.body_fetch_service_owner(task.id())? {
             BodyFetchServiceOwner::Reconstructed(index) => {
                 let LocalCompletion::Reconstructed {
@@ -400,9 +400,9 @@ impl V2EffectServices for ProductionV2Services {
         rebound: BodyFetchTask,
     ) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
-        let operation = output_guard.begin_fail_stop_operation().ok_or_else(|| {
-            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
-        })?;
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| output_guard.restart_error())?;
         if !rebound.rebinds_consumer_of(previous) {
             return Err(format!(
                 "Sumeragi v2 body-fetch work {} has an invalid consumer rebind",
@@ -446,11 +446,14 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
+    fn certified_fetch_persistence_work(&self) -> BTreeSet<EffectWorkId> {
+        self.certified_fetch_persistence_work_snapshot()
+    }
     fn cancel_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         self.remove_exact_body_fetch_owner(task)?;
         operation.complete();
         Ok(())
@@ -462,7 +465,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         if self.body_fetch_service_owner(task.id())? == BodyFetchServiceOwner::Live {
             let fetch = self
                 .fetches
@@ -527,7 +530,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
             return Err("Sumeragi v2 chunk fetch has no exact live owner".to_owned());
         }
@@ -639,7 +642,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         let admitted = match self.io()?.try_enqueue(V2IoCommand::Apply(task)) {
             Ok(()) => true,
             Err(V2IoTrySendError::Full(_)) => false,
@@ -670,7 +673,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
             .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         if tag.height() != self.context.height
             || certificate.round.context_id != self.context.id()
             || certificate.round.height != self.context.height
@@ -747,7 +750,7 @@ impl V2EffectServices for ProductionV2Services {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
             .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+            .ok_or_else(|| output_guard.restart_error())?;
         let mut status = status.clone();
         status.pending_candidate_loads = self
             .locked_candidate_acquisition
@@ -824,6 +827,7 @@ impl V2EffectServices for ProductionV2Services {
     fn fail_closed(&mut self, reason: &str) {
         // The executor may be failing inside an admitted launch/runtime call.
         // Its outer operation owns the final permit release.
+        self.output_guard.retain_effect_failure(reason.to_owned());
         self.output_guard.close_admission_for_restart();
         self.fatal_reason = Some(reason.to_owned());
         iroha_logger::error!(reason, "Sumeragi v2 effect services failed closed");

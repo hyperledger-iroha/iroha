@@ -761,17 +761,19 @@ pub(in crate::sumeragi) fn drain_decided_lane_recovery_ingress_batch_for_test(
     block_sync_server: &mut V2BlockSyncServer,
     limit: usize,
 ) -> Result<usize, V2RunnerError> {
-    service_decided_lane_recovery_ingress_batch(limit, || {
-        let drained = drain_decided_lane_recovery_ingress_for_test(
+    drain_open_preflight_recovery_batch(receiver, limit, |mode| {
+        let drained = drain_decided_lane_recovery_ingress(
             receiver,
             executor,
             services,
             lane_work,
+            executor.current_tag().view(),
             kura,
             block_sync_server,
+            mode,
         )?;
         dispatch_lane_work_effects(lane_work, services, limit)?;
-        Ok(drained)
+        Ok(drained.is_some())
     })
 }
 
@@ -853,7 +855,6 @@ fn run_lifecycle_active_height(
     let mut next_npos_beacon_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
-    let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
     let mut canonical_lane_body_recovered = false;
     let mut terminal_finalization_cut = None;
     let mut finalized_ingress_closed = false;
@@ -925,6 +926,7 @@ fn run_lifecycle_active_height(
                 ))
             },
         )?;
+        let mut producer_claim = activated.producer_claim_projection()?;
         if executor_ready_to_finish {
             successor_timings.record_first(SuccessorTimingStage::ExecutorReady, Instant::now());
         }
@@ -1324,17 +1326,16 @@ fn run_lifecycle_active_height(
             npos_beacon,
             body_queue_capacity,
             control_queue_capacity,
-            producer_claim,
             terminal_finalization_cut.as_ref(),
         )?;
-        producer_claim = drain_disposition.producer_claim();
+        producer_claim = activated.producer_claim_projection()?;
         if let Some(reason) = drain_disposition.advance_executor_yield() {
             last_advance_executor_yield = Some(("pre-ingress", reason, Instant::now()));
         }
         if discovery_was_outstanding && block_sync_request.is_none() {
             admitted_discovered_commit_qc = true;
         }
-        if drain_disposition.requires_yield() {
+        if drain_disposition.requires_yield() || producer_claim.requires_yield() {
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }
@@ -1531,6 +1532,11 @@ fn run_lifecycle_active_height(
             }
         }
 
+        producer_claim = activated.producer_claim_projection()?;
+        if producer_claim.requires_yield() {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
         if terminal_finalization_cut.is_none() {
             let (decided_subject_present, executor_ready_to_finish) = activated
                 .with_runner_runtime(
@@ -1624,8 +1630,24 @@ fn run_lifecycle_active_height(
                         &mut lane_work,
                         npos_beacon,
                         retransmit_interval,
-                    )?;
+                    )
+                    .map_err(|error| {
+                        iroha_logger::error!(
+                            ?error,
+                            height = context.height,
+                            "Sumeragi v2 local proposal scheduling failed closed"
+                        );
+                        error
+                    })?;
                     dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
+                        .map_err(|error| {
+                            iroha_logger::error!(
+                                ?error,
+                                height = context.height,
+                                "Sumeragi v2 post-proposal lane output dispatch failed closed"
+                            );
+                            error
+                        })
                 },
             );
             if let Err(error) = scheduled {
@@ -1693,20 +1715,73 @@ fn run_lifecycle_active_height(
             successor_timings.record_first(SuccessorTimingStage::LaneRolloverReady, Instant::now());
         }
         if finalization_ready && !rollover_ready {
-            // Canonical-body recovery performed by preflight can create the
-            // local lane votes needed to make the finalized bundle independently
-            // durable. Keep only that exact decided-lane corridor alive until
-            // the certificate/application boundary is complete: consume a
-            // bounded burst of independently authenticated fair-ingress
-            // occurrences, publishing their owned effects between dequeues.
-            // Reducer, Runtime,
-            // ordinary Ingress, lane relay, and Producer ownership remain fenced.
-            let drained_terminal_ingress = activated.with_runner_runtime(
-                &mut active_runner,
-                |_owner, executor, services, _local_proposal| {
-                    let drained = service_decided_lane_recovery_ingress_batch(
+            // Recover the finite prefix already queued behind this incomplete
+            // lane boundary before repeating broad hydration and strict storage
+            // authentication. Each occurrence keeps its checked fair-ingress
+            // authority and Completion priority. No successful readiness result
+            // is cached: the next outer turn reruns the full preflight.
+            let drained_terminal_ingress =
+                drain_open_preflight_recovery_batch(receiver, control_queue_capacity, |mode| {
+                    cleanup_supervisor.reap_finished();
+                    if output_guard.restart_required() {
+                        return Err(V2RunnerError::RestartRequired);
+                    }
+                    if shutdown_signal.is_sent() {
+                        return Ok(false);
+                    }
+                    liveness_watchdog.poll(Instant::now());
+                    let drain_disposition = drain_lifecycle_v2_ingress(
+                        &mut activated,
+                        &mut active_runner,
+                        receiver,
+                        &mut lane_work,
+                        kura.as_ref(),
+                        &common_config.key_pair,
+                        block_sync_server,
+                        block_sync,
+                        &mut block_sync_request,
+                        npos_beacon,
+                        body_queue_capacity,
                         control_queue_capacity,
-                        || {
+                        terminal_finalization_cut.as_ref(),
+                    )?;
+                    producer_claim = activated.producer_claim_projection()?;
+                    if let Some(reason) = drain_disposition.advance_executor_yield() {
+                        last_advance_executor_yield =
+                            Some(("open-preflight", reason, Instant::now()));
+                    }
+                    if drain_disposition.requires_yield()
+                        || producer_claim.requires_yield()
+                        || block_sync_server.has_pending_historical_body_serve()
+                    {
+                        return Ok(false);
+                    }
+                    let Some(cut) = terminal_finalization_cut.as_ref() else {
+                        return Err(V2RunnerError::Service(
+                            "open preflight recovery lost its terminal scheduler cut".to_owned(),
+                        ));
+                    };
+                    let _ = activated
+                        .reconcile_decided_lane_certified_serve(
+                            &mut active_runner,
+                            cut.decided_lane_recovery_permit(),
+                        )
+                        .map_err(V2RunnerError::Service)?;
+                    activated.with_runner_runtime(
+                        &mut active_runner,
+                        |_owner, executor, services, _local_proposal| {
+                            if !executor.ready_to_finish() {
+                                return Err(V2RunnerError::Service(
+                                    "open preflight recovery reopened executor ownership"
+                                        .to_owned(),
+                                ));
+                            }
+                            let _ = reconcile_terminal_lane_output_handoffs(
+                                cut.decided_lane_recovery_permit(),
+                                &mut lane_work,
+                                services,
+                                control_queue_capacity,
+                            )?;
                             let drained = drain_decided_lane_recovery_ingress(
                                 receiver,
                                 executor,
@@ -1715,23 +1790,30 @@ fn run_lifecycle_active_height(
                                 executor.current_tag().view(),
                                 kura.as_ref(),
                                 block_sync_server,
-                                DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
+                                mode,
                             )?;
                             dispatch_lane_work_effects(
                                 &mut lane_work,
                                 services,
                                 control_queue_capacity,
                             )?;
-                            Ok(drained.is_some())
+                            Ok::<_, V2RunnerError>(drained.is_some())
                         },
-                    )?;
+                    )
+                })? != 0;
+            if shutdown_signal.is_sent() {
+                activated.into_clean_shutdown(&mut active_runner)?;
+                return Ok(HeightRunOutcome::Shutdown);
+            }
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, _executor, services, _local_proposal| {
                     let now = Instant::now();
                     if now >= next_lane_retransmit {
                         lane_work.schedule_retransmission()?;
                         next_lane_retransmit = deadline_after(now, retransmit_interval);
                     }
-                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)?;
-                    Ok::<_, V2RunnerError>(drained != 0)
+                    dispatch_lane_work_effects(&mut lane_work, services, control_queue_capacity)
                 },
             )?;
             if terminal_stall_due {
@@ -1895,14 +1977,13 @@ fn run_lifecycle_active_height(
                     npos_beacon,
                     body_queue_capacity,
                     control_queue_capacity,
-                    producer_claim,
                     terminal_finalization_cut.as_ref(),
                 )?;
-                producer_claim = drain_disposition.producer_claim();
+                producer_claim = activated.producer_claim_projection()?;
                 if let Some(reason) = drain_disposition.advance_executor_yield() {
                     last_advance_executor_yield = Some(("pre-ingress", reason, Instant::now()));
                 }
-                if drain_disposition.requires_yield() {
+                if drain_disposition.requires_yield() || producer_claim.requires_yield() {
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
                     continue;
                 }
@@ -2167,6 +2248,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
     global_beacon_partial_signer: Option<
         Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
     >,
+    beacon_readiness: Arc<crate::beacon::readiness::GlobalBeaconReadinessV1>,
     kagemusha_mint_finality_authority: Option<
         Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
     >,
@@ -2218,6 +2300,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             return Ok(());
         }
         let context = verified_context.context().clone();
+        beacon_readiness.begin_height(context.id());
         close_ingress_for_rollover(&ingress_ready, &block_rx);
         block_rx
             .configure_roster_for_context(
@@ -2255,9 +2338,17 @@ pub(super) fn run_non_pending_lifecycle_loop(
         )?;
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
-        let mut npos_beacon = V2GlobalBeaconLifecycle::open(
+        // Beacon setup gates production readiness, while installation ingress
+        // and the mandatory pulse constructor keep their existing authority.
+        beacon_readiness.publish_for_height(
             &context,
             state.as_ref(),
+            local_validator,
+            global_beacon_partial_signer.as_deref(),
+        );
+        let mut npos_beacon = V2GlobalBeaconLifecycle::open_deferred(
+            &context,
+            Arc::clone(&state),
             local_validator,
             global_beacon_partial_signer.clone(),
         )

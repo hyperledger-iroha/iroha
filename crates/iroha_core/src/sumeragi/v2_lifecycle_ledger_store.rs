@@ -233,9 +233,13 @@ impl Drop for LifecycleDirectoryOperationGuard<'_> {
 
 impl BoundLifecycleLedgerDirectory {
     fn open_or_create(path: &Path) -> Result<Self, LifecycleLedgerError> {
+        Self::bind(path, true)
+    }
+
+    fn bind(path: &Path, create: bool) -> Result<Self, LifecycleLedgerError> {
         #[cfg(all(unix, not(target_os = "espidf")))]
         {
-            let (canonical_path, directory) = bind_lifecycle_directory_path(path, true)?;
+            let (canonical_path, directory) = bind_lifecycle_directory_path(path, create)?;
             let metadata = directory.metadata().map_err(|error| {
                 lifecycle_storage_io("inspect opened lifecycle directory", path, error)
             })?;
@@ -250,6 +254,7 @@ impl BoundLifecycleLedgerDirectory {
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
+            let _ = create;
             Err(LifecycleLedgerError::Io(format!(
                 "descriptor-relative lifecycle storage is unsupported at {}",
                 path.display()
@@ -1079,6 +1084,51 @@ pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
     fail_persistence_for_test: bool,
 }
 impl LifecycleLedgerStoreV1 {
+    /// Read only a physically present ledger, retaining its directory through
+    /// the bounded frame read. This passive proof projection must neither
+    /// create a missing store nor remove another owner's crash temporary.
+    fn read_existing(
+        root: &Path,
+        context: LifecycleContext,
+    ) -> Result<Option<LifecycleLedgerV1>, LifecycleLedgerError> {
+        match fs::symlink_metadata(root) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(LifecycleLedgerError::Io(format!(
+                    "inspect historical lifecycle directory {}: {error}",
+                    root.display(),
+                )));
+            }
+        }
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let directory = BoundLifecycleLedgerDirectory::bind(root, false)?;
+            let guard = directory.lock()?;
+            let Some(bytes) = guard
+                .directory
+                .read_bounded_locked(LEDGER_FILE, MAX_LEDGER_FRAME_BYTES)?
+            else {
+                return Ok(None);
+            };
+            let ledger = decode_frame(&bytes, MAX_LEDGER_FRAME_BYTES)?;
+            if ledger.context() != context {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "historical lifecycle ledger belongs to another context".to_owned(),
+                ));
+            }
+            ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+            Ok(Some(ledger))
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = context;
+            Err(LifecycleLedgerError::Io(format!(
+                "descriptor-relative lifecycle storage is unsupported at {}",
+                root.display(),
+            )))
+        }
+    }
     /// Return the private sibling path reserved for the one lifecycle-owned
     /// Validate merge-sidecar registration at this height.
     #[cfg(test)]

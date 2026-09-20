@@ -1,14 +1,80 @@
 #[tokio::test]
-async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
-    let (app, message_id, _) = app_with_indexed_sccp_message_for_test(false);
-    let message_id_hex = hex::encode(message_id);
-    let sidecar = app
+async fn sccp_recent_endpoint_requires_exact_finality_before_projection() {
+    // Reuse the complete governed route, settlement asset, native trust anchor,
+    // replay forest, and exact archived body/finality from the routing fixture.
+    let (state, kura, message_id) =
+        routing::sccp_first_release_api_tests::exact_persisted_sccp_state_with_kura();
+    let state = Arc::new(state);
+    let network_id = *state.network_id_ref();
+    let mut app = mk_app_state_for_tests_with_world_and_options_and_network_id(
+        World::default(),
+        None,
+        None,
+        None,
+        None,
+        iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1
+            .parse()
+            .expect("SCCP Taira chain"),
+        network_id,
+    );
+    let app_mut = Arc::get_mut(&mut app).expect("unique recent-endpoint app fixture");
+    app_mut.state = state;
+    app_mut.kura = kura;
+    let (artifact, receipt) = app
         .kura
-        .store_root()
-        .join("blocks")
-        .join("v2_finality")
-        .join("00000000000000000001.norito");
-    assert!(!sidecar.exists(), "fixture starts without finality sidecar");
+        .v2_finality_artifact_with_receipt(2)
+        .expect("authenticate original stored SCCP finality")
+        .expect("genuine height-two finality exists");
+    assert_eq!(receipt.block_hash(), artifact.block_hash);
+    assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
+    let message_id_hex = hex::encode(message_id);
+    let sidecar = app.kura.v2_finality_artifact_path_for_testing(2);
+    let saved_sidecar = sidecar.with_extension("recent-test-original");
+    std::fs::rename(&sidecar, &saved_sidecar).expect("hide the exact original finality sidecar");
+    assert!(
+        !sidecar.exists(),
+        "test starts with the original finality absent"
+    );
+    // The authoritative index locates the message, but only the retained
+    // authenticated finality archive permits either metadata or proof projection.
+    for error in [
+        routing::handle_v1_sccp_messages_recent(
+            Arc::clone(&app.state),
+            routing::SccpRecentWindowQuery::default(),
+            utils::ResponseFormat::Json,
+            acquire_query_admission(app.as_ref(), true)
+                .await
+                .expect("acquire missing-recent test admission"),
+        )
+        .await
+        .expect_err("recent metadata requires exact retained finality"),
+        routing::handle_v1_sccp_message_bundle(
+            Arc::clone(&app.state),
+            message_id_hex.clone(),
+            utils::ResponseFormat::Json,
+            acquire_query_admission(app.as_ref(), true)
+                .await
+                .expect("acquire missing-bundle test admission"),
+        )
+        .await
+        .expect_err("an indexed record cannot substitute for exact finality"),
+    ] {
+        let Error::Query(ValidationFail::InternalError(message)) = error else {
+            panic!("missing exact finality must fail closed: {error}");
+        };
+        assert!(message.contains("finality artifact for height 2 not found"));
+    }
+    std::fs::rename(&saved_sidecar, &sidecar)
+        .expect("restore the same genuine four-validator finality sidecar");
+    let (restored_artifact, receipt) = app
+        .kura
+        .v2_finality_artifact_with_receipt(2)
+        .expect("reauthenticate the restored original finality")
+        .expect("restored exact finality exists");
+    assert_eq!(restored_artifact, artifact);
+    assert_eq!(receipt.block_hash(), artifact.block_hash);
+    assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
+    assert!(sidecar.exists());
     let recent_response = routing::handle_v1_sccp_messages_recent(
         Arc::clone(&app.state),
         routing::SccpRecentWindowQuery::default(),
@@ -18,7 +84,7 @@ async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
             .expect("acquire recent-message test admission"),
     )
     .await
-    .expect("recent metadata does not require finality");
+    .expect("exact finality authenticates recent metadata");
     let recent_before = torii_body_bytes(recent_response, "recent body").await;
     let recent =
         norito::json::from_slice::<norito::json::Value>(&recent_before).expect("recent JSON");
@@ -40,40 +106,32 @@ async fn sccp_recent_endpoint_never_reads_or_verifies_finality_sidecars() {
     assert_eq!(links.len(), 2);
     assert!(links.contains_key("bundle_path"));
     assert!(links.contains_key("proof_request_path"));
-    assert!(
-        matches!(
-            routing::handle_v1_sccp_message_bundle(
-                Arc::clone(&app.state),
-                message_id_hex.clone(),
-                utils::ResponseFormat::Json,
-                acquire_query_admission(app.as_ref(), true)
-                    .await
-                    .expect("acquire missing-bundle test admission"),
-            )
-            .await,
-            Err(Error::Query(ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound
-            )))
-        ),
-        "a valid legacy QC must not substitute for a missing exact-v2 artifact"
-    );
-    std::fs::create_dir_all(sidecar.parent().expect("sidecar directory"))
-        .expect("create adversarial finality directory");
-    std::fs::write(&sidecar, b"malformed-finality-sidecar")
-        .expect("write adversarial finality sidecar");
     let recent_response = routing::handle_v1_sccp_messages_recent(
         Arc::clone(&app.state),
         routing::SccpRecentWindowQuery::default(),
         utils::ResponseFormat::Json,
         acquire_query_admission(app.as_ref(), true)
             .await
-            .expect("acquire corrupted-recent test admission"),
+            .expect("acquire repeated-recent test admission"),
     )
     .await
-    .expect("malformed finality remains outside recent metadata path");
-    let recent_after =
-        torii_body_bytes(recent_response, "recent body after sidecar corruption").await;
+    .expect("unchanged authenticated projection remains stable");
+    let recent_after = torii_body_bytes(recent_response, "repeated recent body").await;
     assert_eq!(recent_after, recent_before);
+    std::fs::write(&sidecar, b"malformed-finality-sidecar")
+        .expect("write adversarial finality sidecar");
+    assert!(matches!(
+        routing::handle_v1_sccp_messages_recent(
+            Arc::clone(&app.state),
+            routing::SccpRecentWindowQuery::default(),
+            utils::ResponseFormat::Json,
+            acquire_query_admission(app.as_ref(), true)
+                .await
+                .expect("acquire corrupted-recent test admission"),
+        )
+        .await,
+        Err(Error::Query(ValidationFail::InternalError(_)))
+    ));
     assert!(matches!(
         routing::handle_v1_sccp_message_bundle(
             app.state.clone(),
@@ -1999,7 +2057,6 @@ fn seed_hosted_http_public_lane_validator(
         .map_or(1, |header| header.height().get().saturating_add(1));
     let header = BlockHeader::new(
         NonZeroU64::new(next_height).expect("non-zero height"),
-        None,
         None,
         None,
         0,

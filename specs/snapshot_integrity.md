@@ -1,51 +1,68 @@
-# Snapshot Integrity
+# Snapshot integrity and restoration
 
-Iroha nodes now emit signed, Merkle-attested snapshots and refuse to restore
-from sidecars that fail integrity checks. Snapshot creation writes four files
-under `snapshot.store_dir`:
+The implementation owners are `iroha_core::snapshot`, `state::deserialize` and
+the daemon startup policy in `irohad`. This first-release format has one
+canonical representation; missing authoritative state is an error.
 
-- `snapshot.data` — Norito JSON dump of the world state
-- `snapshot.sha256` — SHA-256 digest of `snapshot.data`
-- `snapshot.sig` — signature of the digest using the node identity key
-- `snapshot.merkle.json` — Norito JSON metadata with `chunk_size_bytes`,
-  `total_len_bytes`, `root_hex`, and per-chunk SHA-256 leaf hashes
-- Snapshot writers use temp files, fsync payloads, then rename and fsync the
-  snapshot directory so the bundle is crash-safe. Snapshot readers will accept
-  the `.tmp` bundle when the final files are missing and promote the temp files
-  after successful validation.
+## Durable generation
 
-## Configuration
+`snapshot.store_dir/current` names an immutable directory under `generations/`.
+Each selected generation contains exactly five artifacts:
 
-- `snapshot.merkle_chunk_size_bytes` controls the chunk size used to derive the
-  Merkle tree (default: 1 MiB). Change it only when generating a fresh snapshot,
-  since restores validate that metadata and runtime expectations match.
-- `snapshot.max_payload_bytes` bounds the payload buffer read before digest,
-  signature, and Merkle authentication (default: 1 GiB). Digest, signature,
-  and Merkle sidecars have smaller format-derived limits. This is an on-disk
-  byte bound, not a total-RSS bound: after authentication, restore constructs
-  the typed world state and verifies its canonical JSON, so transient memory
-  can be several times the payload size depending on state shape and allocator.
-  Set the limit below the host's available restore headroom and validate it
-  using a representative production snapshot.
-- Snapshot writing is enabled when `snapshot.mode = "read_write"`. Signature
-  sidecars always use the node identity key.
+- `snapshot.data`: canonical Norito JSON State, including authoritative MV
+  current values and predecessor records.
+- `snapshot.sha256`: the payload digest.
+- `snapshot.fast.norito`: the bounded, versioned recovery manifest binding the
+  chain/network, height/tip, SCCP policy and bootstrap-lineage presence.
+- `snapshot.sig`: the node signature over the domain-separated bundle digest,
+  which authenticates both the payload digest and recovery manifest.
+- `snapshot.merkle.json`: canonical chunk geometry and SHA-256 leaf commitments.
 
-## Restore and gating
+The writer authenticates and synchronizes a complete generation before replacing
+and synchronizing `current`. A reader selects only that pointer and binds the
+identities of its directories and regular files. It rechecks the selection and
+artifacts around validation. Loose temporary files are not restore authority.
+Chunk proofs bind both the root and leaf count, including ragged-tree geometry.
 
-- `irohad` now fails startup if any sidecar is missing or mismatched. Restore
-  verifies the digest, the signature over the digest, the Merkle root over the
-  chunked payload, chunk size/length parity, leaf counts, and metadata
-  self-consistency, then confirms the snapshot `chain_id` matches the
-  configured chain before deserializing the world state. Only the `NotFound`
-  case falls back to a fresh genesis state.
-- Error surfaces map to dedicated `TryReadError` variants (`ChecksumMissing`,
-  `SignatureMissing`, `MerkleMissing`, `MerkleMismatch`,
-  `MerkleChunkSizeMismatch`, `MerkleLengthMismatch`, `MerkleProofInvalid`,
-  `ChainIdMismatch`), keeping CI/startup logs explicit about the failure mode.
+## Strict restoration
 
-## Chunk proofs and provenance
+The reader checks bounded file sizes, bundle authentication, payload digest,
+canonical Merkle metadata, exact chunk geometry and resource policy before typed
+State restoration. Fields decode directly from borrowed JSON slices. Static
+schema metadata supplies canonical field order without constructing a default
+World. Unknown, missing or noncanonical authoritative fields are rejected.
 
-- `snapshot.merkle.json` carries per-chunk digests so chunk proofs can be
-  reconstructed (`SnapshotMerkleMetadata::verify_chunk`) for streaming/remote
-  restore flows. The recorded `root_hex` is suitable for on-chain provenance or
-  governance packets when operators need to pin a specific snapshot payload.
+The decoded `Box<State>` retains one heap owner through semantic validation,
+initializer callbacks and handoff. Replay preparation also retains a boxed State;
+the daemon converts its owned restored State to `Arc<State>`. Nested helpers must
+not return whole State values on each stack frame. Ordinary-stack snapshot tests
+cover this ownership boundary; no thread-stack override is part of restoration.
+
+Current and actual predecessor records must be validated together. A derived
+index must reconstruct both projections from the corresponding authoritative
+histories, including deletions and absence preimages. Rebuilding only its current
+map loses latest-block replacement semantics. The remaining coverage and
+publication requirements are tracked in the
+[liveness goals](sumeragi_liveness_redesign_goals.md); this rule is not a claim
+that every derived store is already qualified.
+
+Network identity, governed SCCP state, runtime policy and the actual rollback
+candidate are checked before snapshot-driven Kura reconciliation. A retained
+matching Kura checkpoint also authenticates the canonical snapshot WSV hash.
+Digest-pinned bootstrap authorization is explicit and binds its audited boundary.
+The daemon owns fallback policy and requires retained Kura geometry sufficient
+for reconstruction; it does not accept a failed snapshot as restored state.
+
+## Emergency Fast mode and resource bounds
+
+Emergency Fast startup authenticates the bounded recovery manifest and exact
+Kura terminal boundary. It deliberately defers payload/World semantics and
+selected journals until Strict restart; it cannot authorize snapshot-bootstrap
+lineage and is not full snapshot validation.
+
+`snapshot.max_payload_bytes`, `snapshot.merkle_chunk_size_bytes` and
+`snapshot.resources` bound input and structural work. Sidecars have separate
+format-derived limits. Heap ownership prevents repeated stack copies; it does
+not establish a total allocation or RSS bound. Generation-coherent capture is
+finite and reports busy/changed outcomes, while complete capture allocation
+admission remains an explicit implementation requirement.

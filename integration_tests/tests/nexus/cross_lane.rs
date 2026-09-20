@@ -150,7 +150,6 @@ fn cross_lane_builder_accepts_independent_lane_local_settlement_height() -> Resu
         NonZeroU64::new(10).expect("height"),
         None,
         None,
-        None,
         1_700_000_100_000,
         0,
     );
@@ -203,7 +202,6 @@ fn cross_lane_builder_rejects_da_hash_mismatch_at_construction() -> Result<()> {
         NonZeroU64::new(11).expect("height"),
         None,
         None,
-        None,
         1_700_000_110_000,
         0,
     );
@@ -243,7 +241,6 @@ fn duplicate_lane_relay_envelopes_are_rejected() -> Result<()> {
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(12).expect("height"),
-        None,
         None,
         None,
         1_700_000_010_000,
@@ -298,7 +295,6 @@ fn lane_relay_envelope_rejects_settlement_tampering() -> Result<()> {
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(3).expect("height"),
-        None,
         None,
         None,
         1_700_000_020_000,
@@ -391,7 +387,6 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_height() {
         NonZeroU64::new(first.block_height).expect("height"),
         None,
         None,
-        None,
         1_700_000_080_000,
         0,
     );
@@ -423,7 +418,6 @@ fn verify_lane_relay_envelopes_allows_distinct_lanes_on_same_dataspace_and_heigh
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(first.block_height).expect("height"),
-        None,
         None,
         None,
         1_700_000_082_000,
@@ -459,7 +453,6 @@ fn verify_lane_relay_envelopes_allows_distinct_dataspaces_on_same_lane_and_heigh
         NonZeroU64::new(first.block_height).expect("height"),
         None,
         None,
-        None,
         1_700_000_085_000,
         0,
     );
@@ -492,7 +485,6 @@ fn verify_lane_relay_envelopes_allows_same_lane_across_heights() {
     };
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(next_height).expect("height"),
-        None,
         None,
         None,
         1_700_000_090_000,
@@ -657,7 +649,6 @@ fn sample_relay_envelope() -> LaneRelayEnvelope {
     };
     let mut header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(4).expect("height"),
-        None,
         None,
         None,
         1_700_000_030_000,

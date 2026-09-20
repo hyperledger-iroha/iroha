@@ -303,15 +303,42 @@ impl CertificateRef {
             && self.same_height_subject(other)
     }
 }
-/// Immutable consensus inputs for one block height.
+/// An independently finalized state which authorizes the next local height.
+///
+/// A lane can follow ordinary or Native participant execution finalized by
+/// global consensus without inventing an autonomous lane CommitQC. The native
+/// adapter must authenticate the external decision and its exact predecessor
+/// projection, then include all of this anchor in the derived context ID.
+/// This dependency-free type checks structure, not signatures or state proofs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FinalizedStateAnchor {
+    /// Context of the external consensus decision.
+    pub context_id: ContextId,
+    /// Height of that external decision, independent of the local height.
+    pub height: u64,
+    /// Exact immutable subject of the external decision.
+    pub subject: Subject,
+    /// Local predecessor height authenticated by the decided state.
+    pub predecessor_height: u64,
+    /// Exact local predecessor identity, absent only for an empty frontier.
+    pub predecessor_subject: Option<Subject>,
+}
+/// Mutually exclusive authority for opening one consensus height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeightAnchor {
+    Genesis,
+    ParentCommit(CertificateRef),
+    SnapshotBootstrap,
+    FinalizedState(FinalizedStateAnchor),
+}
+/// Immutable consensus inputs for one global or lane-local height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeightContext {
     protocol_version: u16,
     id: ContextId,
     network_id: NetworkId,
     height: u64,
-    parent_commit: Option<CertificateRef>,
-    snapshot_bootstrap: bool,
+    anchor: HeightAnchor,
     epoch: u64,
     roster: Vec<Validator>,
     total_voting_power: VotingPower,
@@ -347,8 +374,7 @@ impl HeightContext {
             id,
             network_id,
             height,
-            parent_commit,
-            false,
+            parent_commit.map_or(HeightAnchor::Genesis, HeightAnchor::ParentCommit),
             epoch,
             roster,
             mode,
@@ -384,8 +410,48 @@ impl HeightContext {
             id,
             network_id,
             height,
-            None,
-            true,
+            HeightAnchor::SnapshotBootstrap,
+            epoch,
+            roster,
+            mode,
+            nexus_amx_context_hash,
+            execution_policy_hash,
+            da_layout_hash,
+            leader_seed,
+        )
+    }
+    /// Construct a height whose predecessor is authenticated by another
+    /// consensus instance's finalized state.
+    ///
+    /// This is neither a snapshot bypass nor a synthetic parent certificate.
+    /// The adapter must verify the external finality/state evidence and derive
+    /// `id` from the complete anchor and all frozen context inputs before this
+    /// constructor is called. Global height/view advancement cannot replace
+    /// the anchor of a live instance.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero external identities, a noncontiguous local predecessor or
+    /// a malformed roster. Ordinary [`Self::new`] keeps its parent-QC rule.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_from_finalized_state(
+        id: ContextId,
+        network_id: NetworkId,
+        height: u64,
+        anchor: FinalizedStateAnchor,
+        epoch: u64,
+        roster: Vec<Validator>,
+        mode: VotingMode,
+        nexus_amx_context_hash: Digest,
+        execution_policy_hash: Digest,
+        da_layout_hash: Digest,
+        leader_seed: Digest,
+    ) -> Result<Self, HeightContextError> {
+        Self::new_inner(
+            id,
+            network_id,
+            height,
+            HeightAnchor::FinalizedState(anchor),
             epoch,
             roster,
             mode,
@@ -400,8 +466,7 @@ impl HeightContext {
         id: ContextId,
         network_id: NetworkId,
         height: u64,
-        parent_commit: Option<CertificateRef>,
-        snapshot_bootstrap: bool,
+        anchor: HeightAnchor,
         epoch: u64,
         roster: Vec<Validator>,
         mode: VotingMode,
@@ -439,29 +504,36 @@ impl HeightContext {
                 .checked_add(validator.power.get())
                 .ok_or(HeightContextError::VotingPowerOverflow)?;
         }
-        match (height, parent_commit, snapshot_bootstrap) {
-            (1, None, false) => {}
-            (height, None, true) if height > 1 => {}
-            (1, Some(_), _) | (0, _, _) | (_, None, false) | (_, Some(_), true) => {
-                return Err(HeightContextError::InvalidParentCommit);
+        match anchor {
+            HeightAnchor::Genesis if height == 1 => {}
+            HeightAnchor::SnapshotBootstrap if height > 1 => {}
+            HeightAnchor::ParentCommit(parent)
+                if height > 1
+                    && parent.phase == Phase::Commit
+                    && parent.round.height.checked_add(1) == Some(height)
+                    && parent.proposal_round == parent.round => {}
+            HeightAnchor::FinalizedState(external) => {
+                if external.height == 0
+                    || external.context_id == ContextId::default()
+                    || external.subject == Subject::default()
+                    || external.predecessor_height.checked_add(1) != Some(height)
+                    || match (external.predecessor_height, external.predecessor_subject) {
+                        (0, None) => false,
+                        (0, Some(_)) | (_, None) => true,
+                        (_, Some(subject)) => subject == Subject::default(),
+                    }
+                {
+                    return Err(HeightContextError::InvalidFinalizedStateAnchor);
+                }
             }
-            (_, None, true) => return Err(HeightContextError::InvalidParentCommit),
-            (_, Some(parent), false)
-                if parent.phase != Phase::Commit
-                    || parent.round.height.checked_add(1) != Some(height)
-                    || parent.proposal_round != parent.round =>
-            {
-                return Err(HeightContextError::InvalidParentCommit);
-            }
-            (_, Some(_), false) => {}
+            _ => return Err(HeightContextError::InvalidParentCommit),
         }
         Ok(Self {
             protocol_version: PROTOCOL_VERSION_V4,
             id,
             network_id,
             height,
-            parent_commit,
-            snapshot_bootstrap,
+            anchor,
             epoch,
             roster,
             total_voting_power: VotingPower::new(total),
@@ -492,15 +564,28 @@ impl HeightContext {
     pub const fn height(&self) -> u64 {
         self.height
     }
-    /// Returns the parent `CommitQC` reference, if the height is not genesis.
+    /// Return the parent CommitQC when it is the authority for this height.
+    /// Genesis, snapshot and externally finalized state anchors have no local
+    /// parent certificate; their authority is bound by the frozen context ID.
     #[must_use]
     pub const fn parent_commit(&self) -> Option<CertificateRef> {
-        self.parent_commit
+        match self.anchor {
+            HeightAnchor::ParentCommit(parent) => Some(parent),
+            _ => None,
+        }
     }
     /// Return whether an audited snapshot, rather than a parent CommitQC, anchors this height.
     #[must_use]
     pub const fn is_snapshot_bootstrap(&self) -> bool {
-        self.snapshot_bootstrap
+        matches!(self.anchor, HeightAnchor::SnapshotBootstrap)
+    }
+    /// Return the authenticated external-state projection, when present.
+    #[must_use]
+    pub const fn finalized_state_anchor(&self) -> Option<FinalizedStateAnchor> {
+        match self.anchor {
+            HeightAnchor::FinalizedState(anchor) => Some(anchor),
+            _ => None,
+        }
     }
     /// Returns the epoch containing this height.
     #[must_use]
@@ -593,6 +678,9 @@ pub enum HeightContextError {
     VotingPowerOverflow,
     /// The parent reference is not a `CommitQC` for the preceding height.
     InvalidParentCommit,
+    /// External finality has a zero identity or does not authorize the exact
+    /// preceding local frontier.
+    InvalidFinalizedStateAnchor,
 }
 impl fmt::Display for HeightContextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -620,6 +708,9 @@ impl fmt::Display for HeightContextError {
             }
             Self::VotingPowerOverflow => formatter.write_str("total voting power overflow"),
             Self::InvalidParentCommit => formatter.write_str("invalid parent CommitQC reference"),
+            Self::InvalidFinalizedStateAnchor => {
+                formatter.write_str("invalid externally finalized state anchor")
+            }
         }
     }
 }
@@ -905,7 +996,9 @@ impl PayloadManifest {
 /// Justification required by a proposal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProposalJustification {
-    /// View zero is justified by the finalized parent certificate reference.
+    /// View zero matches the frozen height anchor's local parent certificate.
+    /// The reference is absent for genesis, an audited snapshot or externally
+    /// finalized state; those anchors remain bound by the proposal context ID.
     ParentCommit(Option<CertificateRef>),
     /// A later view is justified by a timeout certificate for the prior view.
     Timeout(TimeoutCertificate),

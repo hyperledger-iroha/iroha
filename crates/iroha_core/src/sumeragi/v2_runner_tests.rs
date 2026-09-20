@@ -42,6 +42,41 @@ include!("tests/v2_runner_upstream_recovery.rs");
 include!("tests/v2_runner_lifecycle_startup_order.rs");
 
 #[test]
+fn candidate_limits_require_local_capacity_and_preserve_signed_payload_envelope() {
+    let (mut context, keys) = context();
+    context.da_layout = wire::recommended_data_availability_layout();
+    let pops = keys
+        .iter()
+        .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
+        .collect();
+    let verified = super::super::v2::VerifiedHeightContext::genesis(context, pops)
+        .expect("actual four-authority context with the recommended signed layout");
+    let context = verified.context();
+    let signed_max = usize::try_from(context.da_layout.max_payload_size_bytes).unwrap();
+    for local_bytes in [signed_max - 1, signed_max, signed_max + 1] {
+        let mut actual = iroha_config::parameters::actual::Sumeragi::default();
+        actual.block.max_payload_bytes = NonZeroUsize::new(local_bytes).unwrap();
+        let config = actual
+            .v2_config(Duration::from_secs(1), context.mode)
+            .expect("valid actual local resource configuration");
+        let result = candidate_limits(context, &config);
+        if local_bytes < signed_max {
+            assert!(matches!(result, Err(V2RunnerError::Service(error))
+                if error.contains("configured block payload")));
+        } else {
+            let limits = result.expect("local resources cover the whole signed envelope");
+            assert_eq!(limits.max_payload_bytes().get(), signed_max);
+            assert_eq!(limits.max_transactions(), actual.block.max_transactions);
+            assert_eq!(
+                limits.max_queue_scan().get() as u64,
+                config.limits.max_queue_scan
+            );
+        }
+        assert_eq!(config.limits.max_payload_bytes, local_bytes as u64);
+    }
+}
+
+#[test]
 fn historical_subject_mismatch_classification_preserves_fail_stop_boundary() {
     let remote_guard = ConsensusOutputGuard::isolated();
     let remote_result = serve_block_sync_while_guarded::<()>(

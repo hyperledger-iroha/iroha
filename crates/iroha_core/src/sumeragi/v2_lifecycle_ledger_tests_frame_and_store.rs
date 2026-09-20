@@ -1,13 +1,16 @@
 /// Decode and validate a retained incident frame without opening or mutating its store.
 #[test]
-#[ignore = "requires IROHA_LIFECYCLE_INCIDENT_FRAME and IROHA_LIFECYCLE_INCIDENT_ORDINAL"]
+#[ignore = "requires IROHA_LIFECYCLE_INCIDENT_FRAME; optional ORDINAL focuses one row"]
 fn inspect_retained_lifecycle_ledger_frame() {
     let path = std::env::var_os("IROHA_LIFECYCLE_INCIDENT_FRAME")
         .expect("provide the retained lifecycle frame path");
-    let ordinal = std::env::var("IROHA_LIFECYCLE_INCIDENT_ORDINAL")
-        .expect("provide the exact retained lifecycle ordinal")
-        .parse::<u128>()
-        .expect("the retained lifecycle ordinal is an unsigned integer");
+    let ordinal = std::env::var_os("IROHA_LIFECYCLE_INCIDENT_ORDINAL").map(|value| {
+        value
+            .into_string()
+            .expect("the retained lifecycle ordinal is valid Unicode")
+            .parse::<u128>()
+            .expect("the retained lifecycle ordinal is an unsigned integer")
+    });
     let mut bytes = Vec::new();
     File::open(path)
         .expect("open retained frame read-only")
@@ -26,18 +29,30 @@ fn inspect_retained_lifecycle_ledger_frame() {
         ledger.high_water(),
         ledger.records().len()
     );
-    let selected = ledger
-        .records()
-        .iter()
-        .find(|record| record.ordinal() == ordinal)
-        .expect("the retained ledger contains the requested ordinal");
+    let selected = ordinal.map(|ordinal| {
+        ledger
+            .records()
+            .iter()
+            .find(|record| record.ordinal() == ordinal)
+            .expect("the retained ledger contains the requested ordinal")
+    });
     for record in ledger.records().iter().filter(|record| {
-        record.owner() == selected.owner()
-            || record
-                .continuation()
-                .and_then(DurableContinuation::successor_parts)
-                .is_some_and(|(_, successor)| successor == ordinal)
-            || record.ordinal() == ordinal.saturating_add(1)
+        selected.map_or_else(
+            || {
+                record.work_class() == Some(LifecycleWorkClass::Apply)
+                    && record.stage().map(LifecycleStage::kind)
+                        == Some(LifecycleStageKind::ApplyDecision)
+                    && record.terminal() == Some(None)
+            },
+            |selected| {
+                record.owner() == selected.owner()
+                    || record
+                        .continuation()
+                        .and_then(DurableContinuation::successor_parts)
+                        .is_some_and(|(_, successor)| successor == selected.ordinal())
+                    || record.ordinal() == selected.ordinal().saturating_add(1)
+            },
+        )
     }) {
         let key = record.key().expect("validated record has a lifecycle key");
         println!(
@@ -56,6 +71,16 @@ fn inspect_retained_lifecycle_ledger_frame() {
             record.terminal(),
             record.continuation(),
         );
+        if let Some(DurablePayloadReference::BodyFrame(frame)) = record.durable_payload() {
+            println!(
+                "body_frame context={} round={:?} subject={} manifest={} frame={}",
+                hex::encode(frame.context.as_bytes()),
+                frame.round,
+                hex::encode(frame.subject.as_bytes()),
+                hex::encode(frame.manifest.as_bytes()),
+                hex::encode(frame.frame.as_bytes()),
+            );
+        }
         println!(
             "{}",
             record.replay_authority.public_incident_metadata_for_test()
@@ -2155,4 +2180,62 @@ fn opaque_or_noncanonical_certified_serve_references_are_rejected() {
         ),
         Err(LifecycleLedgerError::InvalidLedger(_))
     ));
+}
+
+impl LifecycleLedgerRecordV1 {
+    /// Change only owner coordinates for the PendingKura wrong-authority regression.
+    pub(in crate::sumeragi) fn with_pending_kura_foreign_owner_for_test(
+        mut self,
+        owner: OwnerId,
+    ) -> Self {
+        self.causal_root = *owner.causal_root().digest().as_bytes();
+        self.owner_first_ordinal = owner.first_admission_ordinal();
+        self.reconstruction_source = *owner.causal_root().digest().as_bytes();
+        self
+    }
+}
+
+impl LifecycleLedgerV1 {
+    /// Assert inherited Apply ownership without exposing private ledger rows.
+    pub(in crate::sumeragi) fn assert_pending_kura_linked_owner_for_test(&self, ordinal: u128) {
+        let apply = self
+            .records()
+            .iter()
+            .find(|row| row.ordinal() == ordinal)
+            .expect("retained canonical linked Apply");
+        assert_eq!(apply.work_class(), Some(LifecycleWorkClass::Apply));
+        assert_ne!(apply.owner().first_admission_ordinal(), ordinal);
+    }
+
+    /// Persist one structurally valid authority substitution in a real linked crash prefix.
+    pub(in crate::sumeragi) fn persist_pending_kura_corruption_for_test(
+        &self,
+        root: &std::path::Path,
+        corrupt_parent: bool,
+    ) {
+        let mut changed = self.clone();
+        let class = if corrupt_parent {
+            LifecycleWorkClass::Validate
+        } else {
+            LifecycleWorkClass::Apply
+        };
+        let row = changed
+            .records
+            .iter_mut()
+            .find(|row| row.work_class() == Some(class))
+            .expect("genuine linked Apply has its exact predecessor and child");
+        row.replay_authority = row
+            .replay_authority
+            .with_pending_kura_corruption_for_test(corrupt_parent)
+            .expect("the selected source supports exactly one corruption");
+        assert_ne!(&changed, self);
+        changed
+            .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+            .expect("corruption retains the complete structural ledger contract");
+        let (store, _) = LifecycleLedgerStoreV1::open(root, self.context())
+            .expect("open retained linked crash prefix");
+        store
+            .persist(&changed)
+            .expect("persist the negative authority input");
+    }
 }

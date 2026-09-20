@@ -1077,3 +1077,56 @@ fn freshness_validation_runs_only_when_building_is_allowed() {
     assert!(!must_validate_binary_freshness(false, false));
     assert!(!must_validate_binary_freshness(true, false));
 }
+
+#[test]
+fn release_prebuilt_taira_launcher_is_mandatory_and_separately_bound() {
+    let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+    let fixture = create_release_prebuilt_fixture();
+    let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
+    let source = fs::read(fixture.target.join(SUMERAGI_V2_PREBUILT_MANIFEST)).unwrap();
+    let parsed = parse_release_prebuilt_manifest(
+        &source,
+        &fixture.source_manifest_sha256,
+        &fixture.target,
+        &fixture.repo,
+    )
+    .unwrap();
+    assert_eq!(parsed.len(), 5);
+    assert_eq!(parsed[4].kind, ReleasePrebuiltBinary::IrohadTaira);
+    let text = std::str::from_utf8(&source).unwrap();
+    let missing = text
+        .lines()
+        .filter(|line| !line.starts_with("irohad_taira_"))
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    assert!(
+        parse_release_prebuilt_manifest(
+            missing.as_bytes(),
+            &fixture.source_manifest_sha256,
+            &fixture.target,
+            &fixture.repo
+        )
+        .is_err()
+    );
+    let substituted = text.replace(
+        "irohad_taira_relative_path\trelease/iroha3d_taira",
+        "irohad_taira_relative_path\trelease/iroha3d",
+    );
+    assert!(
+        parse_release_prebuilt_manifest(
+            substituted.as_bytes(),
+            &fixture.source_manifest_sha256,
+            &fixture.target,
+            &fixture.repo
+        )
+        .is_err()
+    );
+    let spec = Program::IrohadTaira.spec();
+    assert_eq!(spec.env, "TEST_NETWORK_BIN_IROHAD_TAIRA");
+    assert_eq!(spec.name, "iroha3d_taira");
+    assert_eq!(
+        spec.build_args,
+        [OsString::from("--bin"), OsString::from("iroha3d_taira")]
+    );
+    assert!(Program::IrohadTaira.release_prebuilt_allowed());
+}

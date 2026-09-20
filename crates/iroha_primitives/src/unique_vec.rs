@@ -3,6 +3,7 @@
 //! [`UniqueVec`] wraps a standard [`Vec`] but ensures that each inserted value appears at most
 //! once. The accompanying `unique_vec!` macro offers a convenient way to construct such collections
 //! inline, discarding any duplicates in the provided list.
+//! Norito and JSON decoders reject duplicate elements instead of changing the encoded collection.
 use core::borrow::Borrow;
 use derive_more::{AsRef, Deref};
 use iroha_schema::IntoSchema;
@@ -132,12 +133,16 @@ where
     T: SerializePayload + PartialEq + for<'de> DeserializePayload<'de>,
 {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
-        let vec = Vec::<T>::deserialize(archived.cast::<Vec<T>>());
-        UniqueVec::from_iter(vec)
+        Self::try_deserialize(archived).expect("UniqueVec decode")
     }
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let vec = Vec::<T>::try_deserialize(archived.cast::<Vec<T>>())?;
-        Ok(UniqueVec::from_iter(vec))
+        for (index, value) in vec.iter().enumerate() {
+            if vec[..index].contains(value) {
+                return Err(ncore::Error::Message("duplicate UniqueVec element".into()));
+            }
+        }
+        Ok(Self(vec))
     }
 }
 impl<T: JsonSerialize> JsonSerialize for UniqueVec<T> {
@@ -300,16 +305,43 @@ mod tests {
         let decoded = UniqueVec::decode(&mut encoded.as_slice()).expect("decode");
         assert_eq!(unique_vec, decoded);
     }
-    // Decoding should deduplicate serialized data that contains duplicates.
     #[test]
-    fn decode_deduplicates_duplicates() {
+    fn decode_rejects_duplicates_in_framed_payloads() {
         use norito::{Compression, serialize_into};
-        let unique_vec = UniqueVec(vec![1u32, 2, 2]);
-        let mut bytes = Vec::new();
-        serialize_into(&mut bytes, &unique_vec, Compression::None).expect("serialize");
-        let decoded: UniqueVec<u32> =
-            norito::deserialize_from(bytes.as_slice()).expect("decode duplicates");
-        assert_eq!(decoded, unique_vec![1u32, 2]);
+        for values in [vec![1_u32, 1], vec![1, 2, 1], vec![1, 2, 2]] {
+            let malformed = UniqueVec(values);
+            let mut bytes = Vec::new();
+            serialize_into(&mut bytes, &malformed, Compression::None).expect("serialize");
+            assert!(norito::deserialize_from::<_, UniqueVec<u32>>(bytes.as_slice()).is_err());
+        }
+    }
+    #[test]
+    fn decode_rejects_duplicates_in_every_payload_layout() {
+        for requested in (0..=ncore::supported_header_flags())
+            .filter(|flags| ncore::validate_header_flags(*flags).is_ok())
+        {
+            let _requested = ncore::DecodeFlagsGuard::enter(requested);
+            let (bytes, actual) = norito::codec::encode_with_header_flags(&vec![7_u32, 11, 7]);
+            let _actual = ncore::DecodeFlagsGuard::enter(actual);
+            assert!(
+                ncore::decode_field_canonical::<UniqueVec<u32>>(&bytes).is_err(),
+                "duplicate payload was accepted with flags {actual}"
+            );
+        }
+    }
+    #[test]
+    fn infallible_deserialize_rejects_duplicates() {
+        let malformed = UniqueVec(vec![1_u32, 2, 1]);
+        let bytes = ncore::to_bytes(&malformed).expect("frame malformed vector");
+        let archived = ncore::from_bytes::<UniqueVec<u32>>(&bytes).expect("decode frame header");
+        assert!(std::panic::catch_unwind(|| UniqueVec::<u32>::deserialize(archived)).is_err());
+    }
+    #[test]
+    fn infallible_deserialize_preserves_unique_elements() {
+        let value = unique_vec![3_u32, 1, 2];
+        let bytes = ncore::to_bytes(&value).expect("frame unique vector");
+        let archived = ncore::from_bytes::<UniqueVec<u32>>(&bytes).expect("decode frame header");
+        assert_eq!(UniqueVec::<u32>::deserialize(archived), value);
     }
     // JSON serialization and deserialization should round-trip and detect
     // duplicates during deserialization.

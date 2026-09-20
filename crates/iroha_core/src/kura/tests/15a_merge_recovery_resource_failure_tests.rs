@@ -1,7 +1,7 @@
 // Actual failed merge append and subsequent reader/preflight tail recovery.
 
 thread_local! {
-    static FAIL_MERGE_TAIL_RECOVERY_FOR_RESOURCES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static FAIL_MERGE_TAIL_RECOVERY_FOR_RESOURCES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(super) fn fail_merge_tail_recovery_for_resource_tests() -> Result<()> {

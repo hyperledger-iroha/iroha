@@ -7,6 +7,11 @@ first release. The [closure ledger](sumeragi_v2_multilane_closure_ledger.md)
 owns detailed invariants, production symbols, adversarial cases and release
 gates. This record owns the current execution order and audit corrections.
 
+The [2026-09-16 liveness redesign](sumeragi_liveness_redesign_goals.md) now owns
+generic runtime simplification and is a prerequisite for final runtime
+qualification. Its L1–L6 do not replace these multilane feature obligations or
+close any existing gate.
+
 ## Design decisions
 
 - One canonical implementation and explicit versioned Norito layout per

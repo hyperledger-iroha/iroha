@@ -5,21 +5,30 @@ fn abandonment_admits_original_signed_revision_without_relaxing_current_dispatch
     // Release 83 is an actual retained target. The current controller must use its own
     // compiled provenance, while the original dispatcher keeps this exact target revision.
     const ORIGINAL_COMMIT: &str = "57cafebd445a3635a09929ad61a9ecf54c2751cc";
-    let compiled = crate::compiled_build_identity()
-        .unwrap()
-        .release_source_commit()
-        .unwrap();
-    assert_ne!(
-        compiled, ORIGINAL_COMMIT,
-        "regression requires a successor controller"
-    );
+    let compiled = test_compiled_release_commit();
+    if let Some(compiled) = compiled {
+        assert_ne!(
+            compiled, ORIGINAL_COMMIT,
+            "regression requires a successor controller"
+        );
+    }
     let fixture = sample_inventory();
     let bytes = String::from_utf8(canonical_inventory_bytes(&fixture).unwrap()).unwrap();
     let (mut inventory, _chain_guard) = decode_inventory(
-        bytes.replace(compiled, ORIGINAL_COMMIT).as_bytes(),
+        bytes
+            .replace(&fixture.revision.commit, ORIGINAL_COMMIT)
+            .as_bytes(),
         "retained target fixture",
     )
     .unwrap();
+    // Embedded policy/unit bytes have their own digests and generation paths;
+    // changing the outer JSON revision cannot rebind that public closure.
+    inventory.epoch_supervisor = host::epoch_supervisor::fixture_plan(
+        &inventory.validators,
+        &inventory.validator_clients,
+        &inventory.revision,
+        &inventory.maintenance_admin_identity,
+    );
     let host_key =
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHRhaXJhLWZpeHR1cmUtaG9zdC1rZXktMDAwMDAwMDAw";
     let mut known_hosts = String::new();
@@ -36,8 +45,27 @@ fn abandonment_admits_original_signed_revision_without_relaxing_current_dispatch
         known_hosts.push('\n');
     }
     inventory.artifact_closure_sha256 = artifact_closure_sha256(&inventory);
-    validate_inventory_for_controller(&inventory, ControllerAdmission::AbandonOriginalTarget)
+    validate_inventory_structure(&inventory)
         .expect("original target keeps the full first-release structural contract");
+    let mut wrong_policy = inventory.clone();
+    wrong_policy.epoch_supervisor = fixture.epoch_supervisor;
+    assert!(
+        validate_inventory_structure(&wrong_policy).is_err(),
+        "original target must reject a supervisor policy from another revision"
+    );
+    let Some(compiled) = compiled else {
+        for admission in [
+            ControllerAdmission::CurrentExecutable,
+            ControllerAdmission::AbandonOriginalTarget,
+        ] {
+            let error = validate_inventory_for_controller(&inventory, admission)
+                .expect_err("development executable cannot admit either target mode");
+            assert_compiled_admission_error(&error, "unused on development builds");
+        }
+        return;
+    };
+    validate_inventory_for_controller(&inventory, ControllerAdmission::AbandonOriginalTarget)
+        .expect("exact release controller admits the original signed target");
     assert!(
         validate_inventory(&inventory)
             .unwrap_err()

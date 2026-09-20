@@ -9,8 +9,6 @@ use self::{
     account::*, asset::*, block::*, domain::*, dsl::*, executor::*, nft::*, peer::*, permission::*,
     role::*, rwa::*, transaction::*, trigger::*,
 };
-#[cfg(feature = "fault_injection")]
-use crate::transaction::ExecutionStep;
 use crate::{
     NetworkId,
     account::{Account, AccountId},
@@ -19,7 +17,7 @@ use crate::{
         id::{AssetDefinitionId, AssetId},
         value::Asset,
     },
-    block::{BlockHeader, CertifiedMergeLedgerReference, SignedBlock},
+    block::{BlockHeader, SignedBlock},
     domain::Domain,
     merge::MergeLedgerEntry,
     nft::{Nft, NftId},
@@ -32,9 +30,7 @@ use crate::{
     trigger::{Trigger, TriggerId},
 };
 use derive_more::Constructor;
-use iroha_crypto::{
-    Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment, PublicKey, SignatureOf,
-};
+use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_model_base::domain::DomainId;
@@ -2282,6 +2278,7 @@ mod model {
     /// Snapshot representing a transaction committed to the ledger.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::query::model::CommittedTransaction")]
+    #[norito(deny_unknown_fields)]
     pub struct CommittedTransaction {
         /// Hash of the block containing this transaction.
         pub block_hash: HashOf<BlockHeader>,
@@ -2291,222 +2288,73 @@ mod model {
         pub entrypoint_proof: MerkleProof<TransactionEntrypoint>,
         /// The initial execution step of the transaction.
         pub entrypoint: TransactionEntrypoint,
-        /// Hash of the transaction result.
-        pub result_hash: HashOf<TransactionResult>,
-        /// Merkle inclusion proof for the transaction result.
-        pub result_proof: MerkleProof<TransactionResult>,
-        /// The result of executing the transaction (trigger sequence or rejection).
-        pub result: TransactionResult,
-        /// Certified merge-sidecar proof context.
-        ///
-        /// Canonical Norito always encodes this field; ordinary block entrypoints use `None`.
-        pub merge_inclusion: Option<CertifiedMergeTransactionInclusion>,
+        /// Hash of the one full typed Network output, including its source index and completions.
+        pub output_hash: HashOf<crate::block::execution_output::ExecutionOutputV1>,
+        /// Merkle proof in the separate complete typed-output tree.
+        pub output_proof: MerkleProof<crate::block::execution_output::ExecutionOutputV1>,
+        /// Sole full output; this query cannot represent an internal invocation as a network input.
+        pub output: crate::block::execution_output::ExecutionOutputV1,
     }
 }
 impl CommittedTransaction {
-    /// Verify inclusion against an independently authenticated native execution commitment.
-    ///
-    /// The caller must obtain `execution_commitment` from an independently verified, externally
-    /// anchored finality proof for this carrier. This method does not authenticate a caller-supplied
-    /// commitment. It binds the exact canonical executed wire by hash and length before checking
-    /// the header's context, external-entrypoint and result commitments, retained Merkle caches,
-    /// count alignment, exact ordinary index, and ordinary or certified-merge inclusion proofs.
-    ///
-    /// The execution commitment is mandatory: `BlockHeader::hash()` excludes the result root,
-    /// and the header's entrypoint root excludes time triggers. Authenticated executed wire covers
-    /// both, so ordinary, time-trigger and certified-merge evidence use the same trust boundary.
-    /// Transaction signature, execution policy and successful-result checks remain caller-owned.
+    /// Borrow the sole full result from this query's typed output.
+    pub fn result(&self) -> &crate::transaction::TransactionResult {
+        self.output.result()
+    }
+    /// Verify exact wire binding against an independently authenticated execution commitment.
+    /// The caller owns QC/finality authentication; a self-asserted commitment is not authority.
     #[must_use]
     pub fn verify_inclusion_in_authenticated_execution(
         &self,
         block: &SignedBlock,
-        execution_commitment: &crate::block::consensus_v2::ExecutionCommitment,
+        commitment: &crate::block::consensus_v2::ExecutionCommitment,
     ) -> bool {
-        const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
-        if block.hash() != self.block_hash
+        if commitment.validate().is_err()
             || !block.has_results()
-            || execution_commitment.validate().is_err()
+            || block.validate_output_merkle_cache().is_err()
         {
             return false;
         }
         let Ok(wire) = block.encode_wire() else {
             return false;
         };
-        if u64::try_from(wire.len()).ok() != Some(execution_commitment.executed_block_wire_len)
-            || Hash::new(&wire) != execution_commitment.executed_block_wire_hash
-            || execution_commitment.merge_carrier
-                != block.execution_context().and_then(|context| {
-                    context.merge_entry.as_ref().map(|reference| {
-                        crate::block::consensus_v2::MergeCarrierCommitmentV1::new(
-                            reference.entry_hash,
-                        )
-                    })
-                })
-            || block.header().execution_context_hash() != block.execution_context().map(HashOf::new)
-            || block
-                .execution_context()
-                .is_some_and(|context| !context.has_current_version())
-            || block.validate_entrypoint_merkle_cache().is_err()
-            || block.validate_result_merkle_cache().is_err()
-        {
-            return false;
-        }
-        let entrypoint_count = block.entrypoint_hashes().len();
-        let external_count = block.external_entrypoint_count();
-        if entrypoint_count != block.result_hashes().len()
-            || external_count > entrypoint_count
-            || u64::try_from(entrypoint_count).map_or(true, |count| count > MAX_MERKLE_LEAF_COUNT)
-        {
-            return false;
-        }
-        let external_root = MerkleTree::root_from_typed_leaves(
-            block
-                .external_entrypoints_cloned()
-                .map(|entrypoint| entrypoint.hash()),
-        );
-        let result_root = MerkleTree::root_from_typed_leaves(block.result_hashes());
-        if external_root != block.header().merkle_root()
-            || result_root != block.header().result_merkle_root()
-        {
-            return false;
-        }
-        if self.merge_inclusion.is_none() {
-            let Ok(index) = usize::try_from(self.entrypoint_proof.leaf_index()) else {
-                return false;
-            };
-            if index >= entrypoint_count
-                || block.entrypoint_cloned_at(index).as_ref() != Some(&self.entrypoint)
-                || (matches!(
-                    &self.entrypoint,
-                    crate::transaction::signed::TransactionEntrypoint::External(_)
-                ) && index >= external_count)
-            {
-                return false;
-            }
-        }
-        self.verify_inclusion_in_block(block)
+        u64::try_from(wire.len()).ok() == Some(commitment.executed_block_wire_len)
+            && Hash::new(&wire) == commitment.executed_block_wire_hash
+            && commitment.merge_carrier.is_none()
+            && block.execution_context().is_none_or(|context| {
+                context.has_current_version() && context.merge_entry.is_none()
+            })
+            && self.verify_inclusion_in_block(block)
     }
-
-    /// Verify this committed transaction's inclusion proofs against its exact carrier block.
-    ///
-    /// Ordinary transactions are checked against the carrier block's entrypoint and result
-    /// Merkle roots. Certified merge transactions are checked against the merge reference in
-    /// the carrier block's execution context.
-    ///
-    /// This low-level check assumes the carrier's full executed wire is already authenticated.
-    /// Internal caches and a matching header hash alone do not establish that assumption. Use
-    /// [`Self::verify_inclusion_in_authenticated_execution`] to bind a separately authenticated
-    /// native execution commitment, or an authenticated executed-wire capability such as
-    /// [`crate::block::proofs::TrustedBlockProofAnchor`].
+    /// Structural inclusion under exact full-wire commitments. The caller must authenticate
+    /// that wire separately. Header signatures alone never authenticate outputs.
     #[must_use]
     pub fn verify_inclusion_in_block(&self, block: &SignedBlock) -> bool {
-        const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
-        if self.merge_inclusion.is_some() {
-            return self.verify_certified_merge_inclusion_in_block(block);
-        }
-        if block.hash() != self.block_hash
-            || self.entrypoint_hash != self.entrypoint.hash()
-            || self.result_hash != self.result.hash()
-            || self.entrypoint_proof.leaf_index() != self.result_proof.leaf_index()
-        {
-            return false;
-        }
-        let entrypoint_count = block.entrypoint_hashes().len();
-        let result_count = block.result_hashes().len();
-        let leaf_index = self.entrypoint_proof.leaf_index() as usize;
-        if entrypoint_count == 0
-            || entrypoint_count != result_count
-            || leaf_index >= entrypoint_count
-        {
-            return false;
-        }
-        let Some(leaf_count) = u64::try_from(entrypoint_count)
-            .ok()
-            .and_then(NonZeroU64::new)
+        let crate::block::execution_output::ExecutionOutputV1::Network(output) = &self.output
         else {
             return false;
         };
-        if leaf_count.get() > MAX_MERKLE_LEAF_COUNT {
-            return false;
-        }
-        let Some(entrypoint_root) = block.full_entry_merkle_root() else {
-            return false;
-        };
-        let Some(result_root) = block.header().result_merkle_root() else {
-            return false;
-        };
-        let entrypoint_commitment = MerkleTreeCommitment::new(entrypoint_root, leaf_count);
-        let result_commitment = MerkleTreeCommitment::new(result_root, leaf_count);
-        self.entrypoint_proof
-            .verify(&self.entrypoint_hash, &entrypoint_commitment)
-            && self
-                .result_proof
-                .verify(&self.result_hash, &result_commitment)
-    }
-    /// Verify this transaction's merge proofs against a compact reference from its carrier block.
-    ///
-    /// Ordinary block transactions return `false`; callers should verify those against the block
-    /// header's ordinary entrypoint and result roots instead.
-    #[must_use]
-    pub fn verify_certified_merge_inclusion(
-        &self,
-        reference: &CertifiedMergeLedgerReference,
-    ) -> bool {
-        const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
-        let Some(inclusion) = self.merge_inclusion.as_ref() else {
-            return false;
-        };
-        let Some(leaf_count) = NonZeroU64::new(inclusion.entrypoint_count) else {
-            return false;
-        };
-        if reference.version != 1
-            || inclusion.version != 1
-            || leaf_count.get() > MAX_MERKLE_LEAF_COUNT
-            || u64::from(self.entrypoint_proof.leaf_index()) >= inclusion.entrypoint_count
-            || u64::from(self.result_proof.leaf_index()) >= inclusion.entrypoint_count
-            || self.entrypoint_proof.leaf_index() != self.result_proof.leaf_index()
+        if block.hash() != self.block_hash
             || self.entrypoint_hash != self.entrypoint.hash()
-            || self.result_hash != self.result.hash()
-            || reference.entry_hash != inclusion.merge_entry_hash
-            || reference.epoch_id != inclusion.merge_epoch_id
-            || reference.execution_batch_hash != Some(inclusion.execution_batch_hash)
-            || reference.entrypoint_count != Some(inclusion.entrypoint_count)
-            || reference.entrypoint_merkle_root != Some(inclusion.entrypoint_merkle_root)
-            || reference.result_merkle_root != Some(inclusion.result_merkle_root)
+            || self.output_hash != HashOf::new(&self.output)
+            || output.input_index != self.entrypoint_proof.leaf_index()
+            || block.validate_output_merkle_cache().is_err()
+            || block.network_entrypoint_at(output.input_index as usize) != Some(&self.entrypoint)
+            || block
+                .execution_outputs()
+                .get(self.output_proof.leaf_index() as usize)
+                != Some(&self.output)
         {
             return false;
         }
-        let entrypoint_commitment =
-            MerkleTreeCommitment::new(inclusion.entrypoint_merkle_root, leaf_count);
-        let result_commitment = MerkleTreeCommitment::new(inclusion.result_merkle_root, leaf_count);
-        self.entrypoint_proof
-            .verify(&self.entrypoint_hash, &entrypoint_commitment)
-            && self
-                .result_proof
-                .verify(&self.result_hash, &result_commitment)
-    }
-    /// Verify this transaction against the exact signed carrier block.
-    ///
-    /// This additionally binds the compact merge reference to `block_hash`, so
-    /// callers cannot accidentally verify a valid sidecar proof against a
-    /// reference copied from a different canonical block.
-    /// The supplied block's full wire must already be authenticated; this low-level check does
-    /// not establish the execution-context/header commitment. Callers must
-    /// use [`Self::verify_inclusion_in_authenticated_execution`] to bind an authenticated native
-    /// execution commitment before trusting unvalidated block material.
-    #[must_use]
-    pub fn verify_certified_merge_inclusion_in_block(&self, block: &SignedBlock) -> bool {
-        block.hash() == self.block_hash
-            && block
-                .execution_context()
-                .and_then(|context| context.merge_entry.as_ref())
-                .is_some_and(|reference| {
-                    reference.merge_qc.carrier_height == block.header().height().get()
-                        && block.header().prev_block_hash()
-                            == Some(reference.merge_qc.carrier_parent_hash)
-                        && reference.merge_qc.view == block.header().view_change_index()
-                        && self.verify_certified_merge_inclusion(reference)
-                })
+        let Some(inputs) = block.network_input_merkle_commitment() else {
+            return false;
+        };
+        let Some(outputs) = block.output_merkle_commitment() else {
+            return false;
+        };
+        self.entrypoint_proof.verify(&self.entrypoint_hash, &inputs)
+            && self.output_proof.verify(&self.output_hash, &outputs)
     }
 }
 // Server-side predicate support for CommittedTransaction (feature-gated on std)
@@ -2669,25 +2517,25 @@ impl CommittedTxFilters {
             }
         }
         if let Some(ok) = self.result_ok {
-            let actual = tx.result.as_ref().is_ok();
+            let actual = tx.result().as_ref().is_ok();
             if actual != ok {
                 return false;
             }
         }
         if let Some(ne) = self.result_ok_ne {
-            let actual = tx.result.as_ref().is_ok();
+            let actual = tx.result().as_ref().is_ok();
             if actual == ne {
                 return false;
             }
         }
         if !self.result_ok_in.is_empty() {
-            let actual = tx.result.as_ref().is_ok();
+            let actual = tx.result().as_ref().is_ok();
             if !self.result_ok_in.contains(&actual) {
                 return false;
             }
         }
         if !self.result_ok_nin.is_empty() {
-            let actual = tx.result.as_ref().is_ok();
+            let actual = tx.result().as_ref().is_ok();
             if self.result_ok_nin.contains(&actual) {
                 return false;
             }
@@ -2901,11 +2749,6 @@ impl CommittedTransaction {
                     .signed_transaction
                     .inject_instructions(additions.clone());
             }
-            TransactionEntrypoint::Time(entrypoint) => {
-                let mut modified = entrypoint.instructions.0.clone().into_vec();
-                modified.extend(additions);
-                entrypoint.instructions = ExecutionStep(modified.into());
-            }
         }
         // Update the leaf hash to match the tampered entrypoint.
         self.entrypoint_hash = self.entrypoint.hash();
@@ -2914,7 +2757,11 @@ impl CommittedTransaction {
     ///
     /// Only available when the `fault_injection` feature is enabled.
     pub fn swap_result(&mut self) {
-        let result = &mut self.result.0;
+        let result = match &mut self.output {
+            crate::block::execution_output::ExecutionOutputV1::Network(row) => &mut row.result.0,
+            crate::block::execution_output::ExecutionOutputV1::Pipeline(row) => &mut row.result.0,
+            crate::block::execution_output::ExecutionOutputV1::Time(row) => &mut row.result.0,
+        };
         *result = if result.is_ok() {
             Err(TransactionRejectionReason::Validation(
                 ValidationFail::InternalError("result swapped".into()),
@@ -2923,7 +2770,7 @@ impl CommittedTransaction {
             Ok(Vec::new())
         };
         // Update the leaf hash to match the tampered result.
-        self.result_hash = self.result.hash();
+        self.output_hash = HashOf::new(&self.output);
     }
 }
 impl QueryOutputBatchBox {

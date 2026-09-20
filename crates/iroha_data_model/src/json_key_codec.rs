@@ -1,3 +1,4 @@
+//! Canonical JSON object key codecs for persisted data-model identities.
 use iroha_crypto::Hash;
 use mv::json::JsonKeyCodec;
 use norito::json;
@@ -135,6 +136,14 @@ impl JsonKeyCodec for crate::proof::VerifyingKeyId {
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
+    }
+}
+impl JsonKeyCodec for crate::da::types::StorageTicketId {
+    fn encode_json_key(&self, out: &mut String) {
+        self.as_bytes().encode_json_key(out);
+    }
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self::new)
     }
 }
 impl JsonKeyCodec for crate::runtime::RuntimeUpgradeId {
@@ -736,6 +745,31 @@ impl JsonKeyCodec for crate::bridge::sccp::SccpInboundAnchorHighWaterKeyV1 {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn da_pin_keys_roundtrip_with_retained_undo() {
+        use super::*;
+        use crate::da::types::StorageTicketId;
+        use iroha_model_base::topology::LaneId;
+        use mv::storage::StorageReadOnly;
+        let ticket = StorageTicketId::new([0xa7; 32]);
+        let storage = mv::storage::Storage::<StorageTicketId, u64>::new();
+        {
+            let mut block = storage.block();
+            block.insert(ticket, 7);
+            block.commit();
+        }
+        let text = json::to_json(&storage).unwrap();
+        let restored: mv::storage::Storage<StorageTicketId, u64> = json::from_str(&text).unwrap();
+        assert_eq!(restored.view().get(&ticket), Some(&7));
+        assert!(restored.block_and_revert().is_empty());
+        let key = (LaneId::new(u32::MAX), u64::MAX, 0_u64);
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        let inner: String = json::from_str(&encoded).unwrap();
+        assert_eq!(<(LaneId, u64, u64)>::decode_json_key(&inner).unwrap(), key);
+        assert!(StorageTicketId::decode_json_key("00").is_err());
+        assert!(StorageTicketId::decode_json_key(&"zz".repeat(32)).is_err());
+    }
     use crate::account::AccountId;
     use crate::bridge::sccp::{
         SccpInboundAnchorHighWaterKeyV1, SccpLaneIdV1, SccpNetworkV1,

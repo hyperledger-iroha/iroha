@@ -136,6 +136,13 @@ profile alone cannot mutate payment state or budgets. X.509 governance coverage
 keeps block overlays in separate lifecycle stages to bound the default test-stack
 footprint while retaining the complete atomicity and terminal-state assertions.
 
+Anonymous-PGC bootstrap and payment range proofs retain their fixed-size point
+and scalar arrays on the heap. Their codec uses the single canonical fixed-array
+layout and charges the owned storage against the decode allocation budget. This
+bounds the size of nested proof values during native verification; ordinary
+worker stacks must suffice without increasing the thread stack or relaxing
+proof dimensions, canonicality, or resource limits.
+
 Focused regressions distinguish malformed geometry, layout-dependent transcripts,
 noncanonical field representatives, invalid AIR stride, incomplete evidence and
 missing native authority from honest canonical inputs. Synthetic signed manifests

@@ -16,6 +16,9 @@ VALIDATOR = "_kura_retirement_progress_production_source_fidelity_errors"
 INVENTORY = "_KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS"
 RETIREMENT = "ensure_first_release_lane_retirement_admissible_with_certified_locked"
 RECOVERY = "recover_geometry_progress_pairs_before_snapshot"
+MAINTAIN = "maintain_lane_retirement_route_locked"
+MAINTENANCE = "crates/iroha_core/src/kura/lane_geometry/retirement_maintenance.rs"
+MODULE = "maintenance_module"
 PATH_OWNER = "canonical_autonomous_lane_replica_paths_for_entry"
 GEOMETRY = "crates/iroha_core/src/kura/lane_geometry.rs"
 REPLICA = "crates/iroha_core/src/kura/canonical_autonomous_replica.rs"
@@ -40,26 +43,29 @@ class KuraRetirementContractTest(unittest.TestCase):
             exec(compile(ast.Module(body=nodes, type_ignores=[]), CHECKER, "exec"), cls.module.__dict__)
         cls.production_errors = getattr(cls.module, VALIDATOR)(ROOT_DIR)
         cls.owners = {}
-        for relative, names in ((GEOMETRY, (RETIREMENT, RECOVERY)), (REPLICA, (PATH_OWNER,))):
+        for relative, names in ((GEOMETRY, (RETIREMENT, RECOVERY)), (REPLICA, (PATH_OWNER,)), (MAINTENANCE, (MAINTAIN,))):
             source = (ROOT_DIR / relative).read_text()
             for name in names:
                 items = cls.module.rust_items(source, name)
                 assert len(items) == 1, name
                 cls.owners[name] = items[0].source
-            constants = ("LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE", "LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE") if relative == GEOMETRY else ("CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL",)
+            constants = ("LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE", "LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE") if relative == GEOMETRY else ("CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL",) if relative == REPLICA else ()
             for name in constants:
                 statements = [item for item in cls.module.rust_top_level_statements(source) if item.tokens[:2] == ("const", name)]
                 assert len(statements) == 1, name
                 cls.owners[name] = statements[0].source
+        cls.owners[MODULE] = "mod retirement_maintenance;"
         source = cls.owners[RETIREMENT]
         start = source.index("let fixed_progress_pairs:")
         cls.array = source[start:source.index("];", start) + 2]
 
     def errors(self, owners):
         geometry = "\n".join(owners[name] for name in ("LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE", "LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE"))
+        geometry += "\n" + owners[MODULE]
         geometry += "\nimpl Kura {\n" + owners[RETIREMENT] + "\n" + owners[RECOVERY] + "\n}\n"
         replica = owners["CANONICAL_AUTONOMOUS_LANE_REPLICA_FORMAT_LABEL"] + "\nimpl Kura {\n" + owners[PATH_OWNER] + "\n}\n"
-        replacements = {ROOT_DIR / GEOMETRY: geometry, ROOT_DIR / REPLICA: replica}
+        maintenance = "impl Kura {\n" + owners[MAINTAIN] + "\n}\n"
+        replacements = {ROOT_DIR / GEOMETRY: geometry, ROOT_DIR / REPLICA: replica, ROOT_DIR / MAINTENANCE: maintenance}
         read_text = Path.read_text
         with patch.object(Path, "read_text", lambda path, *args, **kwargs: replacements[path] if path in replacements else read_text(path, *args, **kwargs)):
             return getattr(self.module, VALIDATOR)(ROOT_DIR)
@@ -132,16 +138,44 @@ class KuraRetirementContractTest(unittest.TestCase):
     def test_complete_recovery_precedes_snapshot_and_propagates_failure(self):
         expected = self.token_error("all fixed retirement progress pairs must recover before the immutable snapshot")
         self.assert_mutation(RETIREMENT, "    &fixed_progress_pairs,\n", "    &fixed_progress_pairs[..1],\n", expected)
-        old = '                "first-release lane retirement",\n            )?;'
+        old = '                &fixed_progress_pairs,\n            )?;'
         self.assert_mutation(RETIREMENT, old, old.replace(")?;", ").ok();"), expected)
         source = self.owners[RETIREMENT]
-        start = source.index("            let lane_artifacts_guard = self.recover_geometry_progress_pairs_before_snapshot(")
+        start = source.index("            let lane_artifacts_guard = self.maintain_lane_retirement_route_locked(")
         middle = source.index("            let artifact_snapshot =", start)
         end = source.index("            artifact_files_seen =", middle)
         self.assert_mutation(RETIREMENT, source[start:end], source[middle:end] + source[start:middle], expected)
         self.assert_mutation(RECOVERY, "in pairs {", "in pairs.iter().take(1) {", self.token_error("retirement recovery must visit every pair inside the authenticated directory", RECOVERY))
         old = "                    error_kind,\n                    format!(\"{kind} recovery did not reach a durable fixed point\"),"
         self.assert_mutation(RECOVERY, old, old.replace("error_kind,", "ErrorKind::InvalidData,"), self.token_error("retirement recovery failure classification", RECOVERY))
+
+    def test_maintenance_cannot_be_disabled_or_replaced_with_a_decoy_module(self):
+        expected = "retirement maintenance must be one unconditional production module"
+        for replacement in ("", "#[cfg(test)]\nmod retirement_maintenance;", "mod decoy { mod retirement_maintenance; }", '#[path = "decoy.rs"]\nmod retirement_maintenance;'):
+            with self.subTest(replacement=replacement):
+                self.assert_mutation(MODULE, self.owners[MODULE], replacement, expected)
+
+    def test_maintenance_keeps_exact_capacity_route_and_complete_recovery(self):
+        for old, new, label in (
+            ("[(&Path, &Path, &str); 7]", "[(&Path, &Path, &str); 1]", "retirement maintenance must retain exact route, capacity and seven-pair inputs"),
+            ("entry: &LaneStorageEntry", "entry: &LaneConfigEntry", "retirement maintenance must retain exact route, capacity and seven-pair inputs"),
+            ("Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root))", "Self::lane_artifact_dir(&self.store_root)", "retirement maintenance must use the original storage entry namespace"),
+            ("            fixed_progress_pairs,", "            &fixed_progress_pairs[..1],", "retirement maintenance must return complete authenticated progress recovery"),
+            ("        self.recover_geometry_progress_pairs_before_snapshot(", "        self.reopen_progress_directory(", "retirement maintenance must return complete authenticated progress recovery"),
+            ('            "first-release lane retirement",\n        )', '            "first-release lane retirement",\n        ).or_else(|_| Ok(reopened_directory))', "retirement maintenance must return complete authenticated progress recovery"),
+        ):
+            with self.subTest(label=label):
+                self.assert_mutation(MAINTAIN, old, new, self.token_error(label, MAINTAIN))
+
+    def test_maintenance_does_not_relock_or_discard_compaction_failure(self):
+        self.assert_mutation(MAINTAIN, "        let lane_artifacts =", "        let _guard = self.sidecar_lock.lock();\n        let lane_artifacts =", "retirement maintenance must not reacquire inherited locks")
+        expected = "retirement maintenance must retain recovery, confirmation, compaction and snapshot order"
+        self.assert_mutation(MAINTAIN, "                    &frontier,\n                )?", "                    &frontier,\n                ).unwrap_or(LaneHistoryCompactionOutcome::Complete)", expected)
+        source = self.owners[MAINTAIN]
+        start = source.index("            self.confirm_latest_certified_lane_block_frontier_read_locked(")
+        middle = source.index("            self.note_certified_frontier_artifact_validation(", start)
+        end = source.index("        }", middle)
+        self.assert_mutation(MAINTAIN, source[start:end], source[middle:end] + source[start:middle], expected)
 
     def test_pair_and_directory_identity_errors_cannot_be_discarded(self):
         for text, label in (

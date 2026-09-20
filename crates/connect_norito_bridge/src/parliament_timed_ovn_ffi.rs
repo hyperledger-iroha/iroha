@@ -1082,7 +1082,6 @@ mod tests {
                     NonZeroU64::new(height).expect("nonzero Parliament proof height"),
                     parent.map(|artifact| artifact.block_hash),
                     None,
-                    None,
                     timestamp,
                     0,
                 );

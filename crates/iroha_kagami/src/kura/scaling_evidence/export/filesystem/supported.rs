@@ -804,6 +804,7 @@ fn export_with_hook(
             supplied.push(SuppliedHeightEvidence {
                 height: height.height,
                 finality: height.finality,
+                contexts: height.contexts,
                 queries: height.queries,
             });
         }

@@ -2,7 +2,7 @@
 //!
 //! These tests parse the public command route and run its actual filesystem owner.
 //! A preparation reply identifies transports; only the separate verifier below
-//! authenticates their real carrier and merge transcript.
+//! authenticates their real Native carriers and context witnesses.
 
 use super::filesystem::SuppliedEvidenceBundleV1;
 use super::*;
@@ -37,18 +37,17 @@ impl CommandFixture {
         let original = launcher::prepare::tests::encode_facts(
             signed.plan(),
             fixture::limits(),
-            vec![
-                SuppliedHeightEvidence {
-                    height: 1,
-                    finality: norito::encode_canonical(&signed.first).unwrap(),
-                    queries: vec![],
-                },
-                SuppliedHeightEvidence {
-                    height: 2,
-                    finality: norito::encode_canonical(&signed.second).unwrap(),
-                    queries: signed.queries(),
-                },
-            ],
+            signed
+                .heights
+                .iter()
+                .enumerate()
+                .map(|(index, height)| SuppliedHeightEvidence {
+                    height: index as u64 + 1,
+                    finality: norito::encode_canonical(&height.proof).unwrap(),
+                    contexts: height.evidence.clone(),
+                    queries: height.queries(),
+                })
+                .collect(),
         );
         let directory = tempfile::Builder::new()
             .prefix("prepare-command-")
@@ -126,10 +125,14 @@ impl CommandFixture {
         .into_parts();
         let bundle: SuppliedEvidenceBundleV1 = norito::decode_canonical(&bundle_bytes).unwrap();
         assert_eq!(bundle.version, 1);
-        assert_eq!(bundle.heights.len(), 2);
+        assert_eq!(bundle.heights.len(), self.signed.heights.len());
         assert_eq!(bindings.len(), bundle.heights.len());
         for (binding, row) in bindings.iter().zip(&bundle.heights) {
             assert_eq!(binding.height, row.height);
+            assert_eq!(
+                binding.contexts_hash,
+                iroha_crypto::Hash::new(&row.contexts)
+            );
             assert_eq!(
                 binding.finality_hash,
                 iroha_crypto::Hash::new(&row.finality)
@@ -142,28 +145,25 @@ impl CommandFixture {
                     .collect::<Vec<_>>()
             );
         }
-        assert_eq!(bundle.heights[0].height, 1);
-        assert!(bundle.heights[0].queries.is_empty());
-        assert_eq!(
-            bundle.heights[0].finality,
-            norito::encode_canonical(&self.signed.first).unwrap()
-        );
-        assert_eq!(bundle.heights[1].height, 2);
-        assert_eq!(bundle.heights[1].queries, self.signed.queries());
-        let mut verifier = self.signed.start(plan, limits);
-        let queries = bundle.heights[1]
-            .queries
-            .iter()
-            .map(Vec::as_slice)
-            .collect::<Vec<_>>();
-        verifier
-            .push_height(
-                &bundle.heights[1].finality,
-                &self.signed.carrier.encode_wire().unwrap(),
-                Some(&self.signed.entry.canonical_bytes()),
-                &queries,
-            )
-            .unwrap();
+        let mut verifier = ScalingProofVerifier::new(plan, limits).unwrap();
+        for (index, (row, original)) in bundle.heights.iter().zip(&self.signed.heights).enumerate()
+        {
+            assert_eq!(row.height, index as u64 + 1);
+            assert_eq!(
+                row.finality,
+                norito::encode_canonical(&original.proof).unwrap()
+            );
+            assert_eq!(row.contexts, original.evidence);
+            assert_eq!(row.queries, original.queries());
+            verifier
+                .push_height(
+                    &row.finality,
+                    &original.block.encode_wire().unwrap(),
+                    &row.contexts,
+                    &row.queries.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                )
+                .unwrap();
+        }
         assert_eq!(verifier.finish().unwrap().rows().len(), 8);
         assert_eq!(fs::read(&self.facts).unwrap(), self.original);
         for path in [&request_path, &bundle_path] {

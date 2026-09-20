@@ -15,6 +15,9 @@ pub(crate) struct ReplayGeometryBindingRequest<'a> {
 
 /// Private pre-publication expectation. It cannot adopt identities observed after a move.
 pub(crate) struct StartupReplayGeometryTransition {
+    original_owner: Arc<()>,
+    original_kura: super::KuraInstanceIdentity,
+    expected_transitions: Vec<StartupReplayGeometryRequestIdentity>,
     binding: super::V2StartupReplayStorageBinding,
     expected_paths: BTreeMap<PathBuf, super::StableSidecarDirectoryInventory>,
     final_auxiliary: BTreeMap<PathBuf, super::StableSidecarDirectoryInventory>,
@@ -23,18 +26,42 @@ pub(crate) struct StartupReplayGeometryTransition {
     created_namespaces: Vec<StartupReplayNamespaceCreation>,
 }
 
+impl StartupReplayGeometryTransition {
+    /// Compare custody of this original transition while preparation is incomplete.
+    /// The identity carries no storage or publication authority by itself.
+    pub(crate) fn original_owner_identity(&self) -> Arc<()> {
+        Arc::clone(&self.original_owner)
+    }
+}
+
+struct StartupReplayGeometryRequestIdentity {
+    height: u64,
+    previous: Vec<LaneGeometryBinding>,
+    updated: Vec<LaneGeometryBinding>,
+    previous_lineage: Hash,
+    updated_lineage: Hash,
+}
+
 /// Effect receipt emitted only by the existing native namespace creator.
 pub(crate) struct StartupReplayNamespaceCreation {
     blocks_identity: GeometryFileIdentity,
-    held: BoundProgressDirectory,
-    inventory: super::StableSidecarDirectoryInventory,
+    held: Option<BoundProgressDirectory>,
+    inventory: Option<super::StableSidecarDirectoryInventory>,
 }
 struct StartupReplayMissingNamespace {
+    #[cfg(test)]
     blocks: PathBuf,
+    #[cfg(test)]
     merge: PathBuf,
     blocks_identity: GeometryFileIdentity,
+    #[cfg(test)]
     binding: LaneGeometryBinding,
+    #[cfg(test)]
     original_marker: LaneIncarnationMarker,
+    #[cfg(test)]
+    original_block_digest: Hash,
+    #[cfg(test)]
+    original_merge_digest: Hash,
     final_path: PathBuf,
 }
 
@@ -126,17 +153,20 @@ impl Kura {
         })?;
         let _geometry = self.lane_geometry_lock.lock();
         let journal = self.read_lane_geometry_journal()?;
-        let original_lane_paths = self
-            .v2_startup_replay_lane_auxiliary_sidecar_directories()?
-            .into_iter()
-            .flat_map(|(lane, historical)| [lane, historical])
+        // The shared audit covers every journal-retained instance, including
+        // inactive and future replay references. Only the captured active map
+        // determines whether a missing optional namespace is active corruption.
+        let initial_lanes = self.lane_storage_entries.lock().clone();
+        let active_lane_paths = initial_lanes
+            .values()
+            .map(|entry| Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root)))
             .collect::<BTreeSet<_>>();
-        let mut moves = Vec::new();
         let mut sources = BTreeMap::new();
         let mut paths = BTreeSet::new();
         let mut prior_updated = None;
         let mut prior_index = None;
-        let mut final_lanes = self.lane_storage_entries.lock().clone();
+        let mut final_lanes = initial_lanes;
+        let mut expected_transitions = Vec::with_capacity(requests.len());
         for request in requests {
             let previous = self.geometry_bindings(
                 request.previous,
@@ -158,7 +188,12 @@ impl Kura {
                 ));
             }
             if prior_updated.is_none()
-                && final_lanes != Self::lane_storage_entries_from_config(request.previous)
+                && final_lanes
+                    != self.lane_storage_entries_from_geometry(
+                        request.previous,
+                        request.previous_incarnations,
+                        request.previous_activation_heights,
+                    )?
             {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
@@ -186,74 +221,29 @@ impl Kura {
                     "replay geometry journal operations are ambiguous or noncontiguous",
                 ));
             }
+            expected_transitions.push(StartupReplayGeometryRequestIdentity {
+                height: request.transition_height,
+                previous: previous.clone(),
+                updated: updated.clone(),
+                previous_lineage: request.previous_lineage_root,
+                updated_lineage: request.updated_lineage_root,
+            });
             for operation in &record.operations {
-                let mut add = |source: PathBuf,
-                               target: PathBuf,
-                               merge: PathBuf,
-                               binding: &LaneGeometryBinding| {
-                    paths.insert(source.clone());
-                    paths.insert(target.clone());
+                for instance in operation.previous.iter().chain(operation.updated.iter()) {
+                    let path = self.binding_blocks_path(instance);
+                    paths.insert(path.clone());
                     sources
-                        .entry(source.clone())
-                        .or_insert_with(|| (merge, binding.clone()));
-                    moves.push((source, target));
-                };
-                match operation.kind {
-                    LaneGeometryOperationKind::Create => add(
-                        self.resolve_relative_path(&operation.unpublished_blocks_path)?,
-                        self.binding_blocks_path(
-                            operation.updated.as_ref().expect("validated create"),
-                        ),
-                        self.resolve_relative_path(&operation.unpublished_merge_path)?,
-                        operation.updated.as_ref().expect("validated create"),
-                    ),
-                    LaneGeometryOperationKind::Retire => add(
-                        self.binding_blocks_path(
-                            operation.previous.as_ref().expect("validated retire"),
-                        ),
-                        self.resolve_relative_path(&operation.archived_blocks_path)?,
-                        self.binding_merge_path(
-                            operation.previous.as_ref().expect("validated retire"),
-                        ),
-                        operation.previous.as_ref().expect("validated retire"),
-                    ),
-                    LaneGeometryOperationKind::Replace => {
-                        add(
-                            self.binding_blocks_path(
-                                operation.previous.as_ref().expect("validated replace"),
-                            ),
-                            self.resolve_relative_path(&operation.archived_blocks_path)?,
-                            self.binding_merge_path(
-                                operation.previous.as_ref().expect("validated replace"),
-                            ),
-                            operation.previous.as_ref().expect("validated replace"),
-                        );
-                        add(
-                            self.resolve_relative_path(&operation.unpublished_blocks_path)?,
-                            self.binding_blocks_path(
-                                operation.updated.as_ref().expect("validated replace"),
-                            ),
-                            self.resolve_relative_path(&operation.unpublished_merge_path)?,
-                            operation.updated.as_ref().expect("validated replace"),
-                        );
-                    }
-                    LaneGeometryOperationKind::Relabel => add(
-                        self.binding_blocks_path(
-                            operation.previous.as_ref().expect("validated relabel"),
-                        ),
-                        self.binding_blocks_path(
-                            operation.updated.as_ref().expect("validated relabel"),
-                        ),
-                        self.binding_merge_path(
-                            operation.previous.as_ref().expect("validated relabel"),
-                        ),
-                        operation.previous.as_ref().expect("validated relabel"),
-                    ),
+                        .entry(path)
+                        .or_insert_with(|| (self.binding_merge_path(instance), instance.clone()));
                 }
             }
             prior_updated = Some(updated);
             prior_index = Some(index);
-            final_lanes = Self::lane_storage_entries_from_config(request.updated);
+            final_lanes = self.lane_storage_entries_from_geometry(
+                request.updated,
+                request.updated_incarnations,
+                request.updated_activation_heights,
+            )?;
         }
         let mut block_identities = paths
             .iter()
@@ -290,7 +280,7 @@ impl Kura {
             if expected_paths[&path].directory.metadata.is_some() {
                 continue;
             }
-            if original_lane_paths.contains(&path) {
+            if active_lane_paths.contains(&path) {
                 return Err(self.startup_auxiliary_identity_error(
                     &path,
                     "active namespace absence is not an archived replay creation",
@@ -298,31 +288,33 @@ impl Kura {
             }
             self.require_lane_marker_at(&blocks, &native_binding)?;
             let marker = self.read_lane_marker(&blocks.join(MARKER_FILE_NAME))?;
-            let target_blocks = marker.move_target_blocks.as_ref().ok_or_else(|| {
-                self.geometry_error(
+            self.require_complete_geometry_binding_at(&native_binding, &blocks, &merge)?;
+            if !self.lane_marker_is_unsealed_at(&blocks, &native_binding)? {
+                return Err(self.geometry_error(
                     ErrorKind::InvalidData,
-                    "missing namespace source has no authenticated archive seal",
-                )
-            })?;
-            let target_merge = marker.move_target_merge.as_ref().ok_or_else(|| {
-                self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "missing namespace source has no authenticated merge seal",
-                )
-            })?;
-            self.require_sealed_geometry_pair_at(
-                &native_binding,
-                &blocks,
-                &merge,
-                &self.resolve_relative_path(target_blocks)?,
-                &self.resolve_relative_path(target_merge)?,
-            )?;
+                    "replay instance is already owned by collection",
+                ));
+            }
+            let original_block_digest = self.geometry_block_store_digest(&blocks)?;
+            let original_merge_digest = self.geometry_merge_log_digest(&merge)?;
+            // Authenticate these fallible reads in every build. Only the standalone
+            // rollback tests retain their values for exact restoration checks.
+            #[cfg(not(test))]
+            let _ = (marker, original_block_digest, original_merge_digest);
             missing_namespaces.push(StartupReplayMissingNamespace {
+                #[cfg(test)]
                 blocks,
+                #[cfg(test)]
                 merge,
                 blocks_identity: identity,
+                #[cfg(test)]
                 binding: native_binding,
+                #[cfg(test)]
                 original_marker: marker,
+                #[cfg(test)]
+                original_block_digest,
+                #[cfg(test)]
+                original_merge_digest,
                 final_path: path,
             });
         }
@@ -337,75 +329,11 @@ impl Kura {
             }
             expected_paths.insert(path.clone(), old.clone());
         }
-        let canonical_root = self
-            .store_root
-            .canonicalize()
-            .map_err(|error| Error::IO(error, self.store_root.clone()))?;
-        for (source, target) in moves {
-            let source_lane = Self::lane_artifact_dir(&source);
-            let target_lane = Self::lane_artifact_dir(&target);
-            let source_present = block_identities[&source].is_some();
-            let target_present = block_identities[&target].is_some();
-            if source == target || (!source_present && target_present) {
-                continue; // Exact durable operation was already applied; identities remain pinned.
-            }
-            if !source_present || target_present {
-                return Err(self.startup_auxiliary_identity_error(
-                    &source_lane,
-                    "retained geometry source missing or destination already occupied",
-                ));
-            }
-            let identity = block_identities[&source];
-            block_identities.insert(source, None);
-            block_identities.insert(target, identity);
-            for (from, to) in [
-                (source_lane.clone(), target_lane.clone()),
-                (
-                    source_lane.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1),
-                    target_lane.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1),
-                ),
-            ] {
-                let old = expected_paths[&from].clone();
-                let mut moved = old.clone();
-                moved.directory.expected_path = to.clone();
-                let canonical_to =
-                    canonical_root.join(to.strip_prefix(&self.store_root).map_err(|_| {
-                        self.startup_auxiliary_identity_error(
-                            &to,
-                            "geometry target escaped store root",
-                        )
-                    })?);
-                if moved.directory.canonical_path.is_some() {
-                    moved.directory.canonical_path = Some(canonical_to.clone());
-                }
-                moved.files = old
-                    .files
-                    .into_iter()
-                    .map(|(path, mut metadata)| {
-                        let name = path.file_name().expect("immediate sidecar child");
-                        metadata.canonical_path = canonical_to.join(name);
-                        (to.join(name), metadata)
-                    })
-                    .collect();
-                expected_paths.insert(to, moved);
-                expected_paths.insert(
-                    from.clone(),
-                    super::StableSidecarDirectoryInventory {
-                        directory: super::StableSidecarDirectoryMetadata {
-                            expected_path: from,
-                            canonical_path: None,
-                            metadata: None,
-                        },
-                        files: BTreeMap::new(),
-                    },
-                );
-            }
-        }
-        let mut final_auxiliary = original_auxiliary
-            .iter()
-            .filter(|(path, _)| !original_lane_paths.contains(*path))
-            .map(|(path, value)| (path.clone(), value.clone()))
-            .collect::<BTreeMap<_, _>>();
+        // Publishing a reference never retires physical evidence. Keep every
+        // original retained path pinned; only an exact native creation receipt
+        // may replace a captured absence at finish. No post-publication scan
+        // can supply a new before-image or forget a retired instance.
+        let mut final_auxiliary = original_auxiliary.clone();
         for entry in final_lanes.values() {
             let lane = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
             for path in [
@@ -438,6 +366,9 @@ impl Kura {
         drop(_geometry);
         self.validate_v2_startup_replay_storage_binding_unlocked(binding)?;
         Ok(StartupReplayGeometryTransition {
+            original_owner: Arc::new(()),
+            original_kura: self.instance_identity(),
+            expected_transitions,
             binding: binding.clone(),
             expected_paths,
             final_auxiliary,
@@ -448,6 +379,7 @@ impl Kura {
     }
 
     /// Consume native geometry effects into the private replay preparation.
+    #[cfg(test)]
     pub(crate) fn apply_startup_replay_geometry_transition(
         &self,
         request: &ReplayGeometryBindingRequest<'_>,
@@ -475,17 +407,29 @@ impl Kura {
         receipt: &StartupReplayNamespaceCreation,
         path: &Path,
     ) -> Result<super::StableSidecarDirectoryInventory> {
-        let opened = secure_file_metadata::from_file(&receipt.held.file)
+        let held = receipt.held.as_ref().ok_or_else(|| {
+            self.startup_auxiliary_identity_error(
+                path,
+                "native namespace creation has no captured original descriptor",
+            )
+        })?;
+        let inventory = receipt.inventory.as_ref().ok_or_else(|| {
+            self.startup_auxiliary_identity_error(
+                path,
+                "native namespace creation inventory is unfinished",
+            )
+        })?;
+        let opened = secure_file_metadata::from_file(&held.file)
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        if !Self::sidecar_directory_metadata_unchanged(&receipt.held.metadata, &opened)
-            || !receipt.inventory.files.is_empty()
+        if !Self::sidecar_directory_metadata_unchanged(&held.metadata, &opened)
+            || !inventory.files.is_empty()
         {
             return Err(self.startup_auxiliary_identity_error(
                 path,
                 "native created namespace changed after its receipt",
             ));
         }
-        let mut expected = receipt.inventory.clone();
+        let mut expected = inventory.clone();
         expected.directory.expected_path = path.to_path_buf();
         let canonical_root = self
             .store_root
@@ -511,6 +455,7 @@ impl Kura {
 
     /// Geometry rollback restores each original archive first. Remove only the exact
     /// native-created empty inode, then restore the original already-authenticated seal.
+    #[cfg(test)]
     pub(crate) fn rollback_startup_replay_geometry_preparation(
         &self,
         transition: &StartupReplayGeometryTransition,
@@ -533,73 +478,51 @@ impl Kura {
             let path = Self::lane_artifact_dir(&missing.blocks);
             self.retarget_created_namespace(receipt, &path)?;
             let current_marker = self.read_lane_marker(&missing.blocks.join(MARKER_FILE_NAME))?;
-            self.require_sealed_geometry_pair_at(
+            self.require_complete_geometry_binding_at(
                 &missing.binding,
                 &missing.blocks,
                 &missing.merge,
-                &self.resolve_relative_path(
-                    current_marker
-                        .move_target_blocks
-                        .as_deref()
-                        .ok_or_else(|| {
-                            self.geometry_error(
-                                ErrorKind::InvalidData,
-                                "rollback archive is unsealed",
-                            )
-                        })?,
-                )?,
-                &self.resolve_relative_path(
-                    current_marker.move_target_merge.as_deref().ok_or_else(|| {
-                        self.geometry_error(ErrorKind::InvalidData, "rollback merge is unsealed")
-                    })?,
-                )?,
             )?;
+            if current_marker != missing.original_marker {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "replay instance marker changed during namespace creation",
+                ));
+            }
             fs::remove_dir(&path).map_err(|error| Error::IO(error, path.clone()))?;
             self.sync_geometry_parent(Some(&missing.blocks))?;
-            if self.geometry_block_store_digest(&missing.blocks)?
-                != missing.original_marker.block_store_digest
-                || self.geometry_merge_log_digest(&missing.merge)?
-                    != missing.original_marker.merge_log_digest
+            if self.geometry_block_store_digest(&missing.blocks)? != missing.original_block_digest
+                || self.geometry_merge_log_digest(&missing.merge)? != missing.original_merge_digest
             {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
                     "namespace cleanup did not restore the exact authenticated archive",
                 ));
             }
-            self.atomic_write_geometry_file(
-                &missing.blocks.join(MARKER_FILE_NAME),
-                &missing.blocks.join(MARKER_TEMP_FILE_NAME),
-                &missing.original_marker.encode(),
-            )?;
             self.require_geometry_path_identity(&missing.blocks, true, missing.blocks_identity)?;
-            self.require_sealed_geometry_pair_at(
+            self.require_complete_geometry_binding_at(
                 &missing.binding,
                 &missing.blocks,
                 &missing.merge,
-                &self.resolve_relative_path(
-                    missing
-                        .original_marker
-                        .move_target_blocks
-                        .as_deref()
-                        .expect("prevalidated archive"),
-                )?,
-                &self.resolve_relative_path(
-                    missing
-                        .original_marker
-                        .move_target_merge
-                        .as_deref()
-                        .expect("prevalidated archive"),
-                )?,
             )?;
         }
         Ok(())
     }
 
-    /// Caller holds the final canonical publication lease; every failure precedes WSV install.
-    pub(crate) fn finish_startup_replay_geometry_transition(
+    fn finish_startup_replay_geometry_transition_under_lease(
         &self,
         transition: &StartupReplayGeometryTransition,
+        lease: &super::KuraPublicationLease<'_>,
     ) -> Result<super::V2StartupReplayStorageBinding> {
+        if !lease.belongs_to(self)
+            || !transition
+                .original_kura
+                .same_instance(&self.instance_identity())
+        {
+            return Err(
+                self.geometry_error(ErrorKind::InvalidInput, "foreign startup geometry owner")
+            );
+        }
         let (original, _) = transition.binding.strict_parts().ok_or_else(|| {
             self.geometry_error(
                 ErrorKind::InvalidInput,
@@ -640,7 +563,7 @@ impl Kura {
                 expected_blocks: transition.expected_blocks.clone(),
             }),
         };
-        self.validate_v2_startup_replay_storage_binding_unlocked(&next)?;
+        self.validate_v2_startup_replay_storage_binding_with_lease(&next, Some(lease))?;
         // Snapshot/install/clear all take this same inventory-first lock order.
         // No session can pair a publication with an independently replaced audit.
         let installed = self.v2_startup_finality_verification_inventory.lock();
@@ -664,11 +587,17 @@ impl Kura {
         *publication = Some(Arc::clone(next_publication));
         Ok(next)
     }
-    pub(super) fn validate_startup_geometry_publication(
+    pub(super) fn validate_startup_geometry_publication_with_lease(
         &self,
         publication: &StartupReplayGeometryPublication,
+        lease: Option<&super::KuraPublicationLease<'_>>,
     ) -> Result<()> {
-        let _geometry = self.lane_geometry_lock.lock();
+        if lease.is_some_and(|lease| !lease.belongs_to(self)) {
+            return Err(
+                self.geometry_error(ErrorKind::InvalidInput, "foreign startup publication lease")
+            );
+        }
+        let _geometry = lease.is_none().then(|| self.lane_geometry_lock.lock());
         for (path, expected) in &publication.expected_blocks {
             match expected {
                 Some(identity) => self.require_geometry_path_identity(path, true, *identity)?,
@@ -702,5 +631,16 @@ impl Kura {
             Self::require_startup_auxiliary_identity(expected, &current)?;
         }
         Ok(())
+    }
+}
+
+impl super::KuraPublicationLease<'_> {
+    /// Finish the original replay geometry receipt under all held physical fences.
+    pub(crate) fn finish_startup_replay_geometry_transition(
+        &self,
+        transition: &StartupReplayGeometryTransition,
+    ) -> Result<super::V2StartupReplayStorageBinding> {
+        self.original_kura()
+            .finish_startup_replay_geometry_transition_under_lease(transition, self)
     }
 }

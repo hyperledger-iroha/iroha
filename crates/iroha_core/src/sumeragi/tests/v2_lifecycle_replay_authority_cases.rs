@@ -2266,3 +2266,32 @@ fn decision_body_retirement_preserves_current_winner_and_rejects_future_tags() {
     }
     assert!(body_sources > 0);
 }
+
+impl LifecycleReplayAuthorityV1 {
+    /// Change one signed parent or Decision locator without changing logical coordinates.
+    pub(in crate::sumeragi) fn with_pending_kura_corruption_for_test(
+        &self,
+        corrupt_parent: bool,
+    ) -> Option<Self> {
+        let mut changed = self.clone();
+        if corrupt_parent {
+            let LifecycleReplaySourceV1::BodyPipeline(source) = &mut changed.source else {
+                return None;
+            };
+            let BodyPipelineOriginV1::Proposal(proposal) = &mut source.origin else {
+                return None;
+            };
+            *proposal.signature.first_mut()? ^= 1;
+        } else {
+            let LifecycleReplaySourceV1::Wal(source) = &mut changed.source else {
+                return None;
+            };
+            if !matches!(&source.action, WalReplayActionV1::ApplyDecision(_)) {
+                return None;
+            }
+            source.locator =
+                RecoveredWalFrameIdentity::for_test(42, 43, [0xBC; 32]).persisted_locator();
+        }
+        (changed != *self && changed.is_bounded_canonical()).then_some(changed)
+    }
+}

@@ -3053,6 +3053,7 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
         "aps-smoke:{}:{}:{}",
         smoke_request.seed, smoke_request.run, smoke_request.invocation_nonce
     ));
+    let startup_started = Instant::now();
     let startup_timing = SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::NetworkStartup, None);
     let started = sandbox::start_network_blocking_or_skip(builder, context)?;
     let Some((network, runtime)) = sandbox::enforce_network_start_requirement(started, context)?
@@ -3060,7 +3061,15 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
         return Err(eyre!("required sixteen-process smoke network was skipped"));
     };
     verify_controller_readiness(&network, &runtime)?;
-    let initial_inventory = smoke_process_inventory(&network, &runtime, shape)?;
+    let startup_deadline = startup_started
+        .checked_add(network.peer_startup_timeout())
+        .ok_or_else(|| eyre!("smoke startup deadline exceeds the monotonic clock range"))?;
+    let initial_inventory = smoke_process_inventory(
+        &network,
+        &runtime,
+        shape,
+        SmokeInventoryReadinessV1::StartupUntil(startup_deadline),
+    )?;
     evidence_files.push(write_smoke_evidence(
         &evidence_root,
         "processes-before.json",
@@ -3515,7 +3524,12 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
     }
     replay_timing.complete();
     if experiment == N3SettlementExperimentV1::HappyDay {
-        let final_inventory = smoke_process_inventory(&network, &runtime, shape)?;
+        let final_inventory = smoke_process_inventory(
+            &network,
+            &runtime,
+            shape,
+            SmokeInventoryReadinessV1::Immediate,
+        )?;
         ensure!(
             initial_inventory
                 .iter()
@@ -3624,7 +3638,12 @@ fn run_n3_real_process_experiment(experiment: N3SettlementExperimentV1) -> Resul
     );
     recovered_finality_timing.complete();
     evidence_files.extend(files);
-    let recovered_inventory = smoke_process_inventory(&network, &runtime, shape)?;
+    let recovered_inventory = smoke_process_inventory(
+        &network,
+        &runtime,
+        shape,
+        SmokeInventoryReadinessV1::Immediate,
+    )?;
     ensure!(
         initial_inventory
             .iter()

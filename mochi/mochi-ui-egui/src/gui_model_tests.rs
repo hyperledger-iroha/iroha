@@ -1701,7 +1701,7 @@ fn lane_status_rows_surface_relay_lag_and_cursor() {
     };
     let sumeragi = sample_sumeragi_status_wire();
     let mut diagnostics = sample_sumeragi_diagnostics();
-    let header = BlockHeader::new(NonZeroU64::new(9).expect("height"), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(9).expect("height"), None, None, 0, 0);
     let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
         block_height: 9,
         lane_id: LaneId::new(0),

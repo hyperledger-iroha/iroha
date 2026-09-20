@@ -22,7 +22,7 @@ use nonzero_ext::nonzero;
 #[test]
 fn zk_ballot_unqualified_keys_cannot_register_or_create_an_election() {
     let state = closed_registry::state();
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
     for circuit_id in [
         "halo2/pasta/ipa/vote-ballot",
         "halo2/pasta/ipa/vote-tally",

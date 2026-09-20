@@ -14,7 +14,11 @@ fn decision_retirement_releases_queued_leader_wire_runtime_owner() {
         unreachable!("leader-wire fixture carries Proposal")
     };
     runtime
-        .enqueue_network_with_ingress_ownership(fixture.message.clone(), fixture.ownership.clone())
+        .enqueue_network_with_ingress_ownership(
+            fixture.message.clone(),
+            fixture.ownership.clone(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue proposal with durable leader-wire runtime ownership");
     let ordinal = fixture.receipt.owner().admission_ordinal();
     assert_eq!(
@@ -46,7 +50,10 @@ fn decision_retirement_releases_queued_leader_wire_runtime_owner() {
     runtime
         .arm_live_clocks(now)
         .expect("arm runtime after consuming Decision terminal");
-    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     assert!(!runtime.fail_closed);
 }
 
@@ -114,14 +121,21 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
         .expect("future-view proposal owns one runtime receipt")
         .clone();
     runtime
-        .enqueue_network_with_ingress_ownership(proposal_message.clone(), proposal_ownership)
+        .enqueue_network_with_ingress_ownership(
+            proposal_message.clone(),
+            proposal_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated future-view proposal");
     let now = Instant::now();
     runtime
         .arm_live_clocks(now)
         .expect("arm future-view runtime");
 
-    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     let retained = runtime
         .take_last_scheduler_ownership()
         .expect("future-view retry retains scheduler ownership");
@@ -138,12 +152,15 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
     );
 
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                timeout_certificate,
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue the matching timeout certificate");
     let entered = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("matching TC remains a valid pacemaker escape")
         .expect("matching TC bypasses the retained normal proposal");
     let RuntimeStep::Advanced(enter_view_effects) = entered else {
@@ -176,7 +193,7 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
     assert_eq!(runtime.queued_commands(), 1);
 
     let retried = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("retry the exact proposal after entering its view");
     let RuntimeStep::Advanced(proposal_effects) = retried else {
         panic!("matching-view proposal unexpectedly idled")
@@ -235,9 +252,15 @@ fn future_view_proposal_remains_owned_until_matching_tc_enters_view() {
         "the old consumer receipt cannot retire the replacement carrier"
     );
     runtime
-        .enqueue_network_with_ingress_ownership(proposal_message.clone(), retry_ownership)
+        .enqueue_network_with_ingress_ownership(
+            proposal_message.clone(),
+            retry_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue exact retry under the current consumer");
-    let RuntimeStep::Advanced(retry_effects) = runtime.step(now).expect("consume exact retry")
+    let RuntimeStep::Advanced(retry_effects) = runtime
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
+        .expect("consume exact retry")
     else {
         panic!("current-consumer retry unexpectedly idled")
     };
@@ -296,7 +319,11 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
         .expect("future PrepareQC owns one runtime receipt")
         .clone();
     runtime
-        .enqueue_network_with_ingress_ownership(certificate_message.clone(), certificate_ownership)
+        .enqueue_network_with_ingress_ownership(
+            certificate_message.clone(),
+            certificate_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated future PrepareQC");
     let blocked_future =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
@@ -350,7 +377,10 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
         .arm_live_clocks(now)
         .expect("arm future-PrepareQC runtime");
 
-    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     let retained = runtime
         .take_last_scheduler_ownership()
         .expect("future PrepareQC retry retains scheduler ownership");
@@ -374,17 +404,26 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
         2,
     );
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(intervening_certificate.clone()),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                intervening_certificate.clone(),
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue a second retryable future PrepareQC before the matching TC");
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0xC2))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0xC2),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue ordinary work whose class debt must remain fair");
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                timeout_certificate,
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue the matching timeout certificate");
     runtime.schedule.fifo_owed = true;
     runtime.ingress.next_class = CommandClass::Progress;
@@ -396,7 +435,7 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
         .expect("ordinary proposal remains queued before TC service")
         .eligible_skips;
     let entered = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("ordinary production step admits the matching TC");
     let RuntimeStep::Advanced(enter_view_effects) = entered else {
         panic!("matching TC unexpectedly idled")
@@ -459,7 +498,7 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
     assert_eq!(runtime.queued_commands(), 3);
 
     assert!(matches!(
-        runtime.step(now),
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
         Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
     ));
     let normal_scheduler = runtime
@@ -472,7 +511,7 @@ fn ordinary_step_skips_only_blocked_prepare_qcs_to_install_matching_tc() {
     assert_eq!(runtime.queued_commands(), 2);
 
     let retried = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("retry the exact PrepareQC after entering its view");
     let RuntimeStep::Advanced(certificate_effects) = retried else {
         panic!("matching-view PrepareQC unexpectedly idled")
@@ -537,14 +576,20 @@ fn ordinary_step_skips_future_prepare_qc_to_install_ahead_tc() {
         2,
     );
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(blocked_prepare),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                blocked_prepare,
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue the future PrepareQC FIFO head");
     let now = Instant::now();
     runtime.arm_live_clocks(now).expect("arm ahead-TC runtime");
 
-    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     let retained = runtime
         .take_last_scheduler_ownership()
         .expect("future PrepareQC retry retains scheduler ownership");
@@ -556,15 +601,18 @@ fn ordinary_step_skips_future_prepare_qc_to_install_ahead_tc() {
 
     let ahead_timeout = signed_runtime_timeout_certificate_for_view(&context, &keys, 1);
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(ahead_timeout.clone()),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                ahead_timeout.clone(),
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue a TC which installs the blocked PrepareQC view");
     runtime.schedule.fifo_owed = true;
     runtime.ingress.next_class = CommandClass::Progress;
 
     let RuntimeStep::Advanced(effects) = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("ordinary Progress service selects the ahead TC")
     else {
         panic!("ahead TC unexpectedly idled")
@@ -610,16 +658,22 @@ fn ordinary_step_skips_future_prepare_qc_for_higher_view_commit_qc() {
         2,
     );
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(blocked_prepare),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                blocked_prepare,
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue the future PrepareQC FIFO head");
     let now = Instant::now();
     runtime
         .arm_live_clocks(now)
         .expect("arm higher-CommitQC runtime");
 
-    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     let retained = runtime
         .take_last_scheduler_ownership()
         .expect("future PrepareQC retry retains scheduler ownership");
@@ -635,15 +689,18 @@ fn ordinary_step_skips_future_prepare_qc_for_higher_view_commit_qc() {
         2,
     );
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
-        ))
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                decision.clone(),
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue the higher-view terminal CommitQC");
     runtime.schedule.fifo_owed = true;
     runtime.ingress.next_class = CommandClass::Progress;
 
     let RuntimeStep::Advanced(effects) = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("ordinary Progress service selects the terminal CommitQC")
     else {
         panic!("higher-view CommitQC unexpectedly idled")
@@ -720,7 +777,10 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
     runtime
         .arm_live_clocks(now)
         .expect("arm runtime after consuming lock terminal");
-    assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
+    assert!(matches!(
+        runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
+        Ok(RuntimeStep::Idle)
+    ));
     assert!(!runtime.fail_closed);
     // A BodyAvailable continuation can own an older causal lifecycle than
     // a proposal which crossed into Busy while the shared reducer fence
@@ -811,7 +871,10 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
         .arm_live_clocks(dispatch_now)
         .expect("arm runtime for dispatch-side retirement");
     let body_step = dispatch_runtime
-        .step(dispatch_now)
+        .step(
+            dispatch_now,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the older BodyAvailable owner receives the FIFO turn");
     let body_scheduling = dispatch_runtime
         .take_last_scheduler_ownership()
@@ -878,6 +941,7 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
         .enqueue_network_with_ingress_ownership(
             queued_fixture.message.clone(),
             queued_fixture.ownership.clone(),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
         )
         .expect("enqueue the conflicting leader-wire proposal");
     let queued_receipt_ordinal = queued_fixture.receipt.owner().admission_ordinal();
@@ -951,7 +1015,10 @@ fn lock_retirement_releases_busy_deferred_leader_wire_runtime_owner() {
         .arm_live_clocks(queued_now)
         .expect("arm runtime for queued-prune retirement");
     let queued_body_step = queued_runtime
-        .step(queued_now)
+        .step(
+            queued_now,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("service the exact queued BodyAvailable predecessor");
     let queued_scheduling = queued_runtime
         .take_last_scheduler_ownership()
@@ -1001,7 +1068,7 @@ fn semantic_only_authenticated_coalesce_fails_before_receipt_registration() {
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
     let existing = signed_runtime_proposal(&context, &keys, 0xC5);
     runtime
-        .enqueue_network(existing)
+        .enqueue_network(existing, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("retain an existing authenticated semantic owner");
     let queued_before = runtime.queued_commands();
     let candidate = leader_wire_proposal_fixture(
@@ -1061,7 +1128,10 @@ fn decision_retires_proposal_owners_but_preserves_body_and_application_completio
     let (decision_durable, decision_validated) = receipts(&decision_manifest);
     let decision_commitment = decision_validated.execution_commitment();
     runtime
-        .enqueue_network(signed_runtime_proposal(&context, &keys, 0xD1))
+        .enqueue_network(
+            signed_runtime_proposal(&context, &keys, 0xD1),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue authenticated proposal at decided height");
     stage_completion_for_queue_test(
         &mut runtime,
@@ -1347,7 +1417,10 @@ fn decision_retires_proposal_owners_but_preserves_body_and_application_completio
         Err(EnqueueError::FailClosed)
     );
     assert!(matches!(
-        runtime.step(Instant::now()),
+        runtime.step(
+            Instant::now(),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(RuntimeError::FailClosed)
     ));
 }
@@ -1444,7 +1517,10 @@ fn progress_cursor_decision_preserves_outer_ingress_completion_until_apply() {
     let now = Instant::now();
     runtime.arm_live_clocks(now).expect("arm runtime clocks");
     let RuntimeStep::Advanced(decision_effects) = runtime
-        .step_and_take_scheduler_ownership_for_test(now)
+        .step_and_take_scheduler_ownership_for_test(
+            now,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("Progress cursor installs Decision")
     else {
         panic!("queued CommitQC must advance the reducer")
@@ -1465,7 +1541,10 @@ fn progress_cursor_decision_preserves_outer_ingress_completion_until_apply() {
         DecisionProposalRetirement::new(Some(owner_tag), 0)
     );
     let RuntimeStep::Advanced(completion_effects) = runtime
-        .step_and_take_scheduler_ownership_for_test(now)
+        .step_and_take_scheduler_ownership_for_test(
+            now,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("fair completion service reaches the reducer")
     else {
         panic!("retained completion must advance the reducer")
@@ -1489,7 +1568,7 @@ fn progress_cursor_decision_preserves_outer_ingress_completion_until_apply() {
         .expect("enqueue exact Apply acknowledgement");
     assert!(matches!(
         runtime
-            .step_and_take_scheduler_ownership_for_test(now)
+            .step_and_take_scheduler_ownership_for_test(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("dispatch exact Apply acknowledgement"),
         RuntimeStep::Advanced(ref effects) if effects.is_empty()
     ));
@@ -1639,7 +1718,10 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             "a structurally valid far-future {phase:?} vote must drain without certified local view authority"
         );
         assert!(matches!(
-            runtime.enqueue_network(signed_far_future),
+            runtime.enqueue_network(
+                signed_far_future,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            ),
             Err(NetworkIngressError::Authentication(
                 AdapterError::MissingExecutionCommitment
             ))
@@ -1662,7 +1744,10 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             "a structurally invalid far-future {phase:?} vote must drain for normal rejection"
         );
         assert!(matches!(
-            runtime.enqueue_network(malformed_future),
+            runtime.enqueue_network(
+                malformed_future,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            ),
             Err(NetworkIngressError::Authentication(_))
         ));
         assert_eq!(runtime.queued_commands(), 0);
@@ -1673,7 +1758,10 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
         // The mutating seam still rejects a caller that bypasses the
         // non-mutating fair-ingress gate.
         assert!(matches!(
-            runtime.enqueue_network(signed_vote.clone()),
+            runtime.enqueue_network(
+                signed_vote.clone(),
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            ),
             Err(NetworkIngressError::Authentication(
                 AdapterError::MissingExecutionCommitment
             ))
@@ -1701,9 +1789,10 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
         .payload()
         .to_vec();
         runtime
-            .enqueue_network(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Proposal(proposal),
-            ))
+            .enqueue_network(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal)),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("matching proposal establishes a pending body pipeline");
         assert_eq!(runtime.queued_commands(), 1);
         assert!(
@@ -1714,7 +1803,10 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             .arm_live_clocks(Instant::now())
             .expect("arm fixture clocks before dispatch");
         runtime
-            .step_and_take_scheduler_ownership_for_test(Instant::now())
+            .step_and_take_scheduler_ownership_for_test(
+                Instant::now(),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("dispatch matching proposal");
         assert_eq!(runtime.queued_commands(), 0);
         assert!(
@@ -1770,7 +1862,10 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             "a conflicting bound {phase:?} vote must drain for authenticated rejection"
         );
         assert!(matches!(
-            runtime.enqueue_network(conflicting_vote),
+            runtime.enqueue_network(
+                conflicting_vote,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            ),
             Err(NetworkIngressError::Authentication(
                 AdapterError::ConflictingExecutionCommitment
             ))
@@ -1781,7 +1876,10 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             "conflicting {phase:?} vote rejection must not poison the runtime"
         );
         runtime
-            .enqueue_network(signed_vote)
+            .enqueue_network(
+                signed_vote,
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("the same signed canonical vote becomes admissible after validation");
         assert_eq!(runtime.queued_commands(), 1);
         assert!(!runtime.fail_closed);
@@ -1837,7 +1935,11 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
             authenticated_peer.clone(),
             authenticated_peer.clone(),
         );
-        runtime.enqueue_network_with_ingress_ownership(message, ownership)
+        runtime.enqueue_network_with_ingress_ownership(
+            message,
+            ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
     };
     let can_admit_network = |runtime: &SerializedV2Runtime<SumeragiV2Adapter>,
                              message: &wire::ConsensusMessageV2| {
@@ -1971,7 +2073,7 @@ fn certified_commit_uses_physical_slot_reserved_from_completions() {
         "the authenticated CommitQC owns the one slot hidden from completion producers"
     );
     runtime
-        .enqueue_network(commit)
+        .enqueue_network(commit, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the CommitQC consumes its reserved physical slot");
     assert_eq!(runtime.queued_commands(), 4);
     assert!(matches!(
@@ -1990,7 +2092,7 @@ fn certified_commit_arriving_first_preserves_every_ordinary_reserve() {
         signed_runtime_quorum_certificate(&context, &keys, 0xD0),
     ));
     runtime
-        .enqueue_network(commit)
+        .enqueue_network(commit, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the early CommitQC is charged to the certified slot");
     assert_eq!(
         runtime.remaining_completion_capacity(),
@@ -2008,7 +2110,7 @@ fn certified_commit_arriving_first_preserves_every_ordinary_reserve() {
                 ),
             ));
         runtime
-            .enqueue_network(prepare)
+            .enqueue_network(prepare, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("ordinary Progress capacity is independent of certificate arrival order");
     }
     assert_eq!(runtime.remaining_completion_capacity(), 2);
@@ -2048,17 +2150,26 @@ fn prepare_qc_cannot_spend_the_certified_physical_credit() {
     };
     for marker in [0xB0, 0xB1] {
         runtime
-            .enqueue_network(certificate(marker, wire::GlobalPhase::Prepare))
+            .enqueue_network(
+                certificate(marker, wire::GlobalPhase::Prepare),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("the two ordinary Progress positions accept PrepareQCs");
     }
     assert!(matches!(
-        runtime.enqueue_network(certificate(0xB2, wire::GlobalPhase::Prepare)),
+        runtime.enqueue_network(
+            certificate(0xB2, wire::GlobalPhase::Prepare),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(NetworkIngressError::Backpressure(
             EnqueueError::ReservedCapacity
         ))
     ));
     runtime
-        .enqueue_network(certificate(0xB3, wire::GlobalPhase::Commit))
+        .enqueue_network(
+            certificate(0xB3, wire::GlobalPhase::Commit),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("only the CommitQC receives the certified physical credit");
     assert_eq!(runtime.queued_commands(), 3);
     assert_eq!(runtime.remaining_completion_capacity(), 1);
@@ -2077,7 +2188,10 @@ fn distinct_certificates_share_exactly_one_physical_credit() {
     };
     for marker in 0xC0..=0xC2 {
         runtime
-            .enqueue_network(commit(marker))
+            .enqueue_network(
+                commit(marker),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("one certified root uses the extra slot and the others use Progress");
     }
     assert_eq!(runtime.queued_commands(), 3);
@@ -2087,7 +2201,10 @@ fn distinct_certificates_share_exactly_one_physical_credit() {
         "a fourth certificate cannot receive a second physical credit"
     );
     assert!(matches!(
-        runtime.enqueue_network(commit(0xC3)),
+        runtime.enqueue_network(
+            commit(0xC3),
+            &RuntimeExternalLifecycleCensus::empty_for_test()
+        ),
         Err(NetworkIngressError::Backpressure(
             EnqueueError::ReservedCapacity
         ))
@@ -2113,11 +2230,17 @@ fn retiring_the_sole_certificate_does_not_fake_completion_headroom() {
         ))
     };
     runtime
-        .enqueue_network(certificate(0xA0, wire::GlobalPhase::Commit))
+        .enqueue_network(
+            certificate(0xA0, wire::GlobalPhase::Commit),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the CommitQC owns the single certified credit");
     for marker in [0xA1, 0xA2] {
         runtime
-            .enqueue_network(certificate(marker, wire::GlobalPhase::Prepare))
+            .enqueue_network(
+                certificate(marker, wire::GlobalPhase::Prepare),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("ordinary Progress fills its exact class allocation");
     }
     stage_completion_for_queue_test(
@@ -2174,19 +2297,20 @@ fn unpublished_body_replacement_cannot_overbook_the_certified_slot() {
     canonical.chunk_hashes = vec![Hash::new(b"canonical replacement chunk"); 2];
     canonical.chunk_root = Hash::new(b"canonical replacement root");
     runtime
-        .enqueue_network(proposal)
+        .enqueue_network(proposal, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the conflicting proposal occupies Normal capacity");
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
                 signed_runtime_quorum_certificate_for_phase(
                     &context,
                     &keys,
                     0x95,
                     wire::GlobalPhase::Prepare,
                 ),
-            ),
-        ))
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("ordinary Progress occupies its class allocation");
     stage_completion_for_queue_test(
         &mut runtime,
@@ -2209,11 +2333,12 @@ fn unpublished_body_replacement_cannot_overbook_the_certified_slot() {
         .ingress
         .abort_canonical_body_available(reservation.clone());
     runtime
-        .enqueue_network(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::TimeoutCertificate(
+        .enqueue_network(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
                 signed_runtime_timeout_certificate(&context, &keys),
-            ),
-        ))
+            )),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the retained unpublished body cannot exclude the certified escape");
     assert_eq!(runtime.queued_commands(), 3);
     assert_eq!(
@@ -2257,7 +2382,7 @@ fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
     .expect("admit one unblocked retryable Progress root");
     bind_fake_local_deferred_target_for_test(&mut runtime, b"pacemaker-retry-target");
     let first = runtime
-        .dispatch_one_pacemaker_progress(start)
+        .dispatch_one_pacemaker_progress(start, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("retryable pacemaker dispatch remains exact")
         .expect("the unmarked occurrence owns one bounded turn");
     assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -2285,7 +2410,10 @@ fn pacemaker_retry_marks_excludes_and_reconciles_exact_fifo_occurrence() {
     );
     assert!(
         runtime
-            .dispatch_one_pacemaker_progress(start)
+            .dispatch_one_pacemaker_progress(
+                start,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("marked pacemaker selection remains valid")
             .is_none(),
         "the same retryable occurrence cannot spin on the next turn"
@@ -2345,7 +2473,11 @@ fn fence_predecessor_retry_gets_one_bounded_dependency_turn() {
         "serviceable deferred work may not overtake its older FIFO predecessor"
     );
     let first = runtime
-        .dispatch_one_fence_dependency(start, None)
+        .dispatch_one_fence_dependency(
+            start,
+            None,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("the retryable predecessor dependency remains exact")
         .expect("the oldest predecessor owns one bounded turn");
     assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -2364,7 +2496,11 @@ fn fence_predecessor_retry_gets_one_bounded_dependency_turn() {
     assert_eq!(runtime.queued_commands(), 1);
     assert!(
         runtime
-            .dispatch_one_fence_dependency(start, None)
+            .dispatch_one_fence_dependency(
+                start,
+                None,
+                &RuntimeExternalLifecycleCensus::empty_for_test()
+            )
             .expect("the marked dependency set remains valid")
             .is_none(),
         "the same retryable predecessor cannot spin ahead of its fence completion"
@@ -2461,14 +2597,15 @@ fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
         .expect("arm runtime before installing two certified views");
     for certificate_view in [0_u64, 1] {
         runtime
-            .enqueue_network(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::TimeoutCertificate(
+            .enqueue_network(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
                     signed_runtime_timeout_certificate_for_view(&context, &keys, certificate_view),
-                ),
-            ))
+                )),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("admit the next exact view certificate");
         let advanced = runtime
-            .try_step_pacemaker_escape(now)
+            .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("certified view installation remains exact")
             .expect("the next TC owns one pacemaker turn");
         let RuntimeStep::Advanced(effects) = advanced else {
@@ -2509,10 +2646,14 @@ fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
     ));
     assert!(runtime.driver.signature_fence_is_active());
     runtime
-        .enqueue_network_with_ingress_ownership(target_prepare, target_ownership)
+        .enqueue_network_with_ingress_ownership(
+            target_prepare,
+            target_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("admit the deferred PrepareQC target");
     let deferred = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("PrepareQC Busy handoff remains exact")
         .expect("the first PrepareQC owns one pacemaker turn");
     assert!(matches!(deferred, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -2543,7 +2684,11 @@ fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
         "the stale certified command must exercise the pacemaker path, not the pre-cut dependency path"
     );
     runtime
-        .enqueue_network_with_ingress_ownership(marked_prepare, marked_ownership)
+        .enqueue_network_with_ingress_ownership(
+            marked_prepare,
+            marked_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("admit one exact blocked FIFO occurrence");
     let marker = runtime
         .ingress
@@ -2560,10 +2705,14 @@ fn stale_certified_escape_preserves_same_fence_retry_exclusion() {
         .expect("bind the exact retry exclusion to the active signer");
     let marker_before = runtime.fence_retry_blocked_fifo_owners.clone();
     runtime
-        .enqueue_network_with_ingress_ownership(stale, stale_ownership)
+        .enqueue_network_with_ingress_ownership(
+            stale,
+            stale_ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("admit a valid but stale certified escape");
     let escaped = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("stale certified scheduling remains exact")
         .expect("the authenticated stale TC owns one pacemaker turn");
     assert!(matches!(escaped, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -2626,10 +2775,13 @@ fn certified_tc_crosses_full_fence_blocked_prepare_prefix() {
         ))
     };
     runtime
-        .enqueue_network(prepare(0xE1))
+        .enqueue_network(
+            prepare(0xE1),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("admit the first PrepareQC");
     let first = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("first PrepareQC scheduling is valid")
         .expect("first PrepareQC owns a pacemaker turn");
     assert!(matches!(first, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -2643,11 +2795,14 @@ fn certified_tc_crosses_full_fence_blocked_prepare_prefix() {
     assert_eq!(runtime.deferred_lifecycle_ownership.len(), 1);
     assert!(!runtime.driver().deferred_work_is_serviceable());
     runtime
-        .enqueue_network(prepare(0xE2))
+        .enqueue_network(
+            prepare(0xE2),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("admit the second PrepareQC");
     assert!(
         runtime
-            .try_step_pacemaker_escape(now)
+            .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("blocked PrepareQC classification is valid")
             .is_none(),
         "pacemaker escape cannot repeatedly redispatch a fence-blocked PrepareQC"
@@ -2655,7 +2810,10 @@ fn certified_tc_crosses_full_fence_blocked_prepare_prefix() {
     assert!(runtime.last_scheduler_ownership().is_none());
     assert_eq!(runtime.queued_commands(), 1);
     runtime
-        .enqueue_network(prepare(0xE3))
+        .enqueue_network(
+            prepare(0xE3),
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("fill the second ordinary Progress slot");
     stage_completion_for_queue_test(
         &mut runtime,
@@ -2672,11 +2830,11 @@ fn certified_tc_crosses_full_fence_blocked_prepare_prefix() {
         "the certified escape slot remains available after every ordinary slot fills"
     );
     runtime
-        .enqueue_network(tc)
+        .enqueue_network(tc, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the TC consumes the reserved certified slot");
     assert_eq!(runtime.queued_commands(), 4);
     let certified = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("certified selection remains valid")
         .expect("the later TC bypasses the older retry owner");
     let RuntimeStep::Advanced(effects) = certified else {
@@ -2706,7 +2864,7 @@ fn certified_tc_crosses_full_fence_blocked_prepare_prefix() {
         .expect("the executor consumes the TC EnterView ownership");
     assert!(runtime.driver().deferred_work_is_serviceable());
     let retired = runtime
-        .try_step_pacemaker_escape(now)
+        .try_step_pacemaker_escape(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the now-unblocked retained PrepareQC remains schedulable")
         .expect("the retained PrepareQC receives its terminal service turn");
     assert!(matches!(retired, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -2753,6 +2911,7 @@ fn exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer
             .enqueue_network_with_ingress_ownership(
                 message.clone(),
                 fair_network_ownership(&message, first_source),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
             )
             .expect("the first authenticated TC carrier owns the runtime command"),
         round_tag
@@ -2762,6 +2921,7 @@ fn exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer
             .enqueue_network_with_ingress_ownership(
                 message.clone(),
                 fair_network_ownership(&message, second_source),
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
             )
             .expect("the same TC from another source coalesces"),
         round_tag
@@ -2779,7 +2939,7 @@ fn exact_authenticated_timeout_certificate_coalesces_then_applies_through_signer
         .expect("the coalesced TC retains exact ingress ownership");
     assert!(retained.validate_exact());
     assert_eq!(retained.direct.len(), 2);
-    let effects = match runtime.step(now) {
+    let effects = match runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()) {
         Ok(RuntimeStep::Advanced(effects)) => effects,
         other => panic!("authenticated TC did not apply immediately: {other:?}"),
     };
@@ -2847,12 +3007,18 @@ fn admitted_progress_cannot_be_starved_by_older_normal_churn() {
     assert_eq!(initial_queue.normal.depth, 3);
     assert_eq!(initial_queue.progress.depth, 1);
     runtime
-        .step_and_take_scheduler_ownership_for_test(start)
+        .step_and_take_scheduler_ownership_for_test(
+            start,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("bounded class service selects admitted Progress");
     assert_eq!(runtime.driver.delivered.last(), Some(&(initial, 200)));
     for (expected, replacement) in [(0, 3), (1, 4), (2, 5)] {
         runtime
-            .step_and_take_scheduler_ownership_for_test(start)
+            .step_and_take_scheduler_ownership_for_test(
+                start,
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("normal work resumes after the bounded Progress turn");
         assert_eq!(runtime.driver.delivered.last(), Some(&(initial, expected)));
         enqueue_fake(
@@ -3000,7 +3166,7 @@ fn retry_scheduler_rejects_rehashed_unselected_logical_rank_change() {
     .expect("admit a separate unselected Normal occurrence");
     bind_fake_local_deferred_target_for_test(&mut runtime, b"unselected-rank-retry-target");
     let step = runtime
-        .dispatch_one_pacemaker_progress(start)
+        .dispatch_one_pacemaker_progress(start, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("the original retry transition is exact")
         .expect("Progress owns one bounded turn");
     assert!(matches!(step, RuntimeStep::Advanced(ref effects) if effects.is_empty()));
@@ -3135,7 +3301,11 @@ fn far_future_timeout_vote_retains_exact_wal_owner_without_blocking_eligible_pro
         let mut admissions = messages.into_iter().zip(ownerships);
         let ((first, _), ownership) = admissions.next().unwrap();
         runtime
-            .enqueue_network_with_ingress_ownership(first, ownership)
+            .enqueue_network_with_ingress_ownership(
+                first,
+                ownership,
+                &RuntimeExternalLifecycleCensus::empty_for_test(),
+            )
             .expect("retain authenticated far-future input");
         assert_eq!(
             runtime.ingress.commands.front().unwrap().class,
@@ -3148,7 +3318,10 @@ fn far_future_timeout_vote_retains_exact_wal_owner_without_blocking_eligible_pro
         let now = Instant::now();
         runtime.arm_live_clocks(now).expect("arm actual runtime");
         for _ in 0..3 {
-            assert!(matches!(runtime.step(now), Ok(RuntimeStep::Idle)));
+            assert!(matches!(
+                runtime.step(now, &RuntimeExternalLifecycleCensus::empty_for_test()),
+                Ok(RuntimeStep::Idle)
+            ));
             let evidence = runtime
                 .take_last_scheduler_ownership()
                 .expect("typed idle evidence");
@@ -3157,7 +3330,10 @@ fn far_future_timeout_vote_retains_exact_wal_owner_without_blocking_eligible_pro
             assert_eq!(runtime.take_effect_ownership(0), Ok(Vec::new()));
             assert!(
                 runtime
-                    .try_step_pacemaker_escape(now)
+                    .try_step_pacemaker_escape(
+                        now,
+                        &RuntimeExternalLifecycleCensus::empty_for_test()
+                    )
                     .expect("pending-only pacemaker probe remains valid")
                     .is_none()
             );
@@ -3175,7 +3351,11 @@ fn far_future_timeout_vote_retains_exact_wal_owner_without_blocking_eligible_pro
         }
         for ((message, _), ownership) in admissions {
             runtime
-                .enqueue_network_with_ingress_ownership(message, ownership)
+                .enqueue_network_with_ingress_ownership(
+                    message,
+                    ownership,
+                    &RuntimeExternalLifecycleCensus::empty_for_test(),
+                )
                 .expect("eligible honest input receives its preowned physical position");
         }
         let all_owners = exact_retained_runtime_queue_owners(&runtime);
@@ -3198,12 +3378,15 @@ fn far_future_timeout_vote_retains_exact_wal_owner_without_blocking_eligible_pro
         for selected_index in 1..5 {
             let step = if pacemaker {
                 runtime
-                    .try_step_pacemaker_escape(now)
+                    .try_step_pacemaker_escape(
+                        now,
+                        &RuntimeExternalLifecycleCensus::empty_for_test(),
+                    )
                     .expect("exact eligible Progress remains a pacemaker source")
                     .expect("future vote cannot hide honest Progress")
             } else {
                 runtime
-                    .step(now)
+                    .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
                     .expect("ordinary FIFO services the earliest eligible Progress")
             };
             let RuntimeStep::Advanced(effects) = step else {
@@ -3427,10 +3610,18 @@ fn future_proposal_keeps_exact_normal_owner_while_current_proposal_fetches_body(
         .unwrap()
         .clone();
     runtime
-        .enqueue_network_with_ingress_ownership(future, future_owner)
+        .enqueue_network_with_ingress_ownership(
+            future,
+            future_owner,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("retain future Normal owner");
     runtime
-        .enqueue_network_with_ingress_ownership(current, current_owner)
+        .enqueue_network_with_ingress_ownership(
+            current,
+            current_owner,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("enqueue current Normal owner");
     assert!(
         runtime
@@ -3447,7 +3638,7 @@ fn future_proposal_keeps_exact_normal_owner_while_current_proposal_fetches_body(
         .arm_live_clocks(now)
         .expect("arm exact normal runtime");
     let RuntimeStep::Advanced(effects) = runtime
-        .step(now)
+        .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("current proposal is eligible Normal work")
     else {
         panic!("future proposal blocked its current-view dependency")
@@ -3555,7 +3746,11 @@ fn future_timeout_owner_cannot_suppress_periodic_retry_or_bypass_timeout_signer(
         .expect("future vote owns an authenticated durable record")
         .clone();
     runtime
-        .enqueue_network_with_ingress_ownership(future, ownership)
+        .enqueue_network_with_ingress_ownership(
+            future,
+            ownership,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("retain the future physical occurrence before timer admission");
     let retained_owners = exact_retained_runtime_queue_owners(&runtime);
     let retained_rank = runtime.ingress.commands[0].lifecycle_ordinal;
@@ -3570,7 +3765,10 @@ fn future_timeout_owner_cannot_suppress_periodic_retry_or_bypass_timeout_signer(
     // converting the due timer into an idle turn.
     let first_periodic_at = start + runtime.retransmit_interval();
     let RuntimeStep::Advanced(first_effects) = runtime
-        .step(first_periodic_at)
+        .step(
+            first_periodic_at,
+            &RuntimeExternalLifecycleCensus::empty_for_test(),
+        )
         .expect("passive future ingress cannot suppress the first periodic turn")
     else {
         panic!("future TimeoutVote suppressed a due periodic owner")
@@ -3599,7 +3797,7 @@ fn future_timeout_owner_cannot_suppress_periodic_retry_or_bypass_timeout_signer(
 
     let deadline = start + runtime.round_timeout();
     let RuntimeStep::Advanced(timeout_effects) = runtime
-        .step(deadline)
+        .step(deadline, &RuntimeExternalLifecycleCensus::empty_for_test())
         .expect("absolute timeout still creates its real durable signing intent")
     else {
         panic!("absolute timeout unexpectedly idled")
@@ -3625,16 +3823,25 @@ fn future_timeout_owner_cannot_suppress_periodic_retry_or_bypass_timeout_signer(
         effects => panic!("unexpected timeout effects: {effects:?}"),
     };
     assert_eq!(timeout_ownership.len(), 1);
-    runtime
-        .set_external_lifecycle_owners(vec![timeout_ownership[0].owner().clone()])
-        .expect("publish the actual pending timeout signer owner");
+    let mut external_owners = vec![timeout_ownership[0].owner().clone()];
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     assert!(runtime.driver.signature_fence_is_active());
 
     // The eligibility exception applies only to retained authenticated
     // ingress. The younger retry must still wait for the exact local signer.
     let retry_at = deadline + runtime.retransmit_interval();
     for _ in 0..2 {
-        assert!(matches!(runtime.step(retry_at), Ok(RuntimeStep::Idle)));
+        assert!(matches!(
+            runtime.step(
+                retry_at,
+                &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                    .expect("valid borrowed executor owners")
+            ),
+            Ok(RuntimeStep::Idle)
+        ));
         let pending = runtime
             .take_last_scheduler_ownership()
             .expect("pending signer retains exact idle evidence");
@@ -3659,11 +3866,17 @@ fn future_timeout_owner_cannot_suppress_periodic_retry_or_bypass_timeout_signer(
     runtime
         .enqueue_signature_with_owner(signature_tag, signature, &timeout_ownership[0])
         .expect("enqueue the matching signature under its exact physical owner");
-    runtime
-        .set_external_lifecycle_owners(Vec::new())
-        .expect("retire signer only after its completion is queued");
+    external_owners = Vec::new();
+    assert!(
+        RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024).is_ok(),
+        "retain an exact bounded external-owner handoff"
+    );
     let RuntimeStep::Advanced(completion_effects) = runtime
-        .step(retry_at)
+        .step(
+            retry_at,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("the exact older signature completion precedes periodic retry")
     else {
         panic!("actual signature completion unexpectedly idled")
@@ -3695,7 +3908,11 @@ fn future_timeout_owner_cannot_suppress_periodic_retry_or_bypass_timeout_signer(
     // Treat the first broadcast as lost. The same already-frozen retry now
     // emits the exact durable vote while the future ingress owner stays put.
     let RuntimeStep::Advanced(retry_effects) = runtime
-        .step(retry_at)
+        .step(
+            retry_at,
+            &RuntimeExternalLifecycleCensus::new(external_owners.iter(), 1_024)
+                .expect("valid borrowed executor owners"),
+        )
         .expect("retained future vote cannot suppress durable TimeoutVote retry")
     else {
         panic!("future TimeoutVote suppressed the post-signature retransmission")
@@ -3805,7 +4022,11 @@ fn persisted_decision_retires_future_prepare_qc_before_later_terminal_control() 
             .collect::<Vec<_>>();
         for ((message, _), ownership) in messages.into_iter().zip(ownerships) {
             runtime
-                .enqueue_network_with_ingress_ownership(message, ownership)
+                .enqueue_network_with_ingress_ownership(
+                    message,
+                    ownership,
+                    &RuntimeExternalLifecycleCensus::empty_for_test(),
+                )
                 .expect("queue each independent authenticated physical occurrence");
         }
         let original = exact_retained_runtime_queue_owners(&runtime);
@@ -3814,7 +4035,7 @@ fn persisted_decision_retires_future_prepare_qc_before_later_terminal_control() 
         let now = Instant::now();
         runtime.arm_live_clocks(now).expect("arm real runtime");
         let RuntimeStep::Advanced(decision_effects) = runtime
-            .step(now)
+            .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
             .expect("current CommitQC passes the retained future PrepareQC")
         else {
             panic!("current CommitQC unexpectedly idled")
@@ -3862,12 +4083,15 @@ fn persisted_decision_retires_future_prepare_qc_before_later_terminal_control() 
         for expected_index in [0, 2] {
             let step = if pacemaker {
                 runtime
-                    .try_step_pacemaker_escape(now)
+                    .try_step_pacemaker_escape(
+                        now,
+                        &RuntimeExternalLifecycleCensus::empty_for_test(),
+                    )
                     .expect("typed pacemaker can retire terminal controls")
                     .expect("terminal control is runnable")
             } else {
                 runtime
-                    .step(now)
+                    .step(now, &RuntimeExternalLifecycleCensus::empty_for_test())
                     .expect("ordinary FIFO retires terminal controls in order")
             };
             let RuntimeStep::Advanced(effects) = step else {

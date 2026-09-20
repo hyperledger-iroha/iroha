@@ -687,6 +687,45 @@ struct FetchCompletionPlan {
     certified_retirement: Option<CertifiedFetchRetirementPlan>,
     runtime_reservation: BodyAvailableReservation,
 }
+/// Fresh physical dependencies which must settle before terminal Decision cleanup.
+///
+/// This is a per-call projection of the worker command index, never retained
+/// scheduling state. Waiting preserves the executor's existing Apply owner.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum DecisionPersistenceReadinessV1 {
+    /// No admitted certified-body persistence owns a completion.
+    Ready,
+    /// These exact admitted commands still require authenticated Phase B.
+    Waiting(BTreeSet<EffectWorkId>),
+}
+impl DecisionPersistenceReadinessV1 {
+    /// Whether strict terminal body cleanup may proceed now.
+    pub(in crate::sumeragi) fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready)
+    }
+}
+
+/// Current durable Decision authority excluding one exact persisted Fetch result.
+///
+/// Only the executor can mint this token after authenticating the pending
+/// request, response, pipeline owner, and current reducer Decision.
+#[derive(Clone, Copy)]
+pub(in crate::sumeragi) struct CertifiedFetchDecisionExclusionV1 {
+    decision: DurableDecision,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    manifest_hash: HashOf<wire::PayloadManifest>,
+}
+impl CertifiedFetchDecisionExclusionV1 {
+    /// Bind cancellation to the same authenticated canonical body receipt.
+    pub(in crate::sumeragi) fn matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
+        self.round == receipt.round()
+            && self.subject == receipt.subject()
+            && self.manifest_hash == receipt.manifest_hash()
+            && (self.decision.1, self.decision.2) != (self.round, self.subject)
+    }
+}
+
 /// Closed executor-side retirement prepared for the coordinator-owned
 /// certified-Fetch completion path.
 /// Ordinary certified-Fetch Phase B consumes this plan through the live lifecycle transaction.
@@ -705,8 +744,15 @@ pub(in crate::sumeragi) struct PreparedLifecycleCertifiedFetchCompletion {
     durable_receipt: DurableBodyReceipt,
     response_hash: HashOf<wire::CertifiedBodyResponse>,
     claim_preflight: CertifiedBodyResponseClaimPreflight,
+    decision_exclusion: Option<CertifiedFetchDecisionExclusionV1>,
 }
 impl PreparedLifecycleCertifiedFetchCompletion {
+    /// Borrow current Decision exclusion authority, when this result is obsolete.
+    pub(in crate::sumeragi) const fn decision_exclusion(
+        &self,
+    ) -> Option<&CertifiedFetchDecisionExclusionV1> {
+        self.decision_exclusion.as_ref()
+    }
     /// Borrow the exact service task whose owner must be removed after dequeue.
     pub(in crate::sumeragi) const fn task(&self) -> &BodyFetchTask {
         &self.pending.task

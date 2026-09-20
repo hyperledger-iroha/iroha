@@ -79,7 +79,7 @@ fn run_block(
         })
         .collect();
     assert_eq!(
-        vb.as_ref().entrypoint_hashes().collect::<Vec<_>>(),
+        vb.as_ref().network_input_hashes().collect::<Vec<_>>(),
         payload_hashes,
         "entrypoint hashes must preserve payload order independently of execution order"
     );
@@ -133,7 +133,15 @@ fn scheduler_tie_break_stable_by_call_hash_then_index() {
         let (vb, got) = run_block(&state, permuted_txs);
         assert_eq!(got, expected, "execution order must be stable");
         // All must be approved
-        assert!(vb.as_ref().results().take(4).all(|r| r.as_ref().is_ok()));
+        assert!((0..4).all(|index| {
+            vb.as_ref()
+                .network_output_at(index)
+                .expect("validated transaction has an output")
+                .1
+                .result
+                .as_ref()
+                .is_ok()
+        }));
     }
 }
 #[test]
@@ -174,7 +182,15 @@ fn scheduler_tie_break_randomized_input_orders() {
             got, expected,
             "execution order must be stable across permutations"
         );
-        assert!(vb.as_ref().results().take(4).all(|r| r.as_ref().is_ok()));
+        assert!((0..4).all(|index| {
+            vb.as_ref()
+                .network_output_at(index)
+                .expect("validated transaction has an output")
+                .1
+                .result
+                .as_ref()
+                .is_ok()
+        }));
     }
 }
 
@@ -204,9 +220,14 @@ fn scheduler_results_preserve_payload_indices_after_reordering() {
     for _ in 0..txs.len() {
         let (block, execution_order) = run_block(&state, txs.clone());
         assert_eq!(execution_order, expected);
-        let results: Vec<_> = block.as_ref().results().collect();
-        assert_eq!(results.len(), txs.len());
-        for (tx, result) in txs.iter().zip(results) {
+        assert_eq!(block.as_ref().execution_outputs().len(), txs.len());
+        for (index, tx) in txs.iter().enumerate() {
+            let result = &block
+                .as_ref()
+                .network_output_at(u32::try_from(index).expect("input index fits u32"))
+                .expect("validated transaction has an output")
+                .1
+                .result;
             assert_eq!(
                 result.as_ref().is_err(),
                 tx.hash_as_entrypoint() == rejected_hash,

@@ -214,6 +214,7 @@ pub(crate) use projection::{
     ProducerTurnTerminalSettlementErrorV1, ProducerTurnTerminalSettlementFailureV1,
 };
 pub(in crate::sumeragi) use replay_authority::LifecycleReplayAuthorityV1;
+pub(in crate::sumeragi) use replay_authority::PendingKuraApplyComparisonV1;
 pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLineageV1;
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
 #[allow(unused_imports, reason = "reviewed replay-evidence namespace")]

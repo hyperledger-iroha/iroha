@@ -159,7 +159,7 @@ pub trait AsyncQueryBuilderExt<T: HasTypedBatchIter> {
     -> impl Future<Output = Result<T, SingleQueryError<QueryError>>> + Send;
 }
 
-impl<'a, Q, T> AsyncQueryBuilderExt<T> for QueryBuilder<'a, AccountClient, Q, T>
+impl<Q, T> AsyncQueryBuilderExt<T> for QueryBuilder<'_, AccountClient, Q, T>
 where
     Q: Query
         + HasProjection<PredicateMarker>
@@ -169,39 +169,55 @@ where
     Q::Item: Send + Sync + ItemKindTag,
     T: HasTypedBatchIter + HasProjection<PredicateMarker> + Send + 'static,
     T::TypedBatchIter: Send,
-    QueryBuilder<'a, AccountClient, Q, T>: Send,
 {
-    async fn execute(self) -> QueryResult<QueryStream<T>> {
+    fn execute(self) -> impl Future<Output = QueryResult<QueryStream<T>>> + Send {
+        // Consume the generic builder before creating the future. Only the
+        // concrete request and account reference cross the transport await.
         let (account, request) = self.into_request();
-        let (batch, cursor) = account.start_query(request).await?;
-        QueryStream::new(batch, cursor)
+        async move {
+            let (batch, cursor) = account.start_query(request).await?;
+            QueryStream::new(batch, cursor)
+        }
     }
 
-    async fn execute_all(self) -> QueryResult<Vec<T>> {
-        let mut stream = AsyncQueryBuilderExt::execute(self).await?;
-        let mut rows = Vec::new();
-        while let Some(row) = stream.next().await {
-            rows.push(row?);
+    fn execute_all(self) -> impl Future<Output = QueryResult<Vec<T>>> + Send {
+        let query = AsyncQueryBuilderExt::execute(self);
+        async move {
+            let mut stream = query.await?;
+            let mut rows = Vec::new();
+            while let Some(row) = stream.next().await {
+                rows.push(row?);
+            }
+            Ok(rows)
         }
-        Ok(rows)
     }
 
-    async fn execute_single_opt(self) -> Result<Option<T>, SingleQueryError<QueryError>> {
-        let mut stream = AsyncQueryBuilderExt::execute(self).await?;
-        let first = stream.next().await.transpose()?;
-        if stream.next().await.transpose()?.is_some() {
-            return Err(SingleQueryError::ExpectedOneOrZeroGotMany);
+    fn execute_single_opt(
+        self,
+    ) -> impl Future<Output = Result<Option<T>, SingleQueryError<QueryError>>> + Send {
+        let query = AsyncQueryBuilderExt::execute(self);
+        async move {
+            let mut stream = query.await?;
+            let first = stream.next().await.transpose()?;
+            if stream.next().await.transpose()?.is_some() {
+                return Err(SingleQueryError::ExpectedOneOrZeroGotMany);
+            }
+            Ok(first)
         }
-        Ok(first)
     }
 
-    async fn execute_single(self) -> Result<T, SingleQueryError<QueryError>> {
-        let mut stream = AsyncQueryBuilderExt::execute(self).await?;
-        let first = stream.next().await.transpose()?;
-        if stream.next().await.transpose()?.is_some() {
-            return Err(SingleQueryError::ExpectedOneGotMany);
+    fn execute_single(
+        self,
+    ) -> impl Future<Output = Result<T, SingleQueryError<QueryError>>> + Send {
+        let query = AsyncQueryBuilderExt::execute(self);
+        async move {
+            let mut stream = query.await?;
+            let first = stream.next().await.transpose()?;
+            if stream.next().await.transpose()?.is_some() {
+                return Err(SingleQueryError::ExpectedOneGotMany);
+            }
+            first.ok_or(SingleQueryError::ExpectedOneGotNone)
         }
-        first.ok_or(SingleQueryError::ExpectedOneGotNone)
     }
 }
 

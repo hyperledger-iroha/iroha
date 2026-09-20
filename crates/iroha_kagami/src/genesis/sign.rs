@@ -1106,26 +1106,27 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
         [Account::new(authority.clone()).build(&authority)],
         [],
     );
-    let default_nexus;
-    let dataspace_catalog = if let Some(config) = config {
-        &config.nexus.dataspace_catalog
-    } else {
-        default_nexus = actual::Nexus::default();
-        &default_nexus.dataspace_catalog
+    let nexus = match config {
+        Some(config) => config.nexus.clone(),
+        None => staged_default_nexus(genesis)?,
     };
     // Match fresh-node and `iroha3d --check-config` semantics exactly: genesis aliases are
     // pre-seeded before the block executes so declarative EnsureAlias instructions repair
     // derived state without charging or depending on policy activation order.
-    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &provisional.0, dataspace_catalog);
-    let kura = match config {
-        Some(config) => Kura::new_temporary_with_configured_lane_catalog(
-            &config.kura,
-            &config.nexus.lane_config,
-            &config.nexus.configured_lane_catalog,
-        )
-        .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?,
-        None => Kura::blank_kura_for_testing(),
-    };
+    iroha_core::sns::seed_genesis_alias_bootstrap(
+        &mut world,
+        &provisional.0,
+        &nexus.dataspace_catalog,
+    );
+    // Even the generic default profile needs an authenticated configured catalog.
+    // A blank test Kura has no production network/geometry binding to restore.
+    let kura_config = config.map_or_else(staged_default_kura, |config| config.kura.clone());
+    let kura = Kura::new_temporary_with_configured_lane_catalog(
+        &kura_config,
+        &nexus.lane_config,
+        &nexus.configured_lane_catalog,
+    )
+    .map_err(|error| eyre!("initialize isolated Kura for staged genesis: {error}"))?;
     let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
         world,
         Arc::clone(&kura),
@@ -1134,8 +1135,7 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
         staging_network_id,
     )
     .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
-    configure_staged_genesis_state(&mut state, genesis, config)?;
-    install_staged_nexus_policies(&mut state, genesis, config)?;
+    configure_staged_genesis_state(&mut state, genesis, config, nexus)?;
     let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
         .map_err(|error| eyre!("invalid signed Sumeragi v2 genesis roster: {error}"))?;
     if voters.is_empty() {
@@ -1156,11 +1156,19 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
     )
     .unpack(|_| {})
     .map_err(|(block, error)| {
-        let transaction_errors = (0..block.external_transactions().count())
-            .filter_map(|index| {
-                block
-                    .error(index)
-                    .map(|reason| format!("transaction[{index}]: {reason:?}"))
+        let transaction_errors = block
+            .execution_outputs()
+            .iter()
+            .enumerate()
+            .filter_map(|(output_index, output)| {
+                use iroha_data_model::block::execution_output::ExecutionOutputV1;
+                let reason = output.result().as_ref().err()?;
+                let source = match output {
+                    ExecutionOutputV1::Network(row) => format!("transaction[{}]", row.input_index),
+                    ExecutionOutputV1::Pipeline(_) => format!("pipeline output[{output_index}]"),
+                    ExecutionOutputV1::Time(_) => format!("time output[{output_index}]"),
+                };
+                Some(format!("{source}: {reason:?}"))
             })
             .collect::<Vec<_>>();
         if transaction_errors.is_empty() {
@@ -1230,6 +1238,14 @@ fn staged_default_nexus(
 ) -> Result<actual::Nexus, color_eyre::eyre::Error> {
     let discriminant = genesis.chain_discriminant();
     let mut nexus = actual::Nexus::default();
+    if public_xor_profile_for_manifest(genesis).is_some() {
+        // The public bootstrap and the State that executes it must select the same
+        // signed XOR alias binding. Generic synthetic staking/fee defaults remain
+        // specific to private profiles.
+        let public_xor = configured_npos_bootstrap_stake_asset_id(genesis, None)?.to_string();
+        nexus.staking.stake_asset_id = public_xor.clone();
+        nexus.fees.fee_asset_id = public_xor;
+    }
     nexus.staking.stake_escrow_account_id = staged_default_account_literal(
         &nexus.staking.stake_escrow_account_id,
         discriminant,
@@ -1271,11 +1287,31 @@ fn staged_default_pipeline(
     )?;
     Ok(staged_genesis_pipeline(pipeline))
 }
+fn staged_default_kura() -> actual::Kura {
+    actual::Kura {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        // The temporary constructor substitutes its own owned directory before opening storage.
+        store_dir: iroha_config::base::WithOrigin::inline(PathBuf::from(defaults::kura::STORE_DIR)),
+        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
+        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
+        fastpq_artifacts: defaults::kura::FASTPQ_ARTIFACT_POLICY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: defaults::kura::FSYNC_MODE,
+        fsync_interval: defaults::kura::FSYNC_INTERVAL,
+    }
+}
 fn configure_staged_genesis_state(
     state: &mut State,
     genesis: &RawGenesisTransaction,
     config: Option<&actual::Root>,
+    nexus: actual::Nexus,
 ) -> Result<(), color_eyre::eyre::Error> {
+    // Every governed runtime projection requires its validated manifest baseline, including
+    // the views taken while configuring and reconciling the pre-genesis lane catalog.
+    install_staged_nexus_policies(state, genesis, &nexus)?;
     if let Some(config) = config {
         state.set_pipeline(staged_genesis_pipeline(config.pipeline.clone()));
         state.set_oracle(config.oracle.clone());
@@ -1286,52 +1322,43 @@ fn configure_staged_genesis_state(
         state
             .set_zk(config.zk.clone())
             .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;
-        state
-            .prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)
-            .map_err(|error| eyre!("invalid primary Nexus geometry for staged genesis: {error}"))?;
-        state
-            .restore_kura_lane_segments_before_startup_replay()
-            .map_err(|error| eyre!("restore staged genesis primary Nexus geometry: {error}"))?;
-        state
-            .set_nexus_from_config(config.nexus.clone())
-            .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
-        state.set_crypto(config.crypto.clone());
     } else {
         state.set_pipeline(staged_default_pipeline(genesis)?);
-        state
-            .set_nexus(staged_default_nexus(genesis)?)
-            .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
-        state.set_crypto(actual::Crypto::default());
     }
+    state
+        .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+        .map_err(|error| eyre!("invalid primary Nexus geometry for staged genesis: {error}"))?;
+    state
+        .restore_kura_lane_segments_before_startup_replay()
+        .map_err(|error| eyre!("restore staged genesis primary Nexus geometry: {error}"))?;
+    state
+        .set_nexus_from_config(nexus)
+        .map_err(|error| eyre!("invalid Nexus config for staged genesis: {error}"))?;
+    state.set_crypto(config.map_or_else(actual::Crypto::default, |config| config.crypto.clone()));
     Ok(())
 }
 fn install_staged_nexus_policies(
     state: &mut State,
     genesis: &RawGenesisTransaction,
-    config: Option<&actual::Root>,
+    nexus: &actual::Nexus,
 ) -> Result<(), color_eyre::eyre::Error> {
-    let nexus = state.nexus_snapshot();
-    let lane_compliance = match config {
-        Some(config) if config.nexus.compliance.enabled => {
-            let policy_dir = config.nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
+    let lane_manifests = staged_lane_manifest_registry(genesis, nexus)?;
+    let lane_compliance = if nexus.compliance.enabled {
+        let policy_dir =
+            nexus.compliance.policy_dir.as_ref().ok_or_else(|| {
                 eyre!("lane compliance is enabled but no policy_dir is configured")
             })?;
-            let engine = LaneComplianceEngine::from_directory(
-                policy_dir,
-                config.nexus.compliance.audit_only,
-            )
+        let engine = LaneComplianceEngine::from_directory(policy_dir, nexus.compliance.audit_only)
             .map_err(|error| eyre!("load staged genesis lane compliance policies: {error}"))?;
-            engine
-                .validate_active_catalog(&nexus.lane_catalog)
-                .map_err(|error| {
-                    eyre!("validate staged genesis lane compliance policies: {error}")
-                })?;
-            Some(Arc::new(engine))
-        }
-        _ => None,
+        engine
+            .validate_active_catalog(&nexus.lane_catalog)
+            .map_err(|error| eyre!("validate staged genesis lane compliance policies: {error}"))?;
+        Some(Arc::new(engine))
+    } else {
+        None
     };
+    // Load and validate both policy owners before changing either installed projection.
     state.install_lane_compliance_engine(lane_compliance);
-    let lane_manifests = staged_lane_manifest_registry(genesis, &nexus)?;
     state.install_lane_manifests(&Arc::new(lane_manifests));
     Ok(())
 }
@@ -1949,6 +1976,16 @@ mod tests {
         if let Ok(config) = load_peer_config_bytes(path, &source_bytes) {
             return config;
         }
+        actual::Root::from_toml_source(TomlSource::inline(checked_in_consensus_config_table(path)))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "failed to validate consensus projection from {}: {error}",
+                    path.display()
+                )
+            })
+    }
+    fn checked_in_consensus_config_table(path: &std::path::Path) -> toml::Table {
+        let source_bytes = fs::read(path).expect("read checked-in config");
         // Some deployment templates deliberately contain unresolved
         // runtime-secret bindings outside this projection. Reparse only the
         // Nexus and Pipeline tables consumed by the Nexus/AMX commitment,
@@ -2012,12 +2049,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 path.display()
             )
         });
-        actual::Root::from_toml_source(TomlSource::inline(table)).unwrap_or_else(|error| {
-            panic!(
-                "failed to validate consensus projection from {}: {error}",
-                path.display()
-            )
-        })
+        table
     }
     fn bind_fixture_private_key(
         table: &mut toml::Table,
@@ -2494,17 +2526,29 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             signed.0.has_results(),
             "the published signed genesis must carry validated execution results"
         );
-        assert_eq!(
-            signed.0.results().count(),
-            signed.0.entrypoint_hashes().count(),
-            "every executed genesis entrypoint must have one result"
-        );
+        signed
+            .0
+            .validate_output_merkle_cache()
+            .expect("published genesis has complete typed source/output ownership");
+        for input_index in 0..signed.0.network_entrypoint_count() {
+            let (_, output) = signed
+                .0
+                .network_output_at(u32::try_from(input_index).expect("genesis input fits u32"))
+                .expect("every executed genesis entrypoint must have one Network result");
+            assert!(
+                output.result.as_ref().is_ok(),
+                "genesis Network result failed"
+            );
+        }
         assert!(
-            signed.0.results().all(|result| result.as_ref().is_ok()),
+            signed
+                .0
+                .output_results()
+                .all(|result| result.as_ref().is_ok()),
             "every published genesis result must be successful"
         );
-        let minimum_committed_fragments =
-            u64::try_from(signed.0.results().count()).expect("genesis result count fits u64");
+        let minimum_committed_fragments = u64::try_from(signed.0.output_results().count())
+            .expect("genesis result count fits u64");
         let actual_committed_fragments = signed
             .0
             .committed_fragment_count()
@@ -2586,6 +2630,53 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .contains("changed the signed execution policy"),
             "unexpected execution-policy tamper error: {execution_error:#}"
         );
+    }
+
+    #[test]
+    fn default_genesis_staging_authenticates_catalog_and_reproduces_signed_context() {
+        let genesis_key_pair = KeyPair::try_from_seed(vec![0x6E; 32], Algorithm::Ed25519)
+            .expect("derive deterministic default staging key");
+        let raw =
+            GenesisBuilder::new_without_executor(ChainId::from("default-genesis-staging"), ".")
+                .set_topology_for_test(valid_test_topology_entries(4))
+                .build_raw()
+                .expect("complete generic four-validator genesis")
+                .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+                .with_consensus_meta();
+        let (bound_manifest, signed) = bind_and_sign_staged_sumeragi_v2_context(
+            raw,
+            &genesis_key_pair,
+            None,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            Some(1_700_000_000_000),
+        )
+        .expect("no-config signing must authenticate default storage before executing genesis");
+        assert!(signed.0.network_entrypoint_count() > 0);
+        assert!(signed.0.has_results());
+        assert!(
+            signed
+                .0
+                .output_results()
+                .all(|result| result.as_ref().is_ok())
+        );
+        signed
+            .0
+            .validate_output_merkle_cache()
+            .expect("complete executed genesis outputs");
+        assert_genesis_signatures_verify(&signed.0, &genesis_key_pair);
+        let restaged = restage_signed_sumeragi_v2_context_hashes(&bound_manifest, None, &signed.0)
+            .expect("default staging must also accept the final signed network identity");
+        let parameters = bound_manifest.sumeragi_v2_context_parameters();
+        assert_eq!(
+            restaged.nexus_amx_context_hash,
+            Hash::prehashed(parameters.nexus_amx_context_hash)
+        );
+        assert_eq!(
+            restaged.execution_policy_hash,
+            Hash::prehashed(parameters.execution_policy_hash)
+        );
+        assert_eq!(restaged.executed_block.hash(), signed.0.hash());
     }
 
     fn checked_genesis_sign_keypair() -> CryptoKeyPair {
@@ -3444,7 +3535,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
-    fn sign_without_manifest_mutations_preserves_direct_manifest_payload() {
+    fn sign_binds_context_and_preserves_direct_manifest_instruction_batches() {
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::parameter::BlockParameter;
         use std::num::NonZeroU64;
@@ -3477,13 +3568,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
-        let expected = manifest
-            .clone()
-            .build_and_sign_with_confidential_policy_hash(
-                &key_pair,
-                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
-            )
-            .expect("direct manifest signing should succeed");
         let args = Args {
             genesis_file: genesis_file.path().to_path_buf(),
             out_file: None,
@@ -3501,6 +3585,24 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         writer.flush().expect("flush output");
         let bytes = writer.into_inner().expect("extract buffer");
         let actual = decode_framed_signed_block(&bytes).expect("decode signed block");
+        // Signing derives exactly these two execution commitments. Preserve every other
+        // context field, recompute its fingerprint, and compare every complete instruction batch.
+        let signed_meta = consensus_handshake_meta(&actual);
+        signed_meta
+            .validate()
+            .expect("signed consensus metadata is complete");
+        let mut bound_parameters = manifest.sumeragi_v2_context_parameters();
+        bound_parameters.nexus_amx_context_hash = signed_meta.sumeragi_v2.nexus_amx_context_hash;
+        bound_parameters.execution_policy_hash = signed_meta.sumeragi_v2.execution_policy_hash;
+        let expected = manifest
+            .with_sumeragi_v2_context_parameters(bound_parameters)
+            .with_consensus_meta()
+            .build_and_sign_with_confidential_policy_hash(
+                &key_pair,
+                Some(iroha_core::state::default_genesis_confidential_policy_hash()),
+            )
+            .expect("direct signing of the exactly context-bound manifest should succeed");
+        assert_genesis_signatures_verify(&actual, &key_pair);
         let actual_instructions: Vec<_> = actual
             .external_transactions()
             .map(|tx| tx.instructions().clone())
@@ -3512,7 +3614,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .collect();
         assert_eq!(
             actual_instructions, expected_instructions,
-            "signing an unchanged manifest should preserve parsed transaction payloads"
+            "binding computed context must preserve all remaining instructions and transaction boundaries"
         );
         assert_eq!(
             actual.da_proof_policies(),
@@ -3532,8 +3634,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     )]
     fn generated_nexus_localnet_can_be_resigned_with_its_peer_config() {
         let temp = tempfile::tempdir().expect("create localnet output dir");
-        let canonical_temp =
-            fs::canonicalize(temp.path()).expect("canonical localnet fixture root");
+        let output_dir = fs::canonicalize(temp.path()).expect("canonical localnet output path");
         let seed = "localnet-resign-confidential-policy".to_owned();
         let options = crate::localnet::LocalnetOptions {
             sora_profile: Some(crate::localnet::SoraProfile::Nexus),
@@ -3544,7 +3645,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             public_host: crate::localnet::DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 31_080,
             base_p2p_port: 31_337,
-            out_dir: canonical_temp.clone(),
+            out_dir: output_dir.clone(),
             extra_accounts: 0,
             assets: Vec::new(),
             block_cadence_ms: None,
@@ -3552,9 +3653,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         };
         crate::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
             .expect("generate Nexus localnet");
-        let generated_bytes = fs::read(temp.path().join("genesis.signed.nrt"))
-            .expect("read generated signed genesis");
-        let config_path = canonical_temp.join("peer0.toml");
+        let generated_bytes =
+            fs::read(output_dir.join("genesis.signed.nrt")).expect("read generated signed genesis");
+        let config_path = output_dir.join("peer0.toml");
         let config = load_peer_config(&config_path).expect("load generated peer config");
         let expected_policy =
             iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
@@ -3569,7 +3670,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         invalid_compliance_config.nexus.compliance.enabled = true;
         invalid_compliance_config.nexus.compliance.policy_dir = None;
         let invalid_compliance_error = bind_and_sign_staged_sumeragi_v2_context(
-            RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+            RawGenesisTransaction::from_path(output_dir.join("genesis.json"))
                 .expect("reload generated genesis manifest"),
             &genesis_key_pair,
             Some(&invalid_compliance_config),
@@ -3589,7 +3690,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "unexpected compliance staging error: {invalid_compliance_error:#}"
         );
         let args = Args {
-            genesis_file: temp.path().join("genesis.json"),
+            genesis_file: output_dir.join("genesis.json"),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
@@ -3784,51 +3885,192 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "auto-bootstrap must not emit an orphan account derived from public genesis data"
         );
     }
-    fn nexus_profile_with_staking_overrides(overrides: &str, genesis_file: &Path) -> PathBuf {
-        use std::fmt::Write as _;
-        let config =
-            fs::read_to_string(nexus_profile_config_path()).expect("read nexus profile config");
-        let mut config_without_staking = String::new();
-        let mut skipping_staking = false;
-        for line in config.lines() {
-            if line == "[nexus.staking]" {
-                skipping_staking = true;
-                continue;
-            }
-            if skipping_staking && line.starts_with('[') {
-                skipping_staking = false;
-            }
-            if !skipping_staking {
-                writeln!(config_without_staking, "{line}").expect("copy config line");
-            }
+    fn bind_fixture_network_and_governance_accounts(table: &mut toml::Table, discriminant: u16) {
+        // The real Taira profile explicitly projects these disabled-service and
+        // governance identities too. User config deliberately rejects foreign
+        // literals, including unprojected default-network account strings.
+        let operator = staged_default_account_literal(
+            &defaults::soranet::vpn::operator_account_id(),
+            discriminant,
+            "fixture VPN operator",
+        )
+        .expect("manifest-specific VPN operator");
+        let network = table
+            .get_mut("network")
+            .and_then(toml::Value::as_table_mut)
+            .expect("fixture network config");
+        assert!(
+            !network.contains_key("soranet_vpn"),
+            "fixture must not overwrite an explicit VPN identity"
+        );
+        network.insert(
+            "soranet_vpn".to_owned(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "operator_account_id".to_owned(),
+                toml::Value::String(operator),
+            )])),
+        );
+        let mut governance = toml::Table::new();
+        for (field, literal) in [
+            (
+                "citizenship_escrow_account",
+                defaults::governance::citizenship_escrow_account(),
+            ),
+            (
+                "bond_escrow_account",
+                defaults::governance::bond_escrow_account(),
+            ),
+            (
+                "slash_receiver_account",
+                defaults::governance::slash_receiver_account(),
+            ),
+            (
+                "viral_incentive_pool_account",
+                defaults::governance::viral_incentive_pool_account(),
+            ),
+            (
+                "viral_escrow_account",
+                defaults::governance::viral_escrow_account(),
+            ),
+            (
+                "sorafs_pin_fee_treasury_account",
+                defaults::governance::sorafs_pin_fee::treasury_account(),
+            ),
+        ] {
+            governance.insert(
+                field.to_owned(),
+                toml::Value::String(
+                    staged_default_account_literal(&literal, discriminant, field)
+                        .expect("manifest-specific governance identity"),
+                ),
+            );
         }
-        writeln!(config_without_staking, "\n[nexus.staking]\n{overrides}")
-            .expect("append staking overrides");
-        let table = config_without_staking
-            .parse::<toml::Table>()
-            .expect("parse overridden config");
+        assert!(
+            !table.contains_key("gov"),
+            "fixture must not overwrite explicit governance identities"
+        );
+        table.insert("gov".to_owned(), toml::Value::Table(governance));
+    }
+    fn nexus_profile_with_staking_overrides(
+        genesis_file: &Path,
+        overrides: &str,
+    ) -> (tempfile::TempDir, PathBuf) {
         let manifest = RawGenesisTransaction::from_path(genesis_file)
-            .expect("load config-bound fixture manifest");
-        runtime_test_peer_config(table, &manifest, &test_genesis_key_pair())
+            .expect("load manifest selected by the staking-policy fixture");
+        let mut table = checked_in_consensus_config_table(&nexus_profile_config_path());
+        table.insert(
+            "chain".to_owned(),
+            toml::Value::String(manifest.chain_id().to_string()),
+        );
+        table.insert(
+            "chain_discriminant".to_owned(),
+            toml::Value::Integer(i64::from(manifest.chain_discriminant())),
+        );
+        table["genesis"]
+            .as_table_mut()
+            .expect("genesis config")
+            .insert(
+                "public_key".to_owned(),
+                toml::Value::String(test_genesis_key_pair().public_key().to_string()),
+            );
+        bind_fixture_network_and_governance_accounts(&mut table, manifest.chain_discriminant());
+        // Preserve the profile's consensus settings while supplying the fixture's
+        // real chain/account identities, rather than unresolved deployment secrets.
+        let default_nexus =
+            staged_default_nexus(&manifest).expect("manifest-specific default accounts");
+        let mut staking = overrides
+            .parse::<toml::Table>()
+            .expect("typed staking overrides");
+        staking.insert(
+            "stake_escrow_account_id".to_owned(),
+            toml::Value::String(default_nexus.staking.stake_escrow_account_id),
+        );
+        staking.insert(
+            "slash_sink_account_id".to_owned(),
+            toml::Value::String(default_nexus.staking.slash_sink_account_id),
+        );
+        let nexus = table["nexus"].as_table_mut().expect("Nexus config");
+        nexus.insert("staking".to_owned(), toml::Value::Table(staking));
+        let fees = nexus
+            .get_mut("fees")
+            .and_then(toml::Value::as_table_mut)
+            .expect("fee config");
+        fees.insert(
+            "fee_sink_account_id".to_owned(),
+            toml::Value::String(default_nexus.fees.fee_sink_account_id),
+        );
+        fees.insert(
+            "sponsor_vault_custody_account_id".to_owned(),
+            toml::Value::String(
+                staged_default_account_literal(
+                    defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID,
+                    manifest.chain_discriminant(),
+                    "fixture sponsor vault custody",
+                )
+                .expect("manifest-specific sponsor custody"),
+            ),
+        );
+        let pipeline = table
+            .entry("pipeline")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .expect("pipeline config");
+        let gas = pipeline
+            .entry("gas")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .expect("gas config");
+        gas.insert(
+            "tech_account_id".to_owned(),
+            toml::Value::String(
+                staged_default_pipeline(&manifest)
+                    .expect("manifest-specific gas account")
+                    .gas
+                    .tech_account_id,
+            ),
+        );
+        let directory = tempfile::Builder::new()
+            .prefix("kagami-nexus-profile-")
+            .tempdir()
+            .expect("private peer config directory");
+        let canonical_directory =
+            crate::secure_fs::prepare_empty_private_directory(directory.path())
+                .expect("canonical owner-only peer config directory");
+        let path = canonical_directory.join("peer.toml");
+        crate::secure_fs::write_private_file_atomic(
+            &path,
+            toml::to_string(&table)
+                .expect("encode staking-policy fixture")
+                .as_bytes(),
+        )
+        .expect("write owner-only peer config fixture");
+        let config =
+            load_peer_config(&path).expect("fixture must pass production config admission");
+        ensure_peer_config_matches_manifest(&config, &manifest)
+            .expect("fixture config must bind its exact manifest");
+        (directory, path)
     }
     fn nexus_profile_with_validator_modes(
+        genesis_file: &Path,
         public_mode: &str,
         restricted_mode: &str,
-        genesis_file: &Path,
-    ) -> PathBuf {
+    ) -> (tempfile::TempDir, PathBuf) {
         nexus_profile_with_staking_overrides(
+            genesis_file,
             &format!(
                 "public_validator_mode = \"{public_mode}\"\nrestricted_validator_mode = \"{restricted_mode}\""
             ),
-            genesis_file,
         )
     }
-    fn nexus_profile_with_stake_asset_id(stake_asset_id: &str, genesis_file: &Path) -> PathBuf {
+    fn nexus_profile_with_stake_asset_id(
+        genesis_file: &Path,
+        stake_asset_id: &str,
+    ) -> (tempfile::TempDir, PathBuf) {
         nexus_profile_with_staking_overrides(
+            genesis_file,
             &format!(
                 "public_validator_mode = \"stake_elected\"\nrestricted_validator_mode = \"admin_managed\"\nstake_asset_id = \"{stake_asset_id}\""
             ),
-            genesis_file,
         )
     }
     #[test]
@@ -3840,7 +4082,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("valid canonical asset id");
         let genesis_file =
             with_test_authority_for_topology(alias_backed_npos_genesis_file(), &peers);
-        let config = nexus_profile_with_stake_asset_id("xor#universal", &genesis_file);
+        let (_config_directory, config_path) =
+            nexus_profile_with_stake_asset_id(&genesis_file, "xor#universal");
         let args = Args {
             genesis_file,
             out_file: None,
@@ -3851,7 +4094,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
-            config: Some(config),
+            config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -3885,6 +4128,38 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "alias-backed stake asset should not force the synthetic localnet bootstrap asset"
         );
     }
+    #[test]
+    fn staged_default_public_assets_follow_manifest_binding_without_changing_generic_defaults() {
+        let public =
+            RawGenesisTransaction::from_path(public_taira_alias_backed_npos_genesis_file())
+                .expect("load public Taira manifest");
+        let public_nexus = staged_default_nexus(&public).expect("resolve public default assets");
+        let public_xor = configured_npos_bootstrap_stake_asset_id(&public, None)
+            .expect("resolve the asset used by bootstrap")
+            .to_string();
+        assert_eq!(public_xor, crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID);
+        assert_eq!(public_nexus.staking.stake_asset_id, public_xor);
+        assert_eq!(public_nexus.fees.fee_asset_id, public_xor);
+
+        let generic = RawGenesisTransaction::from_path(npos_genesis_file())
+            .expect("load generic NPoS manifest");
+        let generic_nexus = staged_default_nexus(&generic).expect("resolve generic default assets");
+        assert_eq!(
+            generic_nexus.staking.stake_asset_id,
+            defaults::nexus::staking::stake_asset_id()
+        );
+        assert_eq!(
+            generic_nexus.fees.fee_asset_id,
+            defaults::nexus::fees::fee_asset_id()
+        );
+        assert_eq!(
+            generic_nexus.staking.stake_asset_id,
+            configured_npos_bootstrap_stake_asset_id(&generic, None)
+                .expect("generic bootstrap asset")
+                .to_string(),
+        );
+    }
+
     #[test]
     fn public_taira_auto_bootstrap_uses_alias_bound_xor_without_config() {
         let (peers, peer_pops) = valid_test_topology(4);
@@ -3993,8 +4268,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let topology_json = norito::json::to_json(&peers).unwrap();
         let genesis_file =
             with_test_authority_for_topology(public_taira_alias_backed_npos_genesis_file(), &peers);
-        let config =
-            nexus_profile_with_stake_asset_id("61CtjvNd9T3THAR65GsMVHr82Bjc", &genesis_file);
+        let (_config_directory, config_path) =
+            nexus_profile_with_stake_asset_id(&genesis_file, "61CtjvNd9T3THAR65GsMVHr82Bjc");
         let args = Args {
             genesis_file,
             out_file: None,
@@ -4005,7 +4280,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
-            config: Some(config),
+            config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
         let err = args
@@ -4050,8 +4325,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let (peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&peers).unwrap();
         let genesis_file = with_test_authority_for_topology(npos_genesis_file(), &peers);
-        let config =
-            nexus_profile_with_validator_modes("admin_managed", "admin_managed", &genesis_file);
+        let (_config_directory, config_path) =
+            nexus_profile_with_validator_modes(&genesis_file, "admin_managed", "admin_managed");
         let args = Args {
             genesis_file,
             out_file: None,
@@ -4062,7 +4337,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             private_key_file: test_private_key_file(),
             expected_public_key: None,
             creation_time_ms: None,
-            config: Some(config),
+            config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -4229,25 +4504,51 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
     #[test]
     fn sign_embeds_da_proof_policies_from_peer_config() {
-        let genesis_file = minimal_genesis_file();
-        let manifest =
-            RawGenesisTransaction::from_path(&genesis_file).expect("load DA fixture manifest");
-        let table = fs::read_to_string(nexus_profile_config_path())
-            .expect("read Nexus policy fixture")
-            .parse::<toml::Table>()
-            .expect("parse Nexus policy fixture");
-        let config = runtime_test_peer_config(table, &manifest, &test_genesis_key_pair());
+        // Deployment templates contain operator-owned secret paths. Materialize the exact
+        // checked-in consensus policy with disposable fixture credentials and private custody.
+        let key_pair = checked_genesis_sign_keypair();
+        let mut table = checked_in_consensus_config_table(&nexus_profile_config_path());
+        table["genesis"]
+            .as_table_mut()
+            .expect("fixture genesis config")
+            .insert(
+                "public_key".to_owned(),
+                toml::Value::String(key_pair.public_key().to_string()),
+            );
+        let mut config_file = tempfile::NamedTempFile::new().expect("private peer config fixture");
+        write!(
+            config_file,
+            "{}",
+            toml::to_string(&table).expect("encode policy fixture")
+        )
+        .expect("write private peer config fixture");
+        let config_path =
+            fs::canonicalize(config_file.path()).expect("canonical private config path");
+        let config = load_peer_config(&config_path).expect("load private policy fixture");
+        let manifest = GenesisBuilder::new_without_executor(config.common.chain.clone(), ".")
+            .set_topology_for_test(valid_test_topology_entries(4))
+            .build_raw()
+            .expect("complete policy fixture genesis")
+            .with_chain_discriminant(*config.common.chain_discriminant.value())
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+            .with_consensus_meta();
+        let genesis_file = tempfile::NamedTempFile::new().expect("policy fixture genesis");
+        fs::write(
+            genesis_file.path(),
+            norito::json::to_json_pretty(&manifest).unwrap(),
+        )
+        .expect("write policy fixture genesis");
         let args = Args {
-            genesis_file,
+            genesis_file: genesis_file.path().to_path_buf(),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
             topology: None,
             peer_pops: Vec::new(),
-            private_key_file: test_private_key_file(),
+            private_key_file: test_private_key_file_for(&key_pair),
             expected_public_key: None,
             creation_time_ms: None,
-            config: Some(config),
+            config: Some(config_path),
         };
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer).expect("sign should succeed");
@@ -4560,12 +4861,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn private_key_file_round_trips_owner_only_canonical_material() {
         use std::os::unix::fs::PermissionsExt as _;
-        let temp = tempfile::Builder::new()
-            .prefix(".genesis-key-roundtrip-")
-            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-            .expect("private key temp dir");
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
-            .expect("harden private key temp dir");
+        let temp = private_key_fixture_directory(".genesis-key-roundtrip-");
+        assert_eq!(temp.path().canonicalize().unwrap(), temp.path());
+        assert_eq!(
+            temp.path().metadata().unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
         let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         let path = temp.path().join("genesis.private_key");
@@ -4587,12 +4888,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-        let temp = tempfile::Builder::new()
-            .prefix(".genesis-key-rejections-")
-            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-            .expect("private key temp dir");
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
-            .expect("harden private key temp dir");
+        let temp = private_key_fixture_directory(".genesis-key-rejections-");
         let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
         let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         let unsafe_mode = temp.path().join("unsafe-mode.key");
@@ -4633,16 +4929,34 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn test_private_key_file() -> PathBuf {
         test_private_key_file_for(&test_genesis_key_pair())
     }
+    fn private_key_fixture_directory(prefix: &str) -> tempfile::TempDir {
+        // Signed release captures are read-only. Canonicalize the OS temporary
+        // parent so private-file admission also works through macOS's /var alias.
+        let parent =
+            fs::canonicalize(std::env::temp_dir()).expect("resolve writable native fixture parent");
+        let directory = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(parent)
+            .expect("create private-key fixture directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                .expect("harden private-key fixture directory");
+        }
+        directory
+    }
     fn test_private_key_file_for(key_pair: &KeyPair) -> PathBuf {
         use std::cell::RefCell;
 
         thread_local! {
-            static PRIVATE_KEY_FILES: RefCell<Vec<tempfile::NamedTempFile>> = const { RefCell::new(Vec::new()) };
+            static PRIVATE_KEY_FILES: RefCell<Vec<(tempfile::NamedTempFile, tempfile::TempDir)>> = const { RefCell::new(Vec::new()) };
         }
 
+        let directory = private_key_fixture_directory(".genesis-sign-private-");
         let mut file = tempfile::Builder::new()
             .prefix(".genesis-sign-test-key-")
-            .tempfile_in(env!("CARGO_MANIFEST_DIR"))
+            .tempfile_in(directory.path())
             .expect("create owner-only private-key fixture");
         let canonical = zeroize::Zeroizing::new(
             format!("{}\n", ExposedPrivateKey(key_pair.private_key().clone())).into_bytes(),
@@ -4653,7 +4967,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .sync_all()
             .expect("sync private-key fixture");
         let path = file.path().to_path_buf();
-        PRIVATE_KEY_FILES.with(|files| files.borrow_mut().push(file));
+        PRIVATE_KEY_FILES.with(|files| files.borrow_mut().push((file, directory)));
         path
     }
 }

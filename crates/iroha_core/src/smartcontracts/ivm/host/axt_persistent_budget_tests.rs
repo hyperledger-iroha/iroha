@@ -183,7 +183,6 @@ pub(super) fn establish_authenticated_axt_ledger_time(state: &State, creation_ti
         nonzero_ext::nonzero!(1_u64),
         None,
         None,
-        None,
         creation_time_ms,
         0,
     );

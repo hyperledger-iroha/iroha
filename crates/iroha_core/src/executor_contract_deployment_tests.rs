@@ -65,7 +65,7 @@ fn contract_registrar_manager_sponsors_registration_and_meters_every_instruction
         )
         .with_instructions(instructions)
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         executor
             .execute_transaction(
@@ -151,7 +151,7 @@ fn contract_registrar_management_uses_exact_effective_role_and_borrowed_gate() {
                 Kura::blank_kura_for_testing(),
                 query::store::LiveQueryStore::start_test(),
             );
-            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+            let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
             let mut state_transaction = block.transaction();
             let grant: InstructionBox =
                 Grant::account_permission(contract_deployment_permission(), builder.clone()).into();
@@ -262,7 +262,7 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
         .into(),
     ))
     .sign(keypair.private_key());
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let executor = bundled_default_user_provided_executor();
     let super::Executor::UserProvided(loaded_executor) = &executor else {
         unreachable!("test constructs a user-provided executor")
@@ -368,7 +368,7 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         )
         .with_executable(Executable::Instructions(instructions.into()))
         .sign(keypair.private_key());
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let executor = bundled_default_user_provided_executor();
         let super::Executor::UserProvided(loaded_executor) = &executor else {
             unreachable!("test constructs a user-provided executor")
@@ -423,7 +423,7 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut state_transaction = block.transaction();
     let instruction: InstructionBox =
         Grant::account_permission(contract_deployment_permission(), authority.clone()).into();
@@ -484,7 +484,7 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
         .into(),
     ))
     .sign(keypair.private_key());
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut state_transaction = block.transaction();
     let mut ivm_cache = IvmCache::new();
     assert!(
@@ -534,7 +534,7 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut state_transaction = block.transaction();
     assert!(
         !(state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()),
@@ -583,7 +583,7 @@ fn initial_executor_denies_post_genesis_governed_kagemusha_self_grants() {
         Kura::blank_kura_for_testing(),
         query::store::LiveQueryStore::start_test(),
     );
-    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     let mut state_transaction = block.transaction();
     for name in ["CanManageKagemushaReserve"] {
         let permission = Permission::new(name.to_owned(), Json::new(()));

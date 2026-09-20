@@ -9,7 +9,7 @@ fn open_historical_recovery_fixture(
     if !phases.is_empty() {
         // These fixtures explicitly supply their synthetic restored State catalog. Keep the
         // production constructor and every later sidecar/dependency validation intact.
-        kura.restore_lane_segments(lane_config)?;
+        kura.restore_published_lane_geometry_for_test(lane_config)?;
     }
     Ok((kura, count))
 }
@@ -82,6 +82,10 @@ fn historical_atomic_temp_rejects_obsolete_residue_before_promoting_valid_temp()
             .is_err(),
         "fault after temporary fsync must retain the dedicated publication residue",
     );
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let directory = Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
     let dedicated_temp = std::fs::read_dir(&directory)
         .expect("read dedicated historical residue directory")
@@ -115,7 +119,7 @@ fn historical_atomic_temp_rejects_obsolete_residue_before_promoting_valid_temp()
     assert!(
         startup_error
             .to_string()
-            .contains("unknown or malformed entry"),
+            .contains("unknown, malformed, or ambiguous entry"),
         "unexpected obsolete-residue diagnostic: {startup_error}"
     );
     assert!(
@@ -184,6 +188,10 @@ fn historical_atomic_temp_cleans_exact_duplicate_and_two_link_publication_retry(
     persist_historical_atomic_temp_dependencies(&kura, &linked_payload, &signer);
     kura.persist_historical_autonomous_lane_recovery_records(&[duplicate.clone(), linked.clone()])
         .expect("persist stable historical duplicate fixtures");
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("exact published fixture identity");
+    let lane = &lane;
     drop(kura);
     let directory = Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
     let duplicate_temp = write_historical_atomic_temp_fixture(
@@ -239,6 +247,10 @@ fn historical_atomic_temp_whole_inventory_preflight_prevents_partial_promotion()
         open_historical_recovery_fixture(&config, &lane_config).expect("historical preflight Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     persist_historical_atomic_temp_dependencies(&kura, &payload, &signer);
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let directory = Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
     let valid_temp = write_historical_atomic_temp_fixture(
         &directory,
@@ -290,6 +302,10 @@ fn historical_atomic_temp_rejects_multiple_names_for_one_target_before_mutation(
     let (kura, _) = open_historical_recovery_fixture(&config, &lane_config)
         .expect("duplicate-temp residue Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+    let lane = kura
+        .lane_storage_entry(lane.lane_id)
+        .expect("capture the exact journal-published fixture identity");
+    let lane = &lane;
     let directory = Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
     let first = write_historical_atomic_temp_fixture(
         &directory,
@@ -334,6 +350,11 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
         let (kura, _) = open_historical_recovery_fixture(&config, &lane_config)
             .expect("oversized residue Kura");
+        establish_configured_lane_markers_for_test(&kura, &lane_config);
+        let lane = kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("capture the exact journal-published fixture identity");
+        let lane = &lane;
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
         std::fs::create_dir_all(&directory).expect("create oversized residue directory");
@@ -360,6 +381,11 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
         let (kura, _) =
             open_historical_recovery_fixture(&config, &lane_config).expect("symlink residue Kura");
+        establish_configured_lane_markers_for_test(&kura, &lane_config);
+        let lane = kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("capture the exact journal-published fixture identity");
+        let lane = &lane;
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
         std::fs::create_dir_all(&directory).expect("create symlink residue directory");
@@ -399,6 +425,10 @@ fn historical_atomic_temp_rejects_oversize_symlink_and_extraneous_hardlinks() {
         let (kura, _) =
             open_historical_recovery_fixture(&config, &lane_config).expect("hardlink residue Kura");
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        let lane = kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("capture the exact journal-published fixture identity");
+        let lane = &lane;
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
         let first = write_historical_atomic_temp_fixture(
@@ -450,6 +480,10 @@ fn historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutati
         let (kura, _) = open_historical_recovery_fixture(&config, &lane_config)
             .expect("conflicting residues Kura");
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_payload);
+        let lane = kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("capture the exact journal-published fixture identity");
+        let lane = &lane;
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
         let first_temp = write_historical_atomic_temp_fixture(
@@ -498,6 +532,10 @@ fn historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutati
             open_historical_recovery_fixture(&config, &lane_config).expect("stale residue Kura");
         install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
         persist_historical_atomic_temp_dependencies(&kura, &payload, &signer);
+        let lane = kura
+            .lane_storage_entry(lane.lane_id)
+            .expect("capture the exact journal-published fixture identity");
+        let lane = &lane;
         let directory =
             Kura::historical_autonomous_recovery_directory_for_entry(lane, temp_dir.path());
         let temporary = write_historical_atomic_temp_fixture(
@@ -505,7 +543,7 @@ fn historical_atomic_temp_rejects_collision_and_stale_incarnation_without_mutati
             &format!("{HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX}stale"),
             &record,
         );
-        kura.install_lane_incarnation_marker_for_test(
+        kura.substitute_lane_marker_identity_for_test(
             lane,
             Hash::new(b"historical-atomic-temp-recreated-incarnation"),
             0,

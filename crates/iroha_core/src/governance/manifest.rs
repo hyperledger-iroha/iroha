@@ -19,6 +19,7 @@ use iroha_data_model::{
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, LaneCatalog, LaneConfig, LaneStorageProfile, LaneVisibility,
+        NativeLaneManifestV1,
     },
 };
 use iroha_logger::{debug, info, warn};
@@ -162,64 +163,6 @@ impl ManifestSourceLoadBudget {
         self.rule_units = rule_units;
         Ok(())
     }
-}
-/// Native manifest descriptor parsed from an authenticated frozen source.
-#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
-#[norito(deny_unknown_fields)]
-struct ManifestFile {
-    /// Lane alias the manifest targets.
-    pub lane: Option<String>,
-    /// Governance module identifier asserted by the manifest.
-    pub governance: Option<String>,
-    /// Semantic version (major) used to interpret the manifest.
-    pub version: Option<u32>,
-    /// Committee members or validator bindings (human readable).
-    #[norito(default)]
-    pub validators: Option<Vec<ManifestValidatorBindingFile>>,
-    /// Quorum threshold applied to the validator set.
-    pub quorum: Option<u32>,
-    /// Namespaces protected by governance (transactions require explicit approval).
-    #[norito(default)]
-    pub protected_namespaces: Option<Vec<String>>,
-    /// Optional map of governance hooks (module-specific).
-    #[norito(default)]
-    pub hooks: Option<BTreeMap<String, JsonValue>>,
-    /// Optional privacy commitment descriptors consumed by private lanes.
-    #[norito(default)]
-    pub privacy_commitments: Option<Vec<ManifestPrivacyCommitment>>,
-}
-/// Manifest-level validator binding descriptor.
-#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
-#[norito(deny_unknown_fields)]
-struct ManifestValidatorBindingFile {
-    /// Validator authority account literal.
-    pub validator: Option<String>,
-    /// Consensus/transport peer identity literal.
-    pub peer_id: Option<String>,
-    /// Optional Torii base URL used when authoritative routing must bridge over HTTP.
-    #[norito(default)]
-    pub torii_url: Option<String>,
-}
-/// Manifest-level privacy commitment descriptor.
-#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
-#[norito(deny_unknown_fields)]
-struct ManifestPrivacyCommitment {
-    /// Registry identifier assigned to the commitment entry.
-    pub id: Option<u16>,
-    /// Commitment scheme. The first release accepts only `merkle`.
-    pub scheme: Option<String>,
-    /// Merkle-specific parameters.
-    #[norito(default)]
-    pub merkle: Option<ManifestMerkleCommitment>,
-}
-/// Merkle commitment parameters advertised in manifests.
-#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
-#[norito(deny_unknown_fields)]
-struct ManifestMerkleCommitment {
-    /// Canonical 32-byte root digest encoded as hex.
-    pub root: Option<String>,
-    /// Maximum allowed audit-path depth.
-    pub max_depth: Option<u8>,
 }
 /// Governance catalog overlay loaded from distribution cache.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
@@ -586,9 +529,9 @@ impl RuntimeUpgradeHook {
     }
 }
 impl GovernanceRules {
-    fn from_manifest(alias: &str, manifest: &ManifestFile) -> Result<Self, String> {
-        let version = manifest.version.unwrap_or(1);
-        if version != 1 {
+    fn from_manifest(alias: &str, manifest: &NativeLaneManifestV1) -> Result<Self, String> {
+        let version = manifest.version.unwrap_or(NativeLaneManifestV1::VERSION);
+        if version != NativeLaneManifestV1::VERSION {
             return Err(format!(
                 "manifest version {version} is not supported (expected 1)"
             ));
@@ -769,7 +712,7 @@ pub struct LaneManifestSourceSnapshot {
 struct FrozenLaneManifestSource {
     /// Absent for a manifest published through authenticated world state.
     path: Option<PathBuf>,
-    parsed: Result<ManifestFile, String>,
+    parsed: Result<NativeLaneManifestV1, String>,
     content_digest: LaneManifestSourceContentDigestV1,
 }
 #[derive(Debug, Clone)]
@@ -1306,7 +1249,7 @@ impl LaneManifestRegistry {
     fn parse_bounded_manifest_json(
         raw: &[u8],
         budget: &mut ManifestSourceLoadBudget,
-    ) -> Result<ManifestFile, String> {
+    ) -> Result<NativeLaneManifestV1, String> {
         let raw = str::from_utf8(raw)
             .map_err(|err| format!("manifest source is not valid UTF-8: {err}"))?;
         let footprint = Self::preflight_manifest_json(raw.as_bytes(), MANIFEST_JSON_LIMITS_V1)?;
@@ -1453,7 +1396,7 @@ impl LaneManifestRegistry {
         }
         Ok(())
     }
-    fn validate_manifest_source_bounds(manifest: &ManifestFile) -> Result<(), String> {
+    fn validate_manifest_source_bounds(manifest: &NativeLaneManifestV1) -> Result<(), String> {
         Self::validate_optional_source_string(
             "lane alias",
             manifest.lane.as_deref(),
@@ -2023,7 +1966,7 @@ impl LaneManifestRegistry {
     #[allow(clippy::too_many_lines)]
     fn parse_privacy_commitments(
         alias: &str,
-        manifest: &ManifestFile,
+        manifest: &NativeLaneManifestV1,
     ) -> Result<Vec<LanePrivacyCommitment>, String> {
         let Some(entries) = manifest.privacy_commitments.as_ref() else {
             return Ok(Vec::new());
@@ -2131,7 +2074,7 @@ impl LaneManifestRegistry {
         Self::validate_parsed_manifest(&parsed, lane_id, alias, lane_governance, catalog)
     }
     fn validate_parsed_manifest(
-        parsed: &ManifestFile,
+        parsed: &NativeLaneManifestV1,
         lane_id: LaneId,
         alias: &str,
         lane_governance: Option<&str>,
@@ -2603,7 +2546,10 @@ mod tests {
     };
     use iroha_data_model::{
         account::AccountId,
-        nexus::{LaneCatalog, LaneConfig},
+        nexus::{
+            LaneCatalog, LaneConfig, NativeLaneMerkleCommitmentV1, NativeLanePrivacyCommitmentV1,
+            NativeLaneValidatorBindingV1,
+        },
     };
     use iroha_model_base::name::Name;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -2832,16 +2778,16 @@ mod tests {
     }
     #[test]
     fn manifest_shape_and_aggregate_budgets_reject_overflow() {
-        let mut manifest = ManifestFile {
+        let mut manifest = NativeLaneManifestV1 {
             validators: Some(vec![
-                ManifestValidatorBindingFile::default();
+                NativeLaneValidatorBindingV1::default();
                 LANE_MANIFEST_MAX_VALIDATORS_V1 + 1
             ]),
-            ..ManifestFile::default()
+            ..NativeLaneManifestV1::default()
         };
         assert!(LaneManifestRegistry::validate_manifest_source_bounds(&manifest).is_err());
         manifest.validators = Some(vec![
-            ManifestValidatorBindingFile::default();
+            NativeLaneValidatorBindingV1::default();
             LANE_MANIFEST_MAX_VALIDATORS_V1
         ]);
         assert!(LaneManifestRegistry::validate_manifest_source_bounds(&manifest).is_ok());
@@ -3129,13 +3075,13 @@ mod tests {
     }
     #[test]
     fn privacy_commitments_parse_from_manifest() {
-        let manifest = ManifestFile {
+        let manifest = NativeLaneManifestV1 {
             lane: Some("private".to_string()),
             governance: Some("council".to_string()),
-            privacy_commitments: Some(vec![ManifestPrivacyCommitment {
+            privacy_commitments: Some(vec![NativeLanePrivacyCommitmentV1 {
                 id: Some(1),
                 scheme: Some("merkle".to_string()),
-                merkle: Some(ManifestMerkleCommitment {
+                merkle: Some(NativeLaneMerkleCommitmentV1 {
                     root: Some(
                         "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                             .to_string(),
@@ -3143,7 +3089,7 @@ mod tests {
                     max_depth: Some(16),
                 }),
             }]),
-            ..ManifestFile::default()
+            ..NativeLaneManifestV1::default()
         };
         let parsed = LaneManifestRegistry::parse_privacy_commitments("private", &manifest)
             .expect("commitments parsed");
@@ -3151,15 +3097,15 @@ mod tests {
     }
     #[test]
     fn privacy_commitments_reject_snark_scheme_without_real_verifier() {
-        let manifest = ManifestFile {
+        let manifest = NativeLaneManifestV1 {
             lane: Some("private".to_string()),
             governance: Some("council".to_string()),
-            privacy_commitments: Some(vec![ManifestPrivacyCommitment {
+            privacy_commitments: Some(vec![NativeLanePrivacyCommitmentV1 {
                 id: Some(2),
                 scheme: Some("snark".to_string()),
                 merkle: None,
             }]),
-            ..ManifestFile::default()
+            ..NativeLaneManifestV1::default()
         };
         let err = LaneManifestRegistry::parse_privacy_commitments("private", &manifest)
             .expect_err("hash-only SNARK commitments must not be admitted");
@@ -3182,7 +3128,7 @@ mod tests {
                 }
             }]
         }"#;
-        let err = json::from_json::<ManifestFile>(raw)
+        let err = json::from_json::<NativeLaneManifestV1>(raw)
             .expect_err("removed SNARK fields must be rejected");
         assert!(
             err.to_string().contains("snark"),

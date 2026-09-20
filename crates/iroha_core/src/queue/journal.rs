@@ -82,11 +82,15 @@ impl QueuePlanJournalLivePosition {
             enqueue_timestamp_ms: self.record.enqueue_timestamp_ms,
             journal_record_digest: self.claim_digest,
         };
-        let binding = QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission)
-            .map_err(invalid_data)?;
-        binding
-            .validate_for_transaction_and_plan(&self.record.entrypoint, &self.record.routing_plan)
-            .map_err(invalid_data)?;
+        let binding =
+            crate::torii_proxy::queue_plan_binding_from_durable_admission(&durable_admission)
+                .map_err(invalid_data)?;
+        crate::torii_proxy::validate_queue_plan_binding_for_transaction_and_plan(
+            &binding,
+            &self.record.entrypoint,
+            &self.record.routing_plan,
+        )
+        .map_err(invalid_data)?;
         Ok(binding)
     }
     fn validate_global_admission_for_reservation_commit(
@@ -100,9 +104,11 @@ impl QueuePlanJournalLivePosition {
                 "queue plan journal global-admission tombstone does not match the live entrypoint or routing plan",
             ));
         }
-        self.global_admission_binding()?
-            .validate_for_lane_reservation_commit(key)
-            .map_err(invalid_data)
+        crate::torii_proxy::validate_queue_plan_binding_for_lane_reservation_commit(
+            &self.global_admission_binding()?,
+            key,
+        )
+        .map_err(invalid_data)
     }
 }
 /// One exact removal carried by an atomic queue-plan journal batch tombstone.
@@ -4076,11 +4082,15 @@ mod tests {
             enqueue_timestamp_ms: record.enqueue_timestamp_ms,
             journal_record_digest: record.claim_digest().expect("hash global journal claim"),
         };
-        let binding = QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission)
-            .expect("reconstruct global admission binding");
-        binding
-            .validate_for_transaction_and_plan(&record.entrypoint, &record.routing_plan)
-            .expect("validate binding against its exact V1 record");
+        let binding =
+            crate::torii_proxy::queue_plan_binding_from_durable_admission(&durable_admission)
+                .expect("reconstruct global admission binding");
+        crate::torii_proxy::validate_queue_plan_binding_for_transaction_and_plan(
+            &binding,
+            &record.entrypoint,
+            &record.routing_plan,
+        )
+        .expect("validate binding against its exact V1 record");
         binding
     }
     fn globally_bound_record(

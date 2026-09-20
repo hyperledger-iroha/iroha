@@ -55,6 +55,9 @@ profiling = ["pprof"]
 schema = ["iroha_schema", "iroha_schema_gen"]
 # App-facing JSON API (convenience endpoints, JSON DSL).
 app_api = []
+# Fixture execution and publication helpers for tests and benchmarks only.
+# Shipping/default feature sets must not include this authority.
+test-fixtures = ["iroha_core/iroha-core-tests"]
 # Feature-isolated, owner-only controller for authenticated private-settlement
 # route faults in real-process tests. Shipping/default builds never enable it.
 test-network-private-settlement-route-control = [
@@ -189,6 +192,7 @@ jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+iroha_torii = { workspace = true, features = ["test-fixtures"] }
 tokio = { workspace = true, features = ["test-util"] }
 iroha_service_model = { workspace = true }
 criterion = { workspace = true }

@@ -19,7 +19,7 @@ macro_rules! flat_resident_owner {
 flat_resident_owner!(VecDeque<VerifiedV2FinalityCacheEntry>, ResidentVerification);
 flat_resident_owner!(VecDeque<PipelineRecoverySidecar>, ResidentQueue);
 flat_resident_owner!(VecDeque<QueuedFastpqProofSnapshot>, ResidentQueue);
-flat_resident_owner!(BTreeMap<LaneId,LaneConfigEntry>, ResidentFrontier);
+flat_resident_owner!(BTreeMap<LaneId,LaneStorageEntry>, ResidentFrontier);
 flat_resident_owner!(BTreeMap<LaneId,CertifiedPairDurabilityAttestation>, ResidentFrontier);
 flat_resident_owner!(BTreeMap<LaneId,CertifiedFrontierArtifactValidationAttestation>, ResidentFrontier);
 

@@ -136,7 +136,7 @@ impl ConcreteLifecycleWorkRegistry {
         let mut staged = Self::default();
         staged.entries.insert(
             broadcast_address,
-            ConcreteLifecycleWork {
+            Box::new(ConcreteLifecycleWork {
                 digest: broadcast.digest(),
                 kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
                     Box::new(DurableRecoveredLifecycleSignedBroadcastWork {
@@ -153,7 +153,7 @@ impl ConcreteLifecycleWorkRegistry {
                         paired_next_sign: None,
                     }),
                 ),
-            },
+            }),
         );
         let final_sign = votes
             .last()
@@ -205,7 +205,7 @@ impl ConcreteLifecycleWorkRegistry {
                     )
                 }
             };
-            if staged.entries.insert(address, work).is_some() {
+            if staged.entries.insert(address, Box::new(work)).is_some() {
                 return Err("cold Proposal continuation aliases a physical carrier");
             }
         }

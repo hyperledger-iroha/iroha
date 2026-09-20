@@ -2301,7 +2301,7 @@ def _validate_terminal_release_evidence(
     )
     require_inventory(
         prebuilt_root / "release",
-        {"iroha3d", "iroha", "kagami"},
+        {"iroha3d", "iroha", "kagami", "iroha3d_taira"},
         "terminal prebuilt release directory",
         containment_root=artifact_root,
         expected_mode=_TOOL_MODE,

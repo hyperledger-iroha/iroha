@@ -33,6 +33,8 @@ impl StartupGeometryBindingFixture {
         let initial = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &initial)
             .expect("open real primary storage");
+        kura.bind_lane_storage_network(test_network_id(b"kura-v2-finality-test"))
+            .expect("bind the actual finality fixture network");
         let primary_incarnation = Hash::new(b"startup geometry primary incarnation");
         let lane_incarnation = Hash::new(b"startup geometry added incarnation");
         let baseline = kura
@@ -107,13 +109,20 @@ impl StartupGeometryBindingFixture {
         let roots = (0..catalogs.len())
             .map(|index| Hash::new(format!("startup geometry lineage {index}").as_bytes()))
             .collect::<Vec<_>>();
+        let retained_identity = LaneStorageIdentity {
+            network_id: test_network_id(b"kura-v2-finality-test"),
+            lane_id: LaneId::new(1),
+            dataspace_id: catalogs[1].entry(LaneId::new(1)).unwrap().dataspace_id,
+            incarnation: incarnations[1][&LaneId::new(1)],
+            activation_height: activations[1][&LaneId::new(1)],
+        };
         // Retain actual native journal operations, then rewind them to the replay cursor.
         // No synthetic publication receipt, substituted lane map, or copied sidecar is used.
         for index in 0..catalogs.len() - 1 {
             Self::apply_transition(&kura, &catalogs, &incarnations, &activations, &roots, index);
             if index == 0 && with_sidecar {
-                let entry = catalogs[1].entry(LaneId::from(1)).expect("added lane");
-                let path = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root()));
+                let path =
+                    Kura::lane_artifact_dir(&retained_identity.blocks_dir(&kura.store_root()));
                 fs::create_dir_all(&path).expect("create retained lane sidecar directory");
                 fs::write(
                     path.join("startup-replay-evidence.norito"),
@@ -121,18 +130,6 @@ impl StartupGeometryBindingFixture {
                 )
                 .expect("retain sidecar before geometry rewind");
             }
-        }
-        if missing_namespace {
-            assert!(matches!(tail, StartupGeometryTail::Add) && !with_sidecar);
-            let active = Kura::lane_artifact_dir(
-                &catalogs[1]
-                    .entry(LaneId::from(1))
-                    .expect("added lane")
-                    .blocks_dir(&kura.store_root()),
-            );
-            // Remove only an empty optional namespace before native rollback seals the archive.
-            // No retained sealed image or canonical block data is edited.
-            fs::remove_dir(active).expect("model valid missing namespace before archive sealing");
         }
         kura.restore_lane_segments_with_geometry_before_first_transition_at_height(
             &catalogs[0],
@@ -144,25 +141,18 @@ impl StartupGeometryBindingFixture {
         .expect("rewind exact retained journal to configured replay cursor");
         assert!(kura.lane_storage_entry(LaneId::from(1)).is_err());
         assert!(
-            !catalogs[1]
-                .entry(LaneId::from(1))
-                .expect("added lane")
-                .blocks_dir(&kura.store_root())
-                .exists()
+            retained_identity.blocks_dir(&kura.store_root()).is_dir(),
+            "rollback retains the original instance while withdrawing active admission"
         );
-
-        let retained = snapshot_regular_test_tree(&kura.store_root());
-        let mut sources = retained.keys().filter(|path| {
-            path.file_name()
-                .is_some_and(|name| name == "unpublished_blocks")
-        });
-        let retained_blocks = sources.next().expect("native retained Create source");
-        assert!(
-            sources.next().is_none(),
-            "fixture has one exact retained Create source"
-        );
+        if missing_namespace {
+            assert!(matches!(tail, StartupGeometryTail::Add) && !with_sidecar);
+            let active = Kura::lane_artifact_dir(&retained_identity.blocks_dir(&kura.store_root()));
+            // Remove only an empty optional namespace after reference rollback.
+            // No retained sealed image or canonical block data is edited.
+            fs::remove_dir(active).expect("model valid missing namespace after reference rollback");
+        }
         let retained_added_artifacts =
-            Kura::lane_artifact_dir(&kura.store_root().join(retained_blocks));
+            Kura::lane_artifact_dir(&retained_identity.blocks_dir(&kura.store_root()));
         assert_eq!(retained_added_artifacts.exists(), !missing_namespace);
 
         let block = DummyBlocks::new().next();
@@ -288,21 +278,18 @@ impl StartupGeometryBindingFixture {
     }
 
     fn added_artifacts(&self) -> PathBuf {
-        Kura::lane_artifact_dir(
-            &self.catalogs[1]
-                .entry(LaneId::from(1))
-                .expect("added lane")
-                .blocks_dir(&self.kura.store_root()),
-        )
+        self.retained_added_artifacts.clone()
     }
 
     fn finish(
         &self,
         transition: &super::lane_geometry::StartupReplayGeometryTransition,
     ) -> Result<V2StartupReplayStorageBinding> {
-        let _lease = self.kura.canonical_publication_lease();
-        self.kura
-            .finish_startup_replay_geometry_transition(transition)
+        let lease = self
+            .kura
+            .try_publication_lease()
+            .expect("joint startup publication lease");
+        lease.finish_startup_replay_geometry_transition(transition)
     }
 }
 
@@ -315,13 +302,10 @@ fn startup_replay_geometry_transition_preserves_shared_binding_for_added_lane() 
             .begin_startup_replay_geometry_transition(&fixture.binding, &fixture.requests())
             .expect("exact retained addition admits empty or populated lane sidecar storage");
         fixture.apply_all(&mut transition);
-        assert!(
-            fixture
-                .kura
-                .validate_v2_startup_replay_storage_binding(&fixture.binding)
-                .is_err(),
-            "the old shared plan cannot silently adopt added lane paths"
-        );
+        fixture
+            .kura
+            .validate_v2_startup_replay_storage_binding(&fixture.binding)
+            .expect("the original audit already pins the retained instance before activation");
         let next = fixture
             .finish(&transition)
             .expect("derive exact post-publication binding");
@@ -349,12 +333,24 @@ fn startup_replay_geometry_transition_preserves_shared_binding_for_added_lane() 
             .kura
             .validate_v2_startup_replay_storage_binding(&resumed)
             .expect("real resumed session uses the new lane inventory");
+        fixture
+            .kura
+            .validate_v2_startup_replay_storage_binding(&fixture.binding)
+            .expect("reference publication preserves the unchanged shared original inventory");
+        assert!(
+            Arc::ptr_eq(
+                fixture.binding.strict_parts().unwrap().0,
+                next.strict_parts().unwrap().0,
+            ),
+            "the derived binding must retain the exact independently authenticated audit"
+        );
         assert!(
             fixture
-                .kura
-                .validate_v2_startup_replay_storage_binding(&fixture.binding)
-                .is_err(),
-            "publication must not rewrite the shared original inventory"
+                .binding
+                .strict_parts()
+                .unwrap()
+                .1
+                .contains_key(&fixture.added_artifacts())
         );
         assert!(fixture.added_artifacts().is_dir());
         assert!(
@@ -440,14 +436,14 @@ fn startup_replay_geometry_transition_rejects_restored_lane_sidecar_drift() {
     let mut transition = fixture
         .kura
         .begin_startup_replay_geometry_transition(&fixture.binding, &fixture.requests())
-        .expect("pin retained unpublished lane before move");
+        .expect("pin retained unpublished lane before activation");
     fixture.apply_all(&mut transition);
     let directory = fixture.added_artifacts();
     fs::write(
         directory.join("startup-replay-evidence.norito"),
-        b"substituted after the exact native move",
+        b"substituted after exact reference publication",
     )
-    .expect("tamper moved public sidecar");
+    .expect("tamper retained public sidecar");
     let error = fixture
         .finish(&transition)
         .err()
@@ -465,10 +461,18 @@ fn startup_replay_geometry_transition_preserves_relabelled_and_retired_path_guar
     for tail in [StartupGeometryTail::Relabel, StartupGeometryTail::Retire] {
         let fixture =
             StartupGeometryBindingFixture::new(tail, matches!(tail, StartupGeometryTail::Relabel));
+        let old = fixture.added_artifacts();
+        let before = fixture
+            .kura
+            .stable_sidecar_directory_inventory_with_recognized_child(
+                &old,
+                Some(&old.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1)),
+            )
+            .expect("capture the exact original retained directory");
         let mut transition = fixture
             .kura
             .begin_startup_replay_geometry_transition(&fixture.binding, &fixture.requests())
-            .expect("pin all ordered retained moves");
+            .expect("pin all ordered retained reference transitions");
         fixture.apply_all(&mut transition);
         let next = fixture
             .finish(&transition)
@@ -477,9 +481,43 @@ fn startup_replay_geometry_transition_preserves_relabelled_and_retired_path_guar
             .kura
             .validate_v2_startup_replay_storage_binding(&next)
             .expect("complete ordered transition remains exact");
-        let old = fixture.added_artifacts();
-        assert!(!old.exists(), "old active path must remain absent");
-        fs::create_dir_all(&old).expect("reintroduce moved old path");
+        assert!(
+            old.is_dir(),
+            "the original immutable instance remains at its exact address"
+        );
+        let after = fixture
+            .kura
+            .stable_sidecar_directory_inventory_with_recognized_child(
+                &old,
+                Some(&old.join(HISTORICAL_AUTONOMOUS_RECOVERY_DIRECTORY_V1)),
+            )
+            .expect("read the retained directory after reference publication");
+        assert!(
+            Kura::stable_sidecar_directory_inventory_unchanged(&before, &after),
+            "reference publication must retain the original inode and evidence bytes"
+        );
+        assert!(
+            next.strict_parts().unwrap().1.contains_key(&old),
+            "the derived inventory must not omit a retired instance"
+        );
+        match tail {
+            StartupGeometryTail::Relabel => {
+                let active = fixture
+                    .kura
+                    .lane_storage_entry(LaneId::new(1))
+                    .expect("alias change retains the same active identity");
+                assert_eq!(
+                    Kura::lane_artifact_dir(&active.blocks_dir(&fixture.kura.store_root)),
+                    old
+                );
+            }
+            StartupGeometryTail::Retire => {
+                assert!(fixture.kura.lane_storage_entry(LaneId::new(1)).is_err())
+            }
+            StartupGeometryTail::Add => {
+                unreachable!("this control covers alias change and retirement")
+            }
+        }
         fs::write(old.join("surplus.norito"), b"old path is not forgotten")
             .expect("write public test evidence");
         let error = fixture
@@ -492,7 +530,7 @@ fn startup_replay_geometry_transition_preserves_relabelled_and_retired_path_guar
             error
                 .to_string()
                 .contains(blocks.to_string_lossy().as_ref()),
-            "identify resurrected source: {error}"
+            "identify changed retained source: {error}"
         );
     }
 }
@@ -530,13 +568,19 @@ fn startup_replay_geometry_transition_rejects_unretained_request() {
 fn startup_replay_geometry_transition_creates_only_missing_retained_namespace_and_cleans_failure() {
     let fixture = StartupGeometryBindingFixture::new_with_missing_namespace();
     assert!(!fixture.retained_added_artifacts.exists());
+    let preparation_before = snapshot_regular_test_tree(&fixture.kura.store_root());
     let mut transition = fixture
         .kura
         .begin_startup_replay_geometry_transition(&fixture.binding, &fixture.requests())
-        .expect("pin valid sealed archive with missing optional namespace");
+        .expect("pin exact inactive instance with missing optional namespace");
     assert!(
         !fixture.retained_added_artifacts.exists(),
-        "preparation must not mutate the sealed inactive archive"
+        "preparation must not mutate the authenticated inactive instance"
+    );
+    assert_eq!(
+        snapshot_regular_test_tree(&fixture.kura.store_root()),
+        preparation_before,
+        "preparation must preserve every original file and directory"
     );
     fixture.apply_all(&mut transition);
     assert!(
@@ -550,6 +594,13 @@ fn startup_replay_geometry_transition_creates_only_missing_retained_namespace_an
         .kura
         .validate_v2_startup_replay_storage_binding(&next)
         .expect("created namespace is bound by its native effect");
+    assert!(
+        fixture
+            .kura
+            .validate_v2_startup_replay_storage_binding(&fixture.binding)
+            .is_err(),
+        "an original captured absence cannot silently adopt a later native creation"
+    );
 
     let fixture = StartupGeometryBindingFixture::new_with_missing_namespace();
     let before = snapshot_regular_test_tree(&fixture.kura.store_root());
