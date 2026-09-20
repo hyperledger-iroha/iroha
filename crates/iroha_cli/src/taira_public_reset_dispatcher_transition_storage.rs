@@ -1,5 +1,6 @@
 //! Six-file transaction with an absent dispatcher barrier and immutable recovery records.
 use super::*;
+use std::io::Seek as _;
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -482,8 +483,13 @@ fn validate_backups(plan: &Plan, root: &Path) -> Result<()> {
 
 pub(super) fn check(plan: &Plan, bytes: &[u8], root: &Path, new: &[Vec<u8>]) -> Result<()> {
     if !exists(root)? {
+        need(
+            !exists(&operation_stage(root)?)? && !exists(&ownership_path(root)?)?,
+            "operation staging requires apply recovery before a completed check",
+        )?;
         return validate_live(plan, new, false);
     }
+    verify_ownership(root, bytes)?;
     direct_directory(root)?;
     census(root)?;
     checked(
@@ -548,6 +554,37 @@ fn ownership_path(root: &Path) -> Result<PathBuf> {
             .to_string_lossy()
     )))
 }
+fn operation_stage(root: &Path) -> Result<PathBuf> {
+    Ok(root.with_file_name(format!(
+        ".{}.staging",
+        root.file_name()
+            .ok_or_else(|| eyre!("operation name missing"))?
+            .to_string_lossy()
+    )))
+}
+fn ownership_intent(root: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
+    Ok(json::to_vec(
+        &norito::json!({"schema":"iroha.taira.dispatcher-transition-ownership.v1","operation_root":root.to_string_lossy().as_ref(),"staging_root":operation_stage(root)?.to_string_lossy().as_ref(),"plan_sha256":sha256_hex(bytes)}),
+    )?)
+}
+fn verify_ownership(root: &Path, bytes: &[u8]) -> Result<()> {
+    let path = ownership_path(root)?;
+    checked(
+        &path,
+        &pin_bytes(&path, &ownership_intent(root, bytes)?, 0o600),
+    )?;
+    need(
+        !exists(&operation_stage(root)?)?,
+        "staging namespace remained after operation publication",
+    )?;
+    need(
+        !exists(&path.with_file_name(format!(
+            ".{}.partial",
+            path.file_name().unwrap().to_string_lossy()
+        )))?,
+        "ownership publication has a foreign trailing partial",
+    )
+}
 /// The sibling ownership record precedes creation of the operation staging directory.
 pub(super) fn initialize_operation(
     root: &Path,
@@ -558,16 +595,9 @@ pub(super) fn initialize_operation(
         .parent()
         .ok_or_else(|| eyre!("operation parent missing"))?;
     let held = direct_directory(parent)?;
-    let stage = root.with_file_name(format!(
-        ".{}.staging",
-        root.file_name()
-            .ok_or_else(|| eyre!("operation name missing"))?
-            .to_string_lossy()
-    ));
+    let stage = operation_stage(root)?;
     let owner = ownership_path(root)?;
-    let intent = json::to_vec(
-        &norito::json!({"schema":"iroha.taira.dispatcher-transition-ownership.v1","operation_root":root.to_string_lossy().as_ref(),"staging_root":stage.to_string_lossy().as_ref(),"plan_sha256":sha256_hex(bytes)}),
-    )?;
+    let intent = ownership_intent(root, bytes)?;
     if !exists(&owner)? {
         need(
             !exists(&stage)? && !exists(root)?,
@@ -601,8 +631,18 @@ pub(super) fn initialize_operation(
         "unexpected completed staging entry",
     )?;
     check_directory(parent, &held)?;
-    rename_noreplace(&stage, root)?;
-    held.sync_all()
+    rustix::fs::renameat_with(
+        &held,
+        stage
+            .file_name()
+            .ok_or_else(|| eyre!("stage name missing"))?,
+        &held,
+        root.file_name()
+            .ok_or_else(|| eyre!("operation name missing"))?,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )?;
+    held.sync_all()?;
+    check_directory(parent, &held)
 }
 
 pub(super) fn transition(
@@ -615,6 +655,7 @@ pub(super) fn transition(
 ) -> Result<()> {
     need(action != Action::Check, "check cannot mutate")?;
     if exists(root)? {
+        verify_ownership(root, bytes)?;
         direct_directory(root)?;
         census(root)?;
         checked(

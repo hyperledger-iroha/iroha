@@ -73,14 +73,27 @@ fn assert_original_writers_released(state: &State, header: BlockHeader) {
 
 #[test]
 fn native_single_publishes_original_sources_and_exact_checkpoint_once() {
-    let fixture = native_publication_fixture(false);
-    assert_native_publication(false, fixture);
+    assert_native_publication_on_bounded_stack(false);
 }
 
 #[test]
 fn native_atomic_publishes_original_sources_and_exact_checkpoint_once() {
-    let fixture = native_publication_fixture(true);
-    assert_native_publication(true, fixture);
+    assert_native_publication_on_bounded_stack(true);
+}
+
+fn assert_native_publication_on_bounded_stack(atomic: bool) {
+    // Pin the ordinary Rust worker budget so RUST_MIN_STACK cannot hide large
+    // carrier moves during durable-source decoding, abort, or publication.
+    std::thread::Builder::new()
+        .name(format!("native-publication-atomic-{atomic}"))
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let fixture = native_publication_fixture(atomic);
+            assert_native_publication(atomic, fixture);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[inline(never)]
@@ -147,6 +160,7 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
             Ok::<_, Infallible>(Reservation(Arc::clone(&capture_released)))
         })
         .unwrap();
+    let original_effects = std::ptr::from_ref(journals.effects.as_ref());
     original.assert_retained(journals.native_source_for_test().unwrap());
     assert!(
         journals
@@ -164,6 +178,10 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
             Ok::<_, Infallible>(Reservation(Arc::clone(&binding_released)))
         })
         .unwrap_or_else(|refusal| panic!("real Native decision binding: {:?}", refusal.error));
+    assert_eq!(
+        std::ptr::from_ref(decision.journals.effects.as_ref()),
+        original_effects
+    );
     let finality = decision.finality().clone();
     let wire = decision.block().encode_wire().unwrap();
     assert_eq!(finality.commit_qc.execution_commitment, execution);
@@ -187,6 +205,10 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
         DetachedCarrierComponents,
         KuraWsvCheckpointReceipt,
     >| {
+        assert_eq!(
+            std::ptr::from_ref(decision.journals.effects.as_ref()),
+            original_effects
+        );
         decision
             .try_prepare_physical(state, |_, _| {
                 Ok::<_, Infallible>(Reservation(Arc::clone(&installation_released)))
@@ -196,6 +218,10 @@ fn assert_native_publication(atomic: bool, fixture: Box<NativePublicationFixture
     // A real abort releases every acquired writer, preserving exact source and
     // checkpoint custody for the sole later successful consuming publication.
     let decision = acquire(decision).abort();
+    assert_eq!(
+        std::ptr::from_ref(decision.journals.effects.as_ref()),
+        original_effects
+    );
     assert_eq!(installation_released.load(Ordering::SeqCst), 1);
     assert_eq!(capture_released.load(Ordering::SeqCst), 0);
     assert_eq!(binding_released.load(Ordering::SeqCst), 0);

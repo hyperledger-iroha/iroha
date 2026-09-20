@@ -1,7 +1,7 @@
 //! Iterators for the map.
 
 // Iterators for the bptree
-use super::node::{Branch, Leaf, Meta, Node};
+use super::node::{Branch, Leaf, Meta, Node, Untracked};
 use std::borrow::Borrow;
 use std::collections::VecDeque;
 use std::fmt::Debug;
@@ -39,7 +39,7 @@ where
             } else {
                 match bound {
                     Bound::Excluded(q) | Bound::Included(q) => {
-                        let bref = branch_ref!(work_node, K, V);
+                        let bref = branch_ref!(work_node, K, V, Untracked);
                         let idx = bref.locate_node(q);
                         // This is the index we are currently chasing from
                         // within this node.
@@ -48,7 +48,7 @@ where
                     }
                     Bound::Unbounded => {
                         stack.push_back((work_node, 0));
-                        work_node = branch_ref!(work_node, K, V).get_idx_unchecked(0);
+                        work_node = branch_ref!(work_node, K, V, Untracked).get_idx_unchecked(0);
                     }
                 }
             }
@@ -83,7 +83,7 @@ where
         'outer: loop {
             // Get the current branch, it must the the back.
             if let Some((bref, bpidx)) = self.stack.back_mut() {
-                let wbranch = branch_ref!(*bref, K, V);
+                let wbranch = branch_ref!(*bref, K, V, Untracked);
                 // We were currently looking at bpidx in bref. Increment and
                 // check what's next.
                 *bpidx += 1;
@@ -96,7 +96,8 @@ where
                         if self_meta!(work_node).is_leaf() {
                             break 'outer;
                         } else {
-                            work_node = branch_ref!(work_node, K, V).get_idx_unchecked(0);
+                            work_node =
+                                branch_ref!(work_node, K, V, Untracked).get_idx_unchecked(0);
                         }
                     }
                 } else {
@@ -137,7 +138,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for LeafIter<'a, K, V> {
 
         // Return the leaf as we found at the start, regardless of the
         // stack operations.
-        Some(leaf_ref_shared!(leafref, K, V))
+        Some(leaf_ref_shared!(leafref, K, V, Untracked))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -172,13 +173,13 @@ where
         loop {
             if self_meta!(work_node).is_leaf() {
                 // Put in the max len here ...
-                let lref = leaf_ref!(work_node, K, V);
+                let lref = leaf_ref!(work_node, K, V, Untracked);
                 if lref.count() > 0 {
                     stack.push_back((work_node, lref.count() - 1));
                 }
                 break;
             } else {
-                let bref = branch_ref_shared!(work_node, K, V);
+                let bref = branch_ref_shared!(work_node, K, V, Untracked);
                 let bref_count = bref.count();
                 match bound {
                     Bound::Excluded(q) | Bound::Included(q) => {
@@ -191,7 +192,8 @@ where
                     Bound::Unbounded => {
                         // count shows the most right node.
                         stack.push_back((work_node, bref_count));
-                        work_node = branch_ref!(work_node, K, V).get_idx_unchecked(bref_count);
+                        work_node =
+                            branch_ref!(work_node, K, V, Untracked).get_idx_unchecked(bref_count);
                     }
                 }
             }
@@ -226,7 +228,7 @@ where
         'outer: loop {
             // Get the current branch, it must the the back.
             if let Some((bref, bpidx)) = self.stack.back_mut() {
-                let wbranch = branch_ref!(*bref, K, V);
+                let wbranch = branch_ref!(*bref, K, V, Untracked);
                 // We were currently looking at bpidx in bref. Increment and
                 // check what's next.
                 // NOTE: If this underflows, it's okay because idx_checked won't
@@ -245,11 +247,11 @@ where
                     let mut work_node = node;
                     loop {
                         if self_meta!(work_node).is_leaf() {
-                            let lref = leaf_ref!(work_node, K, V);
+                            let lref = leaf_ref!(work_node, K, V, Untracked);
                             self.stack.push_back((work_node, lref.count() - 1));
                             break 'outer;
                         } else {
-                            let bref = branch_ref!(work_node, K, V);
+                            let bref = branch_ref!(work_node, K, V, Untracked);
                             let idx = bref.count();
                             self.stack.push_back((work_node, idx));
                             work_node = bref.get_idx_unchecked(idx);
@@ -292,7 +294,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone> Iterator for RevLeafIter<'a, K, V> {
 
         // Return the leaf as we found at the start, regardless of the
         // stack operations.
-        Some(leaf_ref_shared!(leafref, K, V))
+        Some(leaf_ref_shared!(leafref, K, V, Untracked))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -458,7 +460,7 @@ where
             }
             Bound::Included(k) => {
                 if let Some((node, idx)) = left_iter.get_mut() {
-                    let leaf = leaf_ref!(*node, K, V);
+                    let leaf = leaf_ref!(*node, K, V, Untracked);
                     // eprintln!("Positioning Included with ... {:?} {:?}", leaf, idx);
                     match leaf.locate(k) {
                         Ok(fidx) | Err(fidx) => {
@@ -473,7 +475,7 @@ where
             }
             Bound::Excluded(k) => {
                 if let Some((node, idx)) = left_iter.get_mut() {
-                    let leaf = leaf_ref!(*node, K, V);
+                    let leaf = leaf_ref!(*node, K, V, Untracked);
                     // eprintln!("Positioning Excluded with ... {:?} {:?}", leaf, idx);
                     match leaf.locate(k) {
                         Ok(fidx) => {
@@ -512,7 +514,7 @@ where
             }
             Bound::Included(k) => {
                 if let Some((node, idx)) = right_iter.get_mut() {
-                    let leaf = leaf_ref!(*node, K, V);
+                    let leaf = leaf_ref!(*node, K, V, Untracked);
                     // eprintln!("Positioning Included with ... {:?} {:?}", leaf, idx);
                     match leaf.locate(k) {
                         Ok(fidx) => {
@@ -543,7 +545,7 @@ where
             }
             Bound::Excluded(k) => {
                 if let Some((node, idx)) = right_iter.get_mut() {
-                    let leaf = leaf_ref!(*node, K, V);
+                    let leaf = leaf_ref!(*node, K, V, Untracked);
                     // eprintln!("Positioning Included with ... {:?} {:?}", leaf, idx);
                     match leaf.locate(k) {
                         Ok(fidx) | Err(fidx) => {
@@ -616,7 +618,7 @@ impl<'n, K: Clone + Ord + Debug, V: Clone> Iterator for RangeIter<'n, K, V> {
         loop {
             if let Some((node, idx)) = self.left_iter.get_mut() {
                 // eprintln!("Next with ... {:?} {:?}", node, idx);
-                let leaf = leaf_ref!(*node, K, V);
+                let leaf = leaf_ref!(*node, K, V, Untracked);
                 // Get idx checked.
                 if let Some(r) = leaf.get_kv_idx_checked(*idx) {
                     if let Some((rnode, ridx)) = self.right_iter.get_mut() {
@@ -660,7 +662,7 @@ impl<K: Clone + Ord + Debug, V: Clone> DoubleEndedIterator for RangeIter<'_, K, 
     fn next_back(&mut self) -> Option<Self::Item> {
         loop {
             if let Some((node, idx)) = self.right_iter.get_mut() {
-                let leaf = leaf_ref_shared!(*node, K, V);
+                let leaf = leaf_ref_shared!(*node, K, V, Untracked);
                 // Get idx checked.
                 if let Some(r) = leaf.get_kv_idx_checked(*idx) {
                     if let Some((lnode, lidx)) = self.left_iter.get_mut() {
@@ -699,17 +701,18 @@ mod tests {
     use super::super::cursor::SuperBlock;
     use super::super::node::{Branch, Leaf, Node, L_CAPACITY, L_CAPACITY_N1};
     use super::{Iter, LeafIter, RangeIter, RevLeafIter};
+    use crate::internals::lincowcell::Untracked;
     use std::ops::Bound;
     use std::ops::Bound::*;
 
     fn create_leaf_node_full(vbase: usize) -> *mut Node<usize, usize> {
         assert!(vbase.is_multiple_of(10));
-        let node = Node::new_leaf(0);
+        let node = Node::new_leaf(0, &mut Untracked);
         {
-            let nmut = leaf_ref!(node, usize, usize);
+            let nmut = leaf_ref!(node, usize, usize, Untracked);
             for idx in 0..L_CAPACITY {
                 let v = vbase + idx;
-                nmut.insert_or_update(v, v);
+                nmut.insert_or_update(v, v, &mut Untracked);
             }
         }
         node as *mut _
@@ -737,7 +740,7 @@ mod tests {
     fn test_bptree2_iter_leafiter_3() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Unbounded);
 
         let lref = test_iter.next().unwrap();
@@ -755,10 +758,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Unbounded);
 
         let l1ref = test_iter.next().unwrap();
@@ -829,7 +832,7 @@ mod tests {
     fn test_bptree2_iter_leafiter_bound_4() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&0));
         // Cursor should be positioned on the node with "10"
 
@@ -846,7 +849,7 @@ mod tests {
     fn test_bptree2_iter_leafiter_bound_5() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&10));
         // Cursor should be positioned on the node with "10"
 
@@ -863,7 +866,7 @@ mod tests {
     fn test_bptree2_iter_leafiter_bound_6() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&19));
         // Cursor should be positioned on the node with "10"
 
@@ -882,7 +885,7 @@ mod tests {
         let rnode = create_leaf_node_full(20);
         eprintln!("{:?}, {:?}", lnode, rnode);
 
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&20));
         // Cursor should be positioned on the node with "20"
 
@@ -900,7 +903,7 @@ mod tests {
     fn test_bptree2_iter_leafiter_bound_8() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&100));
         // Cursor should be positioned on the node with "20"
 
@@ -917,10 +920,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&0));
         // Should be on the 10
 
@@ -943,10 +946,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&15));
         // Should be on the 10
 
@@ -969,10 +972,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&20));
         // Should be on the 20
 
@@ -993,10 +996,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&25));
         // Should be on the 20
 
@@ -1017,10 +1020,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&30));
         // Should be on the 30
 
@@ -1039,10 +1042,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&35));
         // Should be on the 30
 
@@ -1061,10 +1064,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&40));
         // Should be on the 40
 
@@ -1081,10 +1084,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: LeafIter<usize, usize> = LeafIter::new(root as *mut _, Included(&100));
         // Should be on the 40
 
@@ -1118,7 +1121,7 @@ mod tests {
     fn test_bptree2_iter_revleafiter_3() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> = RevLeafIter::new(root as *mut _, Unbounded);
 
         let rref = test_iter.next().unwrap();
@@ -1136,10 +1139,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> = RevLeafIter::new(root as *mut _, Unbounded);
 
         let r2ref = test_iter.next().unwrap();
@@ -1198,7 +1201,7 @@ mod tests {
     fn test_bptree2_iter_revleafiter_bound_5() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&10));
         // Cursor should be positioned on the node with "10"
@@ -1214,7 +1217,7 @@ mod tests {
     fn test_bptree2_iter_revleafiter_bound_6() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&19));
         // Cursor should be positioned on the node with "10"
@@ -1232,7 +1235,7 @@ mod tests {
         let rnode = create_leaf_node_full(20);
         eprintln!("{:?}, {:?}", lnode, rnode);
 
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&20));
         // Cursor should be positioned on the node with "20"
@@ -1250,7 +1253,7 @@ mod tests {
     fn test_bptree2_iter_revleafiter_bound_8() {
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&100));
         // Cursor should be positioned on the node with "20"
@@ -1270,10 +1273,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&100));
         // Should be on the 40
@@ -1297,10 +1300,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&45));
         // Should be on the 40
@@ -1324,10 +1327,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&35));
         // Should be on the 30
@@ -1349,10 +1352,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&30));
         // Should be on the 30
@@ -1374,10 +1377,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&25));
         // Should be on the 20
@@ -1397,10 +1400,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&20));
         // Should be on the 20
@@ -1420,10 +1423,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&15));
         // Should be on the 10
@@ -1441,10 +1444,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let mut test_iter: RevLeafIter<usize, usize> =
             RevLeafIter::new(root as *mut _, Included(&0));
         // Should be on the 10
@@ -1461,7 +1464,7 @@ mod tests {
         // Make a tree
         let lnode = create_leaf_node_full(10);
         let rnode = create_leaf_node_full(20);
-        let root = Node::new_branch(0, lnode, rnode);
+        let root = Node::new_branch(0, lnode, rnode, &mut Untracked);
         let test_iter: Iter<usize, usize> = Iter::new(root as *mut _, L_CAPACITY * 2);
 
         assert!(test_iter.size_hint() == (L_CAPACITY * 2, Some(L_CAPACITY * 2)));
@@ -1477,10 +1480,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
         let test_iter: Iter<usize, usize> = Iter::new(root as *mut _, L_CAPACITY * 4);
 
         // println!("{:?}", test_iter.size_hint());
@@ -1535,10 +1538,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
         let test_iter: RangeIter<usize, usize> =
@@ -1581,10 +1584,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
         let test_iter: RangeIter<usize, usize> =
@@ -1628,10 +1631,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
         let test_iter: RangeIter<usize, usize> =
@@ -1674,10 +1677,10 @@ mod tests {
         let r1node = create_leaf_node_full(20);
         let l2node = create_leaf_node_full(30);
         let r2node = create_leaf_node_full(40);
-        let b1node = Node::new_branch(0, l1node, r1node);
-        let b2node = Node::new_branch(0, l2node, r2node);
+        let b1node = Node::new_branch(0, l1node, r1node, &mut Untracked);
+        let b2node = Node::new_branch(0, l2node, r2node, &mut Untracked);
         let root: *mut Branch<usize, usize> =
-            Node::new_branch(0, b1node as *mut _, b2node as *mut _);
+            Node::new_branch(0, b1node as *mut _, b2node as *mut _, &mut Untracked);
 
         let bounds: (Bound<usize>, Bound<usize>) = (Unbounded, Unbounded);
         let test_iter: RangeIter<usize, usize> =

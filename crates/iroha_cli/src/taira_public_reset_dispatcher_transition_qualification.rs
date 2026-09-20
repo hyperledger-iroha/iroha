@@ -1,5 +1,6 @@
 //! Join the completed preparation and maintained transfer producer records.
 use super::*;
+use std::io::Seek as _;
 const NAMES: [&str; 4] = ["iroha3d_taira", "iroha", "sorafs-node", "kagami"];
 const PACKAGES: [&str; 4] = ["irohad", "iroha_cli", "sorafs_node", "iroha_kagami"];
 const BASE: &str = "commit signer_fingerprint native_check_scope native_incremental native_linker environment_sha256 native_environment_sha256 tree target profile jobs source_unchanged toolchain_unchanged source_snapshot_sha256 source_root source_output_target compiler_tools tools command release_qualified deployed";
@@ -302,7 +303,7 @@ pub(in super::super) fn validate_records(candidate: &Candidate, records: &[Value
     Ok(())
 }
 
-pub(super) fn admit(candidate: &Candidate) -> Result<()> {
+pub(super) fn admit(candidate: &Candidate) -> Result<Vec<Pin>> {
     validate_lower_hex("candidate commit", &candidate.commit, 40)?;
     validate_lower_hex("candidate tree", &candidate.tree, 40)?;
     need(
@@ -348,6 +349,7 @@ pub(super) fn admit(candidate: &Candidate) -> Result<()> {
         record(&candidate.transfer_completed)?,
     ];
     validate_records(candidate, &records)?;
+    let mut binaries = Vec::new();
     for row in array(&records[3], "artifacts")? {
         let value = Pin {
             path: format!(
@@ -370,8 +372,9 @@ pub(super) fn admit(candidate: &Candidate) -> Result<()> {
             &file,
             &snapshot,
         )?;
+        binaries.push(value);
     }
-    Ok(())
+    Ok(binaries)
 }
 
 pub(in super::super) fn valid_elf(header: &[u8]) -> bool {

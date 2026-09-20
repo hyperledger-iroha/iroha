@@ -28,7 +28,7 @@ pub(in super::super::super) struct PrepareDispatcherTransition {
 /// Existing current-type occupied bindings; their executable source may differ from configuration.
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct CurrentRuntime {
+pub(super) struct CurrentRuntime {
     schema: String,
     host_identity_sha256: String,
     validators: Vec<ValidatorAdmittedReleaseV1>,
@@ -120,7 +120,7 @@ fn candidate(import: &Path, expected: &str, observed: &mut Observed) -> Result<C
     )?;
     Ok(candidate)
 }
-fn validate_runtime(runtime: &CurrentRuntime) -> Result<()> {
+pub(super) fn validate_runtime(runtime: &CurrentRuntime) -> Result<()> {
     need(
         runtime.schema == "iroha.taira.dispatcher-current-runtime.v1"
             && runtime.validators.len() == 4,

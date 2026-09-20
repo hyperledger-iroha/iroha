@@ -2,6 +2,7 @@
 
 #[macro_use]
 pub(crate) mod macros;
+pub(crate) mod allocation;
 pub(crate) mod cursor;
 pub mod iter;
 pub mod mutiter;

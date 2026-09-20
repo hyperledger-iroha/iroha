@@ -18,6 +18,7 @@ mod tests;
 const CONTROL: &str = "/var/lib/taira/.public-reset-control-v1";
 const RUNTIME: &str = "/private/runtime/taira-public-reset";
 const SCHEMA: &str = "iroha.taira.dispatcher-transition.v1";
+const MAX_PROOF: u64 = 16 * 1024 * 1024;
 const MAX_BINARY: u64 = 512 * 1024 * 1024;
 const SLUGS: [&str; 5] = [
     "taira-validator-1",

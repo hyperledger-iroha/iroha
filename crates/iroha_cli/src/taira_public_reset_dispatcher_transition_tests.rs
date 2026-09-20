@@ -673,3 +673,117 @@ fn dispatcher_transition_requires_native_aarch64_elf_header() {
     }
     assert!(!admission::qualification::valid_elf(&header[..19]));
 }
+
+#[test]
+fn dispatcher_transition_prepare_reuses_current_typed_split_source_bindings() {
+    let config_commit = "a".repeat(40);
+    let daemon_commit = "b".repeat(40);
+    let mut validators = Vec::new();
+    for slug in &SLUGS[..4] {
+        let service = format!("/srv/taira/{slug}");
+        let release = format!("{service}/releases/{config_commit}");
+        let daemon = format!("{RUNTIME}/release-{daemon_commit}-update-one/bin/iroha3d_taira");
+        let mut artifacts = Vec::new();
+        for (role, path, mode, commit) in [
+            ("iroha3d", daemon.clone(), 0o755, daemon_commit.clone()),
+            (
+                "config",
+                format!("{release}/config/config.toml"),
+                0o600,
+                config_commit.clone(),
+            ),
+            (
+                "genesis",
+                format!("{release}/genesis/genesis.json"),
+                0o644,
+                config_commit.clone(),
+            ),
+            (
+                "genesis_hash",
+                format!("{release}/genesis/genesis.sha256"),
+                0o644,
+                config_commit.clone(),
+            ),
+            (
+                "validator_unit",
+                format!("/etc/systemd/system/iroha3d-{slug}.service"),
+                0o644,
+                daemon_commit.clone(),
+            ),
+        ] {
+            artifacts.push(norito::json!({"role":role,"path":path,"sha256":"c".repeat(64),"size":20,"mode":mode,"source_commit":commit}));
+        }
+        validators.push(norito::json!({"commit":config_commit,"release_root":release,"argv":[daemon,"--config",format!("{service}/current/config/config.toml"),"--sora"],"artifacts":artifacts,"service_state":{"state":"stopped","value":{"device":10,"inode":20}}}));
+    }
+    let value = norito::json!({"schema":"iroha.taira.dispatcher-current-runtime.v1","host_identity_sha256":"d".repeat(64),"validators":validators,"edge":{"commit":config_commit,"release_root":format!("/srv/taira/edge/releases/{config_commit}"),"cli_sha256":"e".repeat(64),"config_sha256":"f".repeat(64)}});
+    let typed: prepare::CurrentRuntime = json::from_value(value.clone()).unwrap();
+    prepare::validate_runtime(&typed).unwrap();
+    let mut wrong = value.clone();
+    set(
+        &mut wrong,
+        "schema",
+        Value::String("old.runtime.schema".into()),
+    );
+    assert!(prepare::validate_runtime(&json::from_value(wrong).unwrap()).is_err());
+    let mut wrong = value;
+    let daemon = &mut wrong
+        .as_object_mut()
+        .unwrap()
+        .get_mut("validators")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()[0]
+        .as_object_mut()
+        .unwrap()
+        .get_mut("artifacts")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()[0];
+    set(daemon, "source_commit", Value::String(config_commit));
+    assert!(prepare::validate_runtime(&json::from_value(wrong).unwrap()).is_err());
+}
+#[test]
+fn dispatcher_transition_prepare_cli_requires_pinned_native_inputs() {
+    use clap::Parser as _;
+    let args = vec![
+        "iroha",
+        "taira",
+        "public-reset",
+        "prepare-dispatcher-transition",
+        "--import-root",
+        "/import",
+        "--expected-result-sha256",
+        "a",
+        "--retained-inventory",
+        "/inventory.json",
+        "--expected-retained-inventory-sha256",
+        "b",
+        "--current-runtime",
+        "/runtime.json",
+        "--expected-current-runtime-sha256",
+        "c",
+        "--trusted-public-key",
+        "/trust.json",
+        "--operation-id",
+        "d",
+        "--output",
+        "/plan.json",
+    ];
+    assert!(crate::Args::try_parse_from(args.clone()).is_ok());
+    assert!(crate::Args::try_parse_from(&args[..args.len() - 2]).is_err());
+    assert!(
+        crate::Args::try_parse_from([
+            "iroha",
+            "taira",
+            "public-reset",
+            "dispatcher-transition",
+            "--plan",
+            "/plan.json",
+            "--expected-plan-sha256",
+            "a",
+            "--action",
+            "check"
+        ])
+        .is_ok()
+    );
+}

@@ -1,6 +1,7 @@
 //! Closed candidate/predecessor admission and read-only runtime custody.
 use super::super::super::FileSnapshot;
 use super::*;
+use std::io::Seek as _;
 #[path = "taira_public_reset_dispatcher_transition_qualification.rs"]
 pub(super) mod qualification;
 
@@ -29,13 +30,13 @@ fn pin(value: &Pin, maximum: u64) -> Result<(File, FileSnapshot)> {
     Ok((file, snapshot))
 }
 pub(super) fn read(value: &Pin) -> Result<Vec<u8>> {
-    let (file, snapshot) = pin(value, super::super::super::MAX_JSON_BYTES)?;
+    let (file, snapshot) = pin(value, MAX_PROOF)?;
     read_pinned_bytes(
         Path::new(&value.path),
         "transition public record",
         file,
         &snapshot,
-        super::super::super::MAX_JSON_BYTES,
+        MAX_PROOF,
     )
 }
 fn record(value: &Pin) -> Result<Value> {
@@ -420,7 +421,7 @@ fn protected(plan: &Plan) -> Result<()> {
 }
 
 pub(super) fn admit(plan: &Plan) -> Result<Held> {
-    qualification::admit(&plan.candidate)?;
+    let binaries = qualification::admit(&plan.candidate)?;
     sealed(plan)?;
     protected(plan)?;
     let mut held = Held { files: Vec::new() };
@@ -443,6 +444,7 @@ pub(super) fn admit(plan: &Plan) -> Result<Held> {
     ]
     .into_iter()
     .chain(p.occupied.iter().flat_map(|r| r.files.iter()))
+    .chain(binaries.iter())
     {
         let (file, snapshot) = pin(value, MAX_BINARY)?;
         held.files.push((value.clone(), file, snapshot));

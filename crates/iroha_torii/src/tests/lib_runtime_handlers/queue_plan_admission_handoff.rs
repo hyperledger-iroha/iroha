@@ -382,32 +382,37 @@ async fn queue_plan_handoff_expiry_before_aggregation_preserves_partial_journal_
         - super::TORII_PROXY_EXECUTION_BUDGET
         - Duration::from_millis(1);
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    let response = super::execute_torii_proxy_request_across_candidates(
-        expired_start,
-        vec![ToriiProxyCandidate::Local(
-            fixture.app.local_peer_id.as_ref().unwrap().clone(),
-        )],
-        route,
-        fixture.request.clone(),
-        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
-        Duration::from_millis(50),
-        |_, _| {
-            dispatched.set(dispatched.get() + 1);
-            std::future::ready(Err(ToriiProxyAttemptError::DefinitelyNotDispatched(
-                "expired request must not dispatch".to_owned(),
-            )))
-        },
-        |_| {
-            completed.set(completed.get() + 1);
-            std::future::ready(())
-        },
-    )
-    .await;
-    assert_queue_plan_handoff_uncertainty(&response, &fixture.request);
-    assert_eq!(dispatched.get(), 0);
-    assert_eq!(completed.get(), 0);
-    assert_eq!(fixture.app.queue.active_len(), 1);
-    assert_eq!(std::fs::read(&fixture.journal).unwrap(), claimed);
+    for (started, encoding_budget) in [
+        (expired_start, TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1),
+        (tokio::time::Instant::now(), 1),
+    ] {
+        let response = super::execute_torii_proxy_request_across_candidates(
+            started,
+            vec![ToriiProxyCandidate::Local(
+                fixture.app.local_peer_id.as_ref().unwrap().clone(),
+            )],
+            route,
+            fixture.request.clone(),
+            encoding_budget,
+            Duration::from_millis(50),
+            |_, _| {
+                dispatched.set(dispatched.get() + 1);
+                std::future::ready(Err(ToriiProxyAttemptError::DefinitelyNotDispatched(
+                    "expired request must not dispatch".to_owned(),
+                )))
+            },
+            |_| {
+                completed.set(completed.get() + 1);
+                std::future::ready(())
+            },
+        )
+        .await;
+        assert_queue_plan_handoff_uncertainty(&response, &fixture.request);
+        assert_eq!(dispatched.get(), 0);
+        assert_eq!(completed.get(), 0);
+        assert_eq!(fixture.app.queue.active_len(), 1);
+        assert_eq!(std::fs::read(&fixture.journal).unwrap(), claimed);
+    }
 }
 
 #[cfg(feature = "connect")]

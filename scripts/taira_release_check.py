@@ -729,6 +729,31 @@ TORII_UNIT_STAGES += (("signed account permission query preservation", (
     "torii_routed_read_tests::account_permissions_handler_query_preserves_signed_pagination_and_count_mode",
 )),)
 
+DISPATCHER_TRANSITION_STAGES = (("reversible dispatcher upgrade and native plan preparation", (
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_apply_and_rollback_preserve_exact_original_bytes",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_completed_replays_do_not_republish",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_interrupted_publication_resumes_every_checked_boundary",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rollback_from_every_partial_guard_publication",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_interrupted_rollback_resumes",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_changed_predecessor_refuses_rollback_before_barrier",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_foreign_guard_and_backup",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_same_bytes_replaced_inode",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_foreign_namespace_and_plan",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_dangling_symlink_as_absence",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_refuses_unowned_missing_guard",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_cli_requires_exact_plan_pin_and_action",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_accepts_exact_sealed_completed_predecessor",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_unsealed_rollback_and_foreign_lease",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_derives_guards_without_changing_existing_trust_or_roles",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_staging_publication_crashes_resume_only_owned_prefixes",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_inode_scan_rejects_alias_executable_own_fd_and_maps",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_requires_complete_qualified_transfer_producer_join",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_requires_native_aarch64_elf_header",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_prepare_reuses_current_typed_split_source_bindings",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_prepare_cli_requires_pinned_native_inputs",
+)), )
+STAGES += DISPATCHER_TRANSITION_STAGES
+
 TORII_ADMISSION_HANDOFF_STAGES = (("bounded transaction admission and exact receipt ownership", (
     "queue_plan_capacity_wait::tests::closed_owner_waits_and_rechecks_until_activation",
     "queue_plan_capacity_wait::tests::only_inactive_is_waited_and_terminal_change_is_immediate",

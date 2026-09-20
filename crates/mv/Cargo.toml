@@ -55,3 +55,7 @@ version = "=0.9.20"
 [[test]]
 name = "map_owned_generations"
 path = "tests/map_owned_generations.rs"
+
+[[test]]
+name = "linear_allocation_custody"
+path = "tests/linear_allocation_custody.rs"

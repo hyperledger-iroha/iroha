@@ -24599,6 +24599,15 @@ where
     let request = match SharedToriiProxyAttemptRequest::new(request, max_encoded_request_bytes) {
         Ok(request) => request,
         Err(error) => {
+            if let Some(expected) = queue_plan_synced_expectation.as_ref() {
+                // The expectation derives identity from the actual transaction.
+                // Refusal to encode this attempt cannot undo a previous claim.
+                return queue_plan_outcome_unknown_response(
+                    expected.entrypoint_hash,
+                    expected.signed_transaction_hash,
+                    error,
+                );
+            }
             return torii_proxy_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "proxy_capacity_exceeded",

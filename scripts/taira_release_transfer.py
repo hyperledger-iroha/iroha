@@ -695,8 +695,8 @@ def make_request(plan, build, exported):
         "runtime_root": plan["runtime_root"], "rows": rows,
         "allocation": {"bytes": sum(row["size"] for row in rows) + 2 * source_bytes + 2 * rows[4]["size"]
                                 + 2 * rows[5]["size"] + 128 * objects + 64 * 1024**2,
-                       "files": 2 * source_files + 256,
-                       "directories": 2 * len(directories) + 256}}
+                       "files": 2 * source_files + len(PROOF_NAMES) + 256,
+                       "directories": 2 * len(directories) + 1 + 256}}
     return validate_request(request), payloads
 
 

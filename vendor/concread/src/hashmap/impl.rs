@@ -107,7 +107,7 @@ impl<K: Hash + Eq + Clone + Debug + Sync + Send + 'static, V: Clone + Sync + Sen
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
         let prev = new_sblock.create_reader();
-        let mut cursor = new_sblock.create_writer();
+        let mut cursor = new_sblock.create_writer(());
         cursor.extend(iter);
 
         let _ = new_sblock.pre_commit(cursor, &prev);

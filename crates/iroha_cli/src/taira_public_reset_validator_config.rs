@@ -600,19 +600,11 @@ mod tests {
                 projected["torii"]["address"].as_str(),
                 Some(expected.as_str())
             );
-            let mut expected = original.clone();
-            // Materialization also relocates the existing peer-local revocation store.
-            insert(
-                &mut expected,
-                &[
-                    "network",
-                    "soranet_handshake",
-                    "pow",
-                    "revocation_store_path",
-                ],
-                format!("/var/lib/taira/{role}/privacy/soranet/ticket_revocations.norito").into(),
-            );
-            assert_eq!(projected["network"], expected["network"]);
+            // SoraNet state moves with validator storage while P2P bindings stay unchanged.
+            let mut expected_network = original["network"].clone();
+            expected_network["soranet_handshake"]["pow"]["revocation_store_path"] =
+                format!("/var/lib/taira/{role}/privacy/soranet/ticket_revocations.norito").into();
+            assert_eq!(projected["network"], expected_network);
             assert_eq!(projected["private_key"], original["private_key"]);
             assert_eq!(projected["torii"]["faucet"], original["torii"]["faucet"]);
             assert_eq!(

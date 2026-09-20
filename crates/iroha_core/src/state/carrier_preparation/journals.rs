@@ -215,7 +215,10 @@ pub(crate) struct PreparedCarrierJournals<
     reputation_capture: Option<PreparedReputationCapture>,
     publication_events: Vec<EventBox>,
     tiered_snapshot: tiered_publication::PreparedTieredSnapshot,
-    effects: RetainedCarrierEffects,
+    // Keep one admitted allocation across consuming phase transitions. Inline
+    // policies and lifecycle effects otherwise multiply across every owned
+    // success/refusal value, exhausting ordinary stacks during authentication.
+    effects: Box<RetainedCarrierEffects>,
     // Rust drops fields in declaration order. Capacity outlives every retained
     // journal, archive plan and deferred effect, including partial publication.
     admission: Admission,
@@ -273,8 +276,9 @@ impl<'state> PreparedCarrier<'state> {
     /// StateReadOnly is used only before decomposition. No surrogate State,
     /// reconstructed membership writer or second World tail is introduced.
     /// The required admission callback sees every retained candidate owner before
-    /// projections and journal detachment. Its borrowed inputs preserve allocation
-    /// capacities; serialized lengths alone do not account for retained memory.
+    /// projections, the retained-effects allocation and journal detachment. Its
+    /// borrowed inputs preserve allocation capacities; serialized lengths alone
+    /// do not account for retained memory.
     /// Detachment moves original MV allocations without cloning; execution's
     /// earlier allocations require their own prior admission. The reservation stays
     /// alive until all journals and deferred effects have been released. Archive
@@ -457,7 +461,7 @@ impl<'state> PreparedCarrier<'state> {
             geometry,
             publication_events,
             tiered_snapshot,
-            effects: RetainedCarrierEffects {
+            effects: Box::new(RetainedCarrierEffects {
                 header,
                 nexus,
                 runtime_policy,
@@ -480,7 +484,7 @@ impl<'state> PreparedCarrier<'state> {
                 committed_musubi_replication_shortfall_releases,
                 authenticated_replay_commit,
                 replay_prevalidation,
-            },
+            }),
             admission,
         };
         let mut carrier = StagedCarrierCapture {

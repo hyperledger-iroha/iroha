@@ -379,6 +379,12 @@ def validate_owners(root, models, errors, rust_binding_item):
             "queue_plan_capacity_wait::deadline_response(&request.request, error)",
             "let execution_deadline = (budget_observed_at + execution_budget)",
             ".min(execution_started + TORII_PROXY_EXECUTION_BUDGET)")
+    ordered("execute_torii_proxy_request_across_candidates",
+            "queue_plan_synced_acceptance_expectation(&request)",
+            "queue_plan_complete_input_capacity_error(transaction, &expected.admission_binding)",
+            "SharedToriiProxyAttemptRequest::new(request, max_encoded_request_bytes)",
+            "if let Some(expected) = queue_plan_synced_expectation.as_ref()",
+            "return queue_plan_outcome_unknown_response( expected.entrypoint_hash, expected.signed_transaction_hash, error, )")
     ordered("execute_incoming_torii_proxy_request_with_admission_inner",
             "canonical_queue_plan_synced_response(",
             "queue_plan_service_input_capacity_error(",
