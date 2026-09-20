@@ -1311,6 +1311,7 @@ class BeaconArgumentTests(unittest.TestCase):
         self.counter = 0
         self.renderer = self.root / "renderer.py"
         self.renderer.write_bytes(UNIT_RENDERER_PATH.read_bytes())
+        self.renderer.chmod(0o644)
         self.plan = {"unit_renderer": {"path": str(self.renderer), "sha256": retry.hashlib.sha256(self.renderer.read_bytes()).hexdigest()}}
         self.draft = {"authorization_nonce": "1" * 32, "validators": []}
         self.arguments = {"--validator-unit": []}
@@ -1319,6 +1320,7 @@ class BeaconArgumentTests(unittest.TestCase):
             path = self.root / ("iroha3d-" + role + ".service")
             raw = UNIT_RENDERER["render"](role, f"/unread/{index}.key", f"/unread/{index}.seed").encode()
             path.write_bytes(raw)
+            path.chmod(0o644)
             self.arguments["--validator-unit"].append(str(path))
             self.draft["validators"].append({"slug": role, "systemd_unit": path.name, "systemd_unit_sha256": retry.hashlib.sha256(raw).hexdigest()})
         self.static = ["--public-inputs", "/retained/public-inputs", "--validator-unit", *self.arguments["--validator-unit"]]
@@ -2822,7 +2824,9 @@ class SupersededImportTests(unittest.TestCase):
 
     def setUp(self):
         self.addCleanup(os.umask, os.umask(0o022))
-        self.tmp = tempfile.TemporaryDirectory(dir=SCRIPT.parent)
+        # Use native symlink metadata and owner-controlled ancestry. A shared
+        # checkout projects macOS symlink modes; /tmp has writable ancestors.
+        self.tmp = tempfile.TemporaryDirectory(dir=Path.home())
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
         self.runtime = self.root / 'runtime'
