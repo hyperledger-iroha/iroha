@@ -11,6 +11,7 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempts_ref = attempts.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(first_peer_id.clone()),
             ToriiProxyCandidate::P2p(second_peer_id.clone()),
@@ -81,6 +82,7 @@ async fn run_route_unavailable_proxy_case(case: RouteUnavailableProxyCase) {
     let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let completed_ref = completed.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         candidates,
         route,
         request,
@@ -125,6 +127,7 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
     let request =
         signed_query_proxy_request_for_test(Hash::new(b"torii-proxy-last-retryable"), route);
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
@@ -185,6 +188,7 @@ async fn generic_proxy_retries_exact_capacity_429_on_next_candidate() {
     let attempts_ref = attempts.clone();
     let first_peer_id_for_attempt = first_peer_id.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(first_peer_id),
             ToriiProxyCandidate::P2p(second_peer_id),
@@ -235,6 +239,7 @@ async fn generic_proxy_does_not_retry_an_unstructured_429() {
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempts_ref = attempts.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(first_peer_id),
             ToriiProxyCandidate::P2p(second_peer_id),
@@ -446,6 +451,7 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
     )
     .await;
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
@@ -613,6 +619,7 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
         exact_queue_plan_synced_quorum_snapshot(&app, &request, &second_signer).await;
     let forwarding_authority_for_closure = forwarding_authority.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(forwarding_authority.clone()),
             ToriiProxyCandidate::P2p(final_authority.clone()),
@@ -794,6 +801,7 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         exact_queue_plan_synced_quorum_snapshot(&app, &request, &second_signer).await;
     let response =
             super::execute_torii_proxy_request_across_candidates(
+                tokio::time::Instant::now(),
                 vec![ToriiProxyCandidate::P2p(peer_id.clone())],
                 route,
                 request.clone(),
@@ -894,6 +902,7 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         ("self-asserted outsider receipt", outsider_receipt),
     ] {
         let response = super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             vec![ToriiProxyCandidate::P2p(peer_id.clone())],
             route,
             request.clone(),
@@ -966,6 +975,7 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
         ("malformed 500", malformed_failure),
     ] {
         let response = super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             vec![ToriiProxyCandidate::P2p(peer_id.clone())],
             route,
             request.clone(),
@@ -1031,6 +1041,7 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
         let expected_hash = accepted_queue_hash_for_proxy_submit(&_app, &request);
         let expected_hash_literal = expected_hash.to_string();
         let response = super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             vec![candidate],
             route,
             request,
@@ -1410,6 +1421,7 @@ async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailabl
     let (_app, request) =
         incoming_proxy_submit_fixture(0xb6, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,

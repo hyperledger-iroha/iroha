@@ -729,6 +729,31 @@ TORII_UNIT_STAGES += (("signed account permission query preservation", (
     "torii_routed_read_tests::account_permissions_handler_query_preserves_signed_pagination_and_count_mode",
 )),)
 
+TORII_ADMISSION_HANDOFF_STAGES = (("bounded transaction admission and exact receipt ownership", (
+    "queue_plan_capacity_wait::tests::closed_owner_waits_and_rechecks_until_activation",
+    "queue_plan_capacity_wait::tests::only_inactive_is_waited_and_terminal_change_is_immediate",
+    "queue_plan_capacity_wait::tests::original_monotonic_and_wire_deadlines_are_not_renewed",
+    "queue_plan_capacity_wait::tests::cancellation_drops_wait_without_detached_checks",
+    "tests_runtime_handlers::incoming_queue_plan_handoff_waits_without_claim_then_attests_exact_request",
+    "tests_runtime_handlers::ingress_queue_plan_handoff_cancellation_releases_memory_without_claim",
+    "tests_runtime_handlers::forwarded_queue_plan_handoff_preflight_preserves_request_and_deadline",
+    "tests_runtime_handlers::incoming_queue_plan_handoff_expiry_never_creates_journal_claim",
+    "tests_runtime_handlers::queue_plan_handoff_after_quorum_retains_certificate_and_times_out_indeterminate",
+    "tests_runtime_handlers::incoming_queue_plan_handoff_partial_journal_retry_preserves_uncertainty",
+    "tests_runtime_handlers::queue_plan_handoff_after_quorum_resumes_exact_certificate_publication",
+    "tests_runtime_handlers::queue_plan_handoff_expiry_before_aggregation_preserves_partial_journal_uncertainty",
+    "tests_runtime_handlers::incoming_queue_plan_expired_retry_preserves_partial_journal_uncertainty",
+    "tests_runtime_handlers::incoming_queue_plan_capacity_unavailable_never_creates_a_journal_claim",
+    "tests_runtime_handlers::queue_plan_native_capacity_refuses_direct_and_ingress_promises_before_journal",
+    "tests_runtime_handlers::queue_plan_capacity_loss_after_quorum_remains_indeterminate",
+    "tests_runtime_handlers::queue_plan_synced_future_authority_retries_same_request_until_quorum",
+    "tests_runtime_handlers::queue_plan_synced_persistent_future_preserves_partial_claim_at_deadline",
+    "tests_runtime_handlers::queue_plan_synced_deadline_cancels_only_its_owned_waiter",
+    "tests_runtime_handlers::queue_plan_synced_other_rejections_do_not_rearm_partial_admission",
+)),)
+TORII_STARTUP_STAGES += TORII_ADMISSION_HANDOFF_STAGES
+TORII_UNIT_STAGES += TORII_ADMISSION_HANDOFF_STAGES
+
 TORII_UNIT_STAGES += (("canonical lifecycle status runtime root and public schema", (
     "routing::nexus_lane_lifecycle_tests::lane_lifecycle_status_binds_exact_current_catalog",
     "routing::nexus_lane_lifecycle_tests::lane_lifecycle_status_exposes_native_runtime_root_and_propagates_invalid_state",

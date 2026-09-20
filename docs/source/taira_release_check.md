@@ -242,7 +242,13 @@ measurement and are not inferred from these orchestration checks.
 
 After configuration, MV ownership and the pending-Kura recovery group, both scopes execute empty-journal Queue
 admission, HTTP readiness and daemon startup-policy regressions before CLI and other
-runtime checks. The full scope also executes Core snapshot-owner and cold
+runtime checks. Admission handoff controls require Torii to await a closed live owner
+within the original monotonic and wire deadlines, without creating a journal claim
+or dispatching during that wait. They verify exact successor admission, cancellation
+and memory release, and preserve exact transaction uncertainty for expired retries,
+partial durable claims and post-quorum expiry, including expiry before dispatch.
+Missing recovery, fail-stop and invalid capacity fail immediately.
+The full scope also executes Core snapshot-owner and cold
 certified-history groups at this early boundary. Every installed replay remains quarantined until exact State/Kura
 reconciliation completion, even when it contains no reservation owners. Full-scope cold storage cases restore multiple completed slots, recover only the current
 partial publication, recover independently pruned pairs using an authenticated

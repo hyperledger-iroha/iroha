@@ -129,6 +129,10 @@ pub(crate) struct PublicReset {
 
 #[derive(clap::Subcommand, Debug)]
 enum PublicResetCommand {
+    /// Reversibly advance the fixed dispatcher after a sealed occupied deployment.
+    DispatcherTransition(host::dispatcher_transition::DispatcherTransition),
+    /// Derive a pinned reversible dispatcher plan from qualified transfer and current runtime evidence.
+    PrepareDispatcherTransition(host::dispatcher_transition::prepare::PrepareDispatcherTransition),
     /// Export the exact clean local source manifest without contacting hosts or loading keys.
     SourceManifest(PublicResetSourceManifest),
     /// Materialize a retained validator config from an inherited descriptor without printing secrets.
@@ -359,6 +363,8 @@ impl PublicReset {
     /// Run before client configuration or any ledger signing identity is loaded.
     pub(super) fn run_without_client_config<W: Write>(&self, mut output: W) -> Result<()> {
         let report = match &self.command {
+            PublicResetCommand::DispatcherTransition(args) => return args.run(&mut output),
+            PublicResetCommand::PrepareDispatcherTransition(args) => return args.run(&mut output),
             PublicResetCommand::PrepareEpochSupervisorPlan(args) => {
                 host::epoch_reset_inputs::prepare(args)?;
                 return Ok(());

@@ -36,6 +36,7 @@ from unittest.mock import MagicMock, patch
 # Two private-key fixture controls cover immutable-source signing and custody.
 # Three explicit Torii listener controls preserve P2P and generated API ports.
 # Five real execution publication controls retain witness, wire and State ownership.
+# Eighteen transaction-admission controls retain exact requests, deadlines and receipts.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -44,8 +45,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -3755,7 +3756,9 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         self.directory = Path(self.temp.name).resolve()
         self.target = self.directory / "warm"
         self.source = self.target / "taira-release-sources" / "fixture" / "source"
-        self.source.mkdir(parents=True, mode=0o700)
+        for directory in (self.target, self.target / "taira-release-sources",
+                          self.source.parent, self.source):
+            directory.mkdir(mode=0o700)
         (self.target / "debug").mkdir(mode=0o700)
         self.env = {"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": str(self.target)}
         import taira_cargo_cache as cache
@@ -3790,7 +3793,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
             _, name, kind, arguments = gate.HARNESS_TARGETS[selection]
             package, is_test = arguments[1], True
             executable = self.target / "debug" / "deps" / (name + "-" + hashlib.sha256(selection.encode()).hexdigest()[:16])
-            executable.parent.mkdir(exist_ok=True)
+            executable.parent.mkdir(mode=0o700, exist_ok=True)
         executable.write_bytes(payload)
         executable.chmod(0o700)
         row = {"name": name, "executable": str(executable), "profile": {"test": is_test},
@@ -3820,7 +3823,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
     def test_cargo_publication_pair_is_copied_under_lock_without_changing_aliases(self):
         import taira_cargo_artifact as cargo
         executable, row, _ = self.artifact()
-        deps = executable.parent / 'deps'; deps.mkdir()
+        deps = executable.parent / 'deps'; deps.mkdir(mode=0o700)
         alias = deps / (executable.name + '-0123456789abcdef')
         os.link(executable, alias)
         before = self.contract._open_anchored_regular

@@ -796,6 +796,14 @@ fn queue_plan_capacity_handle_for_test(
     layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
     signers: &[KeyPair],
 ) -> iroha_core::sumeragi::SumeragiHandle {
+    queue_plan_capacity_harness_for_test(network_id, layout, signers).handle()
+}
+#[cfg(feature = "connect")]
+fn queue_plan_capacity_harness_for_test(
+    network_id: NetworkId,
+    layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
+    signers: &[KeyPair],
+) -> iroha_core::sumeragi::SumeragiIngressTestHarness {
     use iroha_data_model::{
         block::consensus_v2 as wire,
         isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
@@ -848,7 +856,7 @@ fn queue_plan_capacity_handle_for_test(
             &iroha_config::parameters::actual::Sumeragi::default(),
         )
         .unwrap();
-    ingress.handle()
+    ingress
 }
 #[cfg(feature = "connect")]
 fn single_route_queue_plan_authorities(
@@ -1538,6 +1546,7 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
         1
     );
     let one_receipt_response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![ToriiProxyCandidate::P2p(authorities[0].clone())],
         route,
         request.clone(),
@@ -1576,6 +1585,7 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
         })
         .collect::<BTreeMap<_, _>>();
     let quorum_response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         authorities
             .iter()
             .cloned()
@@ -1735,6 +1745,7 @@ async fn queue_plan_synced_max_roster_reaches_honest_quorum_past_byzantine_prefi
     let response = tokio::time::timeout(
         Duration::from_secs(5),
         super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             authorities
                 .iter()
                 .cloned()
@@ -1818,6 +1829,7 @@ async fn queue_plan_synced_first_quorum_never_waits_for_pending_equivocation_evi
     .into_iter()
     .collect::<BTreeMap<_, _>>();
     let aggregation = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         authorities[..3]
             .iter()
             .cloned()
@@ -1967,6 +1979,7 @@ async fn queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quo
         ),
     ]);
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::Local(authorities[0].clone()),
             ToriiProxyCandidate::P2p(authorities[1].clone()),
@@ -2158,6 +2171,7 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
     let completion_count = Arc::new(AtomicUsize::new(0));
     let completion_count_for_dispatch = Arc::clone(&completion_count);
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::Local(local_peer_id.clone()),
             ToriiProxyCandidate::P2p(remote_peer_id.clone()),
@@ -3776,6 +3790,7 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
     let attempts_ref = attempts.clone();
     let first_peer_id_for_closure = first_peer_id.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![
             ToriiProxyCandidate::P2p(first_peer_id.clone()),
             ToriiProxyCandidate::P2p(second_peer_id.clone()),
@@ -3867,6 +3882,7 @@ async fn queue_plan_synced_future_authority_retries_same_request_until_quorum() 
     let expected_binding = expected.admission_binding.clone();
     let attempted_authorities = authorities[..2].to_vec();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         attempted_authorities
             .iter()
             .cloned()
@@ -4010,6 +4026,7 @@ async fn queue_plan_synced_persistent_future_preserves_partial_claim_at_deadline
     let response = tokio::time::timeout(
         Duration::from_secs(2),
         super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             selected
                 .iter()
                 .cloned()
@@ -4094,6 +4111,7 @@ async fn queue_plan_synced_deadline_cancels_only_its_owned_waiter() {
     let response = tokio::time::timeout(
         Duration::from_secs(2),
         super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             vec![ToriiProxyCandidate::P2p(authorities[0].clone())],
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             request,
@@ -4234,6 +4252,7 @@ async fn queue_plan_synced_attempt_window_is_parallel_bounded_and_released_at_qu
     let response = tokio::time::timeout(
         Duration::from_secs(2),
         super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             authorities
                 .iter()
                 .cloned()
@@ -4618,6 +4637,7 @@ async fn queue_plan_synced_capacity_recovery_retains_distinct_claim_and_physical
     let owned_capacity = Arc::clone(&capacity);
     let held_owner = Arc::clone(&physical_owner);
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         authorities
             .iter()
             .cloned()
@@ -4706,6 +4726,7 @@ async fn queue_plan_synced_capacity_exhaustion_preserves_original_deadline_and_p
     let response = tokio::time::timeout(
         Duration::from_secs(6),
         super::execute_torii_proxy_request_across_candidates(
+            tokio::time::Instant::now(),
             authorities
                 .iter()
                 .cloned()
@@ -4788,6 +4809,7 @@ async fn queue_plan_synced_other_rejections_do_not_rearm_partial_admission() {
         let response = tokio::time::timeout(
             Duration::from_secs(1),
             super::execute_torii_proxy_request_across_candidates(
+                tokio::time::Instant::now(),
                 authorities
                     .iter()
                     .cloned()
@@ -4869,6 +4891,7 @@ async fn oversized_complete_admission_is_rejected_before_dispatch_or_journal() {
     let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let observed = attempts.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::now(),
         vec![ToriiProxyCandidate::P2p(peer)],
         plan.coordinator_route(),
         request.clone(),

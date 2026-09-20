@@ -23124,13 +23124,32 @@ fn queue_plan_service_input_capacity(
     handle.check_queue_plan_input_capacity(app.state.network_id_ref(), entrypoint, binding)
 }
 #[cfg(feature = "connect")]
-fn queue_plan_service_input_capacity_error(
+async fn queue_plan_service_input_capacity_error(
     app: &AppState,
     entrypoint: &TransactionEntrypoint,
     binding: &QueuePlanAdmissionBindingV1,
+    deadline: tokio::time::Instant,
+    deadline_unix_ms: u64,
 ) -> Option<Response> {
     use iroha_core::sumeragi::QueuePlanInputCapacityErrorV1;
-    let error = queue_plan_service_input_capacity(app, entrypoint, binding).err()?;
+    let error = queue_plan_capacity_wait::wait(
+        || queue_plan_service_input_capacity(app, entrypoint, binding),
+        || queue_plan_capacity_wait::remaining(deadline, deadline_unix_ms),
+    )
+    .await
+    .err()?;
+    let error = match error {
+        queue_plan_capacity_wait::WaitError::Capacity(error) => error,
+        queue_plan_capacity_wait::WaitError::Deadline(error) => {
+            // The exact request may already have a partial durable claim from
+            // an earlier attempt. A closed owner cannot prove non-admission.
+            return Some(queue_plan_outcome_unknown_response(
+                binding.entrypoint_hash,
+                binding.signed_transaction_hash,
+                format!("QueuePlan admission owner wait deadline expired: {error}"),
+            ));
+        }
+    };
     let (status, code) = match &error {
         QueuePlanInputCapacityErrorV1::Unavailable(_) | QueuePlanInputCapacityErrorV1::Inactive => {
             (
@@ -23150,9 +23169,11 @@ fn queue_plan_service_input_capacity_error(
     Some(torii_proxy_error_response(status, code, error.to_string()))
 }
 #[cfg(feature = "connect")]
-fn queue_plan_request_service_capacity_error(
+async fn queue_plan_request_service_capacity_error(
     app: &AppState,
     request: &ToriiProxyRequestKindV1,
+    deadline: tokio::time::Instant,
+    deadline_unix_ms: u64,
 ) -> Option<Response> {
     if let ToriiProxyRequestKindV1::SubmitTransaction {
         transaction,
@@ -23161,7 +23182,14 @@ fn queue_plan_request_service_capacity_error(
         ..
     } = request
     {
-        queue_plan_service_input_capacity_error(app, transaction, binding)
+        queue_plan_service_input_capacity_error(
+            app,
+            transaction,
+            binding,
+            deadline,
+            deadline_unix_ms,
+        )
+        .await
     } else {
         None
     }
@@ -24222,7 +24250,14 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
     };
     // Canonical envelope sizing allocates bounded complete inputs; retain the
     // same request-memory owner through sizing, dispatch and final persistence.
-    if let Some(response) = queue_plan_request_service_capacity_error(app, &request.request) {
+    if let Some(response) = queue_plan_request_service_capacity_error(
+        app,
+        &request.request,
+        tokio::time::Instant::from_std(request_started) + TORII_PROXY_EXECUTION_BUDGET,
+        request.deadline_unix_ms,
+    )
+    .await
+    {
         return response;
     }
     let mut candidate_peers = candidates.peers;
@@ -24260,6 +24295,7 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
     };
     let candidate_proxy_memory = proxy_memory.clone();
     let response = execute_torii_proxy_request_across_candidates(
+        tokio::time::Instant::from_std(request_started),
         candidate_peers,
         routing_decision,
         request,
@@ -24340,6 +24376,7 @@ async fn forward_incoming_torii_proxy_request(
     routing_decision: RoutingDecision,
     request: ToriiProxyRequestV1,
 ) -> Response {
+    let request_started = tokio::time::Instant::now();
     if request.hop_count >= request.max_hops {
         iroha_logger::warn!(
             request_id = %request.request_id,
@@ -24436,12 +24473,18 @@ async fn forward_incoming_torii_proxy_request(
             candidates.loop_prevention_drops,
         );
     }
-    if let Some(response) =
-        queue_plan_request_service_capacity_error(app, &forwarded_request.request)
+    if let Some(response) = queue_plan_request_service_capacity_error(
+        app,
+        &forwarded_request.request,
+        request_started + TORII_PROXY_EXECUTION_BUDGET,
+        forwarded_request.deadline_unix_ms,
+    )
+    .await
     {
         return response;
     }
     execute_torii_proxy_request_across_candidates(
+        request_started,
         candidates.peers,
         routing_decision,
         forwarded_request,
@@ -24501,6 +24544,7 @@ impl core::ops::Deref for SharedToriiProxyAttemptRequest {
 }
 #[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_across_candidates<F, Fut, C, CFut>(
+    execution_started: tokio::time::Instant,
     candidate_peers: Vec<ToriiProxyCandidate>,
     routing_decision: RoutingDecision,
     request: ToriiProxyRequestV1,
@@ -24516,17 +24560,18 @@ where
     CFut: core::future::Future<Output = ()>,
 {
     let request_id = request.request_id.clone();
-    let execution_started = tokio::time::Instant::now();
-    let execution_budget = match validate_torii_proxy_deadline(request.deadline_unix_ms) {
-        Ok(budget) => budget.min(TORII_PROXY_EXECUTION_BUDGET),
+    let budget_observed_at = tokio::time::Instant::now();
+    let execution_budget = match queue_plan_capacity_wait::remaining(
+        execution_started + TORII_PROXY_EXECUTION_BUDGET,
+        request.deadline_unix_ms,
+    ) {
+        Ok(budget) => budget,
         Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::REQUEST_TIMEOUT,
-                "proxy_deadline_exceeded",
-                error,
-            );
+            return queue_plan_capacity_wait::deadline_response(&request.request, error);
         }
     };
+    let execution_deadline = (budget_observed_at + execution_budget)
+        .min(execution_started + TORII_PROXY_EXECUTION_BUDGET);
     let queue_plan_synced_expectation = match queue_plan_synced_acceptance_expectation(&request) {
         Ok(expectation) => expectation,
         Err(error) => {
@@ -24681,7 +24726,6 @@ where
     let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV1>::new();
     let mut last_retryable: Option<Response> = None;
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
-    let execution_deadline = execution_started + execution_budget;
     let retry_delay = hedge_delay.clamp(Duration::from_millis(50), Duration::from_millis(250));
     let mut attempt_budget = retry_delay;
     'catch_up: loop {
@@ -25188,8 +25232,11 @@ async fn persist_queue_plan_admission_certificate(
         entrypoint: expected_entrypoint.clone(),
         certificate,
     };
-    if let Err(error) =
-        queue_plan_service_input_capacity(app, expected_entrypoint, expected_binding)
+    if let Err(error) = queue_plan_capacity_wait::wait(
+        || queue_plan_service_input_capacity(app, expected_entrypoint, expected_binding),
+        || deadline.remaining(),
+    )
+    .await
     {
         // Remote journals may already own this exact request. A changed/failed
         // process owner is indeterminate here, never a definitive rejection.
@@ -27629,6 +27676,7 @@ async fn execute_incoming_torii_proxy_request_with_admission(
             ),
         );
     }
+    let budget_observed_at = tokio::time::Instant::now();
     let absolute_budget = match validate_torii_proxy_deadline(proxy_request.deadline_unix_ms)
         .and_then(|remaining| {
             remaining
@@ -27638,16 +27686,23 @@ async fn execute_incoming_torii_proxy_request_with_admission(
         }) {
         Ok(remaining) => remaining,
         Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::REQUEST_TIMEOUT,
-                "proxy_deadline_exceeded",
-                error,
-            );
+            return queue_plan_capacity_wait::deadline_response(&proxy_request.request, error);
         }
     };
     let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);
     let request_id = proxy_request.request_id.clone();
-    let deadline = tokio::time::Instant::now() + remaining_budget;
+    let queue_plan_identity = match &proxy_request.request {
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            transaction,
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+            ..
+        } => Some((
+            transaction.hash(),
+            signed_transaction_hash_for_entrypoint(transaction),
+        )),
+        _ => None,
+    };
+    let deadline = budget_observed_at + remaining_budget;
     match tokio::time::timeout_at(
         deadline,
         execute_incoming_torii_proxy_request_with_admission_inner(
@@ -27662,13 +27717,26 @@ async fn execute_incoming_torii_proxy_request_with_admission(
     .await
     {
         Ok(response) => response,
-        Err(_) => torii_proxy_error_response(
-            StatusCode::REQUEST_TIMEOUT,
-            "proxy_deadline_exceeded",
-            format!(
+        Err(_) => {
+            let reason = format!(
                 "Torii proxy request `{request_id}` exhausted its authenticated absolute deadline"
-            ),
-        ),
+            );
+            if let Some((entrypoint_hash, signed_transaction_hash)) = queue_plan_identity {
+                // Cancellation may follow an earlier or partially completed
+                // durable claim. Retain exact ambiguity across the timeout race.
+                queue_plan_outcome_unknown_response(
+                    entrypoint_hash,
+                    signed_transaction_hash,
+                    reason,
+                )
+            } else {
+                torii_proxy_error_response(
+                    StatusCode::REQUEST_TIMEOUT,
+                    "proxy_deadline_exceeded",
+                    reason,
+                )
+            }
+        }
     }
 }
 #[cfg(feature = "connect")]
@@ -27907,6 +27975,30 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             ) {
                 return response;
             }
+            // Wait without issuing a claim while the predecessor owner is closed.
+            if let Some(response) = queue_plan_service_input_capacity_error(
+                app,
+                &transaction,
+                &admission_binding,
+                execution_deadline,
+                request_head.deadline_unix_ms,
+            )
+            .await
+            {
+                return response;
+            }
+            // Another exact request may have acquired canonical ownership while
+            // this future waited. Resolve it before fresh acceptance/route policy.
+            if let Some(response) = canonical_queue_plan_synced_response(
+                app,
+                &authenticated,
+                &admission_binding,
+                ingress_plan.coordinator_route(),
+                proxy_memory.as_ref(),
+                execution_deadline,
+            ) {
+                return response;
+            }
             // Only an absent canonical owner enters current admission policy.
             let accepted_tx = match routing::accept_transaction_for_ingress(
                 app.state.clone(),
@@ -27916,14 +28008,6 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                 Ok(accepted_tx) => accepted_tx,
                 Err(error) => return error.into_response(),
             };
-            // Only an absent canonical owner may create a new durable claim.
-            if let Some(response) = queue_plan_service_input_capacity_error(
-                app,
-                accepted_tx.entrypoint(),
-                &admission_binding,
-            ) {
-                return response;
-            }
             let routing_plan = match app
                 .queue
                 .route_plan_with_state(&accepted_tx, app.state.as_ref())
@@ -28548,6 +28632,8 @@ fn process_incoming_queue_plan_admission_publication(
 mod proxy_network_workers;
 #[cfg(feature = "connect")]
 mod proxy_response_finalization;
+#[cfg(feature = "connect")]
+mod queue_plan_capacity_wait;
 #[cfg(feature = "connect")]
 mod queue_plan_publication_wait;
 

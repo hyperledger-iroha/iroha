@@ -2472,36 +2472,39 @@ QUEUE_PLAN_CANONICAL_RETRY_BINDINGS = (('crates/iroha_core/src/state.rs',
   'fn',
   'execute_incoming_torii_proxy_request_with_admission_inner',
   ('queue_plan_service_input_capacity_error(\n'
-   '                app,\n'
-   '                accepted_tx.entrypoint(),\n'
-   '                &admission_binding,\n'
-   '            )',
-   'push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(',
-   'queue_plan_synced_admission_response(',
-   'if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {',
-   'let accepted_tx = match routing::accept_transaction_for_ingress(',
-   'if admission_binding.request_id != request_head.request_id {',
-   'if admission_binding.request_id != canonical_request_id {',
-   'iroha_core::torii_proxy::validate_queue_plan_binding_for_request(\n'
-   '                &admission_binding,\n'
-   '                app.state.network_id_ref(),\n'
-   '                &transaction,\n'
-   '                &ingress_plan,\n'
-   '            )',
-   '.route_plan_with_state(&accepted_tx, app.state.as_ref())',
-   'if let Some(response) = canonical_queue_plan_synced_response(\n'
-   '                app,\n'
-   '                &authenticated,\n'
-   '                &admission_binding,\n'
-   '                ingress_plan.coordinator_route(),\n'
-   '                proxy_memory.as_ref(),\n'
-   '                execution_deadline,\n'
-   '            ) {\n'
-   '                return response;\n'
-   '            }',
-   'execution_deadline: tokio::time::Instant',
-   'let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint(',
-   'authenticated.entrypoint_hash()')),
+ '                app,\n'
+ '                &transaction,\n'
+ '                &admission_binding,\n'
+ '                execution_deadline,\n'
+ '                request_head.deadline_unix_ms,\n'
+ '            )\n'
+ '            .await',
+ 'push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(',
+ 'queue_plan_synced_admission_response(',
+ 'if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {',
+ 'let accepted_tx = match routing::accept_transaction_for_ingress(',
+ 'if admission_binding.request_id != request_head.request_id {',
+ 'if admission_binding.request_id != canonical_request_id {',
+ 'iroha_core::torii_proxy::validate_queue_plan_binding_for_request(\n'
+ '                &admission_binding,\n'
+ '                app.state.network_id_ref(),\n'
+ '                &transaction,\n'
+ '                &ingress_plan,\n'
+ '            )',
+ '.route_plan_with_state(&accepted_tx, app.state.as_ref())',
+ 'if let Some(response) = canonical_queue_plan_synced_response(\n'
+ '                app,\n'
+ '                &authenticated,\n'
+ '                &admission_binding,\n'
+ '                ingress_plan.coordinator_route(),\n'
+ '                proxy_memory.as_ref(),\n'
+ '                execution_deadline,\n'
+ '            ) {\n'
+ '                return response;\n'
+ '            }',
+ 'execution_deadline: tokio::time::Instant',
+ 'let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint(',
+ 'authenticated.entrypoint_hash()')),
  ('crates/iroha_torii/src/lib.rs',
   'fn',
   'transaction_submission_receipt_response',
@@ -2776,8 +2779,9 @@ def validate_canonical_queue_plan_retry(items: dict, errors: list[str]) -> None:
             "AuthenticatedQueuePlanRetry::from_entrypoint(",
             "if admission_binding.request_id != request_head.request_id", "if admission_binding.request_id != canonical_request_id",
             "validate_queue_plan_binding_for_request(", "canonical_queue_plan_synced_response(",
-            "return response;", "let accepted_tx = match routing::accept_transaction_for_ingress(",
-            "queue_plan_service_input_capacity_error(", ".route_plan_with_state(",
+            "return response;", "queue_plan_service_input_capacity_error(",
+            "canonical_queue_plan_synced_response(", "let accepted_tx = match routing::accept_transaction_for_ingress(",
+            ".route_plan_with_state(",
             "push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(")
     ordered("AuthenticatedQueuePlanRetry::from_signed", "Self::check_network(network_id, signed)?;",
             "signed.verify_signature()", "Ok(Some(Self {")

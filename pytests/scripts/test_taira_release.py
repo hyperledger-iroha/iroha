@@ -41,7 +41,7 @@ class TairaPrepareTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name).resolve()
         self.target = self.root / "target"
-        self.target.mkdir()
+        self.target.mkdir(mode=0o700)
         self.target_mode = stat.S_IMODE(self.target.stat().st_mode)
         self.out = self.root / "prepared"
         self.source = self.target / "frozen-source"
@@ -73,7 +73,8 @@ class TairaPrepareTests(unittest.TestCase):
 
     def binaries(self, machine=183):
         output = self.target / release.TARGET / "release"
-        output.mkdir(parents=True, exist_ok=True)
+        output.parent.mkdir(mode=0o700, exist_ok=True)
+        output.mkdir(mode=0o700, exist_ok=True)
         for name, _ in release.BINARIES:
             path = output / name
             path.write_bytes(elf(machine))

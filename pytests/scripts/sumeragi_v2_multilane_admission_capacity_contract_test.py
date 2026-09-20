@@ -128,9 +128,15 @@ def test_admission_capacity_requires_exact_owner_ledger(captured, mutation):
     ("queue_plan_direct_frame_sizes_v1", "iroha_p2p::frame_queue_charge(plaintext)", "Some(plaintext)"),
     ("queue_plan_service_input_capacity", "app.sumeragi.as_ref().ok_or(", "foreign_handle.as_ref().ok_or("),
     ("queue_plan_service_input_capacity_error", "QueuePlanInputCapacityErrorV1::Inactive", "QueuePlanInputCapacityErrorV1::Invalid(_)"),
-    ("execute_torii_proxy_request_with_fallback_admitted", "queue_plan_request_service_capacity_error(app, &request.request)", "None"),
-    ("forward_incoming_torii_proxy_request", "queue_plan_request_service_capacity_error(app, &forwarded_request.request)", "None"),
-    ("execute_incoming_torii_proxy_request_with_admission_inner", 'queue_plan_service_input_capacity_error(\n                app,\n                accepted_tx.entrypoint(),\n                &admission_binding,\n            )', "queue_plan_complete_input_capacity_error(&transaction, binding)"),
+    ("wait", "Err(QueuePlanInputCapacityErrorV1::Inactive) => {}", "Err(_) => {}"),
+    ("wait", "let budget = remaining().map_err(WaitError::Deadline)?;", "let budget = Duration::from_secs(64);"),
+    ("remaining", "Ok(absolute.min(local))", "Ok(absolute)"),
+    ("deadline_response", "transaction.hash()", "unverified_binding.entrypoint_hash"),
+    ("execute_incoming_torii_proxy_request_with_admission", "queue_plan_capacity_wait::deadline_response(&proxy_request.request, error)", "generic_deadline_response(error)"),
+    ("execute_torii_proxy_request_across_candidates", "queue_plan_capacity_wait::deadline_response(&request.request, error)", "generic_deadline_response(error)"),
+    ("execute_torii_proxy_request_with_fallback_admitted", 'queue_plan_request_service_capacity_error(\n        app,\n        &request.request,\n        tokio::time::Instant::from_std(request_started) + TORII_PROXY_EXECUTION_BUDGET,\n        request.deadline_unix_ms,\n    )\n    .await', "None"),
+    ("forward_incoming_torii_proxy_request", 'queue_plan_request_service_capacity_error(\n        app,\n        &forwarded_request.request,\n        request_started + TORII_PROXY_EXECUTION_BUDGET,\n        forwarded_request.deadline_unix_ms,\n    )\n    .await', "None"),
+    ("execute_incoming_torii_proxy_request_with_admission_inner", 'queue_plan_service_input_capacity_error(\n                app,\n                &transaction,\n                &admission_binding,\n                execution_deadline,\n                request_head.deadline_unix_ms,\n            )\n            .await', "queue_plan_complete_input_capacity_error(&transaction, binding)"),
     ("persist_queue_plan_admission_certificate", "queue_plan_service_input_capacity(app, expected_entrypoint, expected_binding)", "Ok::<(), String>(())"),
 ])
 def test_admission_capacity_rejects_semantic_mutation(captured, symbol, old, new):
@@ -165,7 +171,7 @@ def test_admission_capacity_rejects_sizing_before_memory_admission(captured):
     c = checker.admission_capacity_contract
     key = next(k for k in items if k[2] == "execute_torii_proxy_request_with_fallback_admitted")
     source = c._code(items[key])
-    check = c._code("if let Some(response) = queue_plan_request_service_capacity_error(app, &request.request) { return response; }")
+    check = c._code('if let Some(response) = queue_plan_request_service_capacity_error(\n        app,\n        &request.request,\n        tokio::time::Instant::from_std(request_started) + TORII_PROXY_EXECUTION_BUDGET,\n        request.deadline_unix_ms,\n    )\n    .await { return response; }')
     assert source.count(check) == 1
     source = source.replace(check, "", 1)
     source = source.replace("letproxy_memory=", check + "letproxy_memory=", 1)

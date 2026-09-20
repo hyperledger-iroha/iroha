@@ -37,7 +37,10 @@ SCHEMA = "taira.release-transfer.v1"
 RESULT_SCHEMA = "taira.release-transfer.completed.v1"
 NAMES = ("iroha3d_taira", "iroha", "sorafs-node", "kagami")
 PACKAGES = ("irohad", "iroha_cli", "sorafs_node", "iroha_kagami")
+PROOF_NAMES = tuple("preparation/" + name for name in ("result.json", "request.json", "checks.json", "capture.json"))
+PAYLOAD_NAMES = (*NAMES, "source.pack", "source-capture.json", *PROOF_NAMES)
 MAX_BINARY = 512 * 1024**2
+MAX_PROOF = 16 * 1024**2
 MAX_BOOTSTRAP = 4 * 1024**2
 MAX_REPORT = 1024**2
 CHUNK = 1024**2
@@ -312,12 +315,16 @@ def validate_request(request):
          and re.fullmatch(r"[0-9a-f]{40}", request["tree"]) is not None
          and re.fullmatch(r"(?:[0-9A-F]{40}|[0-9A-F]{64})", request["signer_fingerprint"]) is not None
          and digest(request["result_sha256"]), "invalid transfer source identity")
-    need(isinstance(request["rows"], list) and len(request["rows"]) == 6, "six exact payload rows required")
-    for row, name, limit in zip(request["rows"], (*NAMES, "source.pack", "source-capture.json"),
-                                (*([MAX_BINARY] * 4), 4 * 1024**3, 64 * 1024**2)):
+    need(isinstance(request["rows"], list) and len(request["rows"]) == 10, "ten exact payload rows required")
+    for row, name, limit in zip(request["rows"], PAYLOAD_NAMES,
+                                (*([MAX_BINARY] * 4), 4 * 1024**3, 64 * 1024**2, *([MAX_PROOF] * 4))):
         need(isinstance(row, dict) and set(row) == {"name", "size", "sha256"}
              and row["name"] == name and type(row["size"]) is int and 0 < row["size"] <= limit
              and digest(row["sha256"]), "invalid payload row")
+    result, capture = request["rows"][6], request["rows"][9]
+    need(result["sha256"] == request["result_sha256"]
+         and (result["sha256"], result["size"]) == (capture["sha256"], capture["size"]),
+         "preparation result/capture payload binding differs")
     allocation = request["allocation"]
     need(isinstance(allocation, dict) and set(allocation) == {"bytes", "files", "directories"}
          and all(type(value) is int and 0 < value < 2**50 for value in allocation.values())
@@ -373,6 +380,9 @@ def payload_mode(name):
 
 
 def payload_path(destination, name):
+    need(name in PAYLOAD_NAMES, "unknown payload role")
+    if name in PROOF_NAMES:
+        return destination / name
     return destination / ("artifacts/bin" if name in NAMES else "source") / name
 
 
@@ -394,10 +404,11 @@ def expected_receipts(request, destination, facts):
 
 def verify_completed(request, destination, source_owner):
     for directory, names in (
-        (destination, {"request.json", "artifacts", "source", "completed.json"}),
+        (destination, {"request.json", "artifacts", "source", "preparation", "completed.json"}),
         (destination / "artifacts", {"bin", "verified-manifest.json"}),
         (destination / "artifacts/bin", set(NAMES)),
         (destination / "source", {"source.pack", "source-capture.json", "source", "verified-manifest.json"}),
+        (destination / "preparation", {"result.json", "request.json", "checks.json", "capture.json"}),
     ):
         private_directory(directory)
         need(set(os.listdir(directory)) == names, "completed import has missing or unexpected entries")
@@ -448,6 +459,7 @@ def receive(request, stream, source_owner, capacity):
         fresh_directory(destination / "artifacts")
         fresh_directory(destination / "artifacts/bin")
         fresh_directory(destination / "source")
+        fresh_directory(destination / "preparation")
         for row in request["rows"]:
             path = payload_path(destination, row["name"])
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -626,6 +638,34 @@ def remote_call(route, envelope, modules, output, retry, payloads=()):
     return decode(result_raw)
 
 
+def preparation_payloads(plan, build):
+    """Carry the already-qualified producer evidence, with no separate operator upload."""
+    from release_artifact_contract import canonical_json_bytes
+    output = direct(plan["preparation"]["path"]).parent
+    private_directory(output, mode=0o500)
+    attempt = build.get("attempt")
+    need(isinstance(attempt, str) and re.fullmatch(r"attempts/[0-9]{6}", attempt),
+         "invalid completed preparation attempt")
+    private_directory(output / attempt, mode=0o500)
+    paths = (output / "result.json", output / "request.json", output / "checks.json",
+             output / attempt / "capture.json")
+    raw = [read(path, maximum=MAX_PROOF, mode=0o400) for path in paths]
+    records = [decode(value) for value in raw[:3]]
+    need(all(canonical_json_bytes(record) == value for record, value in zip(records, raw)),
+         "preparation proof is not canonical")
+    result, request, checks = records
+    need(result == build and sha(raw[0]) == plan["preparation"]["sha256"] and raw[3] == raw[0],
+         "preparation result/capture changed before transport")
+    need(isinstance(request, dict) and set(request) == BASE_FIELDS | {"schema", "repo_root", "target_dir"}
+         and request["schema"] == "taira.local-preparation.v1"
+         and all(request[key] == build[key] for key in BASE_FIELDS)
+         and Path(request["repo_root"]) == Path(__file__).resolve().parents[1]
+         and checks == {"request": request, "passed": True},
+         "preparation request/checkpoint changed before transport")
+    return [({"name": name, "size": len(value), "sha256": sha(value)}, path)
+            for name, value, path in zip(PROOF_NAMES, raw, paths)]
+
+
 def make_request(plan, build, exported):
     rows = [{key: row[key] for key in ("name", "size", "sha256")} for row in build["artifacts"]]
     payloads = [(row, Path(original["path"])) for row, original in zip(rows, build["artifacts"])]
@@ -635,6 +675,9 @@ def make_request(plan, build, exported):
             row = {"name": name, "size": size, "sha256": checksum}
         rows.append(row)
         payloads.append((row, path))
+    proof_payloads = preparation_payloads(plan, build)
+    rows.extend(row for row, _ in proof_payloads)
+    payloads.extend(proof_payloads)
     source_bytes = exported["source_bytes"]
     source_files = exported["file_count"]
     objects = exported["object_count"]
