@@ -1,41 +1,11 @@
 use super::*;
 fn state_for_lifecycle_test() -> Arc<CoreState> {
     let nexus = iroha_config::parameters::actual::Nexus::default();
-    let kura_config = iroha_config::parameters::actual::Kura {
-        init_mode: iroha_config::kura::InitMode::Strict,
-        // The authenticated temporary constructor owns the isolated storage directory.
-        store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
-        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
-        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: iroha_config::kura::FsyncMode::Batched,
-        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-    };
-    let kura = Kura::new_temporary_with_configured_lane_catalog(
-        &kura_config,
-        &nexus.lane_config,
-        &nexus.configured_lane_catalog,
-    )
-    .expect("open the authenticated lifecycle fixture catalog before State startup");
-    let mut state = CoreState::new_for_testing(
+    let state = CoreState::new_with_pre_genesis_nexus_for_testing(
         iroha_core::state::World::default(),
-        kura,
+        nexus,
         iroha_core::query::store::LiveQueryStore::start_test(),
     );
-    state
-        .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
-        .expect("prepare the authenticated primary lane anchor");
-    state
-        .restore_kura_lane_segments_before_startup_replay()
-        .expect("restore the authenticated lifecycle fixture primary geometry");
-    state
-        .set_nexus_from_config(nexus)
-        .expect("install Nexus catalog for lifecycle test");
     Arc::new(state)
 }
 #[test]

@@ -192,27 +192,13 @@ fn build_faucet_test_context_with_enabled(
                 .into(),
             );
         }
-        let seed_tx = TransactionBuilder::new(
-            network_id,
-            authority_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions(seed_instructions)
-        .sign(authority_kp.private_key());
-        let leader = checked_faucet_block_leader_fixture();
-        let unverified = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
-            seed_tx,
-        ))])
-        .chain(0, state.view().latest_block().as_deref())
-        .sign(leader.private_key())
-        .unpack(|_| {});
-        let mut state_block = state.block(unverified.header());
-        state_block.chain_id = chain_id.clone();
-        let valid = unverified
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        iroha_torii::test_utils::finalize_committed_block(&state, state_block, committed);
+        fixtures::commit_genesis_fixture(
+            &state,
+            &authority_id,
+            &authority_kp,
+            seed_instructions,
+            iroha_primitives::time::TimeSource::new_system(),
+        );
     }
     advance_faucet_state_chain(
         &state,

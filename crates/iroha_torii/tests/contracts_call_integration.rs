@@ -50,9 +50,10 @@ fn can_burn_asset_definition(
     }
     .into()
 }
-fn grant_contract_operator_permissions(
+fn commit_contract_operator_genesis(
     state: &Arc<State>,
     authority: &iroha_data_model::account::AccountId,
+    signer: &iroha_crypto::KeyPair,
 ) {
     use iroha_data_model::prelude::Grant;
     use iroha_executor_data_model::permission::{
@@ -61,38 +62,25 @@ fn grant_contract_operator_permissions(
         smart_contract::CanRegisterSmartContractCode,
     };
 
-    let height = u64::try_from(state.view().height())
-        .unwrap_or(0)
-        .saturating_add(1);
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(height).expect("height > 0"),
-        None,
-        None,
-        0,
-        0,
+    fixtures::commit_genesis_fixture(
+        state,
+        authority,
+        signer,
+        vec![
+            Grant::account_permission(CanRegisterSmartContractCode, authority.clone()).into(),
+            Grant::account_permission(CanEnactGovernance, authority.clone()).into(),
+            Grant::account_permission(
+                CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    ),
+                },
+                authority.clone(),
+            )
+            .into(),
+        ],
+        iroha_primitives::time::TimeSource::new_system(),
     );
-    let mut block = state.block(header);
-    let mut transaction = block.transaction();
-    Grant::account_permission(CanRegisterSmartContractCode, authority.clone())
-        .execute(authority, &mut transaction)
-        .expect("grant CanRegisterSmartContractCode");
-    Grant::account_permission(CanEnactGovernance, authority.clone())
-        .execute(authority, &mut transaction)
-        .expect("grant CanEnactGovernance");
-    Grant::account_permission(
-        CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Dataspace(
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            ),
-        },
-        authority.clone(),
-    )
-    .execute(authority, &mut transaction)
-    .expect("grant universal-dataspace contract alias management");
-    transaction.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit contract operator permissions");
 }
 fn contract_call_noop_program() -> Vec<u8> {
     let src = include_str!("fixtures/contracts_call/noop.ko");
@@ -383,7 +371,9 @@ fn contract_test_state() -> (
         "chain".parse().expect("chain ID"),
         iroha_torii::test_utils::signed_query_network_id(),
     ));
-    grant_contract_operator_permissions(&state, &creds.account);
+    let signer = iroha_crypto::KeyPair::from_private_key(creds.private_key.0.clone())
+        .expect("contract genesis signer");
+    commit_contract_operator_genesis(&state, &creds.account, &signer);
     (creds, state, kura)
 }
 fn contract_test_queue_and_app(
@@ -746,7 +736,7 @@ async fn contracts_call_prepares_exact_payload_and_requires_certified_admission(
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
     let missing_limit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("entrypoint", "main"),
@@ -913,7 +903,7 @@ async fn contracts_call_prepares_exact_payload_and_requires_certified_admission(
             .get("entrypoint_hash_hex")
             .is_some_and(json::Value::is_null)
     );
-    execute_prepared_contract_in_test_overlay(&state, &prepared, 2);
+    execute_prepared_contract_in_test_overlay(&state, &prepared, 3);
 
     app.shutdown().await;
 }
@@ -933,7 +923,7 @@ async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
     let (status, value) = run_contract_view_response_in_test_overlay(
         &app,
@@ -974,7 +964,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
     let asset_definition_id = "6qLb5RYJbzychndCXgFa9aZzjWyx"
         .parse::<AssetDefinitionId>()
@@ -996,7 +986,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
-        2,
+        3,
     )
     .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
@@ -1009,7 +999,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         },
     );
     let init_prepared = prepare_contract_execution(&app, init_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 4);
     let literal =
         run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "literal", None)
             .await;
@@ -1053,7 +1043,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
     let initial_asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -1064,7 +1054,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
-        2,
+        3,
     )
     .await;
     let payload = norito::json!({ "amount": "7" });
@@ -1078,7 +1068,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         },
     );
     let call_prepared = prepare_contract_execution(&app, call_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &call_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &call_prepared, 4);
     let state_after_credit = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1105,7 +1095,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         },
     );
     let asset_call_prepared = prepare_contract_execution(&app, asset_call_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &asset_call_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &asset_call_prepared, 5);
     let state_after_asset = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1139,7 +1129,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
     let initial_account = contract_address.subject_id().to_string();
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
     let hajimari_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
         "account_id",
@@ -1155,7 +1145,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
-        2,
+        3,
     )
     .await;
     let literal =
@@ -1182,7 +1172,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         },
     );
     let bind_prepared = prepare_contract_execution(&app, bind_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &bind_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &bind_prepared, 4);
     let stored =
         run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "stored", None)
             .await;
@@ -1222,7 +1212,7 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1, "expected locally signed deployment");
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1259,7 +1249,7 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         },
     );
     let configure_prepared = prepare_contract_execution(&app, configure_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &configure_prepared, 2);
+    execute_prepared_contract_in_test_overlay(&state, &configure_prepared, 3);
     let admin =
         run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "admin", None)
             .await;
@@ -1298,7 +1288,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
     let initial_asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
     let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -1309,7 +1299,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
-        2,
+        3,
     )
     .await;
     let credit_payload = norito::json!({ "amount": "7" });
@@ -1323,7 +1313,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         },
     );
     let credit_prepared = prepare_contract_execution(&app, credit_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &credit_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &credit_prepared, 4);
     let asset_payload = norito::json!({ "asset_definition_id": asset_literal });
     let asset_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1335,7 +1325,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         },
     );
     let asset_prepared = prepare_contract_execution(&app, asset_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &asset_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &asset_prepared, 5);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1376,9 +1366,9 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 2)
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
         .await;
     let write_payload = norito::json!({ "amount": "7" });
     let write_body = iroha_torii::test_utils::contract_call_request_json(
@@ -1391,7 +1381,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         },
     );
     let write_prepared = prepare_contract_execution(&app, write_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &write_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &write_prepared, 4);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1417,7 +1407,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         "minted".parse().expect("asset definition name"),
     );
     let mut seed_block = state.block(iroha_data_model::block::BlockHeader::new(
-        std::num::NonZeroU64::new(1).expect("height > 0"),
+        std::num::NonZeroU64::new(2).expect("height > 0"),
         None,
         None,
         0,
@@ -1451,9 +1441,9 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 2)
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
         .await;
     let write_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("amount", "7"),
@@ -1470,7 +1460,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         },
     );
     let write_prepared = prepare_contract_execution(&app, write_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &write_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &write_prepared, 4);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1496,7 +1486,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         "n3x_like".parse().expect("asset definition name"),
     );
     let mut seed_block = state.block(iroha_data_model::block::BlockHeader::new(
-        std::num::NonZeroU64::new(1).expect("height > 0"),
+        std::num::NonZeroU64::new(2).expect("height > 0"),
         None,
         None,
         0,
@@ -1530,9 +1520,9 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 2)
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
         .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1544,7 +1534,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         },
     );
     let init_prepared = prepare_contract_execution(&app, init_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 4);
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
@@ -1562,7 +1552,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         },
     );
     let deposit_prepared = prepare_contract_execution(&app, deposit_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 5);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1590,7 +1580,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         "n3x_burn".parse().expect("asset definition name"),
     );
     let mut seed_block = state.block(iroha_data_model::block::BlockHeader::new(
-        std::num::NonZeroU64::new(1).expect("height > 0"),
+        std::num::NonZeroU64::new(2).expect("height > 0"),
         None,
         None,
         0,
@@ -1627,9 +1617,9 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         );
     let contract_address = contract_address.to_string();
     let applied_deploy =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 2)
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
         .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1641,7 +1631,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         },
     );
     let init_prepared = prepare_contract_execution(&app, init_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 4);
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
@@ -1659,7 +1649,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         },
     );
     let deposit_prepared = prepare_contract_execution(&app, deposit_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 5);
     let burn_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", creds.account.clone()),
         iroha_torii::json_entry("asset_definition_id", asset_definition_id.to_string()),
@@ -1675,7 +1665,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         },
     );
     let burn_prepared = prepare_contract_execution(&app, burn_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &burn_prepared, 5);
+    execute_prepared_contract_in_test_overlay(&state, &burn_prepared, 6);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,

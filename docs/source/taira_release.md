@@ -119,7 +119,10 @@ target for native fixture output; source inventories verify this binding without
 traversing generated files. Native fixture processes also run from that external
 target directory. The snapshot covers signed Git entries; the output binding is
 recorded separately as `source_output_target`. Every signed source path remains
-read-only. Subsequent
+read-only. Private Kagami signing fixtures use a canonical native temporary
+directory with mode 0700 and key files with mode 0600; both scopes exercise
+their round-trip and rejection controls without writing to the source capture.
+Subsequent
 checkout edits, merges or HEAD changes cannot mix source versions into
 the build. Native test selection is loaded from the captured gate helper, including
 a resumed check after the checkout has changed. Resume additionally authenticates
@@ -331,6 +334,7 @@ descriptor:
       --network-id REVIEWED_CHECKED_NETWORK_ID \
       --genesis-file /srv/taira/taira-validator-1/releases/COMMIT/genesis/genesis.json \
       --operator-public-key REVIEWED_CANONICAL_OPERATOR_PUBLIC_KEY \
+      --torii-bind-address 0.0.0.0:8080 \
       --output /absolute/private/taira-validator-1.toml
 
 Descriptor 198 must already identify the corresponding generated peer config;
@@ -339,7 +343,12 @@ public genesis identity, maps all eleven mutable paths into the validator's
 reset-managed state directories, sets explicit snapshot storage, and binds the
 installed signed genesis and operator-authentication key. It rejects inherited
 configuration, changed source paths and preexisting output. It emits no private
-configuration to stdout. The generated onboarding key, faucet key, public rANS
+configuration to stdout. The required `--torii-bind-address` selects a canonical
+IP and nonzero port; the port must equal the generated Torii port. For the
+MacStadium deployment, generate with `--bind-host 127.0.0.1` and project Torii to
+`0.0.0.0:8080` through `0.0.0.0:8083` for the four corresponding validators.
+P2P listeners and advertised peer addresses remain unchanged. The generated
+onboarding key, faucet key, public rANS
 table and `nexus.registry.manifest_directory` paths remain in the configuration,
 so their original directory must remain available on that host. The manifest
 directory must be exactly `lane-manifests` under the generator directory; a

@@ -1049,12 +1049,67 @@ def _retire_no_running_inode(inode):
             )
 
 
-def _retire_live_references(roots):
-    """Port native require_no_live_target_references: no argv/env or mapped bytes."""
-    examined = 0
-    fds_examined = 0
-    namespaces = set()
-    references = []
+def _retire_mount_rows(raw):
+    """Decode only bounded public mount identity/path fields, never mounted bytes."""
+    _retire_need(0 < len(raw) <= 4 * 1024 * 1024, "namespace evidence exceeds bound")
+    rows = []
+    for line in raw.decode().splitlines():
+        fields = line.split()
+        _retire_need(len(fields) >= 10 and "-" in fields[6:]
+                     and re.fullmatch(r"[0-9]+:[0-9]+", fields[2]),
+                     "mount identity evidence malformed")
+        major, minor = map(int, fields[2].split(":"))
+        paths = [Path(re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value))
+                 for value in fields[3:5]]
+        _retire_need(all(path.is_absolute() and str(path) == os.path.normpath(path)
+                         for path in paths), "mount path evidence malformed")
+        rows.append((os.makedev(major, minor), *paths))
+        _retire_need(len(rows) <= 65536, "mount census exceeds bound")
+    return rows
+
+
+def _retire_live_references(roots, *, file_identities=(), own_fds=None, proc_root=Path("/proc")):
+    """Observe paths, admitted inodes and mount aliases; never argv/env or payloads.
+
+    Directory roots are checked for path references and mount aliases. Callers
+    with a closed file census also pass its identities to catch aliases after
+    rename/unlink. Explicit own_fds includes the observer in the census and
+    admits only those custody descriptors; native callers may exclude self.
+    """
+    roots = tuple(Path(root) for root in roots)
+    _retire_need(len(roots) <= 65536 and all(root.is_absolute() for root in roots),
+                 "live reference roots exceed bounds or are not absolute")
+    _retire_need(len(file_identities) <= 65536, "live inode census exceeds bound")
+    selected, devices = {}, {}
+    for row in file_identities:
+        stamp, path = row["identity"], Path(row["path"])
+        _retire_need(path.is_absolute() and len(stamp) == 9
+                     and all(type(stamp[i]) is int and stamp[i] >= 0 for i in (0, 1))
+                     and stat.S_ISREG(stamp[2]), "selected file identity malformed")
+        _retire_need(any(path.is_relative_to(root) for root in roots),
+                     "selected file identity escaped observed roots")
+        selected[(stamp[0], stamp[1])] = str(path)
+        if path in roots:
+            devices[path] = stamp[0]
+    for root in roots:
+        try:
+            info = root.lstat()
+        except FileNotFoundError:
+            # Missing original/quarantine names still have a filesystem scope.
+            parent = root.parent
+            while not parent.exists():
+                _retire_need(parent != parent.parent, "live reference filesystem unavailable")
+                parent = parent.parent
+            devices.setdefault(root, parent.stat().st_dev)
+        else:
+            devices[root] = info.st_dev
+            selected[(info.st_dev, info.st_ino)] = str(root)
+    if own_fds is not None:
+        _retire_need(len(own_fds) <= 65536 and all(type(fd) is int and fd >= 0 for fd in own_fds),
+                     "own custody descriptor census malformed")
+    admitted_fds = set(own_fds or ())
+    examined = fds_examined = 0
+    namespaces, views, references = set(), set(), []
 
     def match(target):
         target = target.removesuffix(" (deleted)")
@@ -1063,26 +1118,61 @@ def _retire_live_references(roots):
         path = Path(target)
         return next((str(root) for root in roots if path.is_relative_to(root)), None)
 
-    def observe(pid, kind, target):
-        root = match(target)
-        if root is not None:
+    def observe(pid, kind, target=None, inode=None, fd=None):
+        root = selected.get(inode) or (match(target) if target is not None else None)
+        if root is not None and not (pid == os.getpid() and kind == "fd" and fd in admitted_fds):
             _retire_need(len(references) < 256, "live reference report bound exceeded")
             references.append({"pid": pid, "kind": kind, "target_root": root})
 
-    with os.scandir("/proc") as entries:
-        processes = sorted(
-            (e.name for e in entries if e.name.isascii() and e.name.isdigit()), key=int
-        )
+    def read_bounded(path):
+        with path.open("rb") as stream:
+            raw = stream.read(4 * 1024 * 1024 + 1)
+        _retire_need(len(raw) <= 4 * 1024 * 1024, "namespace evidence exceeds bound")
+        return raw
+
+    local_mounts = _retire_mount_rows(read_bounded(proc_root / "self/mountinfo"))
+    scopes = []
+    for path, device in devices.items():
+        candidates = [row for row in local_mounts if row[0] == device and path.is_relative_to(row[2])]
+        _retire_need(candidates, "selected filesystem missing from mount census")
+        _, mount_root, mountpoint = max(candidates, key=lambda row: len(row[2].parts))
+        scopes.append((device, mount_root / path.relative_to(mountpoint), path))
+
+    def observe_mounts(pid, rows):
+        for device, mount_root, mountpoint in rows:
+            for selected_device, selected_root, path in scopes:
+                if device != selected_device:
+                    continue
+                if selected_root.is_relative_to(mount_root):
+                    alias = mountpoint / selected_root.relative_to(mount_root)
+                    expected = path
+                elif mount_root.is_relative_to(selected_root):
+                    alias = mountpoint
+                    expected = path / mount_root.relative_to(selected_root)
+                else:
+                    continue
+                if alias != expected:
+                    _retire_need(len(references) < 256, "live reference report bound exceeded")
+                    references.append({"pid": pid, "kind": "mount_alias", "target_root": str(path)})
+
+    observe_mounts(os.getpid(), local_mounts)
+    with os.scandir(proc_root) as entries:
+        processes = sorted((e.name for e in entries if e.name.isascii() and e.name.isdigit()), key=int)
     for name in processes:
         pid = int(name)
-        if pid == os.getpid():
+        if pid == os.getpid() and own_fds is None:
             continue
         examined += 1
         _retire_need(examined <= 65536, "process census exceeds bound")
-        proc = Path("/proc") / name
+        proc = proc_root / name
+        process_root = None
         for leaf in ("exe", "cwd", "root"):
             try:
-                observe(pid, leaf, os.readlink(proc / leaf))
+                target = os.readlink(proc / leaf)
+                info = os.stat(proc / leaf)
+                observe(pid, leaf, target, (info.st_dev, info.st_ino))
+                if leaf == "root":
+                    process_root = target
             except FileNotFoundError:
                 pass
         try:
@@ -1090,47 +1180,41 @@ def _retire_live_references(roots):
                 for index, entry in enumerate(entries):
                     _retire_need(index < 65536, "descriptor census exceeds bound")
                     fds_examined += 1
+                    _retire_need(fds_examined <= 1048576, "aggregate descriptor census exceeds bound")
                     try:
-                        observe(pid, "fd", os.readlink(entry.path))
+                        target = os.readlink(entry.path)
+                        info = os.stat(entry.path)
+                        observe(pid, "fd", target, (info.st_dev, info.st_ino), int(entry.name))
                     except FileNotFoundError:
                         pass
         except FileNotFoundError:
             continue
-        for leaf in ("maps", "mountinfo"):
-            namespace = None
-            if leaf == "mountinfo":
-                try:
-                    namespace = os.readlink(proc / "ns/mnt")
-                except FileNotFoundError:
-                    continue
-                if namespace in namespaces:
-                    continue
-            try:
-                with (proc / leaf).open("rb") as stream:
-                    raw = stream.read(4 * 1024 * 1024 + 1)
-            except FileNotFoundError:
+        try:
+            raw = read_bounded(proc / "maps")
+        except FileNotFoundError:
+            continue
+        for line in raw.decode().splitlines():
+            fields = line.split(None, 5)
+            _retire_need(len(fields) >= 5 and re.fullmatch(r"[0-9a-fA-F]+:[0-9a-fA-F]+", fields[3])
+                         and fields[4].isascii() and fields[4].isdigit(), "mapping identity evidence malformed")
+            major, minor = (int(part, 16) for part in fields[3].split(":"))
+            target = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), fields[5]) if len(fields) == 6 else None
+            observe(pid, "maps", target, (os.makedev(major, minor), int(fields[4])))
+        try:
+            namespace = os.readlink(proc / "ns/mnt")
+            view = (namespace, process_root)
+            if view in views:
                 continue
-            _retire_need(
-                len(raw) <= 4 * 1024 * 1024, "namespace evidence exceeds bound"
-            )
-            for token in raw.decode().split():
-                decoded = (
-                    token.replace("\\040", " ")
-                    .replace("\\011", "\t")
-                    .replace("\\012", "\n")
-                    .replace("\\134", "\\")
-                )
-                observe(pid, leaf, decoded)
-            if namespace is not None:
-                namespaces.add(namespace)
-    return {
-        "passed": not references,
-        "processes_examined": examined,
-        "descriptors_examined": fds_examined,
-        "mount_namespaces_examined": len(namespaces),
-        "references": references,
-        "argv_or_environment_read": False,
-    }
+            rows = _retire_mount_rows(read_bounded(proc / "mountinfo"))
+        except FileNotFoundError:
+            continue
+        observe_mounts(pid, rows)
+        namespaces.add(namespace)
+        views.add(view)
+    return {"passed": not references, "processes_examined": examined,
+            "descriptors_examined": fds_examined, "mount_namespaces_examined": len(namespaces),
+            "mount_views_examined": len(views), "references": references,
+            "argv_or_environment_read": False}
 
 
 RETIRE_SLUGS = tuple((f"taira-validator-{i}" for i in range(1, 5))) + ("taira-edge",)
@@ -1801,7 +1885,7 @@ def _retire_prune_revalidate(g, context, intent, exact, chunk_dirs, protected):
         _retire_need(list(identity(_retire_prune_info(path))) == stamp,
                      "canonical public input changed during prune")
     _retire_retained_state(g, context)
-    _retire_need(_retire_live_references(list(expected_directories))["passed"],
+    _retire_need(_retire_live_references(list(expected_directories), file_identities=present)["passed"],
                  "public disposable payload has a live reference")
     return present
 
@@ -2269,7 +2353,13 @@ def _retire_import_revalidate(g, context, admission, intent):
     roots = [row["path"] for row in admission["files"]]
     roots += [row["path"] for row in intent["directories"]]
     roots += [tree, quarantine] if tree else []
-    require(_retire_live_references(roots)["passed"], "superseded import has a live process or mount reference")
+    source_files = []
+    if tree:
+        source_base = Path(quarantine if os.path.lexists(quarantine) else tree)
+        source_files = [{"path": str(source_base / row["path"]), "identity": row["identity"]}
+                        for row in remaining if row["kind"] == "file"]
+    require(_retire_live_references(roots, file_identities=files + source_files)["passed"],
+            "superseded import has a live process or mount reference")
     return files, remaining
 
 

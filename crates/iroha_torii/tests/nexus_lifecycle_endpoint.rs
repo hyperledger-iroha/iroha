@@ -10,7 +10,6 @@ use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     EventsSender,
-    kura::Kura,
     query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, Queue, QueueLimits},
     state::State,
@@ -40,14 +39,6 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         cfg.torii.require_api_token = true;
         cfg.torii.api_tokens = vec![api_token.to_owned()].into();
     }
-    // Use the configured-catalog constructor so the primary anchor is authenticated.
-    // It replaces the fixture store path with a directory owned by this Kura instance.
-    let kura = Kura::new_temporary_with_configured_lane_catalog(
-        &cfg.kura,
-        &cfg.nexus.lane_config,
-        &cfg.nexus.configured_lane_catalog,
-    )
-    .expect("open authenticated Nexus endpoint fixture storage");
     let world = iroha_core::prelude::World::with(
         Vec::new(),
         Vec::new(),
@@ -55,22 +46,14 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     );
     // Core and Torii must share the fixture's explicit genesis-derived identity.
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let mut state = State::new_with_chain_and_network_id_for_testing(
+    let (mut state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
         world,
-        kura.clone(),
+        cfg.nexus.clone(),
         LiveQueryStore::start_test(),
         cfg.common.chain.clone(),
         network_id,
     );
-    state
-        .prepare_configured_primary_geometry_anchor(&cfg.nexus.configured_lane_catalog)
-        .expect("anchor the authenticated Nexus endpoint primary");
-    state
-        .restore_kura_lane_segments_before_startup_replay()
-        .expect("restore the authenticated Nexus endpoint primary geometry");
-    state
-        .set_nexus_from_config(cfg.nexus.clone())
-        .expect("apply initial Nexus config");
+    state.set_nexus(cfg.nexus.clone());
     let state = Arc::new(state);
     let events_sender: EventsSender = tokio::sync::broadcast::channel(64).0;
     let router = Arc::new(ConfigLaneRouter::new(

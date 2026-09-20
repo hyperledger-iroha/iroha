@@ -283,6 +283,7 @@ async fn materialize_generated_validator_configs(
     root: &Path,
     directory: &Path,
     cli: &Path,
+    api_base: u16,
     deadline: Instant,
 ) -> Result<()> {
     let network: NetworkId = fs::read_to_string(directory.join("genesis.expected_hash"))?
@@ -318,6 +319,8 @@ async fn materialize_generated_validator_configs(
             .arg(format!("/srv/taira/{role}/genesis.json"))
             .arg("--operator-public-key")
             .arg(deployment.public_key().to_string())
+            .arg("--torii-bind-address")
+            .arg(format!("127.0.0.1:{}", api_base + peer))
             .arg("--output")
             .arg(&output);
         super::inherit(&mut command, &[(source.as_raw_fd(), 198)])?;
@@ -338,6 +341,15 @@ async fn materialize_generated_validator_configs(
         // Native test code alone reads the fixture-owned private output. Never emit its body.
         let projected: toml::Table = toml::from_str(&fs::read_to_string(&output)?)
             .map_err(|_| eyre!("materialized validator is not TOML"))?;
+        ensure!(
+            projected["torii"]["address"].as_str()
+                == Some(
+                    iroha_primitives::addr::SocketAddr::from(([127, 0, 0, 1], api_base + peer))
+                        .to_literal()
+                        .as_str()
+                ),
+            "materialized validator omitted the explicit loopback Torii listener"
+        );
         ensure!(
             projected["torii"]["operator_signatures"]["allowed_public_keys"]
                 == toml::Value::Array(vec![deployment.public_key().to_string().into()]),
@@ -405,7 +417,7 @@ pub(super) async fn prepare(
         "fresh native localnet",
     )
     .await?;
-    materialize_generated_validator_configs(root, &directory, cli, deadline).await?;
+    materialize_generated_validator_configs(root, &directory, cli, api_base, deadline).await?;
     iroha_genesis::init_instruction_registry();
     // A changed manifest defines a different network. Kagami correctly refuses
     // to replace a published identity, so all final outputs have fresh paths.

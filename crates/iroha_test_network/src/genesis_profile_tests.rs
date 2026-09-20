@@ -117,8 +117,16 @@ fn genesis_preexecution_preserves_selected_profile_across_threads() {
         wrong.nexus.staking.stake_escrow_account_id = ALICE_ID
             .to_i105_for_discriminant(888)
             .expect("foreign literal");
+        // Test fresh execution of the signed inputs under the invalid config.
+        // Replaying the successful output claim would instead correctly reject
+        // its committed fragment count before recording the new rejection.
+        let proposal = GenesisBlock(genesis.0.canonical_resultless_proposal());
+        assert!(proposal.0.is_resultless_proposal());
+        assert_eq!(proposal.0.header(), genesis.0.header());
+        assert_eq!(proposal.0.hash(), genesis.0.hash());
+        assert!(proposal.0.external_transactions().next().is_some());
         let error = config::preexecute_genesis_with_runtime_config(
-            &genesis,
+            &proposal,
             &genesis_account,
             &topology,
             &genesis_key_pair,

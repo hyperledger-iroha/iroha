@@ -7,7 +7,8 @@
 //! digest; retain the generated public manifest receipt for exact byte custody. This command does
 //! not produce a standalone config bundle or relocate those required inputs. The generated HTTP
 //! binding is admitted against `runtime/operator-signer.key` before the explicit deployment key
-//! replaces it; the ledger/faucet and onboarding identities remain unchanged.
+//! replaces it; the ledger/faucet and onboarding identities remain unchanged. The required Torii
+//! listener selects its final bind interface at the generated port; P2P bindings stay unchanged.
 
 use super::*;
 use iroha::data_model::NetworkId;
@@ -36,6 +37,9 @@ pub(super) struct MaterializeValidatorConfig {
     /// Dedicated canonical Ed25519 HTTP operator-authentication public key.
     #[arg(long, value_name = "PUBLIC_KEY", value_parser = checked_operator_key)]
     operator_public_key: PublicKey,
+    /// Final Torii listener as canonical IP:PORT; its port must match the generated config.
+    #[arg(long, value_name = "IP:PORT", value_parser = checked_torii_bind_address)]
+    torii_bind_address: std::net::SocketAddr,
     /// Fresh owner-private output; an existing file is never replaced.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
@@ -54,6 +58,22 @@ fn checked_network_id(value: &str) -> Result<NetworkId, String> {
 fn checked_operator_key(value: &str) -> Result<PublicKey, String> {
     validator_operator_public_key(value)
         .map_err(|_| "operator public key must be canonical Ed25519".to_owned())
+}
+
+fn checked_torii_bind_address(value: &str) -> Result<std::net::SocketAddr, String> {
+    let address = value.parse::<std::net::SocketAddr>().map_err(|_| {
+        "Torii bind address must be a canonical IP:PORT with a nonzero port".to_owned()
+    })?;
+    if address.port() == 0
+        || address.to_string() != value
+        || matches!(address, std::net::SocketAddr::V6(address) if address.scope_id() != 0)
+    {
+        return Err(
+            "Torii bind address must be a canonical unscoped IP:PORT with a nonzero port"
+                .to_owned(),
+        );
+    }
+    Ok(address)
 }
 
 /// Consume private bytes only through native descriptor custody and create a new private file.
@@ -91,6 +111,7 @@ pub(super) fn materialize(args: &MaterializeValidatorConfig) -> Result<()> {
         &args.genesis_file,
         &source_operator_public_key,
         &args.operator_public_key,
+        args.torii_bind_address,
     )?;
     inputs::write_new_private(&args.output, &output)
 }
@@ -182,6 +203,7 @@ fn state_paths(peer: usize) -> Vec<(Vec<&'static str>, PathBuf, &'static str)> {
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn project_config(
     bytes: &[u8],
     source_root: &Path,
@@ -190,6 +212,7 @@ fn project_config(
     genesis_file: &Path,
     source_operator_key: &PublicKey,
     operator_key: &PublicKey,
+    torii_bind_address: std::net::SocketAddr,
 ) -> Result<Zeroizing<Vec<u8>>> {
     validate_absolute_normal_path(source_root, "generated network directory")?;
     validate_absolute_normal_path(genesis_file, "installed signed genesis")?;
@@ -302,6 +325,27 @@ fn project_config(
             .get_mut("torii")
             .and_then(toml::Value::as_table_mut)
             .ok_or_else(|| eyre!("generated validator config omits Torii"))?;
+        let generated_address = torii
+            .get("address")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| eyre!("generated validator config omits its Torii listener"))?;
+        let generated_address: iroha_primitives::addr::SocketAddr =
+            json::from_value(Value::String(generated_address.to_owned()))
+                .map_err(|_| eyre!("generated Torii listener is not a canonical address"))?;
+        if torii_bind_address.port() == 0
+            || torii_bind_address.port() != generated_address.port()
+            || matches!(torii_bind_address, std::net::SocketAddr::V6(address) if address.scope_id() != 0)
+        {
+            return Err(eyre!(
+                "final Torii listener must be unscoped and retain the exact nonzero generated port"
+            ));
+        }
+        torii.insert(
+            "address".into(),
+            toml::Value::String(
+                iroha_primitives::addr::SocketAddr::from(torii_bind_address).to_literal(),
+            ),
+        );
         let generated_signatures = torii
             .get("operator_signatures")
             .and_then(toml::Value::as_table)
@@ -410,6 +454,28 @@ mod tests {
             &["nexus", "registry", "manifest_directory"],
             "/generated/lane-manifests".into(),
         );
+        for field in ["address", "public_address"] {
+            insert(
+                &mut table,
+                &["network", field],
+                iroha_primitives::addr::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    1337 + u16::try_from(peer).expect("four validator fixture ordinals fit u16"),
+                ))
+                .to_literal()
+                .into(),
+            );
+        }
+        insert(
+            &mut table,
+            &["torii", "address"],
+            iroha_primitives::addr::SocketAddr::from((
+                [127, 0, 0, 1],
+                8080 + u16::try_from(peer).expect("four validator fixture ordinals fit u16"),
+            ))
+            .to_literal()
+            .into(),
+        );
         insert(
             &mut table,
             &["torii", "operator_signatures", "enabled"],
@@ -445,6 +511,26 @@ mod tests {
     }
 
     fn project(table: &toml::Table, role: &str) -> Result<toml::Table> {
+        let peer = VALIDATOR_SLUGS
+            .iter()
+            .position(|candidate| *candidate == role)
+            .unwrap_or(0);
+        project_with_torii_bind(
+            table,
+            role,
+            (
+                [0, 0, 0, 0],
+                8080 + u16::try_from(peer).expect("four validator fixture ordinals fit u16"),
+            )
+                .into(),
+        )
+    }
+
+    fn project_with_torii_bind(
+        table: &toml::Table,
+        role: &str,
+        torii_bind_address: std::net::SocketAddr,
+    ) -> Result<toml::Table> {
         let output = project_config(
             toml::to_string(table)?.as_bytes(),
             Path::new("/generated"),
@@ -453,6 +539,7 @@ mod tests {
             Path::new("/installed/genesis.json"),
             &source_operator(),
             &operator(),
+            torii_bind_address,
         )?;
         Ok(toml::from_str(std::str::from_utf8(&output)?)?)
     }
@@ -496,6 +583,80 @@ mod tests {
                     .join("snapshots")
                     .to_str()
             );
+        }
+    }
+
+    #[test]
+    fn materialization_projects_split_torii_bind_without_changing_p2p_or_signer_custody() {
+        for (peer, role) in VALIDATOR_SLUGS.iter().enumerate() {
+            let original = source(peer);
+            let projected = project(&original, role).expect("explicit public Torii binding");
+            let expected = iroha_primitives::addr::SocketAddr::from((
+                [0, 0, 0, 0],
+                8080 + u16::try_from(peer).unwrap(),
+            ))
+            .to_literal();
+            assert_eq!(
+                projected["torii"]["address"].as_str(),
+                Some(expected.as_str())
+            );
+            assert_eq!(projected["network"], original["network"]);
+            assert_eq!(projected["private_key"], original["private_key"]);
+            assert_eq!(projected["torii"]["faucet"], original["torii"]["faucet"]);
+            assert_eq!(
+                projected["torii"]["account_onboarding"],
+                original["torii"]["account_onboarding"]
+            );
+        }
+    }
+
+    #[test]
+    fn materialization_rejects_invalid_torii_listener_and_port_drift() {
+        for port in [0, 8081] {
+            let error = project_with_torii_bind(
+                &source(0),
+                VALIDATOR_SLUGS[0],
+                ([0, 0, 0, 0], port).into(),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("exact nonzero generated port"));
+        }
+        for value in [
+            toml::Value::String("127.0.0.1:8080".into()),
+            toml::Value::String("addr:127.0.0.1:8080#0000".into()),
+            toml::Value::String(
+                iroha_primitives::addr::SocketAddr::from(([127, 0, 0, 1], 0)).to_literal(),
+            ),
+            toml::Value::Integer(8080),
+        ] {
+            let mut changed = source(0);
+            insert(&mut changed, &["torii", "address"], value);
+            assert!(project(&changed, VALIDATOR_SLUGS[0]).is_err());
+        }
+        let mut missing = source(0);
+        missing["torii"].as_table_mut().unwrap().remove("address");
+        assert!(project(&missing, VALIDATOR_SLUGS[0]).is_err());
+    }
+
+    #[test]
+    fn materialization_torii_bind_argument_requires_canonical_ip_and_nonzero_port() {
+        for good in ["0.0.0.0:8080", "127.0.0.1:8083", "[::]:8080"] {
+            assert_eq!(checked_torii_bind_address(good).unwrap().to_string(), good);
+        }
+        for bad in [
+            "",
+            "0.0.0.0",
+            "0.0.0.0:0",
+            "0.0.0.0:65536",
+            "0.0.0.0:08080",
+            "localhost:8080",
+            "http://0.0.0.0:8080/",
+            " 0.0.0.0:8080",
+            "0.0.0.0:8080 ",
+            "[0:0:0:0:0:0:0:0]:8080",
+            "[fe80::1%2]:8080",
+        ] {
+            assert!(checked_torii_bind_address(bad).is_err(), "{bad}");
         }
     }
 
@@ -671,12 +832,15 @@ mod tests {
             "/installed/genesis.json".to_owned(),
             "--operator-public-key".to_owned(),
             operator().to_string(),
+            "--torii-bind-address".to_owned(),
+            "0.0.0.0:8080".to_owned(),
             "--output".to_owned(),
             "/private/output.toml".to_owned(),
         ];
         let parsed = <Command as clap::Parser>::try_parse_from(&arguments).unwrap();
         assert_eq!(parsed.args.validator, VALIDATOR_SLUGS[0]);
         assert_eq!(parsed.args.network_id, identity());
+        assert_eq!(parsed.args.torii_bind_address, ([0, 0, 0, 0], 8080).into());
         let full_arguments = ["iroha", "taira", "public-reset"]
             .into_iter()
             .map(str::to_owned)
@@ -697,6 +861,10 @@ mod tests {
             (6, "taira-validator-5"),
             (8, "unchecked-network"),
             (12, "invalid-public-key"),
+            (14, "0.0.0.0:0"),
+            (14, "localhost:8080"),
+            (14, "http://0.0.0.0:8080/"),
+            (14, "0.0.0.0:08080"),
         ] {
             let mut changed = arguments.clone();
             changed[index] = bad.to_owned();

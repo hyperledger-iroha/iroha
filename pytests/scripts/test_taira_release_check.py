@@ -33,6 +33,8 @@ from unittest.mock import MagicMock, patch
 # candidate funding-policy admission controls are mandatory, together with two
 # content-bound journal/original-seed controls for metadata timestamp collisions.
 # The configured initial-catalog/network control also runs before CLI checks.
+# Two private-key fixture controls cover immutable-source signing and custody.
+# Three explicit Torii listener controls preserve P2P and generated API ports.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -41,8 +43,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -918,7 +920,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (1034, 1212)), ("linux", (1039, 1217))):
+        for platform, counts in (("darwin", (1039, 1217)), ("linux", (1044, 1222))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)
@@ -1254,6 +1256,9 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
             ),
             "cli": (
+                "taira_public_reset::validator_config::tests::materialization_projects_split_torii_bind_without_changing_p2p_or_signer_custody",
+                "taira_public_reset::validator_config::tests::materialization_rejects_invalid_torii_listener_and_port_drift",
+                "taira_public_reset::validator_config::tests::materialization_torii_bind_argument_requires_canonical_ip_and_nonzero_port",
                 "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_source_bindings",
                 "taira_public_reset::validator_config::tests::materialization_binds_every_validator_state_path_and_preserves_other_fields",
             ),
@@ -1315,6 +1320,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "kagami": (
                 "genesis::sign::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
                 "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
+                "genesis::sign::tests::private_key_file_round_trips_owner_only_canonical_material",
+                "genesis::sign::tests::private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize",
                 "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
                 "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",

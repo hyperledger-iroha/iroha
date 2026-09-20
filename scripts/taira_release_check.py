@@ -208,6 +208,9 @@ STAGES = (
     )),
     ("generated validator reset layout", (
         "taira_public_reset::validator_config::tests::materialization_binds_every_validator_state_path_and_preserves_other_fields",
+        "taira_public_reset::validator_config::tests::materialization_projects_split_torii_bind_without_changing_p2p_or_signer_custody",
+        "taira_public_reset::validator_config::tests::materialization_rejects_invalid_torii_listener_and_port_drift",
+        "taira_public_reset::validator_config::tests::materialization_torii_bind_argument_requires_canonical_ip_and_nonzero_port",
         "taira_public_reset::validator_config::tests::materialization_rejects_changed_missing_and_wrong_peer_state_paths",
         "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_source_bindings",
         "taira_public_reset::validator_config::tests::materialization_requires_exact_public_genesis_identity_bytes",
@@ -1421,6 +1424,8 @@ KAGAMI_STAGES = (("canonical Kagami export projection", (
 )), ("native Taira genesis and independent localnet profiles", (
     "genesis::sign::tests::default_genesis_staging_authenticates_catalog_and_reproduces_signed_context",
     "genesis::sign::tests::public_taira_auto_bootstrap_uses_alias_bound_xor_without_config",
+    "genesis::sign::tests::private_key_file_round_trips_owner_only_canonical_material",
+    "genesis::sign::tests::private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize",
     "localnet::tests::generated_taira_genesis_grants_deployment_only_to_generated_client",
     "localnet::tests::localnet_asset_defaults_are_selected_by_exact_taira_chain_context",
     "localnet::tests::localnet_asset_validation_rejects_selected_builtin_identity_or_alias_collision",

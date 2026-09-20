@@ -4265,12 +4265,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn private_key_file_round_trips_owner_only_canonical_material() {
         use std::os::unix::fs::PermissionsExt as _;
-        let temp = tempfile::Builder::new()
-            .prefix(".genesis-key-roundtrip-")
-            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-            .expect("private key temp dir");
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
-            .expect("harden private key temp dir");
+        let temp = private_key_fixture_directory(".genesis-key-roundtrip-");
+        assert_eq!(temp.path().canonicalize().unwrap(), temp.path());
+        assert_eq!(
+            temp.path().metadata().unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
         let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         let path = temp.path().join("genesis.private_key");
@@ -4292,12 +4292,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn private_key_file_rejects_unsafe_mode_links_whitespace_and_oversize() {
         use std::os::unix::fs::{PermissionsExt as _, symlink};
-        let temp = tempfile::Builder::new()
-            .prefix(".genesis-key-rejections-")
-            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-            .expect("private key temp dir");
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
-            .expect("harden private key temp dir");
+        let temp = private_key_fixture_directory(".genesis-key-rejections-");
         let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
         let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
         let unsafe_mode = temp.path().join("unsafe-mode.key");
@@ -4338,16 +4333,34 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn test_private_key_file() -> PathBuf {
         test_private_key_file_for(&test_genesis_key_pair())
     }
+    fn private_key_fixture_directory(prefix: &str) -> tempfile::TempDir {
+        // Signed release captures are read-only. Canonicalize the OS temporary
+        // parent so private-file admission also works through macOS's /var alias.
+        let parent =
+            fs::canonicalize(std::env::temp_dir()).expect("resolve writable native fixture parent");
+        let directory = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(parent)
+            .expect("create private-key fixture directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                .expect("harden private-key fixture directory");
+        }
+        directory
+    }
     fn test_private_key_file_for(key_pair: &KeyPair) -> PathBuf {
         use std::cell::RefCell;
 
         thread_local! {
-            static PRIVATE_KEY_FILES: RefCell<Vec<tempfile::NamedTempFile>> = const { RefCell::new(Vec::new()) };
+            static PRIVATE_KEY_FILES: RefCell<Vec<(tempfile::NamedTempFile, tempfile::TempDir)>> = const { RefCell::new(Vec::new()) };
         }
 
+        let directory = private_key_fixture_directory(".genesis-sign-private-");
         let mut file = tempfile::Builder::new()
             .prefix(".genesis-sign-test-key-")
-            .tempfile_in(env!("CARGO_MANIFEST_DIR"))
+            .tempfile_in(directory.path())
             .expect("create owner-only private-key fixture");
         let canonical = zeroize::Zeroizing::new(
             format!("{}\n", ExposedPrivateKey(key_pair.private_key().clone())).into_bytes(),
@@ -4358,7 +4371,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .sync_all()
             .expect("sync private-key fixture");
         let path = file.path().to_path_buf();
-        PRIVATE_KEY_FILES.with(|files| files.borrow_mut().push(file));
+        PRIVATE_KEY_FILES.with(|files| files.borrow_mut().push((file, directory)));
         path
     }
 }
