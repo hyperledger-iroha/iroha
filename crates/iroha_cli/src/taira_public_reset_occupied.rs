@@ -15,7 +15,19 @@ const UNIT_ROLLBACK_INTENT: &str = "validator-unit-rollback.intent.json";
 const UNIT_BACKUP: &str = "validator-unit.before";
 
 pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Result<()> {
-    let prior = validator.admitted_release()?;
+    validate_prior_binding(
+        validator.admitted_release()?,
+        &validator.service_root,
+        &validator.systemd_unit,
+    )
+}
+
+/// Validate the current typed prior binding without admitting an old candidate revision.
+pub(super) fn validate_prior_binding(
+    prior: &super::super::ValidatorAdmittedReleaseV1,
+    service_root: &str,
+    systemd_unit: &str,
+) -> Result<()> {
     prior.service_state.validate()?;
     if prior.artifacts.len() != OCCUPIED_VALIDATOR_ARTIFACT_ROLES.len() {
         return Err(eyre!(
@@ -56,10 +68,7 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
                 if path != root.join("bin").join(basename) {
                     return Err(eyre!("occupied executable has the wrong role basename"));
                 }
-                let service_release = format!(
-                    "{}/releases/{}",
-                    validator.service_root, entry.source_commit
-                );
+                let service_release = format!("{}/releases/{}", service_root, entry.source_commit);
                 let private_parent = Path::new("/private/runtime/taira-public-reset");
                 let prefix = format!("release-{}-", entry.source_commit);
                 let private_release = root.parent() == Some(private_parent)
@@ -97,7 +106,7 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
                 };
                 let path = Path::new(&entry.path);
                 if path.file_name() != Some(OsStr::new(basename))
-                    || !(path.starts_with(Path::new(&validator.service_root).join("releases"))
+                    || !(path.starts_with(Path::new(&service_root).join("releases"))
                         || path.starts_with("/private/runtime/taira-public-reset"))
                 {
                     return Err(eyre!(
@@ -106,7 +115,7 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
                 }
             }
             "validator_unit" => {
-                if entry.path != format!("/etc/systemd/system/{}", validator.systemd_unit) {
+                if entry.path != format!("/etc/systemd/system/{}", systemd_unit) {
                     return Err(eyre!(
                         "occupied validator unit is not its exact systemd fragment"
                     ));
@@ -116,13 +125,13 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
         }
     }
     let daemon = prior.artifact("iroha3d")?;
-    let stable = format!("{}/current/bin/iroha3d_taira", validator.service_root);
+    let stable = format!("{}/current/bin/iroha3d_taira", service_root);
     let stable_resolves_to_daemon =
         daemon.path == format!("{}/bin/iroha3d_taira", prior.release_root);
     if prior.argv.len() != 4
         || !(prior.argv[0] == daemon.path || (prior.argv[0] == stable && stable_resolves_to_daemon))
         || prior.argv[1] != "--config"
-        || prior.argv[2] != format!("{}/current/config/config.toml", validator.service_root)
+        || prior.argv[2] != format!("{}/current/config/config.toml", service_root)
         || prior.argv[3] != "--sora"
     {
         return Err(eyre!(

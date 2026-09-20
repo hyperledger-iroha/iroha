@@ -396,6 +396,8 @@ mod committed_transaction_context;
 mod da_hydration;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod execution_publication_test_support;
 mod fastpq_source_inventory;
 mod output_capacity;
 mod output_publication;
@@ -32742,10 +32744,10 @@ impl State {
     ///
     /// # Errors
     /// Returns the exact runtime projection error after the captured generation
-    /// is stable. Recovery can reject malformed state without deriving a partial
-    /// view or substituting configured runtime values.
+    /// is stable. Recovery and read-only API callers can reject malformed state
+    /// without deriving a partial view or substituting configured runtime values.
     #[track_caller]
-    pub(crate) fn try_view(&self) -> Result<StateView<'_>, LaneLifecycleError> {
+    pub fn try_view(&self) -> Result<StateView<'_>, LaneLifecycleError> {
         loop {
             if let Some(view) = self.try_view_once()? {
                 return Ok(view);

@@ -1,7 +1,7 @@
 # Prepared Taira transfer
 
 `scripts/taira_release_transfer.py` imports the four executables from a completed
-`taira_release.py prepare` result and the exact signed Git source into fresh,
+`taira_release.py prepare` result, its public qualification evidence and the exact signed Git source into fresh,
 inactive custody on the approved MacStadium Dublin Linux guest. It runs no
 validator, deployment, reset, service, transaction or activation command.
 
@@ -61,7 +61,14 @@ The guest creates `release-import-COMMIT-RESULT_SHA256` under `runtime_root`.
 Executables are independent, single-link mode0755 files in `artifacts/bin`.
 `source/source` is the verified, clean, shallow signed source artifact. Transport
 files remain in mode0600 `source/source.pack` (the retained-import retirement
-contract) and mode0400 `source/source-capture.json`. No tar
+contract) and mode0400 `source/source-capture.json`. The same import carries
+mode0400 `preparation/result.json`, `preparation/request.json`,
+`preparation/checks.json` and `preparation/capture.json`; the latter is the exact
+completed attempt capture and must match the result bytes. These files retain
+the original producer records without rewriting their local build paths. The
+closed stream requires all ten payloads; a six-payload import is incomplete.
+Their bytes, file entries and parent directory are included in capacity admission.
+No separate proof upload is required. No tar
 extraction is used. Each stream length and SHA256 is checked before publication.
 
 Only after revalidating every file and the actual Git signature does the receiver

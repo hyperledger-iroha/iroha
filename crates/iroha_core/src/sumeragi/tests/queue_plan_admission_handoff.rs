@@ -90,6 +90,12 @@ impl SumeragiIngressTestHarness {
         self.handle.clone()
     }
 
+    /// Set only the fixture's live-owner readiness to model a successor handoff.
+    /// Authenticated capacity and all production admission checks remain unchanged.
+    pub fn set_admission_ready(&self, ready: bool) {
+        self.handle.ingress_ready.store(ready, Ordering::Release);
+    }
+
     /// Authenticate a real genesis context before exposing its admission capacity.
     /// This fixture uses the production verifier and capacity publisher; an
     /// arbitrary layout or a missing proof of possession cannot initialize it.

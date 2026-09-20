@@ -235,21 +235,35 @@ build and four-validator test. It needs no second Cargo test build. Its manifest
 bin target kind and test profile distinguish it from the Rust SDK's `iroha`
 library harness and the production CLI. Each completed test copy is released
 through its existing owner. Any collected test failure stops before production
-compilation or network execution; production snapshots remain retained. Configuration
+codegen or network execution; production snapshots remain retained. Configuration
 and proof-bound checks retain their selected cases in both scopes. Adding the CLI changes the combined test feature union,
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
 
 After configuration, MV ownership and the pending-Kura recovery group, both scopes execute empty-journal Queue
 admission, HTTP readiness and daemon startup-policy regressions before CLI and other
-runtime checks. The full scope also executes Core snapshot-owner and cold
+runtime checks. Admission handoff controls require Torii to await a closed live owner
+within the original monotonic and wire deadlines, without creating a journal claim
+or dispatching during that wait. They verify exact successor admission, cancellation
+and memory release, and preserve exact transaction uncertainty for expired retries,
+partial durable claims and post-quorum expiry, including expiry before dispatch.
+Missing recovery, fail-stop and invalid capacity fail immediately.
+The full scope also executes Core snapshot-owner and cold
 certified-history groups at this early boundary. Every installed replay remains quarantined until exact State/Kura
 reconciliation completion, even when it contains no reservation owners. Full-scope cold storage cases restore multiple completed slots, recover only the current
 partial publication, recover independently pruned pairs using an authenticated
 retention frontier, and reject corrupt or missing retained history. Discarded local
 certificate history cannot be resurrected after replica application advances. The remaining startup
-groups collect their failures before stopping expensive work. On
-success, the remaining groups execute each selected test once. The checkpoint
+groups collect their failures before stopping expensive work. On success, a separate
+`cargo check` selects only the authoritative shipping binaries with default features,
+without test targets, a test profile or fixture-feature overrides. It preserves the
+warm target, tool environment and locks, and must observe every production binary.
+Core and Torii library artifact events must exclude their `iroha-core-tests` and
+`test-fixtures` features, so a dependency/default-feature leak also fails this gate.
+This metadata check runs before CLI and long independent tests, including when their
+checkpoint is reused. It supplies no qualification evidence and does not replace
+later shipping codegen or network execution. The remaining groups execute each
+selected test once. The checkpoint
 binds the explicit scope, exact selected census and artifact identity. Core and daemon
 copies stay retained until their final selected stage. A failed startup preflight
 never publishes independent-check success. Strict storage construction and both

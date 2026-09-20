@@ -142,31 +142,68 @@ BINDINGS = (
         'QueuePlanInputCapacityErrorV1::Unavailable(\n            AdmissionCapacityUnavailableV1::Pending,\n        )',
         "handle.check_queue_plan_input_capacity(app.state.network_id_ref(), entrypoint, binding)",
     )),
-    (TORII, "fn", "queue_plan_service_input_capacity_error", (
-        "queue_plan_service_input_capacity(app, entrypoint, binding).err()?",
-        'QueuePlanInputCapacityErrorV1::Unavailable(_) | QueuePlanInputCapacityErrorV1::Inactive => {\n            (\n                StatusCode::SERVICE_UNAVAILABLE,\n                "queue_plan_admission_capacity_unavailable",\n            )\n        }',
-        "Some(torii_proxy_error_response(status, code, error.to_string()))",
-    )),
-    (TORII, "fn", "queue_plan_request_service_capacity_error", (
-        "ToriiProxyRequestKindV1::SubmitTransaction", "admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced",
-        "admission_binding: Some(binding)", "queue_plan_service_input_capacity_error(app, transaction, binding)",
-    )),
-    (TORII, "fn", "execute_torii_proxy_request_with_fallback_admitted", (
-        "let proxy_memory = match pre_admitted_proxy_memory",
-        "None => match acquire_torii_proxy_memory(app)",
-        "hold_torii_proxy_memory_in_response_body(response, proxy_memory)",
-        'if let Some(response) = queue_plan_request_service_capacity_error(app, &request.request) {\n        return response;\n    }',
-        "execute_torii_proxy_request_across_candidates(", "persist_queue_plan_admission_certificate(",
-    )),
-    (TORII, "fn", "forward_incoming_torii_proxy_request", (
-        'if let Some(response) =\n        queue_plan_request_service_capacity_error(app, &forwarded_request.request)\n    {\n        return response;\n    }',
-        "execute_torii_proxy_request_across_candidates(",
-    )),
+    (TORII, "fn", "queue_plan_service_input_capacity_error", ('let error = queue_plan_capacity_wait::wait(\n'
+ '        || queue_plan_service_input_capacity(app, entrypoint, binding),\n'
+ '        || queue_plan_capacity_wait::remaining(deadline, deadline_unix_ms),\n'
+ '    )\n'
+ '    .await\n'
+ '    .err()?;',
+ 'QueuePlanInputCapacityErrorV1::Unavailable(_) | QueuePlanInputCapacityErrorV1::Inactive => {\n'
+ '            (\n'
+ '                StatusCode::SERVICE_UNAVAILABLE,\n'
+ '                "queue_plan_admission_capacity_unavailable",\n'
+ '            )\n'
+ '        }',
+ 'Some(torii_proxy_error_response(status, code, error.to_string()))',
+ 'queue_plan_capacity_wait::WaitError::Deadline(error)',
+ 'queue_plan_outcome_unknown_response(\n'
+ '                binding.entrypoint_hash,\n'
+ '                binding.signed_transaction_hash,')),
+    (TORII, "fn", "queue_plan_request_service_capacity_error", ('ToriiProxyRequestKindV1::SubmitTransaction',
+ 'admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced',
+ 'admission_binding: Some(binding)',
+ 'queue_plan_service_input_capacity_error(\n'
+ '            app,\n'
+ '            transaction,\n'
+ '            binding,\n'
+ '            deadline,\n'
+ '            deadline_unix_ms,\n'
+ '        )\n'
+ '        .await')),
+    (TORII, "fn", "execute_torii_proxy_request_with_fallback_admitted", ('let proxy_memory = match pre_admitted_proxy_memory',
+ 'None => match acquire_torii_proxy_memory(app)',
+ 'hold_torii_proxy_memory_in_response_body(response, proxy_memory)',
+ 'if let Some(response) = queue_plan_request_service_capacity_error(\n'
+ '        app,\n'
+ '        &request.request,\n'
+ '        tokio::time::Instant::from_std(request_started) + TORII_PROXY_EXECUTION_BUDGET,\n'
+ '        request.deadline_unix_ms,\n'
+ '    )\n'
+ '    .await\n'
+ '    {\n'
+ '        return response;\n'
+ '    }',
+ 'execute_torii_proxy_request_across_candidates(',
+ 'persist_queue_plan_admission_certificate(')),
+    (TORII, "fn", "forward_incoming_torii_proxy_request", ('if let Some(response) = queue_plan_request_service_capacity_error(\n'
+ '        app,\n'
+ '        &forwarded_request.request,\n'
+ '        request_started + TORII_PROXY_EXECUTION_BUDGET,\n'
+ '        forwarded_request.deadline_unix_ms,\n'
+ '    )\n'
+ '    .await\n'
+ '    {\n'
+ '        return response;\n'
+ '    }',
+ 'execute_torii_proxy_request_across_candidates(')),
     (TORII, "fn", "execute_incoming_torii_proxy_request_with_admission_inner", ('queue_plan_service_input_capacity_error(\n'
  '                app,\n'
- '                accepted_tx.entrypoint(),\n'
+ '                &transaction,\n'
  '                &admission_binding,\n'
- '            )',
+ '                execution_deadline,\n'
+ '                request_head.deadline_unix_ms,\n'
+ '            )\n'
+ '            .await',
  'push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(',
  'queue_plan_synced_admission_response(',
  'if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {',
@@ -194,6 +231,35 @@ BINDINGS = (
  'let authenticated = match AuthenticatedQueuePlanRetry::from_entrypoint(',
  'authenticated.entrypoint_hash()')),
 )
+
+BINDINGS += (
+    (TORII, "fn", "execute_incoming_torii_proxy_request_with_admission", (
+        "let budget_observed_at = tokio::time::Instant::now()",
+        "queue_plan_capacity_wait::deadline_response(&proxy_request.request, error)",
+        "let deadline = budget_observed_at + remaining_budget",
+    )),
+    ("crates/iroha_torii/src/queue_plan_capacity_wait.rs", "fn", "deadline_response", (
+        "admission: super::ToriiProxyTransactionAdmissionV1::QueuePlanSynced",
+        'super::queue_plan_outcome_unknown_response(\n            transaction.hash(),\n            super::signed_transaction_hash_for_entrypoint(transaction),\n            reason,\n        )',
+        'super::torii_proxy_error_response(\n            super::StatusCode::REQUEST_TIMEOUT,\n            "proxy_deadline_exceeded",\n            reason,\n        )',
+    )),
+    ("crates/iroha_torii/src/queue_plan_capacity_wait.rs", "fn", "wait", (
+        "loop {\n        remaining().map_err(WaitError::Deadline)?;",
+        "let budget = remaining().map_err(WaitError::Deadline)?;",
+        "match check()",
+        "Ok(()) => return remaining().map(|_| ()).map_err(WaitError::Deadline)",
+        "Err(QueuePlanInputCapacityErrorV1::Inactive) => {}",
+        "Err(error) => return Err(WaitError::Capacity(error))",
+        "tokio::time::sleep(budget.min(Duration::from_millis(25))).await",
+    )),
+    ("crates/iroha_torii/src/queue_plan_capacity_wait.rs", "fn", "remaining", (
+        "super::validate_torii_proxy_deadline(deadline_unix_ms)?",
+        "checked_duration_since(tokio::time::Instant::now())",
+        ".filter(|remaining| !remaining.is_zero())",
+        "Ok(absolute.min(local))",
+    )),
+)
+
 # Existing registry bindings retain this owner's full persistence obligations.
 EXTRA_ITEMS = ((TORII, "fn", PERSIST), (TORII, "fn", AGGREGATOR), (RUNNER, "fn", "candidate_attachments"))
 SOURCE_RELATIVES = (
@@ -295,17 +361,36 @@ def validate_owners(root, models, errors, rust_binding_item):
     ordered("execute_torii_proxy_request_with_fallback_admitted",
             "let proxy_memory = match pre_admitted_proxy_memory",
             "acquire_torii_proxy_memory(app)",
-            "queue_plan_request_service_capacity_error(app, &request.request)",
+            'queue_plan_request_service_capacity_error(\n        app,\n        &request.request,\n        tokio::time::Instant::from_std(request_started) + TORII_PROXY_EXECUTION_BUDGET,\n        request.deadline_unix_ms,\n    )\n    .await',
             "take_local_torii_proxy_fast_path(")
+    outer_capacity_call = 'queue_plan_request_service_capacity_error(\n        app,\n        &request.request,\n        tokio::time::Instant::from_std(request_started) + TORII_PROXY_EXECUTION_BUDGET,\n        request.deadline_unix_ms,\n    )\n    .await'
+    forwarded_capacity_call = 'queue_plan_request_service_capacity_error(\n        app,\n        &forwarded_request.request,\n        request_started + TORII_PROXY_EXECUTION_BUDGET,\n        forwarded_request.deadline_unix_ms,\n    )\n    .await'
     for symbol, request in (("execute_torii_proxy_request_with_fallback_admitted", "request"),
                             ("forward_incoming_torii_proxy_request", "forwarded_request")):
-        ordered(symbol, f"queue_plan_request_service_capacity_error(app, &{request}.request)",
+        ordered(symbol, outer_capacity_call if request == "request" else forwarded_capacity_call,
                 "execute_torii_proxy_request_across_candidates(")
     ordered("execute_incoming_torii_proxy_request_with_admission_inner",
-            'queue_plan_service_input_capacity_error(\n                app,\n                accepted_tx.entrypoint(),\n                &admission_binding,\n            )',
+            'queue_plan_service_input_capacity_error(\n                app,\n                &transaction,\n                &admission_binding,\n                execution_deadline,\n                request_head.deadline_unix_ms,\n            )\n            .await',
             "push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(",
             "queue_plan_synced_admission_response(")
+    ordered("execute_torii_proxy_request_across_candidates",
+            "let budget_observed_at = tokio::time::Instant::now()",
+            "queue_plan_capacity_wait::remaining(",
+            "queue_plan_capacity_wait::deadline_response(&request.request, error)",
+            "let execution_deadline = (budget_observed_at + execution_budget)",
+            ".min(execution_started + TORII_PROXY_EXECUTION_BUDGET)")
+    ordered("execute_torii_proxy_request_across_candidates",
+            "queue_plan_synced_acceptance_expectation(&request)",
+            "queue_plan_complete_input_capacity_error(transaction, &expected.admission_binding)",
+            "SharedToriiProxyAttemptRequest::new(request, max_encoded_request_bytes)",
+            "if let Some(expected) = queue_plan_synced_expectation.as_ref()",
+            "return queue_plan_outcome_unknown_response( expected.entrypoint_hash, expected.signed_transaction_hash, error, )")
+    ordered("execute_incoming_torii_proxy_request_with_admission_inner",
+            "canonical_queue_plan_synced_response(",
+            "queue_plan_service_input_capacity_error(",
+            "canonical_queue_plan_synced_response(",
+            "let accepted_tx = match routing::accept_transaction_for_ingress(")
     ordered(PERSIST, "QueuePlanAdmissionCertificateStrengthV1::Quorum",
-            "if let Err(error) = queue_plan_service_input_capacity(app, expected_entrypoint, expected_binding)",
+            "if let Err(error) = queue_plan_capacity_wait::wait( || queue_plan_service_input_capacity(app, expected_entrypoint, expected_binding), || deadline.remaining(), ).await",
             "return queue_plan_outcome_unknown_response(", "norito::encode_canonical(&input)",
             "deadline.persist(&app.state, &input_bytes).await", "disseminate_queue_plan_admission_publication(")

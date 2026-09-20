@@ -57,11 +57,14 @@ class TransferTests(unittest.TestCase):
         os.chmod(self.root, 0o700)
         self.runtime = self.root / "runtime"
         self.runtime.mkdir(mode=0o700)
-        self.data = [b"\x7fELF" + bytes([index]) * 64 for index in range(4)] + [b"public git packet", b'{"public":"manifest"}\n']
+        result = b'{"public":"prepared result"}\n'
+        self.data = [b"\x7fELF" + bytes([index]) * 64 for index in range(4)] + [
+            b"public git packet", b'{"public":"manifest"}\n', result,
+            b'{"public":"prepared request"}\n', b'{"public":"native checks"}\n', result]
         rows = [{"name": name, "size": len(raw), "sha256": transfer.sha(raw)}
-                for name, raw in zip((*transfer.NAMES, "source.pack", "source-capture.json"), self.data)]
+                for name, raw in zip(transfer.PAYLOAD_NAMES, self.data)]
         self.request = {"schema": transfer.SCHEMA, "commit": "a" * 40, "tree": "b" * 40,
-            "signer_fingerprint": "C" * 40, "result_sha256": "d" * 64,
+            "signer_fingerprint": "C" * 40, "result_sha256": transfer.sha(result),
             "runtime_root": str(self.runtime), "rows": rows,
             "allocation": {"bytes": 1024**2, "files": 100, "directories": 100}}
         self.owner = SourceOwner()
@@ -98,6 +101,10 @@ class TransferTests(unittest.TestCase):
         pack = self.destination / "source/source.pack"
         self.assertEqual(stat.S_IMODE(pack.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE((self.destination / "source/source-capture.json").stat().st_mode), 0o400)
+        for index, name in enumerate(transfer.PROOF_NAMES, start=6):
+            path = self.destination / name
+            self.assertEqual(path.read_bytes(), self.data[index])
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o400)
         pack.chmod(0o400)
         with self.assertRaisesRegex(transfer.TransferError, "input mode differs"):
             self.receive()
@@ -107,7 +114,9 @@ class TransferTests(unittest.TestCase):
                                ("short", b"".join(self.data)[:-1]),
                                ("extra", b"".join(self.data) + b"X")):
             with self.subTest(label=label):
-                self.request["result_sha256"] = transfer.sha(label.encode())
+                self.runtime = self.root / ("runtime-" + label)
+                self.runtime.mkdir(mode=0o700)
+                self.request["runtime_root"] = str(self.runtime)
                 with self.assertRaises(transfer.TransferError):
                     self.receive(payload)
                 self.assertTrue(self.destination.is_dir())
@@ -193,6 +202,10 @@ class TransferTests(unittest.TestCase):
             lambda value: value["rows"][1].update(name=value["rows"][0]["name"]),
             lambda value: value["rows"][0].update(size=True),
             lambda value: value["rows"][0].update(size=transfer.MAX_BINARY + 1),
+            lambda value: value["rows"][6].update(size=transfer.MAX_PROOF + 1),
+            lambda value: value["rows"][9].update(sha256="e" * 64),
+            lambda value: value.update(result_sha256="e" * 64),
+            lambda value: value.update(rows=value["rows"][:6]),
             lambda value: value.update(extra=True),
         ):
             value = copy.deepcopy(self.request)
@@ -335,6 +348,21 @@ def remote_entry(e, stream):
             with self.assertRaisesRegex(transfer.TransferError, "capture differs"):
                 transfer.admit_preparation(plan, {"taira_release": release}, "b" * 40)
 
+    def test_preparation_payloads_bind_actual_proofs_and_refuse_changed_checkpoint(self):
+        release, plan, build, output = self.preparation_fixture()
+        payloads = transfer.preparation_payloads(plan, build)
+        self.assertEqual(tuple(row["name"] for row, _ in payloads), transfer.PROOF_NAMES)
+        self.assertEqual(payloads[0][0]["sha256"], plan["preparation"]["sha256"])
+        self.assertEqual(payloads[0][1].read_bytes(), payloads[3][1].read_bytes())
+        for row, path in payloads:
+            self.assertEqual((row["size"], row["sha256"]), (path.stat().st_size, transfer.sha(path.read_bytes())))
+        checkpoint = output / "checks.json"
+        checkpoint.chmod(0o600)
+        checkpoint.write_bytes(release.canonical_json_bytes({"request": release.read_record(output / "request.json"), "passed": False}))
+        checkpoint.chmod(0o400)
+        with self.assertRaisesRegex(transfer.TransferError, "checkpoint changed"):
+            transfer.preparation_payloads(plan, build)
+
     def test_cli_help_has_no_activation_runtime_or_shell_options(self):
         result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "taira_release_transfer.py"), "--help"],
                                 capture_output=True, text=True, check=True)
@@ -376,8 +404,24 @@ class SignedTransferIntegrationTests(unittest.TestCase):
             transfer.write_new(path, raw, mode=0o500)
             binary_rows.append({"name": name, "package": package, "path": str(path),
                                 "size": len(raw), "sha256": transfer.sha(raw)})
-        build = {"commit": self.fixture.commit, "tree": self.fixture.tree, "artifacts": binary_rows}
-        plan = {"expected_signer": self.fixture.fingerprint, "preparation": {"sha256": "d" * 64},
+        from release_artifact_contract import canonical_json_bytes
+        base = dict.fromkeys(transfer.BASE_FIELDS, "fixture")
+        base.update(commit=self.fixture.commit, tree=self.fixture.tree, signer_fingerprint=self.fixture.fingerprint)
+        build = dict(base, artifacts=binary_rows, timings_seconds={}, attempt="attempts/000001")
+        preparation = self.fixture.case / "preparation"
+        attempt = preparation / "attempts/000001"
+        attempt.mkdir(parents=True, mode=0o700)
+        preparation.chmod(0o700)
+        attempt.parent.chmod(0o700)
+        prepared_request = dict(base, schema="taira.local-preparation.v1", repo_root=str(SCRIPTS.parent), target_dir=str(self.fixture.case))
+        for path, record in ((preparation / "result.json", build), (attempt / "capture.json", build),
+                             (preparation / "request.json", prepared_request),
+                             (preparation / "checks.json", {"request": prepared_request, "passed": True})):
+            transfer.write_new(path, canonical_json_bytes(record))
+        attempt.chmod(0o500)
+        preparation.chmod(0o500)
+        plan = {"expected_signer": self.fixture.fingerprint, "preparation": {
+                    "path": str(preparation / "result.json"), "sha256": transfer.sha(canonical_json_bytes(build))},
                 "runtime_root": str(runtime)}
         request, payloads = transfer.make_request(plan, build, exported)
         raw = b"".join(path.read_bytes() for _, path in payloads)

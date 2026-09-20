@@ -40,7 +40,12 @@ fn lane_lifecycle_status_exposes_native_runtime_root_and_propagates_invalid_stat
         baseline_dataspaces_hash: iroha_data_model::nexus::dataspace_catalog_hash(
             &state.nexus_snapshot().configured_dataspace_catalog,
         ),
-        baseline_manifests_hash: Hash::new(b"runtime readback fixture manifest baseline"),
+        baseline_manifests_hash: Hash::prehashed(
+            state
+                .lane_manifests
+                .read()
+                .baseline_consensus_policy_digest(),
+        ),
         dataspaces: Vec::new(),
         manifests: Vec::new(),
     };
@@ -67,9 +72,9 @@ fn lane_lifecycle_status_exposes_native_runtime_root_and_propagates_invalid_stat
     let error = handle_get_nexus_lane_lifecycle(&state)
         .expect_err("malformed protected state must never become an absent runtime root");
     let native_error = state
-        .view()
-        .runtime_catalog_hash()
-        .expect_err("the committed malformed parameter must fail native readback");
+        .try_view()
+        .err()
+        .expect("the committed malformed parameter must fail native projection");
     // Torii's outer Query display omits the cause; inspect its typed conversion payload.
     match error {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(

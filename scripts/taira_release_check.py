@@ -34,6 +34,11 @@ recovery controls. Either prerequisite stops qualification on failure before
 other startup checks, shipping builds or network execution. These controls use
 the same complete native compile graph; focused development checks can compile
 only configuration and selected MV targets, without qualifying a release.
+After mandatory startup checks, both scopes separately metadata-check every
+authoritative shipping binary with default production features before CLI and
+long independent tests. This check also reruns when an independent checkpoint
+is reused; it supplies no test pass or artifact qualification. Later shipping
+codegen and network execution remain required.
 Full additionally executes advanced Core recovery and proof-production matrices.
 Both scopes require strict runtime catalog readback codecs and the lifecycle HTTP
 endpoint, compiled in the same native graph; no runtime security policy is relaxed.
@@ -723,6 +728,56 @@ TORII_UNIT_STAGES += (("exact transaction visibility and restricted history isol
 TORII_UNIT_STAGES += (("signed account permission query preservation", (
     "torii_routed_read_tests::account_permissions_handler_query_preserves_signed_pagination_and_count_mode",
 )),)
+
+DISPATCHER_TRANSITION_STAGES = (("reversible dispatcher upgrade and native plan preparation", (
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_apply_and_rollback_preserve_exact_original_bytes",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_completed_replays_do_not_republish",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_interrupted_publication_resumes_every_checked_boundary",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rollback_from_every_partial_guard_publication",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_interrupted_rollback_resumes",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_changed_predecessor_refuses_rollback_before_barrier",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_foreign_guard_and_backup",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_same_bytes_replaced_inode",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_foreign_namespace_and_plan",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_dangling_symlink_as_absence",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_refuses_unowned_missing_guard",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_cli_requires_exact_plan_pin_and_action",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_accepts_exact_sealed_completed_predecessor",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_rejects_unsealed_rollback_and_foreign_lease",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_derives_guards_without_changing_existing_trust_or_roles",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_staging_publication_crashes_resume_only_owned_prefixes",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_inode_scan_rejects_alias_executable_own_fd_and_maps",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_requires_complete_qualified_transfer_producer_join",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_requires_native_aarch64_elf_header",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_prepare_reuses_current_typed_split_source_bindings",
+    "taira_public_reset::host::dispatcher_transition::tests::dispatcher_transition_prepare_cli_requires_pinned_native_inputs",
+)), )
+STAGES += DISPATCHER_TRANSITION_STAGES
+
+TORII_ADMISSION_HANDOFF_STAGES = (("bounded transaction admission and exact receipt ownership", (
+    "queue_plan_capacity_wait::tests::closed_owner_waits_and_rechecks_until_activation",
+    "queue_plan_capacity_wait::tests::only_inactive_is_waited_and_terminal_change_is_immediate",
+    "queue_plan_capacity_wait::tests::original_monotonic_and_wire_deadlines_are_not_renewed",
+    "queue_plan_capacity_wait::tests::cancellation_drops_wait_without_detached_checks",
+    "tests_runtime_handlers::incoming_queue_plan_handoff_waits_without_claim_then_attests_exact_request",
+    "tests_runtime_handlers::ingress_queue_plan_handoff_cancellation_releases_memory_without_claim",
+    "tests_runtime_handlers::forwarded_queue_plan_handoff_preflight_preserves_request_and_deadline",
+    "tests_runtime_handlers::incoming_queue_plan_handoff_expiry_never_creates_journal_claim",
+    "tests_runtime_handlers::queue_plan_handoff_after_quorum_retains_certificate_and_times_out_indeterminate",
+    "tests_runtime_handlers::incoming_queue_plan_handoff_partial_journal_retry_preserves_uncertainty",
+    "tests_runtime_handlers::queue_plan_handoff_after_quorum_resumes_exact_certificate_publication",
+    "tests_runtime_handlers::queue_plan_handoff_expiry_before_aggregation_preserves_partial_journal_uncertainty",
+    "tests_runtime_handlers::incoming_queue_plan_expired_retry_preserves_partial_journal_uncertainty",
+    "tests_runtime_handlers::incoming_queue_plan_capacity_unavailable_never_creates_a_journal_claim",
+    "tests_runtime_handlers::queue_plan_native_capacity_refuses_direct_and_ingress_promises_before_journal",
+    "tests_runtime_handlers::queue_plan_capacity_loss_after_quorum_remains_indeterminate",
+    "tests_runtime_handlers::queue_plan_synced_future_authority_retries_same_request_until_quorum",
+    "tests_runtime_handlers::queue_plan_synced_persistent_future_preserves_partial_claim_at_deadline",
+    "tests_runtime_handlers::queue_plan_synced_deadline_cancels_only_its_owned_waiter",
+    "tests_runtime_handlers::queue_plan_synced_other_rejections_do_not_rearm_partial_admission",
+)),)
+TORII_STARTUP_STAGES += TORII_ADMISSION_HANDOFF_STAGES
+TORII_UNIT_STAGES += TORII_ADMISSION_HANDOFF_STAGES
 
 TORII_UNIT_STAGES += (("canonical lifecycle status runtime root and public schema", (
     "routing::nexus_lane_lifecycle_tests::lane_lifecycle_status_binds_exact_current_catalog",
@@ -1826,6 +1881,17 @@ CORE_STAGES += CORE_FINALITY_INSPECTION_STAGES
 CORE_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
 CORE_ADMISSION_STARTUP_STAGES += CORE_FINALITY_INSPECTION_STAGES
 
+CORE_EXECUTION_PUBLICATION_STAGES = (("actual execution fixture finality and publication ownership", (
+    'state::execution_publication_test_support::tests::executed_genesis_and_successor_publish_real_finality_and_witnesses',
+    'state::execution_publication_test_support::tests::publication_rejects_an_overlay_from_another_state_before_durable_writes',
+    'state::execution_publication_test_support::tests::publication_rejects_changed_sealed_wire_with_the_same_header',
+    'state::execution_publication_test_support::tests::publication_requires_the_original_captured_witness',
+    'state::execution_publication_test_support::tests::publication_refuses_other_signed_genesis_validator_keys',
+)),)
+CORE_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
+CORE_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
+CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
+
 
 # Portable ownership prerequisites; every selected leaf runs in both scopes.
 MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map")
@@ -2162,6 +2228,65 @@ def check_test_harnesses(root: Path, env: dict[str, str], *,
         raise CheckError("native test metadata check omitted selected test targets: " + ", ".join(missing))
     print(f"[taira-prequalify] native test metadata check passed in {elapsed:.1f}s; "
           "full harness compilation remains required", flush=True)
+
+
+def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+    """Check the authoritative production graph without test/dev feature unification.
+
+    Keep the caller's warm target, toolchain and locks. Cargo check compiles
+    metadata only for the exact default-feature shipping binaries; it neither
+    copies executables nor contributes evidence to the independent test pass.
+    """
+    harnesses = shipping_harnesses(root)
+    selection = native_harness_selection(harnesses)
+    if any(HARNESS_TARGETS[name][2] != "bin" for name in harnesses):
+        raise CheckError("shipping metadata requires only authoritative binary targets")
+    requested = {("bin", HARNESS_TARGETS[name][1]) for name in harnesses}
+    fixture_features = {"iroha_core": "iroha-core-tests", "iroha_torii": "test-fixtures"}
+    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "check",
+               "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
+               *selection, "--message-format=json-render-diagnostics"]
+    progress = CargoBuildProgress("shipping metadata", requested, test_profile=False)
+    started = time.monotonic()
+    observed = set()
+    with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
+                          umask=0o077) as child, progress.heartbeat():
+        assert child.stdout is not None
+        for line in child.stdout:
+            show_build_diagnostic(line)
+            progress.observe(line)
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
+                continue
+            target, profile = event.get("target"), event.get("profile")
+            if (isinstance(target, dict) and isinstance(target.get("name"), str)
+                    and target["name"] in fixture_features
+                    and isinstance(target.get("kind"), list) and "lib" in target["kind"]):
+                features = event.get("features")
+                if not isinstance(features, list) or not all(isinstance(feature, str) for feature in features):
+                    raise CheckError("shipping metadata omitted production library features: " + target["name"])
+                forbidden = fixture_features[target["name"]]
+                if forbidden in features:
+                    raise CheckError(f"shipping metadata enabled forbidden fixture feature: {target['name']}/{forbidden}")
+            if (isinstance(target, dict) and isinstance(profile, dict)
+                    and profile.get("test") is False and isinstance(target.get("kind"), list)
+                    and isinstance(target.get("name"), str)
+                    and "bin" in target["kind"] and ("bin", target.get("name")) in requested):
+                observed.add(("bin", target["name"]))
+        code = child.wait()
+    elapsed = time.monotonic() - started
+    progress.report(f"Cargo exited {code}")
+    if code:
+        raise CheckError(f"shipping metadata check failed (exit {code}, {elapsed:.1f}s)")
+    missing = sorted(name for kind, name in requested - observed)
+    if missing:
+        raise CheckError("shipping metadata check omitted production binary targets: " + ", ".join(missing))
+    print(f"[taira-check] shipping metadata check passed in {elapsed:.1f}s; "
+          "shipping codegen and network qualification remain required", flush=True)
 
 
 def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
@@ -3511,8 +3636,9 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # package/dev-dependency feature union and recompiles shared dependencies.
     # Run startup recovery first, then CLI contracts, so mandatory restart
     # failures surface before unrelated groups without changing the Cargo graph.
-    # Run every independent immutable test copy before starting
-    # the shipping binary graph or four-peer fixture. Aggregate test failures;
+    # After mandatory startup controls, check the production feature graph before
+    # long tests. Run every independent immutable test copy before shipping
+    # codegen or the four-peer fixture. Aggregate test failures;
     # missing tests, artifact custody failures and other infrastructure errors
     # still stop immediately. Production binaries use a separate graph below.
     # Keep the full compile graph and its warm Cargo feature union in both
@@ -3572,6 +3698,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 # when a restart's mandatory storage or policy boundary already failed.
                 if startup_failures:
                     raise SelectedRegressionFailures(startup_failures)
+            # Test-harness dev dependencies can conceal production-only errors.
+            # Always check the separate shipping graph, even when the exact
+            # independent test pass is reused. This creates no checkpoint claim.
+            if shipping:
+                check_shipping_binaries(root, env, lock_fds)
             if STAGES:
                 if not reuse_independent:
                     try:

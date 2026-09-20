@@ -44,6 +44,12 @@ operation and one prepare, retained-envelope submit, or read-only recovery
 action; it is not a one-shot operator command. Keep onboarding tokens and all
 signing inputs in owner-only runtime files outside the repository.
 
+A sealed occupied deployment uses the native
+[`prepare-dispatcher-transition` / `dispatcher-transition` owner](DISPATCHER_TRANSITION.md)
+to advance the fixed dispatcher and its five guards before preparing the next
+reset. The completed transfer carries its preparation proof; the owner preserves
+current runtime bindings and durable deployment history.
+
 Reset input validation checks the complete action timeout budget before scanning
 artifacts or reading signing custody. The install budget counts every required
 artifact upload, including `kagami`, plus each validator's stage and install

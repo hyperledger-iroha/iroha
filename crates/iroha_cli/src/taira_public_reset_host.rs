@@ -1,5 +1,7 @@
 //! Authenticated OpenSSH transport and compiled remote host dispatcher for public Taira reset.
 
+#[path = "taira_public_reset_dispatcher_transition.rs"]
+pub(super) mod dispatcher_transition;
 #[path = "taira_public_reset_beacon.rs"]
 pub(super) mod beacon;
 #[path = "taira_public_reset_epoch_generation.rs"]

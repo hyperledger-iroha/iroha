@@ -19003,7 +19003,7 @@
             "ToriiProxyRequestKindV1::SubmitTransaction",
             "admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced",
             "admission_binding: Some(binding)",
-            "queue_plan_service_input_capacity_error(app, transaction, binding)"
+            "queue_plan_service_input_capacity_error(\n            app,\n            transaction,\n            binding,\n            deadline,\n            deadline_unix_ms,\n        )\n        .await"
           ]
         },
         {
@@ -19014,7 +19014,7 @@
             "let proxy_memory = match pre_admitted_proxy_memory",
             "None => match acquire_torii_proxy_memory(app)",
             "hold_torii_proxy_memory_in_response_body(response, proxy_memory)",
-            "if let Some(response) = queue_plan_request_service_capacity_error(app, &request.request) {\n        return response;\n    }",
+            "if let Some(response) = queue_plan_request_service_capacity_error(\n        app,\n        &request.request,\n        tokio::time::Instant::from_std(request_started) + TORII_PROXY_EXECUTION_BUDGET,\n        request.deadline_unix_ms,\n    )\n    .await\n    {\n        return response;\n    }",
             "execute_torii_proxy_request_across_candidates(",
             "persist_queue_plan_admission_certificate("
           ]
@@ -19024,7 +19024,7 @@
           "kind": "fn",
           "symbol": "forward_incoming_torii_proxy_request",
           "required_tokens": [
-            "if let Some(response) =\n        queue_plan_request_service_capacity_error(app, &forwarded_request.request)\n    {\n        return response;\n    }",
+            "if let Some(response) = queue_plan_request_service_capacity_error(\n        app,\n        &forwarded_request.request,\n        request_started + TORII_PROXY_EXECUTION_BUDGET,\n        forwarded_request.deadline_unix_ms,\n    )\n    .await\n    {\n        return response;\n    }",
             "execute_torii_proxy_request_across_candidates("
           ]
         },
@@ -19033,7 +19033,7 @@
           "kind": "fn",
           "symbol": "execute_incoming_torii_proxy_request_with_admission_inner",
           "required_tokens": [
-            "queue_plan_service_input_capacity_error(\n                app,\n                accepted_tx.entrypoint(),\n                &admission_binding,\n            )",
+            "queue_plan_service_input_capacity_error(\n                app,\n                &transaction,\n                &admission_binding,\n                execution_deadline,\n                request_head.deadline_unix_ms,\n            )\n            .await",
             "push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(",
             "queue_plan_synced_admission_response(",
             "if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {",
@@ -19053,9 +19053,11 @@
           "kind": "fn",
           "symbol": "queue_plan_service_input_capacity_error",
           "required_tokens": [
-            "queue_plan_service_input_capacity(app, entrypoint, binding).err()?",
+            "let error = queue_plan_capacity_wait::wait(\n        || queue_plan_service_input_capacity(app, entrypoint, binding),\n        || queue_plan_capacity_wait::remaining(deadline, deadline_unix_ms),\n    )\n    .await\n    .err()?;",
             "QueuePlanInputCapacityErrorV1::Unavailable(_) | QueuePlanInputCapacityErrorV1::Inactive => {\n            (\n                StatusCode::SERVICE_UNAVAILABLE,\n                \"queue_plan_admission_capacity_unavailable\",\n            )\n        }",
-            "Some(torii_proxy_error_response(status, code, error.to_string()))"
+            "Some(torii_proxy_error_response(status, code, error.to_string()))",
+            "queue_plan_capacity_wait::WaitError::Deadline(error)",
+            "queue_plan_outcome_unknown_response(\n                binding.entrypoint_hash,\n                binding.signed_transaction_hash,"
           ]
         },
         {
@@ -19483,11 +19485,9 @@
           "kind": "fn",
           "symbol": "execute_incoming_torii_proxy_request_with_admission",
           "required_tokens": [
-            "validate_torii_proxy_deadline(proxy_request.deadline_unix_ms)",
-            ".checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)",
-            "let remaining_budget = absolute_budget.min(TORII_PROXY_EXECUTION_BUDGET);",
-            "let deadline = tokio::time::Instant::now() + remaining_budget;",
-            "match tokio::time::timeout_at(\n        deadline,\n        execute_incoming_torii_proxy_request_with_admission_inner(\n            app,\n            proxy_request,\n            immediate_sender_peer_id,\n            pre_admitted_fanout,\n            proxy_memory,\n            deadline,\n        ),\n    )"
+            "let budget_observed_at = tokio::time::Instant::now()",
+            "queue_plan_capacity_wait::deadline_response(&proxy_request.request, error)",
+            "let deadline = budget_observed_at + remaining_budget"
           ]
         },
         {
@@ -19787,6 +19787,41 @@
           "symbol": "V2LaneWorkAdapter::release_pending_autonomous_reservation_batches",
           "required_tokens": [
             "    fn release_pending_autonomous_reservation_batches(&mut self) -> Result<usize, V2LaneWorkError> {\n        if self.pending_autonomous_reservation_batches.is_empty() {\n            return Ok(0);\n        }\n        let queue = self.lane_drain_queue.as_ref().ok_or_else(|| {\n            V2LaneWorkError::InvalidContext(\n                \"autonomous reservation release requires the installed live queue\".to_owned(),\n            )\n        })?;\n        let mut released = 0_usize;\n        while let Some((&route, batch)) = self\n            .pending_autonomous_reservation_batches\n            .first_key_value()\n        {\n            if !batch.reservations.is_empty() {\n                let context = batch.pre_kura_direct_release_context()?;\n                released = released.saturating_add(\n                    queue\n                        .release_pre_kura_autonomous_reservation_batch(context)\n                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,\n                );\n            }\n            // A refused or indeterminate release retains this original batch\n            // and every unvisited batch. Only Queue's completed transition\n            // discharges the adapter's custody; no reconstructed retry owner.\n            self.pending_autonomous_reservation_batches.remove(&route);\n        }\n        Ok(released)\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/queue_plan_capacity_wait.rs",
+          "kind": "fn",
+          "symbol": "wait",
+          "required_tokens": [
+            "loop {\n        remaining().map_err(WaitError::Deadline)?;",
+            "let budget = remaining().map_err(WaitError::Deadline)?;",
+            "match check()",
+            "Ok(()) => return remaining().map(|_| ()).map_err(WaitError::Deadline)",
+            "Err(QueuePlanInputCapacityErrorV1::Inactive) => {}",
+            "Err(error) => return Err(WaitError::Capacity(error))",
+            "tokio::time::sleep(budget.min(Duration::from_millis(25))).await"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/queue_plan_capacity_wait.rs",
+          "kind": "fn",
+          "symbol": "remaining",
+          "required_tokens": [
+            "super::validate_torii_proxy_deadline(deadline_unix_ms)?",
+            "checked_duration_since(tokio::time::Instant::now())",
+            ".filter(|remaining| !remaining.is_zero())",
+            "Ok(absolute.min(local))"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/queue_plan_capacity_wait.rs",
+          "kind": "fn",
+          "symbol": "deadline_response",
+          "required_tokens": [
+            "admission: super::ToriiProxyTransactionAdmissionV1::QueuePlanSynced",
+            "super::queue_plan_outcome_unknown_response(\n            transaction.hash(),\n            super::signed_transaction_hash_for_entrypoint(transaction),\n            reason,\n        )",
+            "super::torii_proxy_error_response(\n            super::StatusCode::REQUEST_TIMEOUT,\n            \"proxy_deadline_exceeded\",\n            reason,\n        )"
           ]
         }
       ]
