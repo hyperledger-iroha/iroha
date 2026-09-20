@@ -717,7 +717,10 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
 async fn retail_recipient_lookup_rejects_unsigned_public_alias() {
     let authority =
         checked_torii_test_account_id(0x91, "derive recipient lookup public target fixture key");
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Public),
+    );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
         iroha_data_model::nexus::LaneVisibility::Public,
@@ -768,8 +771,10 @@ async fn retail_recipient_lookup_rejects_noncanonical_whitespace() {
         0x95,
         "derive recipient lookup validation target fixture key",
     );
-    let mut app =
-        mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        recipient_lookup_world_for_test(&caller, &target),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),
+    );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
         iroha_data_model::nexus::LaneVisibility::Restricted,
@@ -818,8 +823,9 @@ async fn retail_recipient_lookup_allows_signed_alias_permission() {
     );
     let sbp_dataspace = recipient_lookup_sbp_dataspace_for_test();
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::recipient-lookup-auth"));
-    let mut app = mk_app_state_for_tests_with_world(
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
         world_with_target_and_caller_bound_to_dataspace(&target, &caller, uaid, sbp_dataspace),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),
     );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
@@ -870,8 +876,10 @@ async fn retail_recipient_route_is_corridor_scoped_without_granting_general_alia
     );
     let caller = AccountId::new(caller_keypair.public_key().clone());
     let target = checked_torii_test_account_id(0x98, "derive recipient route target fixture key");
-    let mut app =
-        mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        recipient_lookup_world_for_test(&caller, &target),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),
+    );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
         iroha_data_model::nexus::LaneVisibility::Restricted,
@@ -965,8 +973,10 @@ async fn retail_recipient_route_fails_closed_for_missing_and_ambiguous_bindings(
     let caller = AccountId::new(caller_keypair.public_key().clone());
     let target =
         checked_torii_test_account_id(0x9a, "derive recipient route ambiguity target fixture key");
-    let mut app =
-        mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        recipient_lookup_world_for_test(&caller, &target),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),
+    );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
         iroha_data_model::nexus::LaneVisibility::Restricted,
@@ -1166,8 +1176,10 @@ async fn retail_recipient_route_and_sponsor_program_reject_noncanonical_or_malfo
     let caller = AccountId::new(caller_keypair.public_key().clone());
     let target =
         checked_torii_test_account_id(0x9b, "derive recipient route validation target fixture key");
-    let mut app =
-        mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        recipient_lookup_world_for_test(&caller, &target),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Public),
+    );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
         iroha_data_model::nexus::LaneVisibility::Public,
@@ -1837,8 +1849,10 @@ async fn retail_recipient_lookup_preserves_requested_account_literal_for_bank_lo
         "derive recipient lookup funded caller fixture key",
     );
     let caller = AccountId::new(caller_keypair.public_key().clone());
-    let mut app =
-        mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        recipient_lookup_world_for_test(&caller, &target),
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Public),
+    );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
         iroha_data_model::nexus::LaneVisibility::Public,
@@ -2368,7 +2382,10 @@ async fn alias_resolve_routes_to_matching_dataspace_instead_of_local_default_mis
         "derive alias resolve secondary-dataspace authority fixture key",
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account(&authority),
+        crate::tests_runtime_handlers::multiple_dataspace_nexus_for_test(),
+    );
     configure_multiple_dataspace_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@secondary");
     let alias_label = AccountAlias::new(
@@ -2439,11 +2456,10 @@ async fn alias_resolve_allows_signed_exact_permission_for_restricted_target_data
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-resolve-denied"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(10),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");
     let alias_label = AccountAlias::new(
@@ -2572,11 +2588,10 @@ async fn alias_resolve_returns_route_unavailable_when_authoritative_route_is_off
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-resolve-offline"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(12),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(12)),
+        crate::tests_runtime_handlers::private_ingress_with_offline_foreign_nexus_for_test(),
+    );
     let (_local_route, _foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(
                 &mut app,
@@ -3124,11 +3139,10 @@ async fn alias_lookup_by_account_merges_cross_dataspace_aliases_and_recomputes_t
     );
     let authority = AccountId::new(authority_keypair.public_key().clone());
     let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-lookup-fanout"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        DataSpaceId::new(10),
-    ));
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world_with_account_bound_to_dataspace(&authority, uaid, DataSpaceId::new(10)),
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
     configure_private_ingress_routes_for_test(&mut app);
     bind_account_alias_for_test(&app, &authority, "merchant@universal");
     bind_account_alias_for_test(&app, &authority, "merchant@restricted");

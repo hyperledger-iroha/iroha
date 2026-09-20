@@ -2628,7 +2628,7 @@ fn start_broker(
     Arc<RuntimeProviderBrokerLifecycleV1>,
     thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
 ) {
-    let directory = tempfile::tempdir().expect(diagnostics[0]);
+    let directory = broker_socket_test_directory().expect(diagnostics[0]);
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect(diagnostics[1]);
     let path = directory.path().join("runtime-provider-broker-v1.sock");
     let policy = BrokerTestEndpoint::for_test(path.clone());
@@ -2645,9 +2645,16 @@ fn start_broker(
             move || ready_sender.send(()).expect(diagnostics[2]),
         )
     });
-    ready_receiver
-        .recv_timeout(Duration::from_secs(2))
-        .expect(diagnostics[3]);
+    if let Err(error) = ready_receiver.recv_timeout(Duration::from_secs(2)) {
+        if error == mpsc::RecvTimeoutError::Disconnected {
+            panic!(
+                "{}: broker thread exited before readiness: {:?}",
+                diagnostics[3],
+                server.join(),
+            );
+        }
+        panic!("{}: {error}", diagnostics[3]);
+    }
     endpoint_identity(&policy).expect(diagnostics[4]);
     (directory, path, policy, shutdown, server)
 }

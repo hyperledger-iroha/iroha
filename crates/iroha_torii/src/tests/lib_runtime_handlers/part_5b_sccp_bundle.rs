@@ -79,6 +79,7 @@ fn app_with_indexed_sccp_message_for_test(
     block.set_sccp_commitment_root(Some(commitment_root));
     // Finalize the proposal before attaching outputs: changing its SCCP root
     // invalidates any previously attached execution result.
+    let proposal = block.canonical_resultless_proposal();
     crate::test_utils::attach_fixture_execution_outputs(
         &mut block,
         vec![
@@ -92,6 +93,8 @@ fn app_with_indexed_sccp_message_for_test(
         ],
     );
     assert!(block.has_results());
+    assert_eq!(block.canonical_resultless_proposal(), proposal);
+    assert_eq!(block.execution_outputs().len(), 1);
     block
         .validate_output_merkle_cache()
         .expect("SCCP fixture retains its exact Network output");

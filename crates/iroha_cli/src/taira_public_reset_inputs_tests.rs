@@ -1,5 +1,145 @@
 use super::*;
 
+fn faucet_config_fixture(policy: &FaucetPolicyV1) -> String {
+    format!(
+        "[torii.faucet]\nenabled = true\nauthority = {:?}\nprivate_key_file = \"/fixture-secret/nonexistent-faucet-key\"\nasset_definition_id = {:?}\namount = {:?}\n",
+        policy.authority,
+        policy.asset_definition_id,
+        policy.amount.to_string(),
+    )
+}
+
+fn mismatched_faucet_configs(policy: &FaucetPolicyV1) -> Vec<(&'static str, String, &'static str)> {
+    let config = faucet_config_fixture(policy);
+    let other_key = KeyPair::from_seed(
+        b"distinct faucet policy fixture".to_vec(),
+        Algorithm::Ed25519,
+    );
+    let other_authority = AccountId::new(other_key.public_key().clone()).to_string();
+    let other_asset = AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("feetest", "universal").unwrap(),
+        "other".parse().unwrap(),
+    )
+    .to_string();
+    assert_ne!(policy.authority, other_authority);
+    assert_ne!(policy.asset_definition_id, other_asset);
+    vec![
+        (
+            "disabled",
+            config.replace("enabled = true", "enabled = false"),
+            "validator faucet must be enabled for public reset",
+        ),
+        (
+            "authority",
+            config.replace(&policy.authority, &other_authority),
+            "validator faucet authority differs from signed intent",
+        ),
+        (
+            "asset",
+            config.replace(&policy.asset_definition_id, &other_asset),
+            "validator faucet asset differs from signed intent",
+        ),
+        (
+            "amount",
+            config.replace(
+                &format!("amount = {:?}", policy.amount.to_string()),
+                "amount = \"1\"",
+            ),
+            "validator faucet amount differs from signed intent",
+        ),
+    ]
+}
+
+#[test]
+fn validator_faucet_policy_requires_enabled_exact_signed_intent() {
+    let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let policy = sample_inventory_fixture().faucet_policy;
+    let config = faucet_config_fixture(&policy);
+    validate_validator_faucet_config(config.as_bytes(), &policy)
+        .expect("matching public policy needs no signer file");
+    validate_validator_faucet_config(config.replace("enabled = true\n", "").as_bytes(), &policy)
+        .expect("preserve the native faucet enabled default");
+    for (label, invalid, expected_error) in mismatched_faucet_configs(&policy) {
+        let error = validate_validator_faucet_config(invalid.as_bytes(), &policy).unwrap_err();
+        assert_eq!(error.to_string(), expected_error, "{label}");
+        assert!(!format!("{error:#}").contains("fixture-secret"), "{label}");
+    }
+    for invalid in [
+        String::new(),
+        format!("extends = [\"/fixture-secret/unbound.toml\"]\n{config}"),
+        "[torii.faucet]\nauthority = \"fixture-secret\"\namount = [".to_owned(),
+        config.replace(&policy.authority, "fixture-secret-invalid-authority"),
+        config.replace(&policy.asset_definition_id, "fixture-secret-invalid-asset"),
+        config.replace(
+            &format!("amount = {:?}", policy.amount.to_string()),
+            "amount = \"fixture-secret-invalid-quantity\"",
+        ),
+    ] {
+        let error = validate_validator_faucet_config(invalid.as_bytes(), &policy).unwrap_err();
+        assert!(!format!("{error:#}").contains("fixture-secret"));
+    }
+    let mut invalid_intent = policy.clone();
+    invalid_intent.authority = "fixture-secret-invalid-intent".to_owned();
+    let error = validate_validator_faucet_config(config.as_bytes(), &invalid_intent).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "signed faucet policy failed canonical admission"
+    );
+    assert!(!format!("{error:#}").contains("fixture-secret"));
+    let mut zero_intent = policy;
+    zero_intent.amount = Quantity::from(0_u32);
+    let zero_config = faucet_config_fixture(&zero_intent);
+    assert!(validate_validator_faucet_config(zero_config.as_bytes(), &zero_intent).is_err());
+}
+
+#[test]
+#[cfg(unix)]
+fn pinned_validator_configs_reject_faucet_policy_mismatch_before_dispatch() {
+    let _guard = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
+    let inventory = sample_inventory_fixture();
+    let network = iroha::data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(inventory.next_genesis_hash.parse().unwrap()),
+    );
+    let matching = faucet_config_fixture(&inventory.faucet_policy);
+    let mut cases = vec![("matching", matching.clone(), "")];
+    cases.extend(mismatched_faucet_configs(&inventory.faucet_policy));
+    for (label, selected_policy, expected_error) in cases {
+        let directory = private_custody_test_dir("taira-pinned-faucet-");
+        let root = directory.path().canonicalize().unwrap();
+        let pinned = inventory.validators.iter().enumerate().map(|(index, validator)| {
+            let genesis = artifact(&validator.artifacts, "genesis").unwrap();
+            let policy = if index == 2 { &selected_policy } else { &matching };
+            let config = format!(
+                "[genesis]\nfile = {:?}\nexpected_hash = {:?}\n[torii.operator_signatures]\nenabled = true\nallowed_public_keys = [{:?}]\n{policy}",
+                genesis.remote_path, network.to_string(), inventory.operator_public_key,
+            );
+            let path = root.join(format!("{}.toml", validator.slug));
+            write_new_private(&path, config.as_bytes()).unwrap();
+            let (file, snapshot) = open_pinned_regular(&path, "test validator config").unwrap();
+            let mut entry = artifact(&validator.artifacts, "config").unwrap().clone();
+            entry.local_path = path.to_str().unwrap().to_owned();
+            entry.sha256 = sha256_hex(config.as_bytes());
+            entry.size = config.len().try_into().unwrap();
+            PinnedArtifact {
+                slug: validator.slug.clone(),
+                role: "config".to_owned(),
+                artifact: entry,
+                input: PinnedInput { path, file, snapshot },
+            }
+        }).collect::<Vec<_>>();
+        // This is the admission seam shared by preflight and fresh apply, before
+        // any transport is created. A later validator cannot evade the policy join.
+        let result = validate_pinned_validator_genesis_configs(&inventory, &pinned);
+        if label == "matching" {
+            result.expect("all four held configs match independently signed policy");
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(error.to_string(), expected_error, "{label}");
+            assert!(!format!("{error:#}").contains("fixture-secret"), "{label}");
+        }
+    }
+}
+
 #[test]
 fn validator_pin_fee_asset_must_match_the_typed_faucet_funding_asset() {
     let inventory = sample_inventory_fixture();

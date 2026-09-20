@@ -501,4 +501,4 @@ fn predecessor_runtime_catalog(
 
 #[cfg(test)]
 #[path = "carrier_geometry_preparation_tests.rs"]
-pub(super) mod tests;
+mod tests;

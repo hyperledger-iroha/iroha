@@ -1721,11 +1721,16 @@ impl Journal {
             actual.dev() == pinned.dev() && actual.ino() == pinned.ino(),
             "operation journal directory was replaced",
         )?;
-        self.revalidate_file("lock", &self._lock, &self.lock_snapshot)
+        self.revalidate_file("lock", &self._lock, &self.lock_snapshot, &[])
     }
 
     #[cfg(unix)]
-    fn revalidate_file(&self, name: &str, file: &File, before: &fs::Metadata) -> Result<()> {
+    fn revalidate_file_metadata(
+        &self,
+        name: &str,
+        file: &File,
+        before: &fs::Metadata,
+    ) -> Result<()> {
         use rustix::fs::{Mode, OFlags};
         let after = file.metadata()?;
         private_metadata(&after, false)?;
@@ -1741,6 +1746,41 @@ impl Journal {
             same_file_snapshot(before, &after) && same_file_snapshot(&after, &named),
             "journal file or held lock changed during custody",
         )
+    }
+
+    #[cfg(unix)]
+    fn revalidate_file(
+        &self,
+        name: &str,
+        file: &File,
+        before: &fs::Metadata,
+        expected: &[u8],
+    ) -> Result<()> {
+        use std::os::unix::fs::FileExt as _;
+        self.revalidate_file_metadata(name, file, before)?;
+        require(
+            before.len() == u64::try_from(expected.len())?,
+            "journal content length differs from its retained snapshot",
+        )?;
+        // Metadata timestamps can collide. Recheck the bytes consumed by this
+        // operation without disturbing offsets shared by cloned descriptors.
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut offset = 0_u64;
+        for chunk in expected.chunks(buffer.len()) {
+            let observed = &mut buffer[..chunk.len()];
+            file.read_exact_at(observed, offset)
+                .map_err(|_| eyre!("journal content revalidation read failed"))?;
+            require(observed == chunk, "journal content changed during custody")?;
+            offset += u64::try_from(chunk.len())?;
+        }
+        let mut extra = [0_u8; 1];
+        require(
+            file.read_at(&mut extra, offset)
+                .map_err(|_| eyre!("journal content revalidation read failed"))?
+                == 0,
+            "journal content grew during custody",
+        )?;
+        self.revalidate_file_metadata(name, file, before)
     }
 
     #[cfg(not(unix))]
@@ -1807,7 +1847,7 @@ impl Journal {
             )
             .read_to_end(&mut bytes)?;
         require(bytes.len() <= maximum, "journal file exceeds bound")?;
-        self.revalidate_file(name, &file, &before)?;
+        self.revalidate_file(name, &file, &before, &bytes)?;
         self.revalidate()?;
         Ok(Some(bytes))
     }
@@ -2897,6 +2937,57 @@ mod tests {
         );
     }
     #[test]
+    fn journal_content_revalidation_preserves_offset_and_rejects_metadata_collisions() {
+        use std::{
+            io::{Seek as _, SeekFrom},
+            os::unix::fs::PermissionsExt as _,
+        };
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.path().join("operation");
+        let journal = Journal::open(&path, true).unwrap();
+        let expected = vec![0xA5; 64 * 1024 + 3];
+        journal.install("custody.nrt", &expected).unwrap();
+        let mut held = File::open(path.join("custody.nrt")).unwrap();
+        held.seek(SeekFrom::Start(7)).unwrap();
+        let before = held.metadata().unwrap();
+        journal
+            .revalidate_file("custody.nrt", &held, &before, &expected)
+            .unwrap();
+        assert_eq!(held.stream_position().unwrap(), 7);
+
+        let mut changed = expected.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        fs::write(path.join("custody.nrt"), &changed).unwrap();
+        // Model a filesystem clock collision deterministically: the retained
+        // content is unchanged while every compared metadata field agrees.
+        let indistinguishable = held.metadata().unwrap();
+        assert!(same_file_snapshot(
+            &indistinguishable,
+            &fs::metadata(path.join("custody.nrt")).unwrap()
+        ));
+        let error = journal
+            .revalidate_file("custody.nrt", &held, &indistinguishable, &expected)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "journal content changed during custody");
+        assert_eq!(held.stream_position().unwrap(), 7);
+        journal
+            .revalidate_file("custody.nrt", &held, &indistinguishable, &changed)
+            .unwrap();
+        assert_eq!(held.stream_position().unwrap(), 7);
+
+        for length in [expected.len() - 1, expected.len() + 1] {
+            fs::write(path.join("custody.nrt"), vec![0xA5; length]).unwrap();
+            assert!(
+                journal
+                    .revalidate_file("custody.nrt", &held, &held.metadata().unwrap(), &expected)
+                    .is_err()
+            );
+            assert_eq!(held.stream_position().unwrap(), 7);
+        }
+    }
+
+    #[test]
     fn journal_rejects_links_replacement_and_incomplete_records() {
         use std::os::unix::fs::symlink;
         let root = tempfile::tempdir().unwrap();
@@ -2941,7 +3032,7 @@ mod tests {
         fs::write(path.join("custody.nrt"), b"edited").unwrap();
         assert!(
             journal
-                .revalidate_file("custody.nrt", &retained, &before)
+                .revalidate_file("custody.nrt", &retained, &before, b"before")
                 .is_err()
         );
         let before = retained.metadata().unwrap();
@@ -2949,7 +3040,7 @@ mod tests {
         fs::copy(path.join("retained-custody.nrt"), path.join("custody.nrt")).unwrap();
         assert!(
             journal
-                .revalidate_file("custody.nrt", &retained, &before)
+                .revalidate_file("custody.nrt", &retained, &before, b"edited")
                 .is_err()
         );
         journal.install("broken.json", b"{ incomplete").unwrap();

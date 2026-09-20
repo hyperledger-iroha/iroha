@@ -316,6 +316,21 @@ pub fn mk_app_state_for_tests_with_options(
 pub fn mk_app_state_for_tests_with_world(world: World) -> SharedAppState {
     mk_app_state_for_tests_with_world_and_options(world, None, None, None, None)
 }
+pub(crate) fn mk_app_state_for_tests_with_world_and_nexus(
+    world: World,
+    nexus: iroha_config::parameters::actual::Nexus,
+) -> SharedAppState {
+    mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+        world,
+        None,
+        None,
+        None,
+        None,
+        "chain".parse().expect("test chain id"),
+        crate::signed_query_test_network_id(),
+        Some(nexus),
+    )
+}
 #[cfg(feature = "push")]
 pub fn mk_app_state_for_tests_with_world_and_push(
     world: World,
@@ -523,7 +538,7 @@ fn configure_nexus_fee_admission_for_test(
     let state_view = app_state.state.view();
     app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
 }
-pub(crate) fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
+pub(crate) fn multiple_dataspace_nexus_for_test() -> iroha_config::parameters::actual::Nexus {
     let secondary_dataspace = DataSpaceId::new(1);
     let secondary_lane = LaneId::new(1);
     let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
@@ -549,43 +564,20 @@ pub(crate) fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppSt
         },
     ])
     .expect("dataspace catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
+    iroha_config::parameters::actual::Nexus {
+        lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
-    };
-    let app_state = Arc::get_mut(app).expect("unique app state");
-    let state = Arc::get_mut(&mut app_state.state).expect("unique state");
-    state.set_nexus(nexus.clone()).expect("apply nexus config");
-    let state_view = app_state.state.view();
-    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    }
 }
-pub(crate) fn configure_private_ingress_routes_for_test(
-    app: &mut SharedAppState,
-) -> (LaneId, DataSpaceId) {
-    let nexus_lane = LaneId::new(0);
-    let local_validator_keypair = checked_torii_test_ed25519_keypair(
-        0xb6,
-        "derive private-ingress local validator fixture key",
-    );
-    let local_peer_keypair =
-        checked_torii_test_bls_keypair(0xb7, "derive private-ingress local peer fixture key");
-    let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
-    let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+pub(crate) fn private_ingress_nexus_for_test() -> iroha_config::parameters::actual::Nexus {
     let governance_dataspace = DataSpaceId::new(1);
     let governance_lane = LaneId::new(1);
     let restricted_dataspace = DataSpaceId::new(10);
     let restricted_lane = LaneId::new(2);
-    let app_mut = Arc::get_mut(app).expect("unique app state");
-    let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
-    online_tx
-        .send(std::collections::HashSet::from([Peer::new(
-            "127.0.0.1:12001".parse().expect("valid local address"),
-            local_peer_keypair.public_key().clone(),
-        )]))
-        .expect("online peers update should succeed");
-    app_mut.online_peers = OnlinePeersProvider::new(online_rx);
-    app_mut.local_peer_id = Some(local_peer_id.clone());
     let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
         NonZeroU32::new(3).expect("nonzero lane count"),
         vec![
@@ -623,13 +615,209 @@ pub(crate) fn configure_private_ingress_routes_for_test(
         },
     ])
     .expect("dataspace catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
+    iroha_config::parameters::actual::Nexus {
+        lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
-    };
+    }
+}
+pub(crate) fn private_ingress_with_offline_foreign_nexus_for_test()
+-> iroha_config::parameters::actual::Nexus {
+    let local_dataspace = DataSpaceId::new(10);
+    let local_lane = LaneId::new(1);
+    let foreign_dataspace = DataSpaceId::new(12);
+    let foreign_lane = LaneId::new(2);
+    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+        NonZeroU32::new(3).expect("nonzero lane count"),
+        vec![
+            iroha_data_model::nexus::LaneConfig::default(),
+            iroha_data_model::nexus::LaneConfig {
+                id: local_lane,
+                dataspace_id: local_dataspace,
+                alias: "local-restricted".to_owned(),
+                visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                ..iroha_data_model::nexus::LaneConfig::default()
+            },
+            iroha_data_model::nexus::LaneConfig {
+                id: foreign_lane,
+                dataspace_id: foreign_dataspace,
+                alias: "foreign-restricted".to_owned(),
+                visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                ..iroha_data_model::nexus::LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+        iroha_data_model::nexus::DataSpaceMetadata::default(),
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: local_dataspace,
+            alias: "local-restricted".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+        iroha_data_model::nexus::DataSpaceMetadata {
+            id: foreign_dataspace,
+            alias: "foreign-restricted".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    iroha_config::parameters::actual::Nexus {
+        lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
+        lane_catalog,
+        dataspace_catalog,
+        ..iroha_config::parameters::actual::Nexus::default()
+    }
+}
+pub(crate) fn assert_initial_nexus_catalog_for_test(
+    state: &IrohaState,
+    expected: &iroha_config::parameters::actual::Nexus,
+) {
+    let installed = state.nexus_snapshot();
+    assert_eq!(installed.lane_config, expected.lane_config);
+    assert_eq!(installed.lane_catalog, expected.lane_catalog);
+    assert_eq!(installed.dataspace_catalog, expected.dataspace_catalog);
+    assert_eq!(
+        installed.configured_lane_catalog,
+        expected.configured_lane_catalog
+    );
+    assert_eq!(
+        installed.configured_dataspace_catalog,
+        expected.configured_dataspace_catalog
+    );
+}
+#[tokio::test]
+async fn configured_catalog_fixture_binds_initial_geometry_and_explicit_network() {
+    let nexus = private_ingress_nexus_for_test();
+    let chain_id: ChainId = "configured-route-fixture".parse().expect("test chain id");
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"configured-route-fixture-network"),
+    ));
+    let (state, kura) = IrohaState::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        World::default(),
+        nexus.clone(),
+        LiveQueryStore::start_test(),
+        chain_id.clone(),
+        network_id,
+    );
+    assert_initial_nexus_catalog_for_test(&state, &nexus);
+    assert_eq!(state.chain_id_ref(), &chain_id);
+    assert_eq!(state.network_id_ref(), &network_id);
+    assert_eq!(
+        state.nexus_snapshot().fees.per_instruction_fee,
+        Quantity::zero()
+    );
+    assert_eq!(
+        state.nexus_snapshot().fees.per_gas_unit_fee,
+        Quantity::zero()
+    );
+    let view = state.view();
+    assert!(std::ptr::eq(view.kura(), kura.as_ref()));
+    assert_eq!(view.height(), 0);
+    assert_eq!(
+        kura.exact_durable_blocks_count()
+            .expect("empty durable ledger"),
+        0
+    );
+    IrohaState::preflight_configured_primary_geometry_replay(
+        &kura,
+        &network_id,
+        &nexus.configured_lane_catalog,
+    )
+    .expect("configured catalog is the authenticated original baseline");
+    assert!(matches!(
+        IrohaState::preflight_configured_primary_geometry_replay(
+            &kura,
+            &network_id,
+            &iroha_data_model::nexus::LaneCatalog::default(),
+        ),
+        Err(iroha_core::state::LaneLifecycleError::ConfiguredCatalogBaseline(_))
+    ));
+    drop(view);
+    drop(state);
+    drop(kura);
+
+    let app = mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+        World::default(),
+        None,
+        None,
+        None,
+        None,
+        chain_id.clone(),
+        network_id,
+        Some(nexus.clone()),
+    );
+    assert_initial_nexus_catalog_for_test(&app.state, &nexus);
+    assert_eq!(app.chain_id.as_ref(), &chain_id);
+    assert_eq!(app.state.network_id_ref(), &network_id);
+    let view = app.state.view();
+    assert!(std::ptr::eq(view.kura(), app.kura.as_ref()));
+    assert_eq!(view.height(), 0);
+    assert_eq!(
+        app.kura
+            .exact_durable_blocks_count()
+            .expect("empty durable ledger"),
+        0
+    );
+    IrohaState::preflight_configured_primary_geometry_replay(
+        &app.kura,
+        &network_id,
+        &nexus.configured_lane_catalog,
+    )
+    .expect("Torii retains the exact configured Kura baseline");
+    let pipeline = app.state.pipeline_snapshot();
+    assert!(pipeline.dynamic_prepass);
+    assert!(!pipeline.parallel_overlay);
+    assert!(!pipeline.parallel_apply);
+    assert!(!pipeline.ready_queue_heap);
+    assert_eq!(pipeline.workers, 1);
+    let fees = app.state.nexus_snapshot().fees;
+    assert_eq!(fees.per_instruction_fee, nexus.fees.per_instruction_fee);
+    assert_eq!(fees.per_gas_unit_fee, nexus.fees.per_gas_unit_fee);
+}
+pub(crate) fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
+    let nexus = multiple_dataspace_nexus_for_test();
+    let app_state = Arc::get_mut(app).expect("unique app state");
+    let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+    assert_initial_nexus_catalog_for_test(state, &nexus);
+    let state_view = app_state.state.view();
+    app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+}
+pub(crate) fn configure_private_ingress_routes_for_test(
+    app: &mut SharedAppState,
+) -> (LaneId, DataSpaceId) {
+    let nexus_lane = LaneId::new(0);
+    let local_validator_keypair = checked_torii_test_ed25519_keypair(
+        0xb6,
+        "derive private-ingress local validator fixture key",
+    );
+    let local_peer_keypair =
+        checked_torii_test_bls_keypair(0xb7, "derive private-ingress local peer fixture key");
+    let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
+    let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+    let governance_lane = LaneId::new(1);
+    let restricted_dataspace = DataSpaceId::new(10);
+    let restricted_lane = LaneId::new(2);
+    let app_mut = Arc::get_mut(app).expect("unique app state");
+    let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
+    online_tx
+        .send(std::collections::HashSet::from([Peer::new(
+            "127.0.0.1:12001".parse().expect("valid local address"),
+            local_peer_keypair.public_key().clone(),
+        )]))
+        .expect("online peers update should succeed");
+    app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+    app_mut.local_peer_id = Some(local_peer_id.clone());
+    let nexus = private_ingress_nexus_for_test();
     let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-    state.set_nexus(nexus.clone()).expect("apply nexus config");
+    assert_initial_nexus_catalog_for_test(state, &nexus);
     ensure_runtime_peer_binding_for_test(state, &local_validator, &local_peer_keypair, "local");
     {
         let mut topology = state.commit_topology.block();
@@ -704,50 +892,9 @@ pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
         .expect("online peers update should succeed");
     app_mut.online_peers = OnlinePeersProvider::new(online_rx);
     app_mut.local_peer_id = Some(local_peer_id.clone());
-    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
-        NonZeroU32::new(3).expect("nonzero lane count"),
-        vec![
-            iroha_data_model::nexus::LaneConfig::default(),
-            iroha_data_model::nexus::LaneConfig {
-                id: local_lane,
-                dataspace_id: local_dataspace,
-                alias: "local-restricted".to_owned(),
-                visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
-                ..iroha_data_model::nexus::LaneConfig::default()
-            },
-            iroha_data_model::nexus::LaneConfig {
-                id: foreign_lane,
-                dataspace_id: foreign_dataspace,
-                alias: "foreign-restricted".to_owned(),
-                visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
-                ..iroha_data_model::nexus::LaneConfig::default()
-            },
-        ],
-    )
-    .expect("lane catalog");
-    let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
-        iroha_data_model::nexus::DataSpaceMetadata::default(),
-        iroha_data_model::nexus::DataSpaceMetadata {
-            id: local_dataspace,
-            alias: "local-restricted".to_owned(),
-            description: None,
-            fault_tolerance: 1,
-        },
-        iroha_data_model::nexus::DataSpaceMetadata {
-            id: foreign_dataspace,
-            alias: "foreign-restricted".to_owned(),
-            description: None,
-            fault_tolerance: 1,
-        },
-    ])
-    .expect("dataspace catalog");
-    let nexus = iroha_config::parameters::actual::Nexus {
-        lane_catalog,
-        dataspace_catalog,
-        ..iroha_config::parameters::actual::Nexus::default()
-    };
+    let nexus = private_ingress_with_offline_foreign_nexus_for_test();
     let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-    state.set_nexus(nexus.clone()).expect("apply nexus config");
+    assert_initial_nexus_catalog_for_test(state, &nexus);
     for (index, (validator, peer_key)) in local_members.iter().chain(&foreign_members).enumerate() {
         ensure_runtime_peer_binding_for_test(
             state,
@@ -1817,17 +1964,57 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     chain_id: ChainId,
     network_id: NetworkId,
 ) -> SharedAppState {
+    mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+        world,
+        iso,
+        deploy_limit,
+        norito_rpc,
+        push,
+        chain_id,
+        network_id,
+        None,
+    )
+}
+fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
+    world: World,
+    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    deploy_limit: Option<(u32, u32)>,
+    norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+    push: Option<iroha_config::parameters::actual::Push>,
+    chain_id: ChainId,
+    network_id: NetworkId,
+    intended_nexus: Option<iroha_config::parameters::actual::Nexus>,
+) -> SharedAppState {
     // Minimal core state
     let _ = &push;
-    let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state_inner = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura.clone(),
-        query_handle.clone(),
-        chain_id.clone(),
-        network_id,
-    );
+    let has_configured_catalog = intended_nexus.is_some();
+    let (state_inner, kura) = if let Some(nexus) = intended_nexus {
+        let (mut state, kura) =
+            IrohaState::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+                world,
+                nexus.clone(),
+                query_handle.clone(),
+                chain_id.clone(),
+                network_id,
+            );
+        // Retain the route fixture's intended runtime settings after ordinary
+        // test defaults. The physical catalog was authenticated at construction.
+        state
+            .set_nexus(nexus)
+            .expect("apply fixture runtime Nexus settings");
+        (state, kura)
+    } else {
+        let kura = Kura::blank_kura_for_testing();
+        let state = IrohaState::new_with_chain_and_network_id_for_testing(
+            world,
+            kura.clone(),
+            query_handle.clone(),
+            chain_id.clone(),
+            network_id,
+        );
+        (state, kura)
+    };
     {
         let mut topo_block = state_inner.commit_topology.block();
         topo_block.clear();
@@ -1842,6 +2029,10 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     let events: EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events.clone()));
+    if has_configured_catalog {
+        let state_view = state.view();
+        queue.reconfigure_nexus(&state.nexus_snapshot(), &state_view, None);
+    }
     let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
     // Minimal Kiso and peers provider (mocked to avoid spawning the full actor in tests)
     let cfg = crate::test_utils::mk_minimal_root_cfg();

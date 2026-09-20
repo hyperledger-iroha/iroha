@@ -2166,13 +2166,7 @@ fn seed_proof_record_at_height(
     // Ensure the core state height is aligned with the proof being seeded to avoid
     // commit-height mismatches when tests inject multiple proof blocks.
     set_latest_block_height(app, height.saturating_sub(1));
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("height>0"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut stx = block.transaction();
     let id = ProofId {
@@ -2933,13 +2927,7 @@ fn grant_alias_resolve_permissions(
     alias: &AccountAlias,
 ) {
     let height = next_block_height(app);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("height>0"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut stx = block.transaction();
     let scope = match alias
@@ -2982,13 +2970,7 @@ fn grant_alias_resolve_dataspace_permission(
     dataspace: DataSpaceId,
 ) {
     let height = next_block_height(app);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("height>0"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut stx = block.transaction();
     stx.world_mut_for_testing().add_account_permission(
@@ -3045,10 +3027,9 @@ fn recipient_lookup_world_for_test(caller: &AccountId, target: &AccountId) -> Wo
         [],
     )
 }
-fn configure_recipient_lookup_sbp_dataspace_for_test(
-    app: &mut SharedAppState,
+fn recipient_lookup_nexus_for_test(
     visibility: iroha_data_model::nexus::LaneVisibility,
-) {
+) -> actual::Nexus {
     let sbp_dataspace = recipient_lookup_sbp_dataspace_for_test();
     let cbuae_dataspace = recipient_lookup_cbuae_dataspace_for_test();
     let cbuae_lane = LaneId::new(1);
@@ -3090,14 +3071,23 @@ fn configure_recipient_lookup_sbp_dataspace_for_test(
         },
     ])
     .expect("dataspace catalog");
-    let nexus = actual::Nexus {
+    actual::Nexus {
+        lane_config: actual::LaneConfig::from_catalog(&lane_catalog),
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
         ..actual::Nexus::default()
-    };
+    }
+}
+fn configure_recipient_lookup_sbp_dataspace_for_test(
+    app: &mut SharedAppState,
+    visibility: iroha_data_model::nexus::LaneVisibility,
+) {
+    let nexus = recipient_lookup_nexus_for_test(visibility);
     let app_state = Arc::get_mut(app).expect("unique app state");
     let state = Arc::get_mut(&mut app_state.state).expect("unique state");
-    state.set_nexus(nexus.clone()).expect("apply nexus config");
+    crate::tests_runtime_handlers::assert_initial_nexus_catalog_for_test(state, &nexus);
     let state_view = app_state.state.view();
     app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
 }
@@ -3128,7 +3118,10 @@ fn onboarding_alias_test_app(authority: &AccountId, domain_owner: &AccountId) ->
     let mut world = World::with_assets(domains, accounts, [fee_definition], [fee_asset], []);
     install_account_alias_policy_for_test(&mut world, authority);
     install_onboarding_parent_leases_for_test(&mut world, domain_owner);
-    let mut app = mk_app_state_for_tests_with_world(world);
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world,
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),
+    );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
         iroha_data_model::nexus::LaneVisibility::Restricted,
@@ -3205,13 +3198,7 @@ fn grant_account_permissions_for_test(
     permissions: impl IntoIterator<Item = Permission>,
 ) {
     let height = next_block_height(app);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("height>0"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut stx = block.transaction();
     for permission in permissions {
@@ -3245,13 +3232,7 @@ fn onboarding_fee_sponsor_enrollment_permission(program_id: &FeeSponsorProgramId
 }
 fn register_fee_sponsor_program_for_test(app: &SharedAppState, program_id: FeeSponsorProgramId) {
     let height = next_block_height(app);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("height>0"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut stx = block.transaction();
     iroha_data_model::isi::nexus::CreateFeeSponsorProgram {
@@ -3313,7 +3294,10 @@ fn onboarding_alias_test_app_with_role_permissions(
     install_account_alias_policy_for_test(&mut world, authority);
     install_onboarding_parent_leases_for_test(&mut world, domain_owner);
     world.grant_role_for_tests(authority.clone(), role_id);
-    let mut app = mk_app_state_for_tests_with_world(world);
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world,
+        recipient_lookup_nexus_for_test(iroha_data_model::nexus::LaneVisibility::Restricted),
+    );
     configure_recipient_lookup_sbp_dataspace_for_test(
         &mut app,
         iroha_data_model::nexus::LaneVisibility::Restricted,

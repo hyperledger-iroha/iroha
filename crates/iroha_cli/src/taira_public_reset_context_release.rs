@@ -148,6 +148,7 @@ fn derive_fingerprints(
         &public.genesis_hash,
     )?;
     validate_validator_operator_config(&bytes, operator_public_key)?;
+    validate_validator_faucet_config(&bytes, &intent.faucet_policy)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| eyre!("validator config is not UTF-8"))?;
     let table: toml::Table =
         toml::from_str(text).map_err(|_| eyre!("validator config is not TOML"))?;

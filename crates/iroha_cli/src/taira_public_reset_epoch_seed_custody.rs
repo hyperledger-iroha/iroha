@@ -2,7 +2,7 @@
 #![cfg(unix)]
 
 use super::*;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt};
 use zeroize::Zeroizing;
 
 const SEED_ROOT: &str = "/var/lib/taira-epoch-supervisor/seeds";
@@ -50,6 +50,36 @@ fn same_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime_nsec() == right.ctime_nsec()
 }
 
+fn revalidate_seed_metadata(
+    path: &Path,
+    file: &File,
+    snapshot: &fs::Metadata,
+    owner: u32,
+) -> Result<()> {
+    direct_parent(path, owner)?;
+    let named = fs::symlink_metadata(path)?;
+    require(
+        !named.file_type().is_symlink()
+            && same_metadata(snapshot, &named)
+            && same_metadata(snapshot, &file.metadata()?),
+        "original seed changed while held",
+    )
+}
+
+fn read_seed_content(file: &File) -> Result<Zeroizing<[u8; 32]>> {
+    let mut bytes = Zeroizing::new([0_u8; 32]);
+    file.read_exact_at(bytes.as_mut(), 0)
+        .map_err(|_| eyre!("original seed exact native read failed"))?;
+    let mut extra = Zeroizing::new([0_u8; 1]);
+    require(
+        file.read_at(extra.as_mut(), 32)
+            .map_err(|_| eyre!("original seed exact native read failed"))?
+            == 0,
+        "original seed length changed",
+    )?;
+    Ok(bytes)
+}
+
 /// Retain the actual original descriptor while the native coordinator frames it.
 /// Public observations expose only its path and inode, never a seed digest.
 pub(super) struct OriginalSeed {
@@ -57,6 +87,7 @@ pub(super) struct OriginalSeed {
     file: File,
     snapshot: fs::Metadata,
     owner: u32,
+    original: Zeroizing<[u8; 32]>,
 }
 
 impl OriginalSeed {
@@ -83,11 +114,14 @@ impl OriginalSeed {
                 && snapshot.len() == 32,
             "original seed requires one owner0600 regular32-byte file",
         )?;
+        revalidate_seed_metadata(path, &file, &snapshot, owner)?;
+        let original = read_seed_content(&file)?;
         let selected = Self {
             path: path.to_path_buf(),
             file,
             snapshot,
             owner,
+            original,
         };
         selected.revalidate()?;
         Ok(selected)
@@ -98,14 +132,7 @@ impl OriginalSeed {
     }
 
     pub(super) fn revalidate(&self) -> Result<()> {
-        direct_parent(&self.path, self.owner)?;
-        let named = fs::symlink_metadata(&self.path)?;
-        require(
-            !named.file_type().is_symlink()
-                && same_metadata(&self.snapshot, &named)
-                && same_metadata(&self.snapshot, &self.file.metadata()?),
-            "original seed changed while held",
-        )
+        self.read().map(drop)
     }
 
     /// The caller keeps this owner alive and revalidates before and after framing.
@@ -118,17 +145,13 @@ impl OriginalSeed {
     }
 
     pub(super) fn read(&self) -> Result<Zeroizing<[u8; 32]>> {
-        let mut stream = self.stream_file()?;
-        let mut bytes = Zeroizing::new([0u8; 32]);
-        stream
-            .read_exact(bytes.as_mut())
-            .map_err(|_| eyre!("original seed exact native read failed"))?;
-        let mut extra = Zeroizing::new([0u8; 1]);
+        revalidate_seed_metadata(&self.path, &self.file, &self.snapshot, self.owner)?;
+        let bytes = read_seed_content(&self.file)?;
         require(
-            stream.read(extra.as_mut())? == 0,
-            "original seed length changed",
+            bytes.as_ref() == self.original.as_ref(),
+            "original seed content changed while held",
         )?;
-        self.revalidate()?;
+        revalidate_seed_metadata(&self.path, &self.file, &self.snapshot, self.owner)?;
         Ok(bytes)
     }
 }
@@ -342,6 +365,41 @@ mod tests {
         fs::remove_file(&path).unwrap();
         let _replacement = source(&directory);
         assert!(held.read().is_err());
+    }
+
+    #[test]
+    fn original_epoch_seed_content_binding_preserves_offset_and_rejects_metadata_collisions() {
+        use std::io::{Seek as _, SeekFrom};
+        let (_temporary, directory) = fixture();
+        let path = source(&directory);
+        let mut held = OriginalSeed::open(&path).unwrap();
+        let mut shared = held.stream_file().unwrap();
+        shared.seek(SeekFrom::Start(7)).unwrap();
+        held.revalidate().unwrap();
+        assert_eq!(held.read().unwrap().as_ref(), &[0xA5; 32]);
+        assert_eq!(shared.stream_position().unwrap(), 7);
+
+        fs::write(&path, [0x5A; 32]).unwrap();
+        // Preserve the admitted bytes while making all metadata comparisons
+        // identical, independently of the actual filesystem timestamp clock.
+        held.snapshot = held.file.metadata().unwrap();
+        assert!(same_metadata(&held.snapshot, &fs::metadata(&path).unwrap()));
+        let error = held.revalidate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "original seed content changed while held"
+        );
+        assert!(held.read().is_err());
+        assert!(held.stream_file().is_err());
+        assert_eq!(shared.stream_position().unwrap(), 7);
+
+        for length in [31, 33] {
+            fs::write(&path, vec![0xA5; length]).unwrap();
+            held.snapshot = held.file.metadata().unwrap();
+            assert!(held.revalidate().is_err());
+            assert!(held.read().is_err());
+            assert_eq!(shared.stream_position().unwrap(), 7);
+        }
     }
 
     #[test]

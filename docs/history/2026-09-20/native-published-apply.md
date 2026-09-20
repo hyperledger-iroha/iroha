@@ -278,3 +278,80 @@ tampered and unowned temporaries. Epoch97 receipts under
 structural, ledger and guard results. Full workspace and unchanged real
 four/seven-validator qualification remain open, as do production resource
 admission, retained Validate-to-Apply execution and the atomic Native cutover.
+
+
+## Retained lifecycle publication
+
+The private terminal publisher now consumes the captured nonretiring lifecycle
+instead of refusing every nonidentity geometry. The retained geometry owns the
+original State identity as well as its Kura, predecessor, successor and exact
+header. A substitute State sharing that same Kura is not the publication target.
+Before storage work the publisher checks source identity, lifecycle-effect
+presence, retirement ownership and participant durability. Retirement/replacement
+still requires the original service Queue cut and is explicitly refused here.
+
+Geometry preparation and completion reuse the original raw/tiered attempts under
+the already-held Kura lease. A busy backend returns its actual release observation
+with the complete decided carrier after all State/component writers are released.
+Storage completes before the State generation opens; the retained DA mapping and
+lifecycle resets precede this carrier's DA updates. Both post-publication cursor
+continuations finish after generation close and before releasing the original
+lifecycle/Kura fences. Identity and metadata-only transitions do not acquire the
+backend for geometry. The redundant second pending lifecycle copy was removed.
+
+New coverage uses a signed height-two lifecycle transaction after actual genesis
+publication, route planning, candidate validation, exact CommitQC and durable
+checkpoint binding. It exercises backend contention and missing lifecycle-effect
+refusal followed by publication of the same original carrier. Separate structural
+negative controls reject a foreign State, wrong header and retirement/replacement
+before storage mutation. These are private publication tests, not live handoff
+or network qualification.
+
+Build98 exposed two new fixture imports of private `nexus::LaneId`; both now use
+its defining `iroha_model_base::topology` module. That failed run also observed an
+external HEAD/index change on `optimizations` and source edits, so it is not an
+unchanged-candidate result. Build99 then passed on unchanged Rust inputs. Its original review selection
+passed all 32 tests on unchanged inputs and binary. The expanded publication
+selection passed 119/121: two new lifecycle fixtures correctly failed lane
+planning because their global genesis roster had no declared lane committee.
+The fixture now installs an explicit primary-lane manifest bound to those four
+signed genesis keys before predecessor execution. Production lane planning and
+committee authentication remain intact. The publication run overlapped this test
+repair, so its broad source capture changed. Build100 passed compilation and
+all 32 original review controls, but the two new fixtures then reached a rejected
+lifecycle transaction. Its old assertion did not preserve the rejection reason.
+The signed genesis now grants `CanSetParameters` to the submitting account, and
+both genesis context-binding passes install the same explicit zero-fee fixture
+policy. Production fee and permission enforcement remain unchanged. Build101
+passes on unchanged inputs in 127.30 seconds; the actual lane-addition/backend
+retry regression passes on the default stack. All 127 expanded publication,
+geometry, lifecycle, original custody and candidate-preparation controls pass.
+The same immutable Core executable passes all 32 original review regressions,
+for 159 distinct Rust tests with unchanged captured sources. Its SHA256 is
+`cd23cabc0e639b0cd46e0274d79f2d1e05fc609b360b21ae853be5523bc12e9e`.
+The pending-membership ledger passes 1/1 on unchanged inputs. Scoped rustfmt,
+codec prohibition, archive verification and diff checks pass. Epoch101 receipts
+under `dist/sumeragi-main-work/` retain the exact build/runtime inputs. The final
+canonical structural capture initially failed in
+`native-apply101/formal/final/`: five one-line source tokens did not match rustfmt's
+multiline expressions and trailing commas, producing ten diagnostics across the
+two gate layers. This failure is preserved. The corresponding contract and ledger
+declarations were aligned together with the actual source. The repeated final
+capture is recorded in `native-apply101/formal/final2/`, with fresh focused controls
+under `native-geometry101/controls/`. `validation101.json` is produced only after
+checking that the gate has zero diagnostics, all captures remain unchanged and
+their hashes still match disk.
+
+The parallel source-contract selection passed all 34 controls. Its broad capture
+correctly records the separate Rust test fixture edit; the qualified 1,733-input
+contract capture includes all 227 copied source inputs and is unchanged through
+the later fixture-only edits; this selection precedes the raw-token formatting
+correction above. It covers original State/header binding, retirement
+refusal, retained raw/tiered custody and completion/publication ordering. The
+read-only review also confirmed metadata-only transitions avoid geometry backend
+acquisition and that cursor post work does not reacquire Kura/State fences.
+
+Production pre-execution resource admission, the retained Validate-to-Apply
+handoff, original service Queue retirement, old participant durability, the atomic
+Native runner/signer cutover and unchanged four/seven-validator qualification
+remain required. None of the six liveness goals closes at this milestone.

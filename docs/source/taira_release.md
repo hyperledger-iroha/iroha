@@ -40,8 +40,10 @@ invalidates Cargo fingerprints and can rebuild dependencies once in the
 existing warm lane; keeping the same selection reuses that cache. Switching
 back invalidates it again. Linker timing alone does not establish end-to-end
 build or release qualification time.
-`llvm` is rejected on macOS, and authenticated `prepare` does not accept
-`--native-linker`; its native and release environments remain unchanged.
+`llvm` is rejected on macOS. Authenticated `prepare` accepts the same
+`--native-linker` selection and binds the resolved compiler/linker paths, bytes
+and native environment into its request. Resume revalidates those identities.
+The native selection is independent of the explicitly pinned Zig shipping tools.
 
 Before signing an immutable release, use an exact focused diagnostic in the same
 warm development lane:
@@ -178,9 +180,11 @@ runtime effects after staging. The four-validator catalog test separately proves
 the committed topology and transaction history survive restart and full replay.
 
 Both scopes also require the generated validator configuration projection and
-occupied-runtime recovery tests. Prior daemon, CLI, SoraFS, configuration, genesis,
-genesis hash and service unit each have an explicit source revision, path, digest,
-size and mode. The configuration selector and exact process argv are bound
+occupied-runtime recovery tests. The predecessor requires exactly five ordered
+runtime roles: `iroha3d`, `config`, `genesis`, `genesis_hash`, and `validator_unit`.
+Each has an explicit source revision, path, digest, size and mode. CLI, Kagami and
+SoraFS are not predecessor validator dependencies; an eight-role predecessor
+record is rejected. The configuration selector and exact process argv are bound
 separately. An initialized installation may therefore retain artifacts from
 different releases without treating its configuration revision as its executable
 revision. Candidate artifacts still use one canonical release directory.
@@ -298,6 +302,16 @@ Validate the local orchestration without Cargo or network:
 The gate's existing selection and diagnostics are documented in
 [Taira CLI release checks](taira_release_check.md).
 
+## Transferring a prepared release
+
+Use [the maintained transfer command](taira_release_transfer.md) to import a
+completed preparation's four binaries and exact signed source into the approved
+MacStadium guest. It validates the preparation and checks both physical backing
+and guest capacity before payload writes. Completed transfers are revalidated on
+retry; an SSH or storage failure does not require rebuilding unchanged artifacts.
+The command publishes verified binary/source receipts and leaves activation to
+the native deployment workflow below.
+
 ## Preparing validator configuration for a public reset
 
 Generate the fresh four-validator Taira bundle with the qualified native Kagami
@@ -329,6 +343,11 @@ registry cache overlay is rejected. Native signing and startup bind its semantic
 policy digest to signed genesis. Retain and revalidate the generated public
 manifest receipt for exact byte custody; the reset inventory does not declare a
 separate manifest artifact.
+
+Assembly, authorization and forward preflight require every candidate faucet to
+be enabled, with authority, canonical asset and quantity exactly matching the
+independently signed intent. This policy check reads the pinned configuration
+without opening faucet signer files.
 
 Derive the complete public identity bundle using the maintained CLI:
 
@@ -432,7 +451,10 @@ active-state loss. Rollback before deployment proof restores the old unit,
 selector and retained state. Running mode proves the restored old process;
 stopped mode stays stopped and proves absence, without claiming recovery or
 health. Cached and conservative rollback use the same signed state. Cleanup
-protects every admitted prior artifact root. Proven deployments cannot roll back
+protects the selected prior configuration release, every admitted runtime artifact
+root, and the independently signed prior supervisor's CLI/Kagami release. Supervisor
+custody remains explicit in its own prior plan; malformed or inconsistent prior
+state cannot authorize cleanup. Proven deployments cannot roll back
 through this workflow, and ambiguous writes require their retained recovery path.
 
 These preparation operations do not authorize replacement of shared network

@@ -6,8 +6,9 @@ use crate::sumeragi::{
         CarrierCustodyError, CarrierValidator, RetainedBodyValidationService,
         test_support::TrackedOwner,
     },
-    v2_body_store::retained_validation::{
-        fail_next_marker_directory_sync, fail_next_marker_file_sync,
+    v2_body_store::{
+        LocalValidationRefusal,
+        retained_validation::{fail_next_marker_directory_sync, fail_next_marker_file_sync},
     },
 };
 use std::sync::{
@@ -17,6 +18,7 @@ use std::sync::{
 
 struct Validator {
     commitment: wire::ExecutionCommitment,
+    ready: bool,
     calls: Arc<AtomicUsize>,
     drops: Arc<AtomicUsize>,
 }
@@ -29,12 +31,18 @@ impl CarrierValidator for Validator {
         body: &SignedBlock,
     ) -> Result<Self::Owner, Self::Error> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(TrackedOwner::new(
-            context,
-            body,
-            self.commitment,
-            Arc::clone(&self.drops),
-        ))
+        let owner = TrackedOwner::new(context, body, self.commitment, Arc::clone(&self.drops));
+        Ok(if self.ready {
+            owner
+        } else {
+            owner.into_incomplete()
+        })
+    }
+    fn resume(
+        &mut self,
+        owner: Self::Owner,
+    ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)> {
+        Ok(owner)
     }
 }
 fn validator(
@@ -45,12 +53,59 @@ fn validator(
     (
         Validator {
             commitment: ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment(),
+            ready: true,
             calls: Arc::clone(&calls),
             drops: Arc::clone(&drops),
         },
         calls,
         drops,
     )
+}
+
+#[test]
+fn incomplete_retained_owner_cannot_authorize_a_marker_even_when_resume_reports_success() {
+    let directory = TempDir::new().unwrap();
+    let (context, keys) = context_and_keys();
+    let (body, manifest) = body_and_manifest(&context, &keys, None);
+    let mut store = V2BodyStore::open(directory.path(), context).unwrap();
+    let durable = store.store(manifest, body).unwrap();
+    let (mut producer, calls, drops) = validator(&durable);
+    producer.ready = false;
+    let mut service = store.retained_validation_service(producer).unwrap();
+    let mut original = None;
+    for _ in 0..2 {
+        assert!(matches!(
+            store.execute_retained_durable_validation(
+                durable.clone(),
+                durable.manifest_hash(),
+                &mut service
+            ),
+            Err(V2BodyStoreError::CarrierCustody(
+                CarrierCustodyError::IncompleteCapture
+            ))
+        ));
+        let allocation = service
+            .owner_for_test(durable.subject())
+            .unwrap()
+            .allocation();
+        assert_eq!(*original.get_or_insert(allocation), allocation);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert_eq!(service.marker_counts_for_test(), (0, 0));
+        assert!(store.validated.is_empty());
+        assert!(store.rejected.is_empty());
+        assert!(
+            !store
+                .validated_path_for(durable.round(), durable.subject())
+                .exists()
+        );
+        assert!(matches!(
+            service.select(&ValidatedBodyReceipt::for_test(durable.clone())),
+            Err(CarrierCustodyError::Unconfirmed)
+        ));
+    }
+    drop(service);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[test]

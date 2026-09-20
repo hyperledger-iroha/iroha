@@ -29,6 +29,9 @@ from unittest.mock import MagicMock, patch
 # canonical Taira stake-asset selection during no-config signing, and one
 # inert PendingKura validation preview control, and six invocation-owned
 # authenticated finality prefix controls, and two faucet-policy doctor controls.
+# Four occupied-runtime and component-owned supervisor cleanup controls and two
+# candidate funding-policy admission controls are mandatory, together with two
+# content-bound journal/original-seed controls for metadata timestamp collisions.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -37,8 +40,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -704,6 +707,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             'kagami': (
                 'kura::beacon_history::tests::beacon_history_projects_only_typed_public_candidates_and_keeps_proof_limits',
                 'kura::beacon_history::tests::beacon_history_distinguishes_admission_from_recorded_execution_and_nested_effects',
+                'kura::beacon_history::tests::beacon_history_projects_nested_callbacks_once_and_distinguishes_rejected_roots',
                 'kura::beacon_history::tests::beacon_history_requires_exact_bounded_range_and_preserves_read_only_journals',
                 'kura::beacon_history::tests::beacon_history_rejects_malformed_sidecars_and_preserves_their_source',
                 'kura::beacon_history::tests::beacon_history_rejects_block_height_mismatch_without_publishing_partial_json',
@@ -829,6 +833,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_public_producer_controls_replace_stale_names_and_remain_required(self):
         required = (
+            "taira_dataspace_deploy::tests::journal_content_revalidation_preserves_offset_and_rejects_metadata_collisions",
+            "taira_public_reset::host::epoch_seed_custody::tests::original_epoch_seed_content_binding_preserves_offset_and_rejects_metadata_collisions",
+            "taira_public_reset::inputs::tests::validator_faucet_policy_requires_enabled_exact_signed_intent",
+            "taira_public_reset::inputs::tests::pinned_validator_configs_reject_faucet_policy_mismatch_before_dispatch",
             'taira_public_reset::host::epoch_generation::public_binding_tests::public_projection_cannot_satisfy_native_credential_admission',
             'taira_public_reset::host::epoch_generation::public_binding_tests::public_binding_still_rejects_changed_hash_argv_and_network',
             'taira_public_reset::host::epoch_reset_inputs::tests::reset_producer_derives_exact_policy_unit_custody_and_update_binding',
@@ -897,7 +905,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (1024, 1202)), ("linux", (1029, 1207))):
+        for platform, counts in (("darwin", (1033, 1211)), ("linux", (1038, 1216))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)
@@ -1275,6 +1283,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 "taira_public_reset::validator_config::tests::materialization_rejects_inheritance_identity_drift_and_source_bindings",
                 "taira_public_reset::validator_config::tests::materialization_requires_exact_public_genesis_identity_bytes",
                 "taira_public_reset::validator_config::tests::materialization_cli_requires_explicit_custody_and_canonical_identities",
+                "taira_public_reset::host::occupied::tests::occupied_runtime_rejects_builder_tools_and_each_missing_runtime_role",
+                "taira_public_reset::host::epoch_supervisor::tests::prior_release_protection_preserves_independent_authenticated_tool_roots",
+                "taira_public_reset::host::epoch_supervisor::tests::prior_release_protection_rejects_malformed_state_or_plan",
+                "taira_public_reset::host::tests::cleanup_preserves_prior_supervisor_release_across_hosts_and_replay",
                 "taira_public_reset::host::occupied::tests::occupied_runtime_accepts_split_source_and_configuration_binding",
                 "taira_public_reset::host::occupied::tests::occupied_runtime_rejects_incomplete_or_foreign_artifact_custody",
                 "taira_public_reset::host::occupied::tests::occupied_runtime_wire_requires_explicit_artifacts_and_argv",
@@ -1305,6 +1317,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 for name in names:
                     with self.subTest(scope=scope, harness=harness, regression=name):
                         self.assertEqual(selected.count(name), 1)
+                        focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                        self.assertEqual([item for _, tests in focused[harness] for item in tests], [name])
+                        listing = "\n".join(item + ": test" for item in selected if item != name)
+                        with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                            gate.require_tests(listing, stages[harness])
 
     def test_both_scopes_require_runtime_catalog_readback_and_http_contracts_exactly_once(self):
         required = {
@@ -1762,23 +1779,103 @@ class FocusedPrequalificationTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[3], gate.CONFIG_STAGES)
         network.assert_not_called()
 
+    def test_selected_pending_kura_runs_first_once_without_expanding_focus(self):
+        recovery = tuple(test for _, tests in gate.CORE_PENDING_KURA_RECOVERY_STAGES for test in tests)
+        beacon = gate.CORE_BEACON_STAGES[0][1][0]
+        daemon = gate.DAEMON_STARTUP_STAGES[0][1][0]
+        for scope in gate.QUALIFICATION_SCOPES:
+            for selected in (recovery, (recovery[1], recovery[-1])):
+                copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
+                executed, output = [], io.StringIO()
+                requested = ("core=" + beacon, "daemon=" + daemon, "cli=" + self.cli,
+                             "network=" + self.network) + tuple("core=" + test for test in reversed(selected))
+                def execute(harness, root, env, stages, locks, **kwargs):
+                    self.assertNotIn(unittest.mock.call(harness), release.call_args_list)
+                    self.assertEqual(locks, (91,))
+                    executed.extend((harness, test) for _, tests in stages for test in tests)
+                with self.subTest(scope=scope, selected=selected), \
+                     patch.object(gate, "compile_test_harnesses", return_value=copies), \
+                     patch.object(copies, "release") as release, \
+                     patch.object(gate, "run_stages", side_effect=execute) as run, \
+                     patch.object(gate, "run_network_checks", side_effect=lambda *args, **kwargs:
+                                  executed.extend(("network", test) for _, tests in kwargs["stages"]
+                                                  for test in tests)), \
+                     contextlib.redirect_stdout(output):
+                    gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
+                        focused_regressions=requested, environment=self.env, lock_fds=(91,))
+                config = [("config", test) for _, tests in gate.CONFIG_STAGES for test in tests]
+                expected = config + [tuple(item.split("=", 1)) for item in requested]
+                self.assertCountEqual(executed, expected)
+                self.assertEqual(executed[:len(config) + len(selected)],
+                                 config + [("core", test) for test in selected])
+                self.assertEqual([call.args[0] for call in run.call_args_list],
+                                 ["config", "core", "core", "daemon", "cli"])
+                self.assertEqual(run.call_args_list[-1].kwargs, {"batch": True})
+                self.assertEqual(release.call_args_list.count(unittest.mock.call("core")), 1)
+                self.assertIn(f"{len(requested)} focused regressions", output.getvalue())
+
+    def test_pending_kura_only_focus_releases_core_without_empty_or_duplicate_run(self):
+        selected = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][-1]
+        copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
+        with patch.object(gate, "compile_test_harnesses", return_value=copies), \
+             patch.object(copies, "release") as release, \
+             patch.object(gate, "run_stages") as run, \
+             patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(io.StringIO()):
+            gate.run_prequalification(Path("/mutable"), focused_regressions=("core=" + selected,),
+                                      environment=self.env, lock_fds=())
+        self.assertEqual([call.args[0] for call in run.call_args_list], ["config", "core"])
+        self.assertEqual([test for _, tests in run.call_args_list[1].args[3] for test in tests], [selected])
+        self.assertEqual(release.call_args_list, [unittest.mock.call("config"), unittest.mock.call("core")])
+        network.assert_not_called()
+
+    def test_pending_kura_failure_stops_all_remaining_focused_execution(self):
+        selected = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][2]
+        for scope in gate.QUALIFICATION_SCOPES:
+            for error in (gate.SelectedRegressionFailures(["pending Apply publication failed"]),
+                          gate.CheckError("required regressions missing from native harness")):
+                copies = FixtureCopies({name: name for name in gate.HARNESS_TARGETS})
+                output = io.StringIO()
+                def execute(harness, root, env, stages, locks, **kwargs):
+                    if harness == "core":
+                        self.assertEqual([test for _, tests in stages for test in tests], [selected])
+                        raise error
+                with self.subTest(scope=scope, error=type(error).__name__), \
+                     patch.object(gate, "compile_test_harnesses", return_value=copies), \
+                     patch.object(gate, "run_stages", side_effect=execute) as run, \
+                     patch.object(gate, "run_network_checks") as network, \
+                     patch.object(gate, "compile_network_binaries") as shipping, \
+                     contextlib.redirect_stdout(output):
+                    with self.assertRaises(type(error)) as failed:
+                        gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
+                            focused_regressions=("core=" + self.core, "core=" + selected,
+                                                 "cli=" + self.cli, "network=" + self.network),
+                            environment=self.env, lock_fds=())
+                self.assertIs(failed.exception, error)
+                self.assertEqual([call.args[0] for call in run.call_args_list], ["config", "core"])
+                network.assert_not_called()
+                shipping.assert_not_called()
+                self.assertNotIn("diagnostic passed", output.getvalue())
+
     def test_independent_focused_failures_aggregate_and_prevent_network(self):
         copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
-        def execute(harness, *args, **_kwargs):
-            if harness != "/copies/config":
+        selected = gate.CORE_PENDING_KURA_RECOVERY_STAGES[0][1][0]
+        def execute(harness, root, env, stages, locks, **_kwargs):
+            names = [test for _, tests in stages for test in tests]
+            if harness != "/copies/config" and names != [selected]:
                 raise gate.SelectedRegressionFailures([harness + " failed"])
         with patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
              patch.object(gate, "run_stages", side_effect=execute) as run, \
              patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(gate.SelectedRegressionFailures) as failed:
                 gate.run_prequalification(Path("/mutable"),
-                    focused_regressions=("core=" + self.core, "cli=" + self.cli, "network=" + self.network),
+                    focused_regressions=("core=" + self.core, "core=" + selected,
+                                         "cli=" + self.cli, "network=" + self.network),
                     environment=self.env, lock_fds=())
         self.assertEqual([call.args[0] for call in run.call_args_list],
-                         ["/copies/config", "/copies/core", "/copies/cli"])
+                         ["/copies/config", "/copies/core", "/copies/core", "/copies/cli"])
         self.assertEqual(compile.call_args.kwargs["harnesses"], ("config", "core", "network", "cli"))
         self.assertEqual(failed.exception.failures, ("/copies/core failed", "/copies/cli failed"))
-        self.assertEqual([call.kwargs for call in run.call_args_list], [{}, {}, {"batch": True}])
+        self.assertEqual([call.kwargs for call in run.call_args_list], [{}, {}, {}, {"batch": True}])
         network.assert_not_called()
 
     def test_configuration_focus_is_not_duplicated_and_network_receives_exact_focus(self):
@@ -1859,6 +1956,10 @@ class NativeCliBatchTests(unittest.TestCase):
         harness.write_text(f"#!{sys.executable}\n" +
             "import json,os,sys,time\nfrom pathlib import Path\n"
             "settings=json.loads(Path('settings.json').read_text())\n"
+            "if settings.get('create_fixture'):\n"
+            " phase=Path('listing' if '--list' in sys.argv else 'execution')\n"
+            " phase.mkdir(mode=0o777)\n"
+            " os.close(os.open(phase/'owned-lock',os.O_CREAT|os.O_WRONLY,0o666))\n"
             "row={'args':sys.argv[1:],'cwd':os.getcwd(),'marker':os.getenv('CLI_BATCH_TEST_MARKER')}\n"
             "if os.getenv('CLI_BATCH_TEST_FD'):\n row['fd_size']=os.fstat(int(os.environ['CLI_BATCH_TEST_FD'])).st_size\n"
             "with Path('calls.jsonl').open('a') as f:f.write(json.dumps(row)+'\\n')\n"
@@ -1899,6 +2000,24 @@ class NativeCliBatchTests(unittest.TestCase):
             self.assertTrue(all(row["cwd"] == str(root) and row["marker"] == "present" and row["fd_size"] == 10 for row in calls))
             self.assertIn("passed first group (2 tests in CLI batch)", output)
             self.assertIn("passed last group (1 tests in CLI batch)", output)
+
+    def test_serial_and_batch_children_create_private_fixtures_with_permissive_parent_umask(self):
+        for batch in (False, True):
+            with self.subTest(batch=batch), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                (root / "settings.json").write_text(json.dumps({"create_fixture": True,
+                    "stdout": "running 1 test\ntest first ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s\n"}))
+                harness = self.harness(root)
+                original_umask = os.umask(0o002)
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        gate.run_stages(harness, root, dict(os.environ), (("fixture", ("first",)),), (), batch=batch)
+                    self.assertEqual(os.umask(0o002), 0o002)
+                finally:
+                    os.umask(original_umask)
+                for phase in ("listing", "execution"):
+                    self.assertEqual(stat.S_IMODE((root / phase).stat().st_mode), 0o700)
+                    self.assertEqual(stat.S_IMODE((root / phase / "owned-lock").stat().st_mode), 0o600)
 
     def test_empty_duplicate_or_missing_selection_cannot_execute_unselected_tests(self):
         for stages in ((), (("empty", ()),), (("duplicate", ("first", "first")),)):
@@ -3006,6 +3125,49 @@ class CargoQuietBuildProgressTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
 
+    def test_every_cargo_phase_creates_private_outputs_with_permissive_parent_umask(self):
+        real_popen = subprocess.Popen
+        phases = (
+            (lambda env: gate.check_test_harnesses(Path("/frozen"), env, harnesses=("config",)),
+             [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
+            (lambda env: gate.compile_test_harnesses(Path("/frozen"), env, harnesses=("config",)),
+             [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
+            (lambda env: gate.compile_network_binaries(Path("/frozen"), env, ()),
+             [CargoBuildProgressTests.event(name, "bin", test=False) for name in ("iroha3d", "iroha", "iroha3d_taira")]),
+        )
+        for operation, events in phases:
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                target = Path(temporary).resolve()
+                env = {"CARGO": "/unused", "CARGO_TARGET_DIR": str(target)}
+                source = ("import os; "
+                          f"os.mkdir({str(target / 'debug')!r}, 0o777); "
+                          f"os.close(os.open({str(target / 'debug/.cargo-lock')!r}, os.O_CREAT|os.O_WRONLY, 0o666)); "
+                          f"os.close(os.open({str(target / 'debug/program')!r}, os.O_CREAT|os.O_WRONLY, 0o777)); "
+                          f"print({chr(10).join(json.dumps(event) for event in events)!r})")
+
+                def cargo_child(_command, **kwargs):
+                    return real_popen([sys.executable, "-c", source], **kwargs)
+
+                original_umask = os.umask(0o002)
+                try:
+                    with patch.object(gate.subprocess, "Popen", side_effect=cargo_child), \
+                         patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: rows), \
+                         contextlib.redirect_stdout(io.StringIO()):
+                        operation(env)
+                    self.assertEqual(os.umask(0o002), 0o002)
+                finally:
+                    os.umask(original_umask)
+                self.assertEqual(stat.S_IMODE((target / "debug").stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE((target / "debug/.cargo-lock").stat().st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE((target / "debug/program").stat().st_mode), 0o700)
+                with gate.native_artifact_guard(Path("/frozen"), target, env):
+                    pass
+                (target / "debug/.cargo-lock").chmod(0o664)
+                with self.assertRaisesRegex(gate.CheckError, "unsafe native Cargo profile lock"):
+                    with gate.native_artifact_guard(Path("/frozen"), target, env):
+                        self.fail("unsafe existing lock was admitted")
+                self.assertEqual(stat.S_IMODE((target / "debug/.cargo-lock").stat().st_mode), 0o664)
+
     def test_quiet_real_children_report_before_output_and_preserve_all_phase_outcomes(self):
         real_popen = subprocess.Popen
         phases = (
@@ -3413,6 +3575,26 @@ class NativeArtifactIsolationTests(unittest.TestCase):
 
     def isolate(self, rows):
         return gate.isolate_native_artifacts(self.source, self.env, rows)
+
+    def test_cargo_publication_pair_is_copied_under_lock_without_changing_aliases(self):
+        import taira_cargo_artifact as cargo
+        executable, row, _ = self.artifact()
+        deps = executable.parent / 'deps'; deps.mkdir()
+        alias = deps / (executable.name + '-0123456789abcdef')
+        os.link(executable, alias)
+        before = self.contract._open_anchored_regular
+        def guarded(*args, **kwargs):
+            self.assert_profile_locked()
+            return before(*args, **kwargs)
+        with patch.object(self.contract, '_open_anchored_regular', side_effect=guarded):
+            copied = self.isolate({'iroha': row})
+        destination = Path(copied['iroha'])
+        self.assertEqual(destination.read_bytes(), executable.read_bytes())
+        self.assertEqual(destination.stat().st_nlink, 1)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o500)
+        self.assertEqual(executable.stat().st_nlink, 2)
+        self.assertEqual(executable.stat().st_ino, alias.stat().st_ino)
+        self.assert_profile_unlocked()
 
     def test_real_profile_lock_covers_validation_and_copy_then_releases(self):
         executable, row, _ = self.artifact()
@@ -4134,6 +4316,32 @@ class PureFsmGateTests(unittest.TestCase):
         self.target = Path(self.directory.name).resolve()
         self.env = {"RUSTC": "/pinned/rustc", "CARGO_TARGET_DIR": str(self.target)}
 
+    def test_standalone_compile_list_and_execution_use_private_child_umask(self):
+        real_run = subprocess.run
+        outputs = ("", "one: test\n", "test one ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n")
+        calls = []
+
+        def child(command, **kwargs):
+            index = len(calls)
+            calls.append(command)
+            directory = self.target / f"child-{index}"
+            source = (f"import os; os.mkdir({str(directory)!r},0o777); "
+                      f"os.close(os.open({str(directory / 'owned-lock')!r},os.O_CREAT|os.O_WRONLY,0o666)); "
+                      f"print({outputs[index]!r},end='')")
+            return real_run([sys.executable, "-c", source], **kwargs)
+
+        original_umask = os.umask(0o002)
+        try:
+            with patch.object(gate.subprocess, "run", side_effect=child), contextlib.redirect_stdout(io.StringIO()):
+                gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+            self.assertEqual(os.umask(0o002), 0o002)
+        finally:
+            os.umask(original_umask)
+        self.assertEqual(len(calls), 3)
+        for index in range(3):
+            self.assertEqual(stat.S_IMODE((self.target / f"child-{index}").stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((self.target / f"child-{index}/owned-lock").stat().st_mode), 0o600)
+
     @staticmethod
     def results(output=None, code=0):
         return [subprocess.CompletedProcess([], 0, "", ""),
@@ -4156,6 +4364,38 @@ class PureFsmGateTests(unittest.TestCase):
             self.assertEqual(call.kwargs["cwd"], "/")
         self.assertIn("pure FSM PASS: 2 listed, 2 passed, 0 ignored", output.getvalue())
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_standalone_rustc_uses_exact_coordinated_native_linker_pair(self):
+        for flags in (
+            {"RUSTFLAGS": "-Clinker=/fixed/clang -Clink-arg=-fuse-ld=/fixed/ld.lld"},
+            {"CARGO_ENCODED_RUSTFLAGS": "-Clinker=/Xcode Beta.app/clang\x1f-Clink-arg=-fuse-ld=/Xcode Beta.app/ld"},
+        ):
+            expected = (flags["RUSTFLAGS"].split() if "RUSTFLAGS" in flags else
+                        flags["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"))
+            with self.subTest(flags=flags), patch.object(gate.subprocess, "run", side_effect=self.results()) as run, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                gate.run_pure_fsm_checks(Path("/frozen"), self.env | flags, (77, 88))
+            self.assertEqual(run.call_args_list[0].args[0][:5], ["/pinned/rustc", *expected, "--edition=2024", "--test"])
+            self.assertEqual(run.call_args_list[0].kwargs["env"], self.env | flags)
+            self.assertEqual(run.call_args_list[0].kwargs["pass_fds"], (77, 88))
+            self.assertNotIn(expected[0], run.call_args_list[1].args[0])
+            self.assertNotIn(expected[0], run.call_args_list[2].args[0])
+
+    def test_standalone_rustc_rejects_extra_ambiguous_or_relative_flags_before_compilation(self):
+        pair = "-Clinker=/fixed/clang\x1f-Clink-arg=-fuse-ld=/fixed/ld"
+        for flags in (
+            {"CARGO_ENCODED_RUSTFLAGS": pair, "RUSTFLAGS": ""},
+            {"CARGO_ENCODED_RUSTFLAGS": pair + "\x1f--cfg=unreviewed"},
+            {"RUSTFLAGS": "-Clinker=/fixed/clang"},
+            {"CARGO_ENCODED_RUSTFLAGS": pair.replace("/fixed/clang", "relative-clang")},
+            {"CARGO_ENCODED_RUSTFLAGS": pair.replace("/fixed/ld", "/fixed/../ld")},
+            {"CARGO_ENCODED_RUSTFLAGS": "--cfg=unreviewed\x1f-Clink-arg=-fuse-ld=/fixed/ld"},
+            {"CARGO_ENCODED_RUSTFLAGS": pair.replace("/fixed/ld", "/fixed/ld\n")},
+        ):
+            with self.subTest(flags=flags), patch.object(gate.subprocess, "run") as run, \
+                 self.assertRaises(gate.CheckError):
+                gate.run_pure_fsm_checks(Path("/frozen"), self.env | flags, ())
+            run.assert_not_called()
 
     def test_empty_duplicate_or_malformed_census_never_executes_suite(self):
         for listing in ("", "one: test\none: test\n", "one: test\nother: benchmark\n"):

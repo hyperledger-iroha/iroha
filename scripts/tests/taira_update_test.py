@@ -33,6 +33,7 @@ ROOT = Path(renderer.__file__).resolve().parents[1]
 runner.ROOT = ROOT
 GUEST_FILE = SCRIPTS / 'taira_update_guest.py'
 OPERATION = 'update-' + '1' * 32
+CAPACITY_SOURCE = (SCRIPTS / 'taira_disk_capacity.py').read_bytes()
 
 
 def fresh_guest():
@@ -44,6 +45,7 @@ def fresh_guest():
 
 def deployment():
     return {'schema':'taira.runtime-deployment.v1', 'guest_ssh':{'argv':[], 'pins':[]},
+        'backing_ssh':{'argv':[], 'pins':[]}, 'backing_path':'/approved/mac/guest',
         'runtime_root':'/private/runtime/taira', 'state_root':'/var/lib/taira',
         'config_root':'/srv/taira', 'config_release':'a'*40,
         'genesis_manifest':'/private/runtime/taira/genesis/genesis.json',
@@ -137,6 +139,16 @@ def plan_for(build=None, prior=None, value=None, failed_start=None):
     guest=fresh_guest()
     return make_plan_with_supervisor(build, deployment() if value is None else value, prior, guest,
                             OPERATION, failed_start)
+
+
+def admission_for(plan, phase='prepare', *, inspect=None):
+    observer = fresh_guest()
+    capacity = observer.load_capacity(plan, CAPACITY_SOURCE)
+    capacity['inspect_filesystem'] = inspect or (lambda path: {
+        'device': 1, 'anchor': str(path), 'fragment_bytes': 4096,
+        'available_bytes': 32 * 1024**3, 'available_inodes': 100000})
+    with patch.object(observer, 'load_capacity', return_value=capacity):
+        return observer.storage_capacity(plan, CAPACITY_SOURCE, phase)
 
 
 def failed_fixture(value=None, prior=None):
@@ -451,17 +463,17 @@ class CoordinatorTests(unittest.TestCase):
                 fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 with patch.object(guest,'stamp',side_effect=root_stamp), \
                      patch.object(guest.os,'fstat',side_effect=root_stat),patch.object(guest,'apply') as apply:
-                    with self.assertRaises(BlockingIOError):guest.apply_locked(plan)
+                    with self.assertRaises(BlockingIOError):guest.apply_locked(plan, CAPACITY_SOURCE)
                     apply.assert_not_called()
             finally:os.close(held)
             alias=root/'shared-lock';os.link(path,alias)
             with patch.object(guest,'stamp',side_effect=root_stamp), \
                  patch.object(guest.os,'fstat',side_effect=root_stat),patch.object(guest,'apply') as apply:
-                with self.assertRaisesRegex(RuntimeError,'invalid guest deployment lock'):guest.apply_locked(plan)
+                with self.assertRaisesRegex(RuntimeError,'invalid guest deployment lock'):guest.apply_locked(plan, CAPACITY_SOURCE)
                 apply.assert_not_called()
                 alias.unlink()
-                guest.apply_locked(plan)
-                apply.assert_called_once_with(plan)
+                guest.apply_locked(plan, CAPACITY_SOURCE)
+                apply.assert_called_once_with(plan, CAPACITY_SOURCE)
     def test_unit_update_preserves_complete_custody_and_changes_only_daemon_path(self):
         for role in guest.ROLES:
             before = installed_unit(role)
@@ -506,15 +518,17 @@ class CoordinatorTests(unittest.TestCase):
             self.assertNotIn('capture_output', kwargs)
 
     def test_transfer_creates_release_once_then_adds_same_revision_cli(self):
-        first = runner.transfer_code('iroha3d_taira', True, plan_for())
-        second = runner.transfer_code('iroha', False, plan_for())
+        plan = plan_for()
+        admission = admission_for(plan)
+        first = runner.transfer_code('iroha3d_taira', True, plan, admission)
+        second = runner.transfer_code('iroha', False, plan, admission)
         self.assertIn('if True:', first)
         self.assertIn('if False:', second)
         self.assertIn("bins/'iroha'", second)
         compile(first, '<native-transfer-daemon>', 'exec')
         compile(second, '<native-transfer-cli>', 'exec')
         with self.assertRaises(RuntimeError):
-            runner.transfer_code('../config', False, plan_for())
+            runner.transfer_code('../config', False, plan, admission)
         self.assertIn("release=base/" + repr(runner.release_name(plan_for())), first)
 
 
@@ -1069,6 +1083,13 @@ class CoordinatorTests(unittest.TestCase):
             stack.enter_context(patch.object(guest.os, 'open', side_effect=lambda path, flags, *a:
                                             original_open(fake if path in (guest.DAEMON, guest.CLI, guest.KAGAMI) else path, flags, *a)))
             stack.enter_context(patch.object(guest, 'sync'))
+            capacity_calls = [0]
+            def capacity(*args):
+                capacity_calls[0] += 1
+                if failure == 'capacity-before-stop' and capacity_calls[0] == 2:
+                    raise RuntimeError('guest capacity exhausted before stopping services')
+                return {'passed': True}
+            stack.enter_context(patch.object(guest, 'storage_capacity', side_effect=capacity))
             stack.enter_context(patch.object(guest, 'write_new'))
             def record(name, value):
                 if failure == 'failure-record' and name == 'failure.json':
@@ -1173,10 +1194,18 @@ class CoordinatorTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 if failure:
                     with self.assertRaises(OSError if failure == 'failure-record' else RuntimeError):
-                        guest.apply(plan)
+                        guest.apply(plan, CAPACITY_SOURCE)
                 else:
-                    guest.apply(plan)
+                    guest.apply(plan, CAPACITY_SOURCE)
         return events, records, units, plan
+
+    def test_capacity_is_rechecked_before_any_supervisor_or_validator_stop(self):
+        events, records, _, _ = self.simulate('capacity-before-stop')
+        self.assertIn('capacity-before-apply.json', records)
+        self.assertNotIn('capacity-before-stop.json', records)
+        for event in ('supervisor-capture', 'supervisor-pause', 'stop-all', 'start'):
+            self.assertNotIn(event, events)
+        self.assertFalse(any(event.startswith('install-') for event in events))
 
     def test_full_cohort_is_stopped_before_any_unit_replacement_and_readbacks_precede_success(self):
         events, records, _, _ = self.simulate()
@@ -1353,7 +1382,8 @@ class CoordinatorTests(unittest.TestCase):
         value=deployment()
         with patch.object(runner.retry,'validate_ssh',return_value=['fixed']) as ssh:
             self.assertIs(runner.validate_deployment(value),value)
-            ssh.assert_called_once_with(value['guest_ssh'])
+            self.assertEqual([call.args[0] for call in ssh.call_args_list],
+                             [value['guest_ssh'], value['backing_ssh']])
             for key,bad in [('replay_floor',0),('public_origin','https://test.example/'),
                             ('roles',['one']),('ports',[8080]*4),('private_key','forbidden')]:
                 changed=copy.deepcopy(value);changed[key]=bad
@@ -1365,13 +1395,13 @@ class CoordinatorTests(unittest.TestCase):
         for operation in ['update-'+'1'*32,'update-'+'2'*32]:
             value=deployment()
             original=copy.deepcopy(value)
-            plan={'deployment':value,'commit':commit,'operation':operation}
+            plan=dict(plan_for(value=value), commit=commit, operation=operation)
             local_guest=fresh_guest();local_guest.configure(plan)
             expected=value['runtime_root']+'/release-'+commit+'-'+operation+'/bin/iroha3d_taira'
             paths.append(expected)
             self.assertEqual(str(local_guest.DAEMON),expected)
             self.assertEqual(str(local_guest.CLI),str(Path(expected).with_name('iroha')))
-            transfer=runner.transfer_code('iroha3d_taira',True,plan)
+            transfer=runner.transfer_code('iroha3d_taira',True,plan,admission_for(plan))
             self.assertIn('release=base/'+repr(Path(expected).parents[1].name),transfer)
             self.assertIn('release.mkdir(mode=0o700)',transfer)
             self.assertIn('os.O_EXCL|os.O_NOFOLLOW',transfer)
@@ -2188,14 +2218,14 @@ class KagamiArtifactAdmissionTests(unittest.TestCase):
 
     def test_kagami_transfer_is_exact_release_path_and_native_stream(self):
         plan = plan_for()
-        tree = ast.parse(runner.transfer_code('kagami', False, plan))
+        tree = ast.parse(runner.transfer_code('kagami', False, plan, admission_for(plan)))
         code = ast.unparse(tree)
         self.assertIn("bins / 'kagami'", code)
         self.assertIn('os.O_EXCL | os.O_NOFOLLOW', code)
         self.assertIn("os.execv('/bin/cat', ['/bin/cat'])", code)
         self.assertNotIn('read_bytes', code)
         self.assertEqual(str(guest.KAGAMI), str(guest.DAEMON.with_name('kagami')))
-        with self.assertRaises(RuntimeError): runner.transfer_code('../kagami', False, plan)
+        with self.assertRaises(RuntimeError): runner.transfer_code('../kagami', False, plan, admission_for(plan))
 
 
 class EpochSupervisorReadinessTests(unittest.TestCase):
@@ -2452,13 +2482,13 @@ class EpochSupervisorTransitionTests(unittest.TestCase):
                 fd = os.open(supervisor/'.deployment.lock', os.O_RDWR|os.O_CREAT, 0o600)
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX|fcntl.LOCK_NB)
-                    with self.assertRaises(BlockingIOError): guest.apply_locked(plan)
+                    with self.assertRaises(BlockingIOError): guest.apply_locked(plan, CAPACITY_SOURCE)
                 finally:
                     os.close(fd)
                 marker = supervisor/'.reset-owner.json'
                 marker.symlink_to(supervisor/'missing')
                 with self.assertRaisesRegex(RuntimeError, 'retained reset owner'):
-                    guest.apply_locked(plan)
+                    guest.apply_locked(plan, CAPACITY_SOURCE)
                 self.assertTrue(marker.is_symlink())
                 apply.assert_not_called()
                 self.assertIsNone(guest.DEPLOYMENT_LOCK_FD)
@@ -2534,6 +2564,298 @@ class ArtifactPreparationPhaseTests(unittest.TestCase):
                 kagami.unlink()
                 with self.assertRaises(FileNotFoundError): guest.verify_prepared_artifacts(plan)
                 self.assertFalse(kagami.exists())
+
+
+class StorageAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        self.plan = plan_for()
+
+    @staticmethod
+    def filesystem(path, *, device=1, free=32 * 1024**3):
+        return dict(device=device, anchor=str(path), fragment_bytes=4096,
+                    available_bytes=free, available_inodes=100000)
+
+    def test_backing_owner_and_path_are_required_and_both_routes_are_pinned(self):
+        for key in ('backing_ssh', 'backing_path'):
+            value = deployment()
+            del value[key]
+            with self.subTest(missing=key), patch.object(runner.retry, 'validate_ssh') as ssh:
+                with self.assertRaisesRegex(RuntimeError, 'deployment fields differ'):
+                    runner.validate_deployment(value)
+                ssh.assert_not_called()
+        for path in ('relative', '/approved/../other', '/approved/guest\n'):
+            value = dict(deployment(), backing_path=path)
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, 'runtime path'):
+                runner.validate_deployment(value)
+        value = deployment()
+        with patch.object(runner.retry, 'validate_ssh', side_effect=[['guest'], RuntimeError('backing pin changed')]) as ssh:
+            with self.assertRaisesRegex(RuntimeError, 'backing pin changed'):
+                runner.validate_deployment(value)
+        self.assertEqual(ssh.call_args.args, (value['backing_ssh'],))
+
+    def test_actual_artifacts_and_each_guest_filesystem_are_charged_once(self):
+        prepared = admission_for(self.plan)
+        rows = prepared['guest_plan']['allocations']
+        self.assertEqual(sum(row['label'] == 'guest filesystem headroom' for row in rows), 1)
+        for artifact in self.plan['artifacts']:
+            row = next(row for row in rows if row['label'] == 'candidate artifact ' + artifact['name'])
+            self.assertEqual(row['bytes'], artifact['size'] + 4095 + 4096)
+        shared = admission_for(self.plan, 'apply')
+        self.assertEqual(sum(row['label'] == 'guest filesystem headroom'
+                             for row in shared['guest_plan']['allocations']), 1)
+        self.assertFalse(any(row['label'].startswith('candidate artifact')
+                             for row in shared['guest_plan']['allocations']))
+        paths = (self.plan['deployment']['runtime_root'], '/var/lib/taira-epoch-supervisor',
+                 '/etc/systemd/system', self.plan['deployment']['state_root'])
+        separate = admission_for(self.plan, 'apply', inspect=lambda path:
+                                 self.filesystem(path, device=paths.index(str(path)) + 1))
+        self.assertEqual(len(separate['guest_capacity']['filesystems']), 4)
+        self.assertEqual(sum(row['label'] == 'guest filesystem headroom'
+                             for row in separate['guest_plan']['allocations']), 4)
+
+    def test_full_state_filesystem_and_inode_exhaustion_refuse_despite_free_runtime(self):
+        def inspect(path):
+            state = str(path) == self.plan['deployment']['state_root']
+            return self.filesystem(path, device=2 if state else 1, free=113 * 1024**2 if state else 32 * 1024**3)
+        with self.assertRaisesRegex(RuntimeError, 'insufficient guest capacity before apply'):
+            admission_for(self.plan, 'apply', inspect=inspect)
+        with self.assertRaisesRegex(RuntimeError, 'inodes'):
+            admission_for(self.plan, inspect=lambda path:
+                          dict(self.filesystem(path), available_inodes=0))
+
+    def test_changed_capacity_source_and_filesystem_are_rejected(self):
+        observer = fresh_guest()
+        with self.assertRaisesRegex(RuntimeError, 'capacity checker changed'):
+            observer.storage_capacity(self.plan, CAPACITY_SOURCE + b'\n', 'prepare')
+        calls = [0]
+        def inspect(path):
+            calls[0] += 1
+            return self.filesystem(path, device=1 if calls[0] == 1 else 2)
+        with self.assertRaisesRegex(RuntimeError, 'filesystems changed'):
+            admission_for(self.plan, inspect=inspect)
+
+    def test_mac_admission_precedes_guest_and_uses_its_full_measured_allocation(self):
+        admission = admission_for(self.plan)
+        calls = []
+        def remote(route, payload, output, name):
+            calls.append((route, payload, name))
+            if name.startswith('guest'):
+                return admission
+            self.assertIn(b'sys.platform == "darwin"', payload)
+            return {'schema': 'taira.disk-capacity.result.v1', 'passed': True, 'errors': []}
+        with patch.object(runner, 'storage_remote', side_effect=remote):
+            self.assertEqual(runner.admit_storage(self.plan, 'prepare', Path('/unused')), admission)
+        self.assertEqual([row[2] for row in calls],
+                         ['backing-capacity-before-prepare', 'guest-capacity-prepare', 'backing-capacity-prepare'])
+        self.assertIs(calls[0][0], self.plan['deployment']['backing_ssh'])
+        self.assertIs(calls[1][0], self.plan['deployment']['guest_ssh'])
+        required = sum(row['bytes'] for row in admission['guest_plan']['allocations'])
+        self.assertIn(str(required).encode(), calls[-1][1])
+
+    def test_full_mac_or_guest_stops_before_next_storage_phase(self):
+        for failed_phase in ('backing-capacity-before-prepare', 'guest-capacity-prepare', 'backing-capacity-prepare'):
+            calls = []
+            def remote(route, payload, output, name):
+                calls.append(name)
+                if name == failed_phase:
+                    if name.startswith('guest'):
+                        raise RuntimeError('insufficient guest capacity')
+                    return {'schema': 'taira.disk-capacity.result.v1', 'passed': False,
+                            'errors': ['113 MiB available']}
+                return (admission_for(self.plan) if name.startswith('guest') else
+                        {'schema': 'taira.disk-capacity.result.v1', 'passed': True, 'errors': []})
+            with self.subTest(phase=failed_phase), patch.object(runner, 'storage_remote', side_effect=remote):
+                with self.assertRaisesRegex(RuntimeError, 'capacity'):
+                    runner.admit_storage(self.plan, 'prepare', Path('/unused'))
+            self.assertEqual(calls[-1], failed_phase)
+            if failed_phase.startswith('backing-capacity-before'):
+                self.assertEqual(len(calls), 1)
+
+    def test_preparation_creates_only_missing_coordination_root_before_locked_probe(self):
+        observer = fresh_guest()
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory).resolve() / 'supervisor'
+            events = []
+            @__import__('contextlib').contextmanager
+            def held(plan):
+                self.assertEqual(plan, self.plan)
+                self.assertTrue(state.is_dir())
+                self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o700)
+                events.append('locked')
+                yield
+                events.append('unlocked')
+            def probe(*args):
+                self.assertEqual(events, ['locked'])
+                return {'fixture': True}
+            with patch.object(observer, 'SUPERVISOR_STATE_ROOT', state), \
+                 patch.object(observer, 'stamp') as stamp, \
+                 patch.object(observer, 'deployment_locks', held), \
+                 patch.object(observer, 'storage_capacity', side_effect=probe), redirect_stdout(io.StringIO()):
+                observer.storage_capacity_locked(dict(plan=self.plan, phase='prepare',
+                    capacity_source=base64.b64encode(CAPACITY_SOURCE).decode()))
+            self.assertEqual(events, ['locked', 'unlocked'])
+            self.assertEqual(stamp.call_args_list, [unittest.mock.call(path, True) for path in state.parents])
+            self.assertEqual(list(state.iterdir()), [])
+
+    def test_storage_refusal_prevents_apply_guest_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            build, _ = fixture()
+            raw_build = json.dumps(build).encode()
+            build_path = root / 'build.json'
+            build_path.write_bytes(raw_build)
+            plan = dict(self.plan, build_result_path=str(build_path),
+                        build_result_sha256=runner.sha(raw_build))
+            plan_path = root / 'plan.json'
+            raw_plan = json.dumps(plan).encode()
+            plan_path.write_bytes(raw_plan)
+            args = SimpleNamespace(plan=plan_path, plan_sha256=runner.sha(raw_plan),
+                                   output=root / 'attempt')
+            with patch.object(runner, 'retained_artifacts'), \
+                 patch.object(runner.retry, 'validate_ssh', return_value=['pinned']), \
+                 patch.object(runner, 'admit_storage', side_effect=RuntimeError('full Mac')) as admit, \
+                 patch.object(runner.subprocess, 'run') as dispatch, \
+                 patch.object(runner, 'verify_prepared_remote') as verify:
+                with self.assertRaisesRegex(RuntimeError, 'full Mac'):
+                    runner.apply_plan(args)
+            self.assertEqual(admit.call_args.args[1], 'apply')
+            dispatch.assert_not_called(); verify.assert_not_called()
+
+    def test_storage_refusal_prevents_artifact_transfer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            build, _ = fixture()
+            args = SimpleNamespace(operation=OPERATION, output=Path(directory) / 'attempt',
+                                   prepared_result=Path(directory) / 'build.json')
+            with patch.object(runner, 'retained_artifacts', return_value=[]), \
+                 patch.object(runner.retry, 'validate_ssh', return_value=['pinned']), \
+                 patch.object(runner, 'admit_storage', side_effect=RuntimeError('full Mac')) as admit, \
+                 patch.object(runner.subprocess, 'run') as transfer, \
+                 patch.object(runner, 'verify_prepared_remote') as verify:
+                with self.assertRaisesRegex(RuntimeError, 'full Mac'):
+                    runner.prepare_artifacts(args, deployment(), json.dumps(build).encode())
+            self.assertEqual(admit.call_args.args[1], 'prepare')
+            transfer.assert_not_called(); verify.assert_not_called()
+
+    def test_apply_capacity_refusal_precedes_attempt_and_runtime_mutations(self):
+        observer = fresh_guest()
+        with patch.object(observer.os, 'geteuid', return_value=0), \
+             patch.object(observer, 'storage_capacity', side_effect=RuntimeError('full guest')), \
+             patch.object(observer, 'retained_attempt') as retained, \
+             patch.object(observer, 'write_new') as write, \
+             patch.object(observer, 'supervisor_pause') as pause, \
+             patch.object(observer, 'command') as native:
+            with self.assertRaisesRegex(RuntimeError, 'full guest'):
+                observer.apply(self.plan, CAPACITY_SOURCE)
+        retained.assert_not_called(); write.assert_not_called(); pause.assert_not_called(); native.assert_not_called()
+
+    def test_transfer_rechecks_capacity_under_lock_before_any_artifact_write(self):
+        admission = admission_for(self.plan)
+        tree = ast.parse(runner.transfer_code('iroha', False, self.plan, admission))
+        source = ast.unparse(tree)
+        self.assertLess(source.index('fcntl.flock('), source.index("capacity['evaluate']("))
+        self.assertLess(source.index("capacity['evaluate']("), source.index('release = base'))
+        # Execute the real generated capacity statements with the actual checker,
+        # forcing statvfs to report exhaustion before any transfer statements run.
+        begin = next(index for index, item in enumerate(tree.body)
+                     if isinstance(item, ast.Assign) and isinstance(item.targets[0], ast.Name)
+                     and item.targets[0].id == 'capacity_source')
+        end = next(index for index, item in enumerate(tree.body)
+                   if isinstance(item, ast.Expr) and isinstance(item.value, ast.Call)
+                   and ast.unparse(item.value.func) == 'os.set_inheritable')
+        probe = ast.Module(body=tree.body[begin:end], type_ignores=[])
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory).resolve()
+            local_plan = copy.deepcopy(self.plan)
+            local_plan['deployment']['runtime_root'] = str(local)
+            local_admission = admission_for(local_plan, inspect=lambda path:
+                dict(self.filesystem(path), device=local.stat().st_dev))
+            local_tree = ast.parse(runner.transfer_code('iroha', False, local_plan, local_admission))
+            probe.body = local_tree.body[begin:end]
+            exhausted = SimpleNamespace(f_frsize=4096, f_bsize=4096, f_bavail=0, f_favail=100000)
+            with patch.object(os, 'fstatvfs', return_value=exhausted):
+                with self.assertRaisesRegex(AssertionError, 'insufficient guest capacity before artifact transfer'):
+                    exec(compile(probe, '<actual-transfer-capacity>', 'exec'),
+                         {'base64': base64, 'hashlib': __import__('hashlib'), 'Path': Path})
+        # Only the completed daemon allocation is removed on the second transfer.
+        self.assertNotIn("'candidate artifact iroha3d_taira'", source)
+        self.assertIn("'candidate artifact iroha'", source)
+        self.assertIn("'candidate artifact kagami'", source)
+
+
+class BackingRecordAuthoringTests(unittest.TestCase):
+    def authoring_inputs(self, directory):
+        root = Path(directory).resolve()
+        value = deployment()
+        route = value.pop('backing_ssh')
+        backing = value.pop('backing_path')
+        source = root / 'source.json'
+        # Preserve original whitespace too, not just decoded semantic identity.
+        raw = (json.dumps(value, indent=2) + '\n').encode()
+        source.write_bytes(raw)
+        route_path = root / 'route.json'
+        route_path.write_text(json.dumps(route))
+        return SimpleNamespace(deployment=source, backing_route=route_path,
+                               backing_path=backing, output=root / 'bound.json'), raw, value, route
+
+    def test_local_authoring_preserves_source_and_publishes_only_validated_current_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, raw, value, route = self.authoring_inputs(directory)
+            output = io.StringIO()
+            with patch.object(runner.retry, 'validate_ssh') as pins, \
+                 patch.object(runner.subprocess, 'run') as remote, redirect_stdout(output):
+                runner.bind_backing_storage(args)
+            self.assertEqual(pins.call_args_list, [unittest.mock.call(value['guest_ssh']),
+                                                   unittest.mock.call(route)])
+            remote.assert_not_called()
+            self.assertEqual(args.deployment.read_bytes(), raw)
+            self.assertEqual(json.loads(args.output.read_bytes()), dict(value, backing_ssh=route,
+                                                                        backing_path=args.backing_path))
+            self.assertEqual(stat.S_IMODE(args.output.stat().st_mode), 0o600)
+            self.assertEqual(json.loads(output.getvalue()), {'deployment': str(args.output),
+                'source_sha256': runner.sha(raw), 'host_contacted': False, 'runtime_mutated': False})
+
+    def test_pin_failure_partial_binding_unknown_fields_and_overwrites_are_refused(self):
+        for mutation in ('pin', 'partial', 'bound', 'unknown', 'existing', 'source', 'symlink'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                args, raw, value, route = self.authoring_inputs(directory)
+                if mutation == 'partial': value['backing_path'] = args.backing_path
+                if mutation == 'bound': value.update(backing_path=args.backing_path, backing_ssh=route)
+                if mutation == 'unknown': value['surprise'] = True
+                if mutation in ('partial', 'bound', 'unknown'):
+                    raw = json.dumps(value).encode(); args.deployment.write_bytes(raw)
+                if mutation == 'existing': args.output.write_bytes(b'retained')
+                if mutation == 'source': args.output = args.deployment
+                if mutation == 'symlink': args.output.symlink_to(args.deployment)
+                before = args.output.read_bytes() if args.output.exists() else None
+                with patch.object(runner.retry, 'validate_ssh',
+                                  side_effect=RuntimeError('pin changed') if mutation == 'pin' else None), \
+                     patch.object(runner.subprocess, 'run') as remote:
+                    with self.assertRaises((RuntimeError, FileExistsError)):
+                        runner.bind_backing_storage(args)
+                remote.assert_not_called()
+                self.assertEqual(args.deployment.read_bytes(), raw)
+                if before is not None: self.assertEqual(args.output.read_bytes(), before)
+                else: self.assertFalse(args.output.exists())
+
+    def test_cli_dispatch_is_explicit_local_and_disallows_update_options(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args, _, _, _ = self.authoring_inputs(directory)
+            argv = ['taira_update.py', '--bind-backing-storage', '--deployment', str(args.deployment),
+                    '--backing-route', str(args.backing_route), '--backing-path', args.backing_path,
+                    '--output', str(args.output)]
+            with patch.object(sys, 'argv', argv), \
+                 patch.object(runner.subprocess, 'check_output', return_value='optimizations\n'), \
+                 patch.object(runner, 'bind_backing_storage') as author, \
+                 patch.object(runner.subprocess, 'run') as remote:
+                runner.main()
+            author.assert_called_once(); remote.assert_not_called()
+            for extra in (['--operation', OPERATION], ['--plan-only'], ['--prepare-artifacts'],
+                          ['--prepared-result', '/unused/build.json']):
+                with self.subTest(extra=extra), patch.object(sys, 'argv', argv + extra), \
+                     patch.object(runner, 'bind_backing_storage') as author:
+                    with self.assertRaisesRegex(RuntimeError, 'backing authoring requires only'):
+                        runner.main()
+                author.assert_not_called()
 
 
 if __name__ == '__main__':
