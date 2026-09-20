@@ -16,8 +16,8 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 676_880
-EXPECTED_ASSET_SHA256 = "7b6437bf611e7383b35224e0198c4f5d173b28c494e61134d70ce053dc22fc46"
+EXPECTED_ASSET_LENGTH = 677_727
+EXPECTED_ASSET_SHA256 = "0c379c9cba11d30b5d916f9f3a9671e964e75e0a78904768a02e82475febe03a"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {
@@ -48,11 +48,13 @@ MIGRATED_TESTS = {
 # The certified Fetch case now limits retries to changed queue cuts, retains
 # permanent rejection custody, and orders exact Decision cancellation. Cleanup
 # excludes admitted persistence; the timer region includes its external census.
+# Storage-only startup now retains the authenticated exact pending Apply comparison
+# and orders ledger/body recovery before opening its production owner.
 NEW_CASE_CONTRACT_COUNTS = {
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 181,
     "registry_remains_inert_and_scheduler_free": 89,
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": 98,
-    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
+    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 341,
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 312,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
@@ -63,7 +65,7 @@ MIGRATED_CASE_SHA256 = {
     "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "be7471d4e85fcfbbcadbae26edf7628c422d9ca60b2244a11041f089a79108c5",
     "registry_remains_inert_and_scheduler_free": "cf3a858cc7345c7663edfef709da6191758b48b881a93cd031c88d0b9878bc93",
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": "71ea3bb6e8824dc8151382fa4c18cfba4cc75c6093a15d5f6a849fd6a451236d",
-    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
+    "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "9819e8836f8893f55626f44ba4b6532c21d1a09aec4a6efcb39145f9165fcf14",
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "bda488863750adfa085b4a11b068ec66b7d4281868fbd0501ed6abcaaa7371b1",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "4119f60449e948da1e2add5f027060e7e17eb6877c8b58a8ebdae123c07ba745",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",

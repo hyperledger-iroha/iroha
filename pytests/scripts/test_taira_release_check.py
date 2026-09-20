@@ -32,6 +32,7 @@ from unittest.mock import MagicMock, patch
 # Four occupied-runtime and component-owned supervisor cleanup controls and two
 # candidate funding-policy admission controls are mandatory, together with two
 # content-bound journal/original-seed controls for metadata timestamp collisions.
+# The configured initial-catalog/network control also runs before CLI checks.
 # Linux additionally
 # selects OpenSSH, native worker identity and three Linux generation controls.
 EXPECTED_BEACON_NETWORK_TEST = (
@@ -40,8 +41,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -304,6 +305,18 @@ class BeaconGateTests(unittest.TestCase):
                         focused = gate.focused_regression_stages(scope, (harness + "=" + regression,))
                         self.assertEqual(tuple(focused), (harness,))
                         self.assertEqual([name for _, tests in focused[harness] for name in tests], [regression])
+
+    def test_initial_catalog_control_is_selected_once_before_cli_in_both_scopes(self):
+        name = "tests_runtime_handlers::configured_catalog_fixture_binds_initial_geometry_and_explicit_network"
+        startup = [leaf for _, names in gate.TORII_STARTUP_STAGES for leaf in names]
+        self.assertEqual(startup.count(name), 1)
+        for scope in gate.QUALIFICATION_SCOPES:
+            with self.subTest(scope=scope):
+                selected = gate.qualification_stages(scope)["torii-unit"]
+                self.assertEqual([leaf for _, names in selected for leaf in names].count(name), 1)
+                focused = gate.focused_regression_stages(scope, ("torii-unit=" + name,))
+                self.assertEqual(tuple(focused), ("torii-unit",))
+                self.assertEqual([leaf for _, names in focused["torii-unit"] for leaf in names], [name])
 
     def test_controller_beacon_authority_and_public_builder_controls_are_exact_in_both_scopes(self):
         required = (
@@ -905,7 +918,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "darwin": 'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse',
             "linux": 'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart',
         }
-        for platform, counts in (("darwin", (1033, 1211)), ("linux", (1038, 1216))):
+        for platform, counts in (("darwin", (1034, 1212)), ("linux", (1039, 1217))):
             spec = importlib.util.spec_from_file_location("platform_taira_release_check", gate.__file__)
             self.assertIsNotNone(spec)
             self.assertIsNotNone(spec.loader)

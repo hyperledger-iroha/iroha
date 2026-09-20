@@ -203,7 +203,7 @@ class TransferTests(unittest.TestCase):
 
     def test_same_tick_mutation_is_detected_by_descriptor_content_reread(self):
         path = self.root / "public"
-        path.write_bytes(b"original")
+        transfer.write_new(path, b"original", mode=0o600)
         with patch.object(transfer, "identity", return_value=(1,)):
             with self.assertRaisesRegex(transfer.TransferError, "changed during use"):
                 with transfer.pinned(path) as (fd, _, _):
@@ -240,7 +240,7 @@ def remote_entry(e, stream):
 '''
         path = self.root / "payload"
         raw = b"bounded payload\x00" * 100000
-        path.write_bytes(raw)
+        transfer.write_new(path, raw, mode=0o600)
         row = {"size": len(raw), "sha256": transfer.sha(raw)}
         retry = types.SimpleNamespace(validate_ssh=lambda route: [sys.executable, "-c", "unused"])
         # Existing strict SSH validation is reused in production; replace only
@@ -400,7 +400,8 @@ class SignedTransferIntegrationTests(unittest.TestCase):
         scripts = self.fixture.repo / "scripts"
         scripts.mkdir(mode=0o755)
         for name in transfer.CONTROLLERS:
-            (scripts / (name + ".py")).write_bytes((SCRIPTS / (name + ".py")).read_bytes())
+            transfer.write_new(scripts / (name + ".py"),
+                (SCRIPTS / (name + ".py")).read_bytes(), mode=0o644)
         self.fixture.git("add", "scripts")
         self.fixture.git("commit", "-m", "signed transfer controller closure")
         commit = self.fixture.git("rev-parse", "HEAD").decode().strip()

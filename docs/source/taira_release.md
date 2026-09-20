@@ -174,6 +174,10 @@ The native gate receives the same source, toolchain and explicit target director
 Both scopes also verify that idle governance sweeps create no execution fragment,
 while successful and failed due sweeps retain their effects and audit records.
 
+Both scopes first verify that fresh catalog fixtures authenticate their intended
+geometry during construction and retain their explicit network identity. A later
+runtime update cannot replace the original storage catalog.
+
 Both native qualification scopes require certified catalog and bootstrap parameter
 commit and recovery tests, plus rejection of changed parameters or mismatched
 runtime effects after staging. The four-validator catalog test separately proves

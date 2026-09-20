@@ -58,13 +58,7 @@ fn onboarding_readiness_payment_asset_mismatch_is_blocked_while_joining_state_is
     for tier in &mut policy.pricing {
         tier.base_price.asset_id = other_asset.clone();
     }
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("height>0"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(1).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut stx = block.transaction();
     stx.world_mut_for_testing()
@@ -143,13 +137,7 @@ fn onboarding_readiness_rejects_unknown_additional_permission() {
 }
 fn declare_onboarding_dpn_permissions_for_test(app: &SharedAppState) {
     let height = next_block_height(app);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("height>0"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);
     let mut stx = block.transaction();
     let world = stx.world_mut_for_testing();
@@ -692,13 +680,7 @@ fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
     let mut registry = FxCorridorPolicyRegistry::default();
     registry.upsert(policy);
     let height = next_block_height(app);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("height>0"),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
     let mut block = app.state.block(header);
     block
         .world

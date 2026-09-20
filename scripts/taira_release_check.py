@@ -665,7 +665,9 @@ DAEMON_STARTUP_STAGES = (("frozen startup policy before snapshot authentication 
 )),)
 DAEMON_STAGES += DAEMON_STARTUP_STAGES
 
-TORII_STARTUP_STAGES = (("HTTP admission waits for Queue startup reconciliation", (
+TORII_STARTUP_STAGES = (("configured initial catalog and explicit network identity", (
+    "tests_runtime_handlers::configured_catalog_fixture_binds_initial_geometry_and_explicit_network",
+)), ("HTTP admission waits for Queue startup reconciliation", (
     "tests_runtime_handlers::readiness_rejects_empty_queue_startup_reconciliation",
     "tests_runtime_handlers::readiness_rejects_closed_consensus_ingress",
 )), ("actual public MCP catalogue and response bounds", (

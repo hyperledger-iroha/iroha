@@ -1129,13 +1129,7 @@ async fn identifier_resolve_returns_bound_account() {
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
-    let header = BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        receipt.resolved_at_ms(),
-        0,
-    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1244,13 +1238,7 @@ async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
-    let header = BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        receipt.resolved_at_ms(),
-        0,
-    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1354,13 +1342,7 @@ async fn identifier_resolve_accepts_bfv_encrypted_input() {
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
-    let header = BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        receipt.resolved_at_ms(),
-        0,
-    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -1658,13 +1640,7 @@ async fn identifier_receipt_lookup_returns_persisted_claim() {
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
         .expect("claim receipt");
     let receipt_hash = receipt.payload.receipt_hash.to_string();
-    let header = BlockHeader::new(
-        nonzero!(1_u64),
-        None,
-        None,
-        receipt.resolved_at_ms(),
-        0,
-    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, receipt.resolved_at_ms(), 0);
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
     register_and_activate_identifier_policy_bundle(&authority, &mut tx, &policy, &program_policy);
@@ -2442,13 +2418,7 @@ async fn proof_retention_status_reports_counts() {
     let boundary_height = current_height.saturating_sub(grace);
     let fresh_height = current_height;
     {
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(1).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         let mut insert_record = |proof_hash: [u8; 32], verified_at_height: u64| -> ProofId {
