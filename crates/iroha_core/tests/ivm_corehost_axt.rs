@@ -5,8 +5,6 @@
 mod execution_output_test_support;
 use iroha_config::parameters::actual::NexusAxt as ActualAxtTiming;
 #[cfg(feature = "app_api")]
-use iroha_core::block::BlockBuilder;
-#[cfg(feature = "app_api")]
 use iroha_core::nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet};
 use iroha_core::{
     kura::Kura,
@@ -37,7 +35,7 @@ use iroha_data_model::{
 };
 #[allow(unused_imports)]
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-use iroha_primitives::{Quantity, time::TimeSource};
+use iroha_primitives::Quantity;
 use iroha_test_samples::ALICE_ID;
 use ivm::{
     IVM, IVMHost, PointerType, ProgramMetadata, VMError,
@@ -49,9 +47,7 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-#[cfg(feature = "app_api")]
-use std::collections::BTreeMap;
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use std::{num::NonZeroU64, sync::Arc};
 
 const FIXTURE_AUTHORITY_PUBLIC_KEY: &str =
     "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
@@ -278,6 +274,27 @@ fn install_replay_probe_policy(
     snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
     host.refresh_axt_policy_snapshot(&snapshot)
         .expect("replay probe policy should remain canonical");
+}
+// Keep the candidate overlay out of the reconstructed World fixture's stack frame.
+#[inline(never)]
+fn host_from_axt_candidate(authority: AccountId, state: &State, header: BlockHeader) -> CoreHost {
+    let scope = state.block(header);
+    let mut host = CoreHost::new(authority);
+    host.hydrate_axt_state(&scope)
+        .expect("the candidate scope should hydrate the committed AXT ledger");
+    host
+}
+fn run_axt_replay_component_test(test: fn()) {
+    // These component fixtures retain the source and rebuilt World together.
+    // Match the explicit stack budget used by State's reconstruction fixtures.
+    let worker = std::thread::Builder::new()
+        .name("axt-replay-component".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(test)
+        .expect("spawn the replay fixture with its explicit stack budget");
+    if let Err(payload) = worker.join() {
+        std::panic::resume_unwind(payload);
+    }
 }
 fn anchor_axt_test_header(state: &mut State, header: BlockHeader) {
     state.push_block_hash_for_testing(header.hash());
@@ -751,6 +768,13 @@ fn nexus_with_lane_catalog(
     use iroha_config::parameters::actual::LaneRoutingPolicy;
     use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata};
     use std::collections::BTreeSet;
+    let mut lanes = lane_catalog.lanes().to_vec();
+    if !lanes.iter().any(|lane| lane.id == LaneId::SINGLE) {
+        lanes.push(iroha_data_model::nexus::LaneConfig::default());
+    }
+    lanes.sort_by_key(|lane| lane.id);
+    let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(lane_catalog.lane_count(), lanes)
+        .expect("AXT fixtures retain the configured primary lane");
     let mut dataspace_ids: BTreeSet<DataSpaceId> = lane_catalog
         .lanes()
         .iter()
@@ -785,11 +809,34 @@ fn nexus_with_lane_catalog(
     let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
     iroha_config::parameters::actual::Nexus {
         lane_config,
+        configured_lane_catalog: lane_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         lane_catalog,
         dataspace_catalog,
         routing_policy,
         ..iroha_config::parameters::actual::Nexus::default()
     }
+}
+
+/// Finish fresh AXT fixture configuration before seeding its policy or replay records.
+fn configure_axt_state(
+    state: &mut State,
+    nexus: iroha_config::parameters::actual::Nexus,
+) -> Arc<Kura> {
+    assert_eq!(state.view().height(), 0);
+    assert_eq!(state.exact_durable_block_count().unwrap(), 0);
+    let chain_id = state.chain_id_ref().clone();
+    let network_id = *state.network_id_ref();
+    let world = std::mem::take(&mut state.world);
+    let (configured, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        world,
+        nexus,
+        LiveQueryStore::start_test(),
+        chain_id,
+        network_id,
+    );
+    *state = configured;
+    kura
 }
 #[test]
 fn axt_policy_snapshot_refreshes_current_slot() {
@@ -813,7 +860,7 @@ fn axt_policy_snapshot_refreshes_current_slot() {
         }],
     )
     .expect("slot refresh lane catalog");
-    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
+    configure_axt_state(&mut state, nexus_with_lane_catalog(lane_catalog));
     // Seed a matching hash/header pair so the synthetic state exposes an
     // authenticated, non-zero AXT slot.
     let slot_length_ms = state.view().nexus().axt.slot_length_ms.get();
@@ -1234,21 +1281,18 @@ fn axt_handle_rejects_clock_skew_above_config() {
     ));
 }
 #[test]
-fn axt_replay_ledger_persists_through_kura_replay() {
-    use iroha_core::block::{BlockBuilder, ValidBlock};
-    use iroha_crypto::HashOf;
-    use iroha_data_model::{
-        nexus::{
-            AssetHandleDraft as ModelAssetHandleDraft, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
-            AxtHandleFragment as ModelAxtHandleFragment, AxtHandleReplayKey,
-            AxtProofFragment as ModelAxtProofFragment, AxtTouchFragment as ModelAxtTouchFragment,
-            GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
-            HandleSubject as ModelHandleSubject, RemoteSpendIntent as ModelRemoteSpendIntent,
-            SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
-        },
-        transaction::TransactionEntrypoint,
+fn axt_replay_component_persists_ledger_through_canonical_kura_roundtrip() {
+    run_axt_replay_component_test(assert_axt_replay_through_canonical_kura_roundtrip);
+}
+fn assert_axt_replay_through_canonical_kura_roundtrip() {
+    use iroha_data_model::nexus::{
+        AssetHandleDraft as ModelAssetHandleDraft, AxtEnvelopeRecord as ModelAxtEnvelopeRecord,
+        AxtHandleFragment as ModelAxtHandleFragment, AxtHandleReplayKey,
+        AxtProofFragment as ModelAxtProofFragment, AxtTouchFragment as ModelAxtTouchFragment,
+        GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
+        HandleSubject as ModelHandleSubject, RemoteSpendIntent as ModelRemoteSpendIntent,
+        SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest,
     };
-    use iroha_model_base::peer::PeerId;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
     use std::collections::BTreeMap;
     let authority = fixture_authority();
@@ -1275,7 +1319,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-    *state.nexus.get_mut() = nexus.clone();
+    let kura = configure_axt_state(&mut state, nexus.clone());
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -1365,79 +1409,53 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         }],
         commit_height: 1,
     };
-    let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
-    let signer = checked_keypair();
-    let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
-    let mut base_block: iroha_data_model::block::SignedBlock =
-        BlockBuilder::new_with_time_source(Vec::new(), time_source)
-            .chain(0, None)
-            .sign(signer.private_key())
-            .unpack(|_| {})
-            .into();
-    let mut state_block = state.block(base_block.header());
-    // A live State without an authenticated header cannot publish a policy
-    // snapshot. The candidate block context supplies the exact consensus slot
-    // and permanent counter projection used by deterministic validation.
-    let deterministic_snapshot = state_block.axt_policy_snapshot();
+    // Record through the live AXT component before encoding its resulting
+    // envelope. This fixture tests storage/replay, not consensus finality.
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let mut source = state.block(header);
     {
-        let outputs = execution_output_test_support::structural_network_outputs(
-            &base_block,
-            &entry_hashes,
-            Vec::new(),
-        );
-        base_block.set_execution_outputs(
-            outputs,
-            1,
-            BTreeMap::new(),
-            Vec::new(),
-            deterministic_snapshot,
-            Default::default(),
-            Vec::new(),
-            &execution_output_test_support::structural_output_limits(),
-        )
+        let mut transaction = source.transaction();
+        transaction.current_lane_id = Some(lane);
+        transaction
+            .record_axt_envelope(envelope.clone())
+            .expect("record the exact live AXT envelope");
+        transaction.apply();
     }
-    .expect("empty validation block should advertise its deterministic AXT post-state");
-    let valid_block = ValidBlock::validate_unchecked(base_block, &mut state_block).unpack(|_| {});
-    let mut committed = valid_block.commit_unchecked().unpack(|_| {});
-    let mut replay_snapshot = committed
-        .as_ref()
-        .axt_policy_snapshot()
-        .cloned()
-        .expect("validated block should carry its deterministic AXT post-state");
-    let replay_policy = replay_snapshot
-        .entries
-        .iter_mut()
-        .find(|binding| binding.dsid == dsid)
-        .expect("replay dataspace policy should remain in the validated snapshot");
-    assert_eq!(replay_policy.policy.active_handle_era, handle_era);
-    assert_eq!(replay_policy.policy.next_handle_counter, handle_sub_nonce);
-    replay_policy.policy.next_handle_counter = handle_sub_nonce
-        .checked_add(1)
-        .expect("fixture handle counter should advance");
-    replay_snapshot.version = AxtPolicySnapshot::compute_version(&replay_snapshot.entries);
-    // `validate_unchecked` rebuilds live-execution results. Reattach the
-    // historical envelope and its exact ratcheted post-state to this explicitly
-    // synthetic replay fixture.
-    committed
-        .as_mut()
+    let envelopes = source.axt_envelopes().to_vec();
+    let snapshot = source.axt_policy_snapshot();
+    source
+        .commit_world_overlay_for_testing()
+        .expect("persist the live component World overlay");
+    let signer = checked_keypair();
+    let mut encoded = iroha_data_model::block::builder::BlockBuilder::new(header)
+        .build_with_signature(0, signer.private_key());
+    encoded
         .set_execution_outputs(
             Vec::new(),
-            1,
+            0,
             BTreeMap::new(),
-            vec![envelope.clone()],
-            replay_snapshot,
+            envelopes,
+            snapshot,
             Default::default(),
             Vec::new(),
             &execution_output_test_support::structural_output_limits(),
         )
-        .expect("replay fixture should retain its AXT envelope");
-    let peer_id = PeerId::new(signer.public_key().clone());
-    let _ = state_block.apply_without_execution(&committed, vec![peer_id.clone()]);
-    state_block
-        .commit()
-        .expect("commit state after AXT envelope");
-    kura.store_block(Arc::new(committed.clone().into()))
-        .expect("store block with AXT envelope");
+        .expect("encode the component replay records in canonical block storage");
+    kura.store_block(Arc::new(encoded.clone()))
+        .expect("store canonical component carrier");
+    let stored = kura
+        .get_block(nonzero!(1_usize))
+        .expect("read component carrier from Kura");
+    assert_eq!(
+        stored.canonical_wire().expect("stored wire").into_vec(),
+        encoded.canonical_wire().expect("original wire").into_vec()
+    );
+    let stored = iroha_data_model::block::decode_framed_signed_block(
+        &stored
+            .encode_wire()
+            .expect("canonical stored component wire"),
+    )
+    .expect("decode the retained canonical component carrier");
     let replay_world = {
         let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
         let genesis_domain = genesis_domain.build(&genesis_account);
@@ -1445,8 +1463,23 @@ fn axt_replay_ledger_persists_through_kura_replay() {
         World::with([genesis_domain], [genesis_account_value], [])
     };
     let replay_query = LiveQueryStore::start_test();
-    let mut replay_state = State::new_for_testing(replay_world, Arc::clone(&kura), replay_query);
-    *replay_state.nexus.get_mut() = nexus;
+    let mut replay_state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        replay_world,
+        Arc::clone(&kura),
+        replay_query,
+        state.chain_id_ref().clone(),
+        *state.network_id_ref(),
+    )
+    .expect("open the authenticated AXT replay storage");
+    replay_state
+        .prepare_configured_primary_geometry_anchor(&nexus.configured_lane_catalog)
+        .expect("authenticate the retained configured primary before replay");
+    replay_state
+        .restore_kura_lane_segments_before_startup_replay()
+        .expect("restore the configured primary replay cursor");
+    replay_state
+        .set_nexus_from_config(nexus)
+        .expect("install the same configured AXT route before replay");
     replay_state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -1457,9 +1490,18 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             current_slot: 0,
         },
     );
-    let mut replay_block = replay_state.block(committed.as_ref().header());
-    let _ = replay_block.apply_without_execution(&committed, vec![peer_id.clone()]);
-    replay_block.commit().expect("commit replayed state");
+    let mut replay_block = replay_state.block(stored.header());
+    replay_block.replay_axt_envelopes_for_testing(
+        stored.axt_envelopes().expect("stored component envelopes"),
+    );
+    replay_block
+        .commit_world_overlay_for_testing()
+        .expect("persist the replayed component World overlay");
+    assert_eq!(
+        replay_state.committed_height(),
+        0,
+        "component replay does not claim block finality"
+    );
     let replay_key = AxtHandleReplayKey::from_handle(dsid, &envelope.handles[0].handle);
     let replay_view = replay_state.view();
     let ledger_entry = replay_view
@@ -1483,11 +1525,10 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     );
     drop(replay_view);
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), &replay_state)
-        .expect("replayed fixture state should produce a valid CoreHost");
+    let mut host = host_from_axt_candidate(authority.clone(), &replay_state, stored.header());
     install_replay_probe_policy(
         &mut host,
-        replay_state.axt_policy_snapshot(),
+        replay_state.block(stored.header()).axt_policy_snapshot(),
         dsid,
         envelope.handles[0].handle.handle_era,
         envelope.handles[0].handle.sub_nonce,
@@ -1705,7 +1746,7 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
         }],
     )
     .expect("replay prune lane catalog");
-    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
+    configure_axt_state(&mut state, nexus_with_lane_catalog(lane_catalog));
     state.nexus.get_mut().axt.slot_length_ms = nonzero!(1_u64);
     state.nexus.get_mut().axt.replay_retention_slots =
         NonZeroU64::new(1).expect("non-zero retention");
@@ -1863,7 +1904,7 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         }],
     )
     .expect("replay host rebuild lane catalog");
-    *state.nexus.get_mut() = nexus_with_lane_catalog(lane_catalog);
+    configure_axt_state(&mut state, nexus_with_lane_catalog(lane_catalog));
     state.nexus.get_mut().axt.replay_retention_slots =
         NonZeroU64::new(64).expect("retention slots");
     state.set_axt_policy(
@@ -2067,7 +2108,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-    *state.nexus.get_mut() = nexus;
+    configure_axt_state(&mut state, nexus);
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -2230,7 +2271,11 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
 }
 #[cfg(feature = "app_api")]
 #[test]
-fn axt_replay_ledger_persists_across_apply_without_execution() {
+fn axt_replay_component_persists_ledger_in_committed_world() {
+    run_axt_replay_component_test(assert_axt_replay_in_committed_world);
+}
+#[cfg(feature = "app_api")]
+fn assert_axt_replay_in_committed_world() {
     use iroha_data_model::nexus::{
         AssetHandleDraft as ModelAssetHandleDraft, AxtDescriptor as ModelAxtDescriptor,
         AxtEnvelopeRecord as ModelAxtEnvelopeRecord, AxtHandleFragment as ModelAxtHandleFragment,
@@ -2258,7 +2303,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-    *state.nexus.get_mut() = nexus;
+    configure_axt_state(&mut state, nexus);
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {
@@ -2351,86 +2396,29 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         handles: vec![handle_fragment.clone()],
         commit_height: 1,
     };
-    let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
-    let signer = checked_keypair();
-    let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
-    let mut base_block: iroha_data_model::block::SignedBlock =
-        BlockBuilder::new_with_time_source(Vec::new(), time_source)
-            .chain(0, None)
-            .sign(signer.private_key())
-            .unpack(|_| {})
-            .into();
-    let envelopes = vec![envelope.clone()];
-    let mut state_block = state.block(base_block.header());
-    // Derive the advertised post-state from the authenticated candidate block
-    // so its slot and permanent counter projection match live validation.
-    let deterministic_snapshot = state_block.axt_policy_snapshot();
-    {
-        let outputs = execution_output_test_support::structural_network_outputs(
-            &base_block,
-            &entry_hashes,
-            Vec::new(),
-        );
-        base_block.set_execution_outputs(
-            outputs,
-            1,
-            BTreeMap::new(),
-            Vec::new(),
-            deterministic_snapshot,
-            Default::default(),
-            Vec::new(),
-            &execution_output_test_support::structural_output_limits(),
-        )
-    }
-    .expect("empty validation block should advertise its deterministic AXT post-state");
-    let valid = iroha_core::block::ValidBlock::validate_unchecked(base_block, &mut state_block)
-        .unpack(|_| {});
-    let mut committed = valid.commit_unchecked().unpack(|_| {});
-    let mut replay_snapshot = committed
-        .as_ref()
-        .axt_policy_snapshot()
-        .cloned()
-        .expect("validated block should carry its deterministic AXT post-state");
-    let replay_policy = replay_snapshot
-        .entries
-        .iter_mut()
-        .find(|binding| binding.dsid == dsid)
-        .expect("replay dataspace policy should remain in the validated snapshot");
-    assert_eq!(replay_policy.policy.active_handle_era, handle_era);
-    assert_eq!(replay_policy.policy.next_handle_counter, handle_sub_nonce);
-    replay_policy.policy.next_handle_counter = handle_sub_nonce
-        .checked_add(1)
-        .expect("fixture handle counter should advance");
-    replay_snapshot.version = AxtPolicySnapshot::compute_version(&replay_snapshot.entries);
-    committed
-        .as_mut()
-        .set_execution_outputs(
-            Vec::new(),
-            1,
-            BTreeMap::new(),
-            envelopes.clone(),
-            replay_snapshot,
-            Default::default(),
-            Vec::new(),
-            &execution_output_test_support::structural_output_limits(),
-        )
-        .expect("empty committed test block should attach AXT envelope results");
-    assert_eq!(
-        committed
-            .as_ref()
-            .axt_envelopes()
-            .map_or(0, <[ModelAxtEnvelopeRecord]>::len),
-        envelopes.len(),
-        "committed block should retain AXT envelopes for replay"
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let replay_key = AxtHandleReplayKey::from_handle(dsid, &handle_fragment.handle);
+    // Isolate the production post-admission replay component, with no claim
+    // that this synthetic envelope carries whole-block finality.
+    let mut replay = state.block(header);
+    replay.replay_axt_envelopes_for_testing(core::slice::from_ref(&envelope));
+    replay
+        .commit_world_overlay_for_testing()
+        .expect("persist the component replay ledger");
+    assert!(
+        state
+            .view()
+            .world()
+            .axt_replay_ledger()
+            .get(&replay_key)
+            .is_some()
     );
-    let _ = state_block.apply_without_execution(&committed, Vec::new());
-    state_block.commit().expect("commit replay ledger");
+    assert_eq!(state.committed_height(), 0);
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), &state)
-        .expect("fixture state should produce a valid CoreHost");
+    let mut host = host_from_axt_candidate(authority.clone(), &state, header);
     install_replay_probe_policy(
         &mut host,
-        state.axt_policy_snapshot(),
+        state.block(header).axt_policy_snapshot(),
         dsid,
         handle_fragment.handle.handle_era,
         handle_fragment.handle.sub_nonce,
@@ -2529,7 +2517,7 @@ fn axt_replay_entries_expire_after_retention_window() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-    *state.nexus.get_mut() = nexus;
+    configure_axt_state(&mut state, nexus);
     state.prune_axt_replay_ledger_for_tests(5, retention_slots);
     state.set_axt_policy(
         dsid,

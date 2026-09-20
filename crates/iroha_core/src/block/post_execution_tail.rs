@@ -203,7 +203,11 @@ impl ValidBlock {
             None,
             SccpRootValidation::Enforce,
             genesis.as_ref(),
-        )
+        )?;
+        state
+            .finalize_lane_consensus_contexts(block, None)
+            .and_then(|()| state.capture_exec_witness())
+            .map_err(Self::execution_context_error)
     }
 
     /// Execute a fixture and retain its actual witness under the same recorder owner.

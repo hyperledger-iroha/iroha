@@ -740,28 +740,14 @@ fn autonomous_merge_commit_authorization_fixture(
         false,
     )
 }
-fn autonomous_merge_transfer_commit_authorization_fixture() -> (State, MergeLedgerEntry, SignedBlock)
-{
-    let (state, entry, carrier, _) = autonomous_merge_commit_authorization_fixture_inner(
-        false,
-        false,
-        Some(QueuePlanTransferFixture::Single),
-        false,
-    );
-    (state, entry, carrier)
-}
-fn autonomous_merge_batch_transfer_commit_authorization_fixture(
+/// Retain actual lane execution evidence for structural/extraction component tests.
+/// These tests do not publish or execute the historical MergeQC carrier: current
+/// economics belongs to the Native Decision owner exercised by the roundtrips.
+fn autonomous_transfer_evidence_fixture(
     mode: QueuePlanTransferFixture,
 ) -> (State, MergeLedgerEntry, SignedBlock) {
-    assert!(
-        matches!(
-            mode,
-            QueuePlanTransferFixture::AtomicBatch | QueuePlanTransferFixture::IndependentBatch
-        ),
-        "batch fixture requires batch settlement semantics"
-    );
-    let (state, entry, carrier, _) =
-        autonomous_merge_commit_authorization_fixture_inner(false, false, Some(mode), false);
+    let UnpersistedAutonomousMergeFixture { state, entry, carrier, .. } =
+        unpersisted_autonomous_merge_commit_fixture(false, false, Some(mode), false, None, false);
     (state, entry, carrier)
 }
 #[derive(Clone, Copy)]

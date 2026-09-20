@@ -155,6 +155,7 @@ async fn get_blocks_from_height() {
     for i in 1..=BLOCK_CNT {
         let block = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(i as u64).unwrap());
+            header.set_prev_block_hash(state.block_hashes.view().last().copied());
         });
         let mut state_block = state.block(block.as_ref().header());
         let _events = state_block.apply_without_execution(&block, Vec::new());
@@ -184,6 +185,7 @@ async fn canonical_history_stops_at_missing_kura_entry() {
     for height in 1..=3_u64 {
         let block = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(height).unwrap());
+            header.set_prev_block_hash(state.block_hashes.view().last().copied());
         });
         let mut state_block = state.block(block.as_ref().header());
         let _events = state_block.apply_without_execution(&block, Vec::new());

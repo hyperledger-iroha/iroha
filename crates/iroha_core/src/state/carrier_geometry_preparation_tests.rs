@@ -343,7 +343,7 @@ fn carrier_geometry_foreign_lease_refuses_before_descriptor_capture_or_effects()
     let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert!(geometry.raw.is_none());
@@ -414,7 +414,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert!(geometry.raw.as_ref().unwrap().has_pending_journal_write());
@@ -424,7 +424,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
     let lease = state.kura.try_publication_lease().unwrap();
     // No nested acquisition: this lease remains held throughout the exact retry.
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
         .unwrap();
     assert_eq!(
         geometry.raw.as_ref().unwrap().phase(),
@@ -448,7 +448,7 @@ fn carrier_geometry_retries_sync_failure_under_held_lease_without_state_publicat
             .is_dir()
     );
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
         .unwrap();
     assert_eq!(state.canonical_runtime.view().get(), &runtime);
     assert_eq!(norito::json::to_json(&state.world).unwrap(), world);
@@ -479,7 +479,7 @@ fn carrier_geometry_completion_requires_original_prepared_descriptors() {
     let before = std::fs::read(state.kura.lane_geometry_journal_path()).unwrap();
     assert!(
         geometry
-            .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+            .resume_under(&mut state.tiered_backend.lock(), &lease)
             .is_err()
     );
     assert!(
@@ -524,7 +524,7 @@ fn carrier_geometry_catalog_sync_retry_preserves_original_mapping_and_state() {
         .prepare_under(&state.tiered_backend.lock(), &lease)
         .unwrap();
     geometry
-        .resume_under(&mut state.tiered_backend.lock(), &lease, None)
+        .resume_under(&mut state.tiered_backend.lock(), &lease)
         .unwrap();
     crate::kura::fail_bound_progress_intent_directory_sync_for_tests(0, 0);
     assert!(

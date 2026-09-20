@@ -18,6 +18,22 @@ impl CommittedNetworkProofFixture {
         target: impl FnOnce(&SignedBlock) -> SignedBlock,
         publish_finality: bool,
     ) -> Self {
+        Self::build(target, publish_finality, false)
+    }
+
+    /// Inject malformed stored wire below live admission, then sign its exact bytes.
+    /// This models hostile persisted state without requiring the live writer to accept it.
+    pub(crate) fn with_malformed_target(
+        target: impl FnOnce(&SignedBlock) -> SignedBlock,
+    ) -> Self {
+        Self::build(target, true, true)
+    }
+
+    fn build(
+        target: impl FnOnce(&SignedBlock) -> SignedBlock,
+        publish_finality: bool,
+        malformed_target: bool,
+    ) -> Self {
         let (root, _config, kura) = kura_root_fixture(nonzero!(4_usize));
         establish_dummy_store_primary_anchor(&kura);
         let parent = DummyBlocks::new().next_with_results();
@@ -25,7 +41,23 @@ impl CommittedNetworkProofFixture {
         assert_eq!(target.header().height().get(), 2);
         assert_eq!(target.header().prev_block_hash(), Some(parent.hash()));
         let blocks = vec![parent, target];
-        for block in &blocks {
+        for (index, block) in blocks.iter().enumerate() {
+            if malformed_target && index == 1 {
+                assert!(
+                    kura.store_block(Arc::clone(block)).is_err(),
+                    "live admission must reject the malformed output structure"
+                );
+                {
+                    let mut store = kura.block_store.lock();
+                    store.append_block_to_chain(block)
+                        .expect("inject malformed canonical wire into the physical fixture");
+                    store.flush_pending_fsync(true)
+                        .expect("retain the malformed fixture's exact durable slot");
+                }
+                kura.block_data.lock().push((block.hash(), Some(Arc::clone(block))));
+                kura.block_height_index.lock().insert(block.hash(), nonzero!(2_usize));
+                continue;
+            }
             kura.store_block(Arc::clone(block))
                 .expect("store exact proof fixture body");
         }
@@ -37,9 +69,42 @@ impl CommittedNetworkProofFixture {
                 .verify()
                 .expect("actual three-of-four BLS and PoP finality");
             if publish_finality {
-                let _ = kura
-                    .store_v2_finality_artifact(artifact)
-                    .expect("publish authentic proof fixture finality");
+                if malformed_target && artifact.height == 2 {
+                    assert!(
+                        kura.store_v2_finality_artifact(artifact).is_err(),
+                        "live finality publication must reject malformed execution outputs"
+                    );
+                    // A cryptographically valid QC can accompany hostile disk
+                    // contents. Inject the exact retained evidence below live
+                    // publication so the proof reader must validate the body.
+                    let target = &blocks[1];
+                    let (wire_len, wire_hash) = Kura::canonical_block_wire_identity(target)
+                        .expect("malformed fixture still has exact canonical wire");
+                    let retained = KuraRetainedBlockRecord::new(
+                        target.header(),
+                        Kura::canonical_proposal_wire_hash(target)
+                            .expect("malformed fixture has exact proposal wire"),
+                        wire_len,
+                        wire_hash,
+                        None,
+                        Vec::new(),
+                    );
+                    let retained_path = kura.retained_block_record_path(2);
+                    fs::create_dir_all(retained_path.parent().unwrap()).unwrap();
+                    fs::write(retained_path, retained.encode())
+                        .expect("inject exact hostile retained-wire metadata");
+                    let finality_path = kura.v2_finality_artifact_path(2);
+                    fs::create_dir_all(finality_path.parent().unwrap()).unwrap();
+                    fs::write(
+                        finality_path,
+                        KuraV2FinalityRecord::new(target.header(), artifact.clone()).encode(),
+                    )
+                    .expect("inject genuine exact-wire finality for hostile persisted body");
+                } else {
+                    let _ = kura
+                        .store_v2_finality_artifact(artifact)
+                        .expect("publish authentic proof fixture finality");
+                }
             }
         }
         Self {

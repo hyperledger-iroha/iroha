@@ -1860,7 +1860,7 @@ mod tests {
         );
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register Alice");
@@ -2160,7 +2160,7 @@ mod tests {
             0,
             0,
         ));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
         // Create domain and accounts
@@ -2201,7 +2201,8 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         // Commit the permission grant and execute in the next block
-        stx.apply();
+        stx.apply_callback_for_testing()
+            .expect("capture successful component callbacks");
         state_block.commit_world_overlay_for_testing().unwrap();
         let mut state_block2 = state.block(BlockHeader::new(
             NonZeroU64::new(2).unwrap(),
@@ -2210,7 +2211,7 @@ mod tests {
             0,
             0,
         ));
-        let mut stx2 = state_block2.transaction();
+        let mut stx2 = state_block2.transaction_for_callback_testing();
         let exec = ExecuteTrigger::new(trig_id);
         exec.execute(&BOB_ID, &mut stx2)
             .expect("bob should be permitted to execute trigger");
@@ -2320,7 +2321,7 @@ mod tests {
             0,
             0,
         ));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
         // Create domain and account
@@ -2416,7 +2417,7 @@ mod tests {
             0,
             0,
         ));
-        let mut stx = state_block.transaction();
+        let mut stx = state_block.transaction_for_callback_testing();
         Register::domain(Domain::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
         ))

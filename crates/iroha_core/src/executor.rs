@@ -8980,11 +8980,13 @@ mod tests {
         );
         let mut setup_block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         {
-            let mut setup_tx = setup_block.transaction();
+            let mut setup_tx = setup_block.transaction_for_callback_testing();
             Register::trigger(trigger)
                 .execute(&ALICE_ID, &mut setup_tx)
                 .expect("register generic IVM trigger");
-            setup_tx.apply();
+            setup_tx
+                .apply_callback_for_testing()
+                .expect("capture successful component callbacks");
         }
         setup_block
             .commit_world_overlay_for_testing()
@@ -8992,7 +8994,7 @@ mod tests {
 
         let mut block = state.block(BlockHeader::new(nonzero!(3_u64), None, None, 0, 0));
         let nested_ivm_gas = {
-            let mut baseline_tx = block.transaction();
+            let mut baseline_tx = block.transaction_for_callback_testing();
             baseline_tx
                 .execute_called_trigger(
                     &trigger_id,
@@ -9017,7 +9019,7 @@ mod tests {
             vec![ExecutableBatchItem::Instruction(execute_trigger)].into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut state_tx = block.transaction();
+        let mut state_tx = block.transaction_for_callback_testing();
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .expect("live batch executes its generic IVM trigger");

@@ -92,6 +92,17 @@ fn block_and_revert_rewinds_da_indexes() {
         hashes.push(signed_second.hash());
         hashes.commit_for_tests();
     }
+    {
+        let mut world = state.world.block();
+        world.accounts.insert(
+            pin_intent.authorization.owner.clone(),
+            iroha_data_model::account::AccountValue::new(AccountDetails::default()),
+        );
+        world.commit();
+    }
+    commit_pin_intent_world_projection_for_test(
+        &state, signed_second.header().height().get(), vec![pin_intent.clone()],
+    );
     state
         .ensure_da_indexes_hydrated()
         .expect("initial hydration should succeed");

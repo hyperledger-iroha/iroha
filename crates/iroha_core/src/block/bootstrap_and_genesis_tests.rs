@@ -148,10 +148,10 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
         .expect("configured genesis key authorizes actual genesis execution");
         let valid_genesis = ValidBlock::new_unverified_for_tests(genesis);
         let genesis_signed = valid_genesis.as_ref().clone();
-        genesis_state_block
-            .commit()
-            .expect("commit actual configured-key genesis block");
         let committed_genesis = valid_genesis.commit_unchecked().unpack(|_| {});
+        state
+            .commit_executed_block_for_testing(genesis_state_block, committed_genesis.clone())
+            .expect("publish actual configured-key genesis block under exact execution finality");
         let (_registration_handle, registration_time) =
             TimeSource::new_mock(Duration::from_millis(10));
         let registration = TransactionBuilder::new_with_time_source(
@@ -211,10 +211,10 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
                 .any(|stored| stored == &manager_permission)
         );
         let registration_signed = valid_registration.as_ref().clone();
-        registration_state_block
-            .commit()
-            .expect("commit manager-sponsored registration");
         let committed_registration = valid_registration.commit_unchecked().unpack(|_| {});
+        state
+            .commit_executed_block_for_testing(registration_state_block, committed_registration.clone())
+            .expect("publish manager-sponsored registration under exact execution finality");
         let (_upload_handle, upload_time) = TimeSource::new_mock(Duration::from_millis(30));
         let accepted = TransactionBuilder::new_with_time_source(
             network_id,
@@ -277,10 +277,10 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
                 .is_some()
         );
         let deployment_signed: SignedBlock = valid_deployment.as_ref().clone();
-        deployment_state_block
-            .commit()
-            .expect("commit builder upload block");
         let committed_deployment = valid_deployment.commit_unchecked().unpack(|_| {});
+        state
+            .commit_executed_block_for_testing(deployment_state_block, committed_deployment.clone())
+            .expect("publish builder upload block under exact execution finality");
         let existing_replay = make_bootstrap_transaction(
             &authority,
             &authority_keypair,
@@ -375,10 +375,10 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
                 .contract_code_upload_progress(&adversary, &decorated_hash)
                 .is_none()
         );
-        rejected_state_block
-            .commit()
-            .expect("commit block containing rejected bootstraps");
         let committed_rejected = valid_rejected.commit_unchecked().unpack(|_| {});
+        state
+            .commit_executed_block_for_testing(rejected_state_block, committed_rejected.clone())
+            .expect("publish rejected bootstrap block under exact execution finality");
         let mut replay_state = State::new_with_chain_and_network_id_for_testing(
             genesis_world(),
             Kura::blank_kura_for_testing(),
@@ -394,20 +394,11 @@ fn manager_sponsored_contract_registration_survives_block_and_committed_replay()
             &committed_deployment,
             &committed_rejected,
         ] {
-            let mut replay_block = replay_state.block(committed.as_ref().header());
-            replay_block
-                .apply_fixture_block(
-                    committed,
-                    Vec::new(),
-                    committed
-                        .as_ref()
-                        .header()
-                        .is_genesis()
-                        .then_some(&genesis_account),
+            replay_state
+                .replay_and_commit_fixture_block_for_testing(
+                    committed.clone(),
+                    committed.as_ref().header().is_genesis().then_some(&genesis_account),
                 )
-                .expect("replay actual phases and compare complete authenticated output metadata");
-            replay_block
-                .commit()
                 .expect("committed manager-sponsored registration and upload must replay");
         }
         let replay_view = replay_state.view();
@@ -501,14 +492,8 @@ async fn genesis_public_key_is_checked() {
         .with_confidential_features(test_confidential_features(&state, 1))
         .sign(genesis_correct_key.private_key())
         .unpack(|_| {});
-    let mut state_block = state.block(unverified_block.header);
-    let valid_block = unverified_block
-        .validate_and_record_transactions(&mut state_block)
-        .unpack(|_| {});
-    state_block.commit().unwrap();
-    // Validate genesis block
-    // Use correct genesis key and check if transaction is rejected
-    let block: SignedBlock = valid_block.into();
+    // Invalid genesis authority must be rejected before any execution or commit.
+    let block: SignedBlock = unverified_block.into();
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
     let mut voting_block = None;
     let (_, error) = ValidBlock::validate_signed_genesis_keep_voting_block(
@@ -575,7 +560,7 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
     let topology = crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
     let mut voting_block = None;
-    let (_valid, state_block) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (valid, state_block) = ValidBlock::validate_signed_genesis_keep_voting_block(
         block,
         &topology,
         &genesis_account_id,
@@ -586,7 +571,9 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
     )
     .unpack(|_| {})
     .expect("genesis asset-definition registration should not require domain-owner authorization");
-    state_block.commit().unwrap();
+    state
+        .commit_executed_block_for_testing(*state_block, valid.commit_unchecked().unpack(|_| {}))
+        .expect("publish the exact executed genesis under verified fixture finality");
 }
 #[tokio::test]
 async fn genesis_domain_registration_bootstraps_domain_name_lease() {
@@ -617,7 +604,7 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
     let topology = crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
     let mut voting_block = None;
-    let (_valid, state_block) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (valid, state_block) = ValidBlock::validate_signed_genesis_keep_voting_block(
         block,
         &topology,
         &genesis_account_id,
@@ -628,7 +615,9 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
     )
     .unpack(|_| {})
     .expect("genesis domain registration should bootstrap the SNS lease");
-    state_block.commit().unwrap();
+    state
+        .commit_executed_block_for_testing(*state_block, valid.commit_unchecked().unpack(|_| {}))
+        .expect("publish the exact executed genesis under verified fixture finality");
     let view = state.view();
     assert_eq!(
         crate::sns::active_domain_owner(view.world(), &wonderland_domain_id, 0),

@@ -492,9 +492,9 @@ fn opaque_asset_transfer_routes_to_sender_single_scope_when_asset_definition_unr
     );
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(dataspace_id);
-    let state =
+    let mut state =
         state_with_account_scope_entries(&[(sender_id.clone(), scope_entry)], dataspace_catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     assert_eq!(
         router
             .try_route_without_state(&tx)

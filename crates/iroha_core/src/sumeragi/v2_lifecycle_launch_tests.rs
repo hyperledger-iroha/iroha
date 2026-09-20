@@ -259,7 +259,7 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         Ok(_) => panic!("an open, already-bound ingress accepted a foreign launch gate"),
         Err(error) => error,
     };
-    assert!(error.contains("empty closed ingress"));
+    assert_eq!(error, "leader-wire lifecycle gate requires closed ingress without global-height owners");
     assert!(
         !ingress.state.lock().open,
         "failed binding must close ingress"

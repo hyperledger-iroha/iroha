@@ -194,9 +194,8 @@ fn mutate_stored_block(
 }
 
 fn assert_invalid_finalized_body(mutate: impl FnOnce(&mut BlockPayload, &mut BlockResult)) {
-    let fixture = CommittedNetworkProofFixture::new(
+    let fixture = CommittedNetworkProofFixture::with_malformed_target(
         |parent| mutate_stored_block(&proof_target(parent, false), mutate),
-        true,
     );
     let target = fixture.target();
     let entry = target.network_entrypoint_at(0).unwrap().hash();
@@ -377,12 +376,14 @@ fn block_proofs_validate_foreign_network_join_and_unrelated_internal_owner() {
 fn block_proofs_reject_retired_context_even_with_exact_finality() {
     let fixture = CommittedNetworkProofFixture::new(
         |parent| {
-            let mut block = proof_target(parent, false);
-            let mut context = iroha_data_model::block::BlockExecutionContextBundle::new(Vec::new());
-            context.version = 0;
-            assert!(!context.has_current_version());
-            block.set_execution_context(Some(context));
-            block
+            mutate_stored_block(&proof_target(parent, false), |payload, _| {
+                let mut context =
+                    iroha_data_model::block::BlockExecutionContextBundle::new(Vec::new());
+                context.version = 0;
+                assert!(!context.has_current_version());
+                payload.header.set_execution_context_hash(Some(HashOf::new(&context)));
+                payload.execution_context = Some(context);
+            })
         },
         true,
     );

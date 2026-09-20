@@ -6,7 +6,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::ivm::cache::IvmCache,
-    state::{State, StateReadOnly, World, WorldReadOnly},
+    state::{State, World, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -16,7 +16,6 @@ use iroha_data_model::{
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::peer::PeerId;
 use iroha_primitives::{numeric::NumericSpec, time::TimeSource};
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
@@ -209,9 +208,11 @@ fn block_history_tamper_rejected_without_mutation() {
     } = setup_world();
     let network_id = *state.network_id_ref();
     let peer_key = checked_random_adversarial_bls_keypair();
-    let peer = PeerId::from(peer_key.public_key().clone());
     let time_source = TimeSource::new_system();
-    // Commit a baseline block at height 1 so subsequent rewinds have a stable checkpoint.
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish fixture genesis");
+    // Commit ordinary work after genesis so rewinds have a stable checkpoint.
     let baseline_tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -221,7 +222,7 @@ fn block_history_tamper_rejected_without_mutation() {
     .sign(alice_kp.private_key());
     let baseline_accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(baseline_tx))];
     let baseline_block = BlockBuilder::new_with_time_source(baseline_accepted, time_source.clone())
-        .chain(0, state.view().latest_block().as_deref())
+        .chain(0, Some(&genesis))
         .sign(peer_key.private_key())
         .unpack(|_| {});
     let signed_baseline: SignedBlock = baseline_block.clone().into();
@@ -236,23 +237,14 @@ fn block_history_tamper_rejected_without_mutation() {
         "baseline transaction rejected during execution: {:?}",
         committed_baseline.as_ref().output_error(0)
     );
-    let _ = baseline_state_block.apply_without_execution(&committed_baseline, vec![peer.clone()]);
-    baseline_state_block
-        .kura()
-        .store_block(Arc::new(committed_baseline_signed.clone()))
-        .expect("store baseline block");
-    println!("baseline block applied");
-    baseline_state_block
-        .commit()
+    state
+        .commit_executed_block_for_testing(baseline_state_block, committed_baseline)
         .expect("commit baseline state");
     let height_after_baseline = state.view().height();
-    assert_eq!(
-        height_after_baseline, 1,
-        "baseline block height should be 1"
-    );
+    assert_eq!(height_after_baseline, 2, "baseline block follows genesis");
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u64));
     assert_eq!(balance(&state, &bob_asset_id), Quantity::from(5_u64));
-    // Forge a block that rewinds height to 1 with a conflicting prev hash and extra mint.
+    // Forge a successor with a conflicting previous hash and extra mint.
     let rewind_tx = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -290,14 +282,28 @@ fn block_history_tamper_rejected_without_mutation() {
         expected_prev, actual_prev,
         "prev hash tamper should be observable"
     );
-    let reason = BlockValidationError::PrevBlockHashMismatch {
-        expected: expected_prev,
-        actual: actual_prev,
-    };
-    assert!(
-        matches!(reason, BlockValidationError::PrevBlockHashMismatch { .. }),
-        "static validation would reject the tampered prev hash"
+    let topology = iroha_core::sumeragi::network_topology::Topology::new(
+        std::iter::once(peer_key.clone())
+            .chain((0..3).map(|_| checked_random_adversarial_bls_keypair()))
+            .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone())),
     );
+    let mut staged = state.block(signed_rewind.header());
+    let (_, reason) = ValidBlock::validate_sumeragi_v2_fixture(
+        signed_rewind,
+        &topology,
+        &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
+        &time_source,
+        &mut staged,
+    )
+    .unpack(|_| {})
+    .expect_err("static validation must reject the tampered previous hash");
+    assert!(
+        matches!(reason.as_ref(), BlockValidationError::PrevBlockHashMismatch {
+            expected, actual,
+        } if *expected == expected_prev && *actual == actual_prev),
+        "unexpected rejection: {reason}"
+    );
+    drop(staged);
     // State stays on the canonical head.
     assert_eq!(state.view().height(), height_after_baseline);
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u64));

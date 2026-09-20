@@ -5525,7 +5525,7 @@ pub mod tests {
         isi::{InstructionBox, Log, governance::ProposeRuntimeUpgradeProposal},
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
-            AuditControls, DataSpaceCatalog, JurisdictionSet, LaneCatalog, LaneCompliancePolicy,
+            AuditControls, DataSpaceCatalog, JurisdictionSet, LaneCompliancePolicy,
             LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LanePrivacyMerkleWitness,
             LanePrivacyProof, LanePrivacyWitness, LaneStorageProfile, LaneVisibility,
             ManifestVersion, ParticipantSelector,
@@ -5625,7 +5625,7 @@ pub mod tests {
         (World::with([domain], [account], []), authority_id, key_pair)
     }
     fn configure_active_same_dataspace_lanes(state: &State, lane_count: NonZeroU32) {
-        let lanes = (0..lane_count.get())
+        let lanes = (1..lane_count.get())
             .map(|index| LaneConfig {
                 id: TestLaneId::new(index),
                 alias: format!("lane-{index}"),
@@ -5634,15 +5634,15 @@ pub mod tests {
                 ..LaneConfig::default()
             })
             .collect();
-        let mut nexus = state.nexus.write();
-        nexus.autoscale.enabled = false;
-        nexus.lane_catalog =
-            LaneCatalog::new(lane_count, lanes).expect("same-dataspace lane catalog");
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: lanes,
+                retire: Vec::new(),
+            })
+            .expect("install same-dataspace lanes through their lifecycle");
     }
 
-    fn configure_active_autoscale_sibling(state: &State) {
+    fn configure_active_autoscale_sibling(state: &mut State) {
         let mut elastic_lane = LaneConfig {
             id: TestLaneId::new(1),
             alias: "elastic-lane-1".to_owned(),
@@ -5658,15 +5658,19 @@ pub mod tests {
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
-        let mut nexus = state.nexus.write();
+        let mut nexus = state.nexus_snapshot();
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lane_id = nonzero!(1_u32);
         nexus.autoscale.max_lane_id_exclusive = nonzero!(2_u32);
-        nexus.lane_catalog =
-            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
-                .expect("static and autoscale lane catalog");
-        nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        state
+            .set_nexus_from_config(nexus)
+            .expect("enable pre-genesis autoscale policy");
+        state
+            .apply_autoscale_lane_lifecycle_for_tests(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![elastic_lane],
+                retire: Vec::new(),
+            })
+            .expect("install the authenticated elastic sibling");
     }
 
     fn lane_manifest_status(
@@ -6652,7 +6656,7 @@ pub mod tests {
             },
         );
         let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        state.install_lane_manifests(&registry);
+        let policy_manifests = Arc::clone(&registry);
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -6679,6 +6683,7 @@ pub mod tests {
         .expect("admission must accept the signature shape");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         assert!(
@@ -6727,7 +6732,7 @@ pub mod tests {
             },
         );
         let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        state.install_lane_manifests(&registry);
+        let policy_manifests = Arc::clone(&registry);
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -6749,6 +6754,7 @@ pub mod tests {
         .expect("admission should accept transaction shape");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         assert!(
@@ -6788,11 +6794,12 @@ pub mod tests {
                 ),
             ),
         ]);
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
             lane_id: TestLaneId::new(1),
@@ -6838,11 +6845,12 @@ pub mod tests {
                 ),
             ),
         ]);
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
             lane_id: TestLaneId::new(1),
@@ -6888,11 +6896,12 @@ pub mod tests {
                 ),
             ),
         ]);
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
 
         let tx = runtime_upgrade_transaction(authority.clone(), &keypair);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
             lane_id: TestLaneId::new(1),
@@ -6935,13 +6944,13 @@ pub mod tests {
         let chain: ChainId = "static-autoscale-manifest-authority".parse().unwrap();
         let (world, static_validator, static_keypair) = world_with_authority("wonderland");
         let (elastic_validator, elastic_keypair) = gen_account_in("wonderland");
-        let state = State::new_with_chain(
+        let mut state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             chain,
         );
-        configure_active_autoscale_sibling(&state);
+        configure_active_autoscale_sibling(&mut state);
 
         let mut static_rules = runtime_upgrade_rules(false);
         static_rules.validators = vec![static_validator.clone()];
@@ -6957,12 +6966,13 @@ pub mod tests {
                 lane_manifest_status(TestLaneId::new(1), Some("parliament"), elastic_rules),
             ),
         ]);
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
 
         let static_tx = runtime_upgrade_transaction(static_validator, &static_keypair);
         let elastic_tx = runtime_upgrade_transaction(elastic_validator, &elastic_keypair);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let stx = block.transaction();
         let static_assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
         let elastic_assignment = super::LaneAssignment {
@@ -7023,11 +7033,12 @@ pub mod tests {
                 lane_manifest_status(TestLaneId::new(2), None, conflicting_authority),
             ),
         ]);
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
             lane_id: TestLaneId::new(1),
@@ -7071,11 +7082,12 @@ pub mod tests {
                 ),
             ),
         ]);
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
             lane_id: TestLaneId::new(1),
@@ -7108,11 +7120,12 @@ pub mod tests {
             TestLaneId::SINGLE,
             lane_manifest_status(TestLaneId::SINGLE, Some("parliament"), rules),
         )]);
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
 
         let tx = runtime_upgrade_transaction(authority, &keypair);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let stx = block.transaction();
         let assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
 
@@ -11829,7 +11842,7 @@ pub mod tests {
                 privacy_commitments: Vec::new(),
             },
         );
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -11846,6 +11859,7 @@ pub mod tests {
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         macro_rules! validate_instruction {
             ($instruction:expr, $metadata:expr) => {{
                 let tx = TransactionBuilder::new(
@@ -12045,9 +12059,10 @@ pub mod tests {
                 privacy_commitments: Vec::new(),
             },
         );
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let policy_manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         for syscall in [
             ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
             ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
@@ -12221,7 +12236,7 @@ pub mod tests {
             },
         );
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        state.install_lane_manifests(&manifests);
+        let policy_manifests = Arc::clone(&manifests);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -12246,6 +12261,7 @@ pub mod tests {
         .sign(keypair.private_key());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let stx = block.transaction();
         let assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
         let result = super::enforce_lane_policies(&tx, &stx, &assignment);
@@ -12261,7 +12277,7 @@ pub mod tests {
         let (world, authority, keypair) = world_with_authority("wonderland");
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
         {
             let mut elastic_lane = LaneConfig {
                 id: TestLaneId::new(1),
@@ -12277,15 +12293,21 @@ pub mod tests {
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
-            let mut nexus = state.nexus.write();
+            let mut nexus = state.nexus_snapshot();
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lane_id = nonzero!(1_u32);
             nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
-                    .expect("autoscale lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            state
+                .set_nexus_from_config(nexus)
+                .expect("enable pre-genesis autoscale policy");
+            state
+                .apply_autoscale_lane_lifecycle_for_tests(
+                    &iroha_data_model::nexus::LaneLifecyclePlan {
+                        additions: vec![elastic_lane],
+                        retire: Vec::new(),
+                    },
+                )
+                .expect("install the authenticated elastic lane");
         }
         let mut statuses = BTreeMap::new();
         statuses.insert(
@@ -12317,7 +12339,7 @@ pub mod tests {
             },
         );
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        state.install_lane_manifests(&manifests);
+        let policy_manifests = Arc::clone(&manifests);
         let mut selected = None;
         for attempt in 0_u64..256 {
             let mut metadata = Metadata::default();
@@ -12370,6 +12392,7 @@ pub mod tests {
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = Arc::clone(&policy_manifests);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         result.expect("live autoscale-routed transaction should bypass blocked base lane");
@@ -12490,7 +12513,7 @@ pub mod tests {
     fn state_with_guarded_base_and_open_elastic_lane(chain: &ChainId, world: World) -> State {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
         let elastic_lane_id = TestLaneId::new(1);
         let mut elastic_lane = LaneConfig {
             id: elastic_lane_id,
@@ -12507,15 +12530,21 @@ pub mod tests {
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
         {
-            let mut nexus = state.nexus.write();
+            let mut nexus = state.nexus_snapshot();
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lane_id = nonzero!(1_u32);
             nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
-                    .expect("autoscale lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            state
+                .set_nexus_from_config(nexus)
+                .expect("enable pre-genesis autoscale policy");
+            state
+                .apply_autoscale_lane_lifecycle_for_tests(
+                    &iroha_data_model::nexus::LaneLifecyclePlan {
+                        additions: vec![elastic_lane],
+                        retire: Vec::new(),
+                    },
+                )
+                .expect("install the authenticated elastic lane");
         }
         let mut statuses = BTreeMap::new();
         statuses.insert(
@@ -12612,6 +12641,7 @@ pub mod tests {
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = state.lane_manifests.read().clone();
         let mut ivm_cache = IvmCache::new();
         let results = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
@@ -12709,6 +12739,7 @@ pub mod tests {
             crate::queue::RoutingDecision::new(TestLaneId::SINGLE, TestDataSpaceId::UNIVERSAL);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = state.lane_manifests.read().clone();
         let mut ivm_cache = IvmCache::new();
         let external_result = block
             .validate_transaction_with_entrypoint_index_and_routing_context(
@@ -12993,6 +13024,7 @@ pub mod tests {
         artifact.entrypoint_hashes[0] = Hash::new(b"forged lane execution entrypoint hash");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = state.lane_manifests.read().clone();
         let mut ivm_cache = IvmCache::new();
         let err = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
@@ -13034,6 +13066,7 @@ pub mod tests {
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = state.lane_manifests.read().clone();
         let mut ivm_cache = IvmCache::new();
         let err = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
@@ -13092,6 +13125,7 @@ pub mod tests {
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
+        block.lane_manifests = state.lane_manifests.read().clone();
         let mut ivm_cache = IvmCache::new();
         let results = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)

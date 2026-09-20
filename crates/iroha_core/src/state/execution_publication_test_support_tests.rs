@@ -6,7 +6,7 @@ use crate::{
     governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{StateReadOnly, World},
+    state::{StateReadOnly, World, WorldReadOnly},
     sumeragi::network_topology::Topology,
     tx::AcceptedTransaction,
 };
@@ -85,6 +85,53 @@ fn fixture_with_keys(keys: Vec<KeyPair>) -> (Box<State>, SignedBlock, Topology) 
 
 fn fixture() -> (Box<State>, SignedBlock, Topology) {
     fixture_with_keys(keys().unwrap())
+}
+
+#[test]
+fn component_genesis_retains_execution_and_finality_before_ordinary_work() {
+    let (state, _, _) = fixture();
+    let genesis = state
+        .seed_genesis_for_testing()
+        .expect("publish fixture genesis");
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(state.latest_block_hash_fast(), Some(genesis.hash()));
+    assert!(
+        genesis
+            .output_results()
+            .all(|result| result.as_ref().is_ok())
+    );
+    let artifact = state.kura.v2_finality_artifact(1).unwrap().unwrap();
+    assert_eq!(artifact.block_hash, genesis.hash());
+    VerifiedV2FinalityArtifact::verify(artifact).unwrap();
+    assert!(state.seed_genesis_for_testing().is_err());
+}
+
+#[test]
+fn component_genesis_registers_its_missing_authority_through_execution() {
+    let signer = KeyPair::try_from_seed(vec![0xA9; 32], Algorithm::Ed25519)
+        .expect("explicit fixture signer");
+    let authority = AccountId::new(signer.public_key().clone());
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    assert!(state.query_view().world().account(&authority).is_err());
+    let genesis = state
+        .seed_signed_genesis_for_testing(&signer)
+        .expect("execute self-registering genesis");
+    assert!(state.query_view().world().account(&authority).is_ok());
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(state.latest_block_hash_fast(), Some(genesis.hash()));
+    assert!(
+        genesis
+            .output_results()
+            .all(|result| result.as_ref().is_ok())
+    );
+    let artifact = state.kura.v2_finality_artifact(1).unwrap().unwrap();
+    assert_eq!(artifact.block_hash, genesis.hash());
+    VerifiedV2FinalityArtifact::verify(artifact).unwrap();
+    assert!(state.seed_signed_genesis_for_testing(&signer).is_err());
 }
 
 fn execute_genesis<'state>(

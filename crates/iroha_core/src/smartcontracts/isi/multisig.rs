@@ -3315,22 +3315,24 @@ mod tests {
             &mut world,
             &payment_asset_definition_id.to_string(),
         );
-        let state = State::new_with_chain(
+        let mut state = State::new_with_chain(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ChainId::from("multisig-fi-registration-alias-batch"),
         );
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: sbp,
-                alias: "sbp".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("sbp dataspace catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: sbp,
+                    alias: "sbp".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("sbp dataspace catalog"),
+        );
         state.nexus.write().fees.fee_asset_id = payment_asset_definition_id.to_string();
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
@@ -5975,6 +5977,10 @@ mod tests {
             World::new(),
             "multisig-trigger-contract-entrypoint"
         );
+        tx.tx_call_hash = Some(
+            tx.direct_execution_identity()
+                .expect("component approval root"),
+        );
         let signer1 = checked_keypair();
         let signer2 = checked_keypair();
         let signer1_id = new_account_id(&signer1);
@@ -6530,6 +6536,10 @@ seiyaku TriggerDispatch {
             tx,
             World::new(),
             "multisig-staged-mint-json-args"
+        );
+        tx.tx_call_hash = Some(
+            tx.direct_execution_identity()
+                .expect("component approval root"),
         );
         let domain_id: DomainId = DomainId::try_new("staged", "universal").unwrap();
         let signer1 = checked_keypair();

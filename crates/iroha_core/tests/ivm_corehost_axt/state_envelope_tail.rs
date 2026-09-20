@@ -34,7 +34,7 @@ fn core_host_from_state_enforces_space_directory_policy() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query);
-    *state.nexus.get_mut() = nexus;
+    configure_axt_state(&mut state, nexus);
     anchor_axt_test_header(
         &mut state,
         BlockHeader::new(nonzero!(1_u64), None, None, 0, 0),
@@ -618,7 +618,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             current_slot: 0,
         },
     );
-    *state.nexus.get_mut() = nexus;
+    configure_axt_state(&mut state, nexus);
     state.set_axt_policy(
         dsid,
         AxtPolicyEntry {

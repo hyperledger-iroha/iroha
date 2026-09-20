@@ -435,8 +435,11 @@ fn successful_live_batches_accumulate_parent_block_gas() {
                 .expect("batch must pass stateless admission")
             })
             .collect::<Vec<_>>();
-        let block = BlockBuilder::new(transactions)
-            .chain(0, None)
+        state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
+        let block = BlockBuilder::new_with_time_source(
+            transactions, TimeSource::new_fixed(Duration::from_millis(10)),
+        )
+            .chain(0, state.view().latest_block().as_deref())
             .sign(keypair.private_key())
             .unpack(|_| {});
         let mut state_block = state.block(block.header());

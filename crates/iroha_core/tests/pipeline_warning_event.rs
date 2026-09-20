@@ -1,6 +1,6 @@
-//! Pipeline warning delivery test: inject a mismatching DAG fingerprint sidecar
+//! Canonical execution is independent of local advisory DAG sidecars.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! and assert that a Pipeline Warning event is emitted during block processing.
+//! Advisory metadata cannot add consensus-visible warning events.
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::{
     governance::manifest::LaneManifestRegistry,
@@ -14,7 +14,7 @@ use iroha_model_base::domain::DomainId;
 use std::sync::Arc;
 // unused
 #[test]
-fn pipeline_warning_emitted_on_dag_mismatch() {
+fn canonical_execution_ignores_mismatching_local_dag_sidecar() {
     // Build a persistent Kura in a temp directory so sidecars are writable.
     let temp_dir = tempfile::tempdir().expect("tempdir");
     let (kura, _block_count) = Kura::new_fresh_single_lane(
@@ -65,6 +65,9 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish fixture genesis");
     // Build a block with two txs (independent)
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -95,7 +98,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(t)))
         .collect();
     let new_block = iroha_core::block::BlockBuilder::new(acc)
-        .chain(0, None)
+        .chain(0, Some(&genesis))
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     // Inject a mismatching sidecar for this block height before validation
@@ -118,12 +121,23 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         sidecar_txs,
     );
     kura.write_pipeline_metadata(&sidecar);
-    // Validate and apply; expect a Pipeline Warning event among returned events
+    // Publish canonical outputs; local DAG metadata has no consensus authority.
     let mut sb = state.block(new_block.header());
     let vb =
         iroha_core::block::ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = sb.apply_without_execution(&cb, Vec::new());
+    assert!(
+        cb.as_ref()
+            .output_results()
+            .all(|result| result.as_ref().is_ok())
+    );
+    let events = state
+        .commit_executed_block_for_testing(sb, cb)
+        .expect("publish canonical outputs independently of advisory metadata");
+    assert!(
+        !events.is_empty(),
+        "publication must emit the transaction events"
+    );
     let warned = events.iter().any(|e| match e {
         EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Warning(w)) => {
             w.kind == "dag_fingerprint_mismatch"
@@ -137,7 +151,10 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         }),
         _ => false,
     });
-    assert!(warned, "expected a pipeline warning event for DAG mismatch");
+    assert!(
+        !warned,
+        "local DAG mismatch must not affect canonical events"
+    );
 }
 #[test]
 fn pipeline_warning_ignored_for_stale_sidecar() {
@@ -191,6 +208,9 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish fixture genesis");
     // Build a block with two txs (independent)
     let rose: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -221,7 +241,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(t)))
         .collect();
     let new_block = iroha_core::block::BlockBuilder::new(acc)
-        .chain(0, None)
+        .chain(0, Some(&genesis))
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     // Inject a stale sidecar (no tx hashes for this block height) before validation
@@ -244,7 +264,18 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let vb =
         iroha_core::block::ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = sb.apply_without_execution(&cb, Vec::new());
+    assert!(
+        cb.as_ref()
+            .output_results()
+            .all(|result| result.as_ref().is_ok())
+    );
+    let events = state
+        .commit_executed_block_for_testing(sb, cb)
+        .expect("publish canonical outputs independently of advisory metadata");
+    assert!(
+        !events.is_empty(),
+        "publication must emit the transaction events"
+    );
     let warned = events.iter().any(|e| match e {
         EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Warning(w)) => {
             w.kind == "dag_fingerprint_mismatch"

@@ -6252,10 +6252,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lane_id = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lane_id_exclusive = NonZeroU32::new(2).expect("nonzero max lanes");
-        {
-            let mut current = gossiper.state.nexus.write();
-            *current = nexus;
-        }
+        gossiper
+            .state
+            .install_synthetic_routing_snapshot_for_testing(nexus);
         assert_eq!(
             crate::state::nexus_active_lane_dataspace_at_height(
                 inactive_lane,
@@ -6518,25 +6517,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 Ok(RoutingDecision::new(self.lane, self.dataspace))
             }
         }
-        let temp_dir = tempdir().expect("temp dir");
-        let kura_cfg = KuraConfig {
-            init_mode: iroha_config::kura::InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
-            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
-            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: FsyncMode::Batched,
-            fsync_interval: defaults::kura::FSYNC_INTERVAL,
-        };
-        let (kura, _) =
-            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
-                .expect("init kura");
-        let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
         let mismatched_lane = LaneId::new(1);
         let mismatched_dataspace = DataSpaceId::new(7);
         let lane_catalog = LaneCatalog::new(
@@ -6562,12 +6542,15 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             },
         ])
         .expect("dataspace catalog");
-        {
-            let mut nexus = state.nexus.write();
-            nexus.lane_catalog = lane_catalog.clone();
-            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
-            nexus.dataspace_catalog = dataspace_catalog.clone();
-        }
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.lane_catalog = lane_catalog.clone();
+        nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+        nexus.dataspace_catalog = dataspace_catalog.clone();
+        let state = Arc::new(State::new_with_nexus_for_testing(
+            World::new(),
+            nexus,
+            LiveQueryStore::start_test(),
+        ));
         let lane_catalog = Arc::new(lane_catalog);
         let dataspace_catalog = Arc::new(dataspace_catalog);
         let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
@@ -6620,25 +6603,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
     #[tokio::test(flavor = "current_thread")]
     async fn gossip_drops_stale_native_amx_participant_plan_but_keeps_valid_entry() {
-        let temp_dir = tempdir().expect("temp dir");
-        let kura_cfg = KuraConfig {
-            init_mode: iroha_config::kura::InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
-            max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
-            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: FsyncMode::Batched,
-            fsync_interval: defaults::kura::FSYNC_INTERVAL,
-        };
-        let (kura, _) =
-            Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
-                .expect("init kura");
-        let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
         let first_lane = LaneId::new(2);
@@ -6681,17 +6645,20 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             },
         ])
         .expect("dataspace catalog");
-        {
-            let mut nexus = state.nexus.write();
-            nexus.autoscale.enabled = false;
-            nexus.fees.base_fee = Quantity::zero();
-            nexus.fees.per_byte_fee = Quantity::zero();
-            nexus.fees.per_instruction_fee = Quantity::zero();
-            nexus.fees.per_gas_unit_fee = Quantity::zero();
-            nexus.lane_catalog = lane_catalog.clone();
-            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
-            nexus.dataspace_catalog = dataspace_catalog.clone();
-        }
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.autoscale.enabled = false;
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
+        nexus.lane_catalog = lane_catalog.clone();
+        nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+        nexus.dataspace_catalog = dataspace_catalog.clone();
+        let state = Arc::new(State::new_with_nexus_for_testing(
+            world_with_alice(),
+            nexus,
+            LiveQueryStore::start_test(),
+        ));
         assert!(state.is_lane_active_for_authority(first_lane));
         assert!(state.is_lane_active_for_authority(second_lane));
         assert!(!state.is_lane_active_for_authority(stale_participant.lane_id));

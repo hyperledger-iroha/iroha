@@ -256,6 +256,42 @@ impl CallbackJournal {
     }
 }
 
+impl super::StateTransaction<'_, '_> {
+    /// Consume an isolated component fixture's actual callbacks before applying
+    /// its successful overlay. Failed, incomplete and overflowing journals keep
+    /// the same production rejection semantics and are never applied.
+    #[cfg(test)]
+    pub(crate) fn apply_callback_for_testing(mut self) -> Result<(), String> {
+        if self.block_execution_output_plan.is_some() {
+            return Err("component callback capture cannot replace a block output owner".into());
+        }
+        let call = self
+            .tx_call_hash
+            .ok_or("callback fixture has no root owner")?;
+        match self.callback_journal.take(call)? {
+            DrainedCallbacks::Complete { completions, .. } => {
+                if !self.execution_effects_allow_apply() {
+                    return Err("callback fixture has unclosed execution effects".into());
+                }
+                for completion in completions {
+                    self.world.external_event_buf.push(
+                        iroha_data_model::events::trigger_completed::TriggerCompletedEvent::new(
+                            completion.trigger_id,
+                            iroha_crypto::HashOf::from_untyped_unchecked(call),
+                            completion.callback_index,
+                            completion.outcome,
+                        )
+                        .into(),
+                    );
+                }
+                self.apply();
+                Ok(())
+            }
+            DrainedCallbacks::OutputLimit => Err("callback fixture output limit exceeded".into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +303,38 @@ mod tests {
 
     fn call() -> Hash {
         Hash::new(b"actual source call")
+    }
+
+    #[test]
+    fn component_fixture_requires_explicit_root_and_consumes_actual_capture() {
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            0,
+            0,
+        ));
+        assert!(block.transaction().tx_call_hash.is_none());
+        let mut transaction = block.transaction_for_callback_testing();
+        let root = transaction.tx_call_hash;
+        let ticket = transaction
+            .callback_journal
+            .begin(root, &"fixture".parse().unwrap())
+            .unwrap();
+        transaction
+            .callback_journal
+            .finish(ticket, root, &Ok(step(1)))
+            .unwrap();
+        assert!(!transaction.callback_journal.allows_apply());
+        transaction.apply_callback_for_testing().unwrap();
+        let mut rejected = block.transaction_for_callback_testing();
+        rejected.callback_journal.record_failure();
+        assert!(rejected.apply_callback_for_testing().is_err());
     }
 
     #[test]
