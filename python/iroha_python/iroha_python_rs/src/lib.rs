@@ -14827,7 +14827,6 @@ fn lane_relay_envelope_fixture_py() -> PyResult<(Vec<u8>, Vec<u8>)> {
         NonZeroU64::new(1).expect("nonzero height"),
         None,
         None,
-        None,
         1_700_000_000_000,
         0,
     );

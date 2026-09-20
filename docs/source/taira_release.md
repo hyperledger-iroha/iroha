@@ -178,9 +178,11 @@ runtime effects after staging. The four-validator catalog test separately proves
 the committed topology and transaction history survive restart and full replay.
 
 Both scopes also require the generated validator configuration projection and
-occupied-runtime recovery tests. Prior daemon, CLI, SoraFS, configuration, genesis,
-genesis hash and service unit each have an explicit source revision, path, digest,
-size and mode. The configuration selector and exact process argv are bound
+occupied-runtime recovery tests. The predecessor requires exactly five ordered
+runtime roles: `iroha3d`, `config`, `genesis`, `genesis_hash`, and `validator_unit`.
+Each has an explicit source revision, path, digest, size and mode. CLI, Kagami and
+SoraFS are not predecessor validator dependencies; an eight-role predecessor
+record is rejected. The configuration selector and exact process argv are bound
 separately. An initialized installation may therefore retain artifacts from
 different releases without treating its configuration revision as its executable
 revision. Candidate artifacts still use one canonical release directory.
@@ -432,7 +434,10 @@ active-state loss. Rollback before deployment proof restores the old unit,
 selector and retained state. Running mode proves the restored old process;
 stopped mode stays stopped and proves absence, without claiming recovery or
 health. Cached and conservative rollback use the same signed state. Cleanup
-protects every admitted prior artifact root. Proven deployments cannot roll back
+protects the selected prior configuration release, every admitted runtime artifact
+root, and the independently signed prior supervisor's CLI/Kagami release. Supervisor
+custody remains explicit in its own prior plan; malformed or inconsistent prior
+state cannot authorize cleanup. Proven deployments cannot roll back
 through this workflow, and ambiguous writes require their retained recovery path.
 
 These preparation operations do not authorize replacement of shared network

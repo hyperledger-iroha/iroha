@@ -1643,7 +1643,6 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         NonZeroU64::new(1).expect("nonzero height"),
         None,
         None,
-        None,
         1_700_000_000_000,
         0,
     );

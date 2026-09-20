@@ -3461,7 +3461,7 @@ fn committed_block_wire_requires_exact_canonical_executed_height() -> Result<()>
 
     let key_pair = KeyPair::try_from_seed(vec![0x7B; 32], Algorithm::Ed25519)
         .wrap_err("derive committed-block fixture signer")?;
-    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 1, 7);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 7);
     let signature = BlockSignature::new(
         0,
         SignatureOf::try_from_hash(key_pair.private_key(), header.hash())?,

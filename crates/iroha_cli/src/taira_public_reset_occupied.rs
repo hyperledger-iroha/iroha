@@ -4,7 +4,7 @@
 //! artifact path is never reconstructed from another role's source revision.
 
 use super::super::{
-    OccupiedArtifactV1, VALIDATOR_ARTIFACT_ROLES, artifact_role_policy,
+    OCCUPIED_VALIDATOR_ARTIFACT_ROLES, OccupiedArtifactV1, artifact_role_policy,
     validate_absolute_normal_path, validate_lower_hex,
 };
 use super::*;
@@ -17,14 +17,18 @@ const UNIT_BACKUP: &str = "validator-unit.before";
 pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Result<()> {
     let prior = validator.admitted_release()?;
     prior.service_state.validate()?;
-    if prior.artifacts.len() != VALIDATOR_ARTIFACT_ROLES.len() {
+    if prior.artifacts.len() != OCCUPIED_VALIDATOR_ARTIFACT_ROLES.len() {
         return Err(eyre!(
             "occupied runtime requires exactly {} artifact roles",
-            VALIDATOR_ARTIFACT_ROLES.len()
+            OCCUPIED_VALIDATOR_ARTIFACT_ROLES.len()
         ));
     }
     let mut paths = BTreeSet::new();
-    for (entry, role) in prior.artifacts.iter().zip(VALIDATOR_ARTIFACT_ROLES) {
+    for (entry, role) in prior
+        .artifacts
+        .iter()
+        .zip(OCCUPIED_VALIDATOR_ARTIFACT_ROLES)
+    {
         if entry.role != role || !paths.insert(&entry.path) {
             return Err(eyre!(
                 "occupied artifact roles/paths are not exact, ordered and unique"
@@ -42,13 +46,8 @@ pub(in super::super) fn validate_occupied_binding(validator: &ValidatorV1) -> Re
             return Err(eyre!("occupied artifact size or mode violates its role"));
         }
         match role {
-            "iroha3d" | "iroha_cli" | "kagami" | "sorafs_node" => {
-                let basename = match role {
-                    "iroha3d" => "iroha3d_taira",
-                    "iroha_cli" => "iroha",
-                    "kagami" => "kagami",
-                    _ => "sorafs-node",
-                };
+            "iroha3d" => {
+                let basename = "iroha3d_taira";
                 let path = Path::new(&entry.path);
                 let root = path
                     .parent()
@@ -668,24 +667,16 @@ mod tests {
         let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
             unreachable!()
         };
-        for (role, revision) in [("iroha3d", "5"), ("iroha_cli", "5"), ("kagami", "8")] {
-            let entry = prior
-                .artifacts
-                .iter_mut()
-                .find(|entry| entry.role == role)
-                .unwrap();
-            entry.source_commit = revision.repeat(40);
-            let basename = match role {
-                "iroha3d" => "iroha3d_taira",
-                "iroha_cli" => "iroha",
-                "kagami" => "kagami",
-                _ => unreachable!("fixture executable roles"),
-            };
-            entry.path = format!(
-                "/private/runtime/taira-public-reset/release-{}-update-0123456789abcdef/bin/{basename}",
-                entry.source_commit
-            );
-        }
+        let daemon = prior
+            .artifacts
+            .iter_mut()
+            .find(|entry| entry.role == "iroha3d")
+            .unwrap();
+        daemon.source_commit = "5".repeat(40);
+        daemon.path = format!(
+            "/private/runtime/taira-public-reset/release-{}-update-0123456789abcdef/bin/iroha3d_taira",
+            daemon.source_commit
+        );
         prior.argv[0] = prior.artifact("iroha3d").unwrap().path.clone();
         for role in ["genesis", "genesis_hash"] {
             let entry = prior
@@ -726,23 +717,19 @@ mod tests {
                 .iter()
                 .map(|entry| entry.role.as_str())
                 .collect::<Vec<_>>(),
-            VALIDATOR_ARTIFACT_ROLES
-        );
-        assert_ne!(
-            prior.artifact("kagami").unwrap().source_commit,
-            prior.commit
-        );
-        assert_ne!(
-            prior.artifact("kagami").unwrap().source_commit,
-            prior.artifact("iroha3d").unwrap().source_commit
+            OCCUPIED_VALIDATOR_ARTIFACT_ROLES
         );
         assert_ne!(
             prior.artifact("iroha3d").unwrap().source_commit,
             prior.commit
         );
         assert_eq!(
-            prior.artifact("sorafs_node").unwrap().source_commit,
+            prior.artifact("config").unwrap().source_commit,
             prior.commit
+        );
+        assert_eq!(
+            inventory.validators[0].artifacts.len(),
+            super::super::super::VALIDATOR_ARTIFACT_ROLES.len()
         );
         assert_ne!(
             prior.artifact("genesis").unwrap().source_commit,
@@ -776,19 +763,17 @@ mod tests {
                     .unwrap()
             };
             let daemon = role_index("iroha3d");
-            let cli = role_index("iroha_cli");
             let config = role_index("config");
             let unit = role_index("validator_unit");
             let genesis = role_index("genesis");
-            let kagami = role_index("kagami");
             match change {
                 0 => {
                     prior.artifacts.pop();
                 }
-                1 => prior.artifacts.swap(daemon, cli),
+                1 => prior.artifacts.swap(daemon, config),
                 2 => prior.artifacts[daemon].role = "iroha_cli".to_owned(),
                 3 => prior.artifacts[daemon].source_commit = "7".repeat(40),
-                4 => prior.artifacts[daemon].path = prior.artifacts[cli].path.clone(),
+                4 => prior.artifacts[daemon].path = prior.artifacts[config].path.clone(),
                 5 => prior.artifacts[daemon].sha256 = "xyz".to_owned(),
                 6 => prior.artifacts[daemon].size = 0,
                 7 => prior.artifacts[config].mode = 0o644,
@@ -801,13 +786,13 @@ mod tests {
                 12 => prior.argv.push("--extra".to_owned()),
                 13 => prior.artifacts[genesis].path = "/tmp/genesis.json".to_owned(),
                 14 => {
-                    prior.artifacts[kagami].path = Path::new(&prior.artifacts[kagami].path)
+                    prior.artifacts[daemon].path = Path::new(&prior.artifacts[daemon].path)
                         .with_file_name("iroha")
                         .to_string_lossy()
                         .into_owned();
                 }
-                15 => prior.artifacts[kagami].source_commit = prior.commit.clone(),
-                16 => prior.artifacts[kagami].role = "sorafs_node".to_owned(),
+                15 => prior.artifacts[daemon].source_commit = prior.commit.clone(),
+                16 => prior.artifacts[daemon].role = "sorafs_node".to_owned(),
                 _ => unreachable!(),
             }
             let error = validate_occupied_binding(&validator).expect_err(&format!(
@@ -826,6 +811,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn occupied_runtime_rejects_builder_tools_and_each_missing_runtime_role() {
+        for role in OCCUPIED_VALIDATOR_ARTIFACT_ROLES {
+            let mut validator = split_validator();
+            let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state
+            else {
+                unreachable!()
+            };
+            prior.artifacts.retain(|entry| entry.role != role);
+            assert!(
+                validate_occupied_binding(&validator)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exactly 5 artifact roles"),
+                "missing {role}"
+            );
+        }
+        let mut validator = split_validator();
+        let ValidatorInitialStateV1::AdmittedRelease(prior) = &mut validator.initial_state else {
+            unreachable!()
+        };
+        let daemon = prior.artifact("iroha3d").unwrap().clone();
+        for (offset, (role, name)) in [
+            ("iroha_cli", "iroha"),
+            ("kagami", "kagami"),
+            ("sorafs_node", "sorafs-node"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut tool = daemon.clone();
+            tool.role = role.into();
+            tool.path = Path::new(&daemon.path)
+                .with_file_name(name)
+                .display()
+                .to_string();
+            prior.artifacts.insert(offset + 1, tool);
+        }
+        assert_eq!(
+            prior
+                .artifacts
+                .iter()
+                .map(|entry| entry.role.as_str())
+                .collect::<Vec<_>>(),
+            super::super::super::VALIDATOR_ARTIFACT_ROLES
+        );
+        assert!(
+            validate_occupied_binding(&validator)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly 5 artifact roles")
+        );
     }
 
     #[test]
@@ -907,6 +946,25 @@ mod tests {
                 protects_prior_artifact(&target, root),
                 "unprotected {}",
                 entry.role
+            );
+        }
+        let prior = validator.admitted_release().unwrap();
+        let daemon_root = Path::new(&prior.artifact("iroha3d").unwrap().path)
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        // The source42 CLI is a daemon sibling; retained SoraFS is within the
+        // selected configuration release. Neither is a validator dependency.
+        for retained_tool in [
+            daemon_root.join("bin/iroha"),
+            Path::new(&prior.release_root).join("bin/sorafs-node"),
+        ] {
+            let release = retained_tool.parent().unwrap().parent().unwrap();
+            assert!(
+                protects_prior_artifact(&target, release),
+                "{}",
+                retained_tool.display()
             );
         }
         assert!(!protects_prior_artifact(

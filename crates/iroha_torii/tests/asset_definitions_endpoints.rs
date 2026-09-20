@@ -75,7 +75,6 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         NonZeroU64::new(1).expect("non-zero height"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -142,7 +141,6 @@ fn commit_alias_lease(
 ) {
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(height).expect("non-zero height"),
-        None,
         None,
         None,
         creation_time_ms,
@@ -297,7 +295,6 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     ));
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero height"),
-        None,
         None,
         None,
         0,

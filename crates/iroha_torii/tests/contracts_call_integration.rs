@@ -68,7 +68,6 @@ fn grant_contract_operator_permissions(
         NonZeroU64::new(height).expect("height > 0"),
         None,
         None,
-        None,
         0,
         0,
     );
@@ -632,7 +631,6 @@ fn execute_prepared_contract_in_test_overlay(
     let committed_height = state.committed_height();
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(execution_height).expect("positive execution height"),
-        None,
         None,
         None,
         0,
@@ -1422,7 +1420,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         std::num::NonZeroU64::new(1).expect("height > 0"),
         None,
         None,
-        None,
         0,
         0,
     ));
@@ -1500,7 +1497,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     );
     let mut seed_block = state.block(iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("height > 0"),
-        None,
         None,
         None,
         0,
@@ -1595,7 +1591,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     );
     let mut seed_block = state.block(iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("height > 0"),
-        None,
         None,
         None,
         0,

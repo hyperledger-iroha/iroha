@@ -33,7 +33,6 @@ mod dpn_permission_tests {
                         NonZeroU64::new(height).expect("non-zero block height"),
                         None,
                         None,
-                        None,
                         0,
                         0,
                     ),

@@ -52,14 +52,8 @@ mod tests {
         fn new() -> Self {
             let key_pair = checked_bridge_ed25519_key_fixture();
             let account_id = AccountId::new(key_pair.public_key().clone());
-            let header = BlockHeader::new(
-                NonZeroU64::new(1).expect("height > 0"),
-                None,
-                None,
-                None,
-                0,
-                0,
-            );
+            let header =
+                BlockHeader::new(NonZeroU64::new(1).expect("height > 0"), None, None, 0, 0);
             Self {
                 host: Iroha,
                 context: Context {

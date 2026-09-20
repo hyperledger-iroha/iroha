@@ -473,7 +473,6 @@ mod tests {
             NonZeroU64::new(1).expect("non-zero height"),
             None,
             None,
-            None,
             0,
             0,
         );
@@ -660,7 +659,6 @@ mod tests {
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero successor height"),
             Some(parent_artifact.block_hash),
-            None,
             None,
             0,
             0,

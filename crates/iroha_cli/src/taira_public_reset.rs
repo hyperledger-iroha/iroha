@@ -65,6 +65,14 @@ const VALIDATOR_ARTIFACT_ROLES: [&str; 8] = [
     "genesis_hash",
     "validator_unit",
 ];
+// Rollback admits the prior validator runtime independently of candidate build tools.
+const OCCUPIED_VALIDATOR_ARTIFACT_ROLES: [&str; 5] = [
+    "iroha3d",
+    "config",
+    "genesis",
+    "genesis_hash",
+    "validator_unit",
+];
 const EDGE_ARTIFACT_ROLES: [&str; 2] = ["iroha_cli", "edge_config"];
 const MAX_SOURCE_FILES: usize = 100_000;
 const MAX_SOURCE_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -1016,6 +1024,7 @@ struct ValidatorAdmittedReleaseV1 {
     release_root: String,
     /// Exact daemon argv, including the stable configuration selector.
     argv: Vec<String>,
+    /// Exact ordered daemon/configuration/genesis/hash/unit runtime closure.
     artifacts: Vec<OccupiedArtifactV1>,
     /// Independently selected predecessor service state; never inferred from a failed probe.
     service_state: PriorValidatorServiceStateV1,
@@ -9735,14 +9744,11 @@ mod executor_model {
                                     format!("{service_root}/current/config/config.toml"),
                                     "--sora".to_owned(),
                                 ],
-                                artifacts: VALIDATOR_ARTIFACT_ROLES
+                                artifacts: OCCUPIED_VALIDATOR_ARTIFACT_ROLES
                                     .iter()
                                     .map(|role| {
                                         let name = match *role {
                                             "iroha3d" => "bin/iroha3d_taira".to_owned(),
-                                            "iroha_cli" => "bin/iroha".to_owned(),
-                                            "kagami" => "bin/kagami".to_owned(),
-                                            "sorafs_node" => "bin/sorafs-node".to_owned(),
                                             "config" => "config/config.toml".to_owned(),
                                             "genesis" => "genesis/genesis.json".to_owned(),
                                             "genesis_hash" => "genesis/genesis.sha256".to_owned(),

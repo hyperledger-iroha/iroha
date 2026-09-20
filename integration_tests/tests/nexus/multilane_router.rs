@@ -213,7 +213,6 @@ fn seed_committed_height(state: &mut State, height: u64) {
         std::num::NonZeroU64::new(height).expect("committed height must be nonzero"),
         None,
         None,
-        None,
         0,
         0,
     ));

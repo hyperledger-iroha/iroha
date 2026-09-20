@@ -415,22 +415,7 @@ pub(super) fn validate_plan_context(
             }
         }
     }
-    match (plan.prior_state.as_str(), &plan.prior) {
-        ("absent", None) => {}
-        ("running" | "stopped", Some(prior)) => {
-            public_bytes(&prior.plan_bytes, &prior.plan_sha256)?;
-            let previous: EpochSupervisorPlanV1 = json::from_slice(&prior.plan_bytes)?;
-            validate_generation(&previous)?;
-            if previous.host_slug != plan.host_slug {
-                return Err(eyre!("epoch supervisor predecessor host differs"));
-            }
-        }
-        _ => {
-            return Err(eyre!(
-                "epoch supervisor requires explicit absent/running/stopped predecessor closure"
-            ));
-        }
-    }
+    predecessor(plan)?;
     Ok(())
 }
 
@@ -655,16 +640,39 @@ pub(super) fn finish_seal(admitted: &HostAdmission, progress: &HostProgressV1) -
     Ok(())
 }
 fn predecessor(plan: &EpochSupervisorPlanV1) -> Result<Option<EpochSupervisorPlanV1>> {
-    plan.prior
-        .as_ref()
-        .map(|p| {
-            public_bytes(&p.plan_bytes, &p.plan_sha256)?;
-            let prior = json::from_slice(&p.plan_bytes)?;
+    match (plan.prior_state.as_str(), &plan.prior) {
+        ("absent", None) => Ok(None),
+        ("running" | "stopped", Some(pin)) => {
+            public_bytes(&pin.plan_bytes, &pin.plan_sha256)?;
+            let prior: EpochSupervisorPlanV1 = json::from_slice(&pin.plan_bytes)?;
             validate_generation(&prior)?;
-            Ok(prior)
-        })
-        .transpose()
+            if prior.host_slug != plan.host_slug {
+                return Err(eyre!("epoch supervisor predecessor host differs"));
+            }
+            Ok(Some(prior))
+        }
+        _ => Err(eyre!(
+            "epoch supervisor requires explicit absent/running/stopped predecessor closure"
+        )),
+    }
 }
+
+/// Protect the independently authenticated supervisor tool release on every host.
+/// Its signed literal path need not share a validator's configuration or daemon root.
+pub(super) fn protects_prior_release(plan: &EpochSupervisorPlanV1, path: &Path) -> Result<bool> {
+    let Some(prior) = predecessor(plan)? else {
+        return Ok(false);
+    };
+    let policy = validate_generation(&prior)?;
+    let release = Path::new(&policy.kagami.path)
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| eyre!("epoch supervisor tool release root missing"))?;
+    // validate_generation binds the Kagami path and its exact bin/iroha sibling
+    // to the prior policy and unit. Keep the complete containing release.
+    Ok(release.starts_with(path) || path.starts_with(release))
+}
+
 fn nominated_admission(admitted: &HostAdmission) -> Result<HostAdmission> {
     let validator = admitted
         .inventory
@@ -1666,9 +1674,123 @@ pub(in super::super) fn fixture_plan(
     plan
 }
 
+/// Independently bound prior supervisor generation for cleanup and custody tests.
+#[cfg(test)]
+pub(super) fn fixture_prior_generation(
+    plan: &EpochSupervisorPlanV1,
+    release: &Path,
+) -> EpochSupervisorPlanV1 {
+    let _chain_guard = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+    let mut prior = plan.clone();
+    prior.prior_state = "absent".into();
+    prior.prior = None;
+    prior.release_source_commit = "7".repeat(40);
+    let mut policy: NativePolicyV1 = json::from_slice(&prior.policy_bytes).unwrap();
+    policy.release_source_commit = prior.release_source_commit.clone();
+    policy.kagami.path = release.join("bin/kagami").display().to_string();
+    prior.policy_bytes = json::to_json(&policy).unwrap().into_bytes();
+    prior.policy_sha256 = sha256_hex(&prior.policy_bytes);
+    let generation = format!("{STATE_ROOT}/generations/{}", prior.policy_sha256);
+    prior.admin_config_path = format!("{generation}/administrator.toml");
+    prior.http_operator_key_path = format!("{generation}/http-operator.key");
+    prior.policy_path = format!("{generation}/policy.json");
+    prior.trust_path = format!("{generation}/trust.json");
+    prior.custody_path = format!("{generation}/custody.json");
+    prior.unit_bytes = render_unit(&prior, release.join("bin/iroha").to_str().unwrap()).unwrap();
+    prior.unit_sha256 = sha256_hex(&prior.unit_bytes);
+    validate_generation(&prior).unwrap();
+    prior
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn bind_prior(plan: &mut EpochSupervisorPlanV1, prior: &EpochSupervisorPlanV1) {
+        let bytes = json::to_json(prior).unwrap().into_bytes();
+        plan.prior = Some(PriorEpochSupervisorV1 {
+            plan_sha256: sha256_hex(&bytes),
+            plan_bytes: bytes,
+        });
+    }
+
+    #[test]
+    fn prior_release_protection_preserves_independent_authenticated_tool_roots() {
+        let mut plan = super::super::super::sample_inventory_fixture().epoch_supervisor;
+        for root in [
+            "/private/runtime/taira-public-reset/release94".to_owned(),
+            format!("/srv/taira/taira-validator-2/releases/{}", "8".repeat(40)),
+        ] {
+            let root = Path::new(&root);
+            let prior = fixture_prior_generation(&plan, root);
+            for state in ["running", "stopped"] {
+                plan.prior_state = state.into();
+                bind_prior(&mut plan, &prior);
+                for path in [
+                    root.to_path_buf(),
+                    root.join("bin"),
+                    root.join("bin/iroha"),
+                    root.join("bin/kagami"),
+                ] {
+                    assert!(
+                        protects_prior_release(&plan, &path).unwrap(),
+                        "{}",
+                        path.display()
+                    );
+                }
+                assert!(!protects_prior_release(&plan, &root.with_file_name("unrelated")).unwrap());
+            }
+        }
+        plan.prior_state = "absent".into();
+        plan.prior = None;
+        assert!(!protects_prior_release(&plan, Path::new("/srv/taira")).unwrap());
+    }
+
+    #[test]
+    fn prior_release_protection_rejects_malformed_state_or_plan() {
+        let original = super::super::super::sample_inventory_fixture().epoch_supervisor;
+        let root = Path::new("/private/runtime/taira-public-reset/release94");
+        for change in 0..10 {
+            let mut plan = original.clone();
+            let mut prior = fixture_prior_generation(&plan, root);
+            plan.prior_state = "running".into();
+            match change {
+                0 => plan.prior_state = "absent".into(),
+                1 | 2 => {}
+                3 => plan.prior_state = "unknown".into(),
+                4 | 5 => {}
+                6 => prior.host_slug = "taira-validator-2".into(),
+                7 => prior.kagami_sha256 = "9".repeat(64),
+                8 => prior.policy_bytes.push(b' '),
+                9 => prior.unit_bytes.push(b' '),
+                _ => unreachable!(),
+            }
+            bind_prior(&mut plan, &prior);
+            match change {
+                1 | 2 => {
+                    plan.prior = None;
+                    if change == 2 {
+                        plan.prior_state = "stopped".into();
+                    }
+                }
+                4 => plan.prior.as_mut().unwrap().plan_sha256 = "1".repeat(64),
+                5 => {
+                    let pin = plan.prior.as_mut().unwrap();
+                    pin.plan_bytes = b"{}".to_vec();
+                    pin.plan_sha256 = sha256_hex(&pin.plan_bytes);
+                }
+                _ => {}
+            }
+            assert!(
+                protects_prior_release(&plan, root).is_err(),
+                "mutation {change}"
+            );
+            assert!(
+                protects_prior_release(&plan, Path::new("/unrelated")).is_err(),
+                "mutation {change} must not become no protection"
+            );
+        }
+    }
+
     #[test]
     fn unit_matches_independent_python_golden_and_exact_native_argv() {
         let inventory = super::super::super::sample_inventory_fixture();

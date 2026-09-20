@@ -194,7 +194,7 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
         Mint::asset_quantity(500u64, AssetId::new(cash_id, first_account.clone())).into(),
         Mint::asset_quantity(250u64, AssetId::new(points_id, first_account.clone())).into(),
     ];
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let selector =
@@ -255,7 +255,7 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
         Mint::asset_quantity(875u64, AssetId::new(cash_id, first_account.clone())).into(),
         Mint::asset_quantity(320u64, AssetId::new(points_id, first_account.clone())).into(),
     ];
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
     let selector =

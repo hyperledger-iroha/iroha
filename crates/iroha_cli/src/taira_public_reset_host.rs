@@ -9577,8 +9577,8 @@ fn build_cleanup_plan(admitted: &HostAdmission) -> Result<CleanupPlanV1> {
                 continue;
             }
             let path = entry.path();
-            if path == current_release || occupied::protects_prior_artifact(&admitted.target, &path)
-            {
+            let protected = cleanup_protects_prior_release(admitted, &path)?;
+            if path == current_release || protected {
                 continue;
             }
             if let Some(candidate) = admit_cleanup_candidate(&path, admitted, "release", policy)? {
@@ -9685,12 +9685,21 @@ fn cleanup_original_path(admitted: &HostAdmission, kind: &str, name: &str) -> Re
 }
 
 #[cfg(any(target_os = "linux", test))]
+fn cleanup_protects_prior_release(admitted: &HostAdmission, path: &Path) -> Result<bool> {
+    // Validate even when a validator root already protects the path: malformed
+    // supervisor custody must never become an implicit absent predecessor.
+    let supervisor =
+        epoch_supervisor::protects_prior_release(&admitted.inventory.epoch_supervisor, path)?;
+    Ok(supervisor || occupied::protects_prior_artifact(&admitted.target, path))
+}
+
+#[cfg(any(target_os = "linux", test))]
 fn require_cleanup_release_not_prior(
     admitted: &HostAdmission,
     _kind: &str,
     path: &Path,
 ) -> Result<()> {
-    if occupied::protects_prior_artifact(&admitted.target, path) {
+    if cleanup_protects_prior_release(admitted, path)? {
         return Err(eyre!(
             "cleanup must preserve the exact admitted prior release"
         ));
@@ -25713,6 +25722,95 @@ time.sleep(30)
         assert!(require_cleanup_release_not_prior(&admitted, "release", prior).is_err());
         require_cleanup_release_not_prior(&admitted, "release", Path::new("/srv/taira/unrelated"))
             .expect("other release is checked by the remaining cleanup admission rules");
+    }
+
+    #[test]
+    fn cleanup_preserves_prior_supervisor_release_across_hosts_and_replay() {
+        let mut admitted = progress_admission();
+        admitted.target = HostTarget::Validator(admitted.inventory.validators[1].clone());
+        assert_ne!(
+            admitted.target.slug(),
+            admitted.inventory.epoch_supervisor.host_slug
+        );
+        let original_name = "8".repeat(40);
+        let root = Path::new(admitted.target.service_root())
+            .join("releases")
+            .join(&original_name);
+        let prior =
+            epoch_supervisor::fixture_prior_generation(&admitted.inventory.epoch_supervisor, &root);
+        let bytes = json::to_json(&prior).unwrap().into_bytes();
+        admitted.inventory.epoch_supervisor.prior_state = "stopped".into();
+        admitted.inventory.epoch_supervisor.prior =
+            Some(epoch_supervisor::PriorEpochSupervisorV1 {
+                plan_sha256: sha256_hex(&bytes),
+                plan_bytes: bytes,
+            });
+        assert!(!occupied::protects_prior_artifact(&admitted.target, &root));
+        assert!(
+            cleanup_protects_prior_release(&admitted, &root).unwrap(),
+            "discovery protects the separate supervisor dependency"
+        );
+        assert!(require_cleanup_release_not_prior(&admitted, "release", &root).is_err());
+
+        let marker = GeneratedMarkerV1 {
+            schema: GENERATED_MARKER_SCHEMA_V1.into(),
+            kind: "release".into(),
+            host_slug: admitted.target.slug().into(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+            revision: original_name.clone(),
+            created_at_unix_ms: 1,
+        };
+        let entry = CleanupPlanEntryV1 {
+            kind: "release".into(),
+            original_name,
+            original_path: root.display().to_string(),
+            marker_sha256: sha256_hex(json::to_json(&marker).unwrap().as_bytes()),
+            marker,
+            directory_device: 1,
+            directory_inode: 1,
+            initial_bytes: 1,
+        };
+        let plan = CleanupPlanV1 {
+            schema: CLEANUP_PLAN_SCHEMA_V1.into(),
+            action: HostAction::Cleanup.label().into(),
+            host_slug: admitted.target.slug().into(),
+            request_sha256: admitted.request_sha256.clone(),
+            inventory_sha256: admitted.inventory_sha256.clone(),
+            authorization_sha256: admitted.authorization_sha256.clone(),
+            authorization_nonce: admitted.inventory.authorization_nonce.clone(),
+            max_reclaim_bytes: physical_host_cleanup_reclaim_limit(&admitted).unwrap(),
+            bytes_before: 1,
+            entries: vec![entry],
+        };
+        let replay: CleanupPlanV1 =
+            json::from_slice(json::to_json(&plan).unwrap().as_bytes()).unwrap();
+        assert!(
+            validate_cleanup_plan(&admitted, &replay)
+                .unwrap_err()
+                .to_string()
+                .contains("preserve the exact admitted prior release")
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            open_cleanup_plan_entry(&admitted, &replay.entries[0])
+                .err()
+                .expect("execution must refuse before opening the release")
+                .to_string()
+                .contains("preserve the exact admitted prior release")
+        );
+        // This plan is otherwise valid: a genuinely absent supervisor adds no
+        // invented dependency or rejection before the ordinary cleanup checks.
+        let retained = admitted.inventory.epoch_supervisor.prior.take();
+        admitted.inventory.epoch_supervisor.prior_state = "absent".into();
+        validate_cleanup_plan(&admitted, &replay).unwrap();
+        // Even a path already protected by the validator must not mask an invalid
+        // supervisor state/pin relation during discovery or durable replay.
+        admitted.inventory.epoch_supervisor.prior = retained;
+        let validator_root = admitted.target.admitted_release_root().unwrap();
+        assert!(cleanup_protects_prior_release(&admitted, validator_root).is_err());
+        assert!(require_cleanup_release_not_prior(&admitted, "release", validator_root).is_err());
+        assert!(validate_cleanup_plan(&admitted, &replay).is_err());
     }
 
     #[cfg(unix)]

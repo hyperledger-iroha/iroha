@@ -631,8 +631,14 @@ with `"state":"admitted_release"` and the release record in `"value"`. Both
 fields are required; vacant state accepts only `null` content. Unknown fields,
 unknown discriminators, and retired rollback shapes are rejected. There is no
 implicit predecessor or legacy rollback field. An admitted release binds its
-actual prior commit, canonical `releases/<commit>` directory, and exact artifact
-hashes. Every occupied validator record also requires `service_state`: explicitly
+actual prior configuration commit, canonical `releases/<commit>` directory, and
+exactly five ordered runtime artifacts: `iroha3d`, `config`, `genesis`,
+`genesis_hash`, and `validator_unit`. Each artifact independently binds its source
+revision, path, hash, size and mode; the daemon may come from a different pinned
+release. Candidate validators still require all eight artifacts. Prior CLI/Kagami
+for an occupied epoch supervisor remain pinned by that supervisor's own signed
+plan, whose tool release is protected from cleanup alongside the validator roots.
+Every occupied validator record also requires `service_state`: explicitly
 `running` with null content, or `stopped` with the independently selected state
 root's `device` and nonzero `inode`. Missing state has no default. Running requires
 the exact live prior process; a failed probe never changes it to stopped. Stopped
