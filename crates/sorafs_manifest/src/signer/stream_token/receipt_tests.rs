@@ -1,4 +1,4 @@
-//! Exact stream receipt tests with independently signed simulations, not hardware qualification.
+//! Exact stream receipt tests with independently signed authorization fixtures.
 
 use super::*;
 use crate::signer::{
@@ -1021,22 +1021,9 @@ fn token_time_checks_use_original_completion_observation_and_exclusive_token_exp
 }
 
 #[test]
-fn resigned_wrong_purpose_and_software_origin_custody_never_authorize_stream_receipts() {
-    let mutations: &[(fn(&mut SignerCustodyStatementV1), SignerCustodyErrorV1)] = &[
-        (
-            |s| s.exportable = true,
-            SignerCustodyErrorV1::HardwareCustodyRequired,
-        ),
-        (
-            |s| s.generated_in_hardware = false,
-            SignerCustodyErrorV1::HardwareCustodyRequired,
-        ),
-        (
-            |s| s.ever_exported = true,
-            SignerCustodyErrorV1::HardwareCustodyRequired,
-        ),
-        (|s| s.revoked = true, SignerCustodyErrorV1::Revoked),
-    ];
+fn resigned_wrong_purpose_and_revoked_custody_never_authorize_stream_receipts() {
+    let mutations: &[(fn(&mut SignerCustodyStatementV1), SignerCustodyErrorV1)] =
+        &[(|s| s.revoked = true, SignerCustodyErrorV1::Revoked)];
     for (mutate, expected) in mutations {
         let mut f = fixture();
         assert_positive(&f);

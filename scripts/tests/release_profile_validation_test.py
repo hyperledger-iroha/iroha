@@ -468,7 +468,7 @@ def test_release_builders_emit_portable_basename_checksum_sidecars(
         assert '--listed-name "$archive_name"' in source
 
 
-def test_release_pipeline_requires_complete_software_ed25519_signer_contract() -> None:
+def test_release_pipeline_requires_authenticated_ed25519_without_backend_origin_claims() -> None:
     scripts_dir = REPO_ROOT / "scripts"
     sys.path.insert(0, str(scripts_dir))
     try:
@@ -477,17 +477,14 @@ def test_release_pipeline_requires_complete_software_ed25519_signer_contract() -
         sys.path.pop(0)
 
     assert pipeline.RELEASE_SIGNING_PROVIDER == "authenticated_external_signer"
-    assert pipeline.RELEASE_SIGNING_BACKEND == "software"
-    assert pipeline.RELEASE_SIGNER_QUALIFICATION == "software-key-qualified"
+    assert not hasattr(pipeline, "RELEASE_SIGNING_BACKEND")
+    assert not hasattr(pipeline, "RELEASE_SIGNER_QUALIFICATION")
     release_wrapper = (REPO_ROOT / "scripts" / "release_sorafs_cli.sh").read_text(
         encoding="utf-8"
     )
-    for marker in (
-        'release_signing_provider="authenticated_external_signer"',
-        'release_signing_backend="software"',
-        'signer_qualification="software-key-qualified"',
-    ):
-        assert marker in release_wrapper
+    assert 'release_signing_provider="authenticated_external_signer"' in release_wrapper
+    assert "release_signing_backend=" not in release_wrapper
+    assert "signer_qualification=" not in release_wrapper
 
     assert pipeline.release_signing_cli_args(None, None, None) == []
     with pytest.raises(pipeline.PipelineError, match="must be supplied together"):
@@ -1608,8 +1605,6 @@ def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
             "release_manifest.json.sig",
             "--development-allow-unsigned-publish-plan",
             "authenticated_external_signer",
-            "software",
-            "software-key-qualified",
             "OIDC/cosign",
         ),
         "release_runbook.md": (
@@ -1637,8 +1632,6 @@ def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
             "exactly 32 raw Ed25519 public-key bytes",
             "--development-allow-unsigned-manifest",
             "authenticated_external_signer",
-            "software",
-            "software-key-qualified",
         ),
         "sora_nexus_operator_onboarding.md": (
             "Builders emit no per-artifact key or signature sidecars",
@@ -1650,8 +1643,6 @@ def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
             "exactly 32 raw Ed25519 bytes",
             "release_manifest.json.sig",
             "authenticated_external_signer",
-            "software",
-            "software-key-qualified",
             "OIDC/cosign",
         ),
         "nexus-operator-onboarding.md": (
@@ -1664,8 +1655,6 @@ def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
             "exactly 32 raw Ed25519 bytes",
             "release_manifest.json.sig",
             "authenticated_external_signer",
-            "software",
-            "software-key-qualified",
             "OIDC/cosign",
         ),
         "sorafs_reference_sdk_plan.md": (
@@ -1673,7 +1662,7 @@ def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
             "canonical aggregate `release_manifest.json`",
             "scripts/release_manifest_signing.py",
             "release-manifest-receipt",
-            "hardware",
+            "signer",
             "custody",
             "current revocation",
             "finalized completion",
@@ -1685,8 +1674,6 @@ def test_release_signing_docs_bind_fingerprint_key_and_signature() -> None:
             "canonical aggregate `release_manifest.json`",
             "scripts/release_manifest_signing.py",
             "authenticated_external_signer",
-            "software",
-            "software-key-qualified",
             "aggregate-manifest signature tuple",
         ),
     }

@@ -152,6 +152,8 @@ impl StreamSource {
     }
 }
 
+// Deliberately signing-only: production-style receipt tests must not require an enrollment or
+// terminal-control implementation. Renewal fixtures request that capability from `base` explicitly.
 impl SignerOperationStateSourceV1 for StreamSource {
     fn observe(
         &self,
@@ -263,27 +265,6 @@ impl SignerOperationStateSourceV1 for StreamSource {
             return Err(SignerOperationErrorV1::ReservationConflict);
         }
         Ok(state.context)
-    }
-
-    fn observe_enrollment(
-        &self,
-        binding: &SignerCustodyBindingV1,
-    ) -> Result<SignerCustodyEnrollmentContextV1, SignerOperationErrorV1> {
-        self.base.observe_enrollment(binding)
-    }
-
-    fn enroll_initial(
-        &self,
-        request: &super::super::super::control::SignerCustodyEnrollmentRequestV1<'_>,
-    ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1> {
-        self.base.enroll_initial(request)
-    }
-
-    fn commit_custody_transition(
-        &self,
-        request: &super::super::super::control::SignerCustodyTransitionRequestV1<'_>,
-    ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1> {
-        self.base.commit_custody_transition(request)
     }
 }
 
@@ -476,7 +457,12 @@ impl Harness {
         .unwrap();
         let bytes = norito::encode_canonical(&record).unwrap();
         let prepared = coordinator
-            .prepare_custody_activation(binding, bytes.clone(), self.source.trust.clone())
+            .prepare_custody_activation(
+                self.source.base.as_ref(),
+                binding,
+                bytes.clone(),
+                self.source.trust.clone(),
+            )
             .unwrap();
         let operation_id = [0x94; 32];
         let intent = SignerOperationIntentV1 {
@@ -504,7 +490,7 @@ impl Harness {
             )
             .unwrap();
         let activated = transition
-            .finish_custody_activation(prepared, audit)
+            .finish_custody_activation(self.source.base.as_ref(), prepared, audit)
             .unwrap();
         let custody = SignerOperationCustodyV1::from_verified(activated.activation().unwrap());
         (bytes, custody)

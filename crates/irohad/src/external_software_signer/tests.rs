@@ -23,6 +23,127 @@ use sorafs_manifest::{
 };
 use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 const WRAPPING_KEY: [u8; 32] = [0xA5; 32];
+
+#[test]
+fn unimplemented_purposes_cannot_provision_an_unusable_signer() {
+    let parent = temporary_parent();
+    fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let state = parent.path().join("unsupported-purpose");
+    for role in [
+        SignerRoleV1::ReleaseManifest,
+        SignerRoleV1::StreamToken,
+        SignerRoleV1::FinalPromotionProvenance,
+        SignerRoleV1::FinalPromotionAccountTransaction,
+    ] {
+        let configured = provisioning(role, SignerKeyAlgorithmV1::Ed25519);
+        assert!(configured.purpose_binding.validates_role(role));
+        assert!(matches!(
+            SoftwareSignerServiceV1::provision(&state, configured, wrapping_key()),
+            Err(super::SoftwareSignerErrorV1::InvalidBinding)
+        ));
+        assert!(!state.exists());
+    }
+    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn final_promotion_software_provisioning_rejects_all_handles_and_retains_repair() {
+    let parent = temporary_parent();
+    fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let state = parent.path().join("rejected-final-promotion");
+    for handle in [
+        "software://sorafs/final-promotion-provenance/primary",
+        "software://sorafs/promotion/primary",
+        "hsm://sorafs/final-promotion-provenance/primary",
+        "kms://sorafs/final-promotion-provenance/primary",
+        "pkcs11:sorafs/final-promotion-provenance/primary",
+    ] {
+        let mut configured = provisioning(
+            SignerRoleV1::FinalPromotionProvenance,
+            SignerKeyAlgorithmV1::Ed25519,
+        );
+        configured.handle = handle.into();
+        assert!(configured.purpose_binding.validates_role(configured.role));
+        assert!(!super::protocol::valid_software_signer_handle(
+            configured.role,
+            handle
+        ));
+        assert!(matches!(
+            SoftwareSignerServiceV1::provision(&state, configured, wrapping_key()),
+            Err(super::SoftwareSignerErrorV1::InvalidBinding)
+        ));
+        assert!(!state.exists());
+        assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    }
+    let service = provision(
+        parent.path(),
+        SignerRoleV1::Repair,
+        SignerKeyAlgorithmV1::Ed25519,
+    );
+    let (payload, _) = native_payload(&service);
+    let builder = TransactionBuilder::decode_payload(&payload).unwrap();
+    assert!(
+        super::protocol::native_role(SignerRoleV1::Repair).is_some_and(|role| {
+            iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(role, builder.payload())
+        })
+    );
+    assert!(
+        !super::protocol::native_role(SignerRoleV1::FinalPromotionProvenance).is_some_and(|role| {
+            iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(role, builder.payload())
+        })
+    );
+    assert!(super::protocol::native_role(SignerRoleV1::FinalPromotionProvenance).is_none());
+    let response = service
+        .handle_sign_request(&sign_request(&service, [0x97; 32], payload))
+        .unwrap();
+    assert_eq!(response.status, SignStatusV1::Ok);
+}
+
+#[test]
+fn final_promotion_cannot_relabel_a_real_software_binding_or_envelope() {
+    let parent = temporary_parent();
+    let service = provision(
+        parent.path(),
+        SignerRoleV1::Repair,
+        SignerKeyAlgorithmV1::Ed25519,
+    );
+    let binding = service.public_binding().unwrap();
+    binding.validate().unwrap();
+    let path = parent.path().join("state/key-envelope-v1.norito");
+    let bytes = fs::read(&path).unwrap();
+    let envelope: super::SoftwareSignerKeyEnvelopeV1 = norito::decode_canonical(&bytes).unwrap();
+    assert_eq!(
+        envelope.open(&wrapping_key()).unwrap().public_key(),
+        &binding.public_key
+    );
+    let mut substituted = binding.clone();
+    substituted.role = SignerRoleV1::FinalPromotionProvenance;
+    substituted.purpose_binding = SignerPurposeBindingV1::FinalPromotionProvenance {
+        deployment_id: "production-primary".into(),
+    };
+    substituted.domain = substituted.role.domain().into();
+    substituted.handle = "software://sorafs/final-promotion-provenance/primary".into();
+    assert!(substituted.purpose_binding.validates_role(substituted.role));
+    assert!(substituted.validate().is_err());
+    assert!(substituted.digest().is_err());
+    let mut altered = envelope.clone();
+    altered.aad.role = substituted.role;
+    altered.aad.purpose_binding = substituted.purpose_binding;
+    altered.aad.domain = substituted.domain;
+    altered.aad.handle = substituted.handle;
+    altered.envelope_digest = altered.compute_digest().unwrap();
+    assert_eq!(
+        altered.validate_public(),
+        Err(super::SoftwareSignerEnvelopeErrorV1::Invalid)
+    );
+    assert!(matches!(
+        altered.open(&wrapping_key()),
+        Err(super::SoftwareSignerEnvelopeErrorV1::Invalid)
+    ));
+    assert_eq!(fs::read(path).unwrap(), bytes);
+    assert_eq!(service.public_binding().unwrap(), binding);
+}
+
 fn test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::prehashed([0x53; Hash::LENGTH]),
@@ -49,6 +170,8 @@ fn provisioning(
         SignerRoleV1::StreamToken => "stream-token",
         SignerRoleV1::PopCredentials => "pop-credentials",
         SignerRoleV1::ReleaseManifest => "release-manifest",
+        SignerRoleV1::FinalPromotionProvenance => "final-promotion-provenance",
+        SignerRoleV1::FinalPromotionAccountTransaction => "final-promotion-account-transaction",
     };
     let purpose_binding = match role {
         SignerRoleV1::ProofOutcome
@@ -73,6 +196,16 @@ fn provisioning(
         SignerRoleV1::StreamToken => SignerPurposeBindingV1::StreamToken {
             provider_id: [0x62; 32],
         },
+        SignerRoleV1::FinalPromotionProvenance => {
+            SignerPurposeBindingV1::FinalPromotionProvenance {
+                deployment_id: "production-primary".into(),
+            }
+        }
+        SignerRoleV1::FinalPromotionAccountTransaction => {
+            SignerPurposeBindingV1::FinalPromotionAccountTransaction {
+                deployment_id: "production-primary".into(),
+            }
+        }
         SignerRoleV1::ReleaseManifest => SignerPurposeBindingV1::ReleaseManifest {
             deployment_id: "production-primary".into(),
         },
@@ -1022,3 +1155,9 @@ fn signer_transport_frames_bind_exact_current_owners() {
 
 #[path = "tests/stream_token_software_rejection.rs"]
 mod stream_token_software_rejection;
+
+#[path = "tests/native_role_authorization.rs"]
+mod native_role_authorization;
+
+#[path = "tests/final_promotion_account.rs"]
+mod final_promotion_account;

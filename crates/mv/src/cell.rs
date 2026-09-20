@@ -47,7 +47,7 @@ impl<Charge> CellAllocationCharges<Charge> {
 }
 
 impl CellAllocationCharges<Untracked> {
-    fn untracked() -> Self {
+    pub(crate) fn untracked() -> Self {
         Self::new(Untracked, Untracked)
     }
 }
@@ -96,13 +96,23 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
     /// Construct current and empty undo with their already prepaid charges.
     /// The caller must separately admit any payload before constructing `v`.
     pub fn new_charged(v: V, charges: CellAllocationCharges<Charge>) -> Self {
+        Self::from_values_charged(v, None, charges)
+    }
+
+    /// Move exact decoded current/undo values into their prepaid EBR allocations.
+    /// Payload decoding and nested storage are the caller's separate obligation.
+    pub(crate) fn from_values_charged(
+        current_value: V,
+        undo_value: Option<V>,
+        charges: CellAllocationCharges<Charge>,
+    ) -> Self {
         let CellAllocationCharges { current, undo } = charges;
         Self {
             publication: Publication::new(),
             revert_released: ReleaseNotification::default(),
             blocks_released: ReleaseNotification::default(),
-            revert: EbrCell::new_charged(None, undo),
-            blocks: EbrCell::new_charged(v, current),
+            revert: EbrCell::new_charged(undo_value, undo),
+            blocks: EbrCell::new_charged(current_value, current),
         }
     }
 

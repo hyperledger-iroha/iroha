@@ -20,12 +20,11 @@ from check_sorafs_release_version_map import (  # noqa: E402
     _read_bytes_no_follow,
     _require_regular_repo_file,
 )
+from sorafs_evidence_json import load_evidence_json
 
 
 SCHEMA = "sorafs.release.automation.v1"
 REQUIRED_RELEASE_SIGNING_PROVIDER = "authenticated_external_signer"
-REQUIRED_RELEASE_SIGNING_BACKEND = "software"
-REQUIRED_RELEASE_SIGNER_QUALIFICATION = "software-key-qualified"
 RELEASE_TARGET_RUNNERS: tuple[tuple[str, str], ...] = (
     ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
     ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu"),
@@ -57,8 +56,6 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "`scripts/release_manifest_signing.py verify`",
         "never receives a private key or invokes a signer",
         REQUIRED_RELEASE_SIGNING_PROVIDER,
-        REQUIRED_RELEASE_SIGNING_BACKEND,
-        REQUIRED_RELEASE_SIGNER_QUALIFICATION,
     ),
     "specs/sorafs/runbooks/release_rollback_yank.md": (
         "# SoraFS Release Rollback and Yank",
@@ -77,10 +74,8 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "all five native candidate archives",
         "[SoraFS Release Rollback and Yank](../runbooks/release_rollback_yank.md)",
         "`SORAFS_RELEASE_MANIFEST_VERIFIER_PATH`",
-        "No private key or software-signing operation",
+        "No private key or signing operation",
         REQUIRED_RELEASE_SIGNING_PROVIDER,
-        REQUIRED_RELEASE_SIGNING_BACKEND,
-        REQUIRED_RELEASE_SIGNER_QUALIFICATION,
     ),
     "fixtures/documentation/sorafs_release_notes.md": (
         "## Rollback / Yank Record",
@@ -530,6 +525,141 @@ RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
     ),
 }
 SORAFS_CLI_RELEASE_GATE_SCRIPT = "ci/check_sorafs_cli_release.sh"
+SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT = "ci/check_sorafs_native_authority_runtime.sh"
+SORAFS_NATIVE_AUTHORITY_RUNTIME_TEST = "scripts/tests/sorafs_native_authority_runtime_test.py"
+SORAFS_SIGNER_CONTRACT_LIBRARIES = (
+    "sorafs_manifest", "iroha_data_model", "iroha_executor_data_model",
+    "iroha_executor", "iroha_schema_gen",
+)
+SORAFS_SIGNER_CONTRACT_COMMAND = (
+    "cargo test --locked "
+    + " ".join(f"-p {package}" for package in SORAFS_SIGNER_CONTRACT_LIBRARIES)
+    + " --lib"
+)
+SORAFS_NATIVE_AUTHORITY_PACKAGES = ("iroha_core", "iroha_torii", "irohad", "iroha_sccp")
+SORAFS_NATIVE_AUTHORITY_FILTERS = (
+    "final_promotion", "signer_finality", "sorafs::token::", "signer_operation",
+    "signer_custody_history", "signer_check",
+    "test_fixtures::finality_descendant_tests::",
+    "native_transaction_signer", "external_software_signer",
+    "runtime_provider_broker", "runtime_provider_registry",
+    "stream_token_custody",
+    "validation_fee::tests::newly_dispatchable_native_instruction_fails_until_explicitly_classified",
+    "validation_fee::tests::custom_instruction_without_effect_disposition_fails_closed",
+    "state::tests::autonomous_merge_gas_accounting_rejects_missing_limit_and_overflow",
+    "kura::tests::progress_witness_durability::bound_progress_pair_uses_each_file_directory_snapshot",
+    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::registered_deferred_validate_decision_drains_recovery_prefix_without_releasing_wait",
+)
+SORAFS_NATIVE_AUTHORITY_SENTINELS = (
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::check_tests::account_check_repeats_without_history_or_key_index_writes",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::check_tests::account_check_requires_observer_inequality_even_with_both_exact_permissions",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::check_tests::account_check_rechecks_both_account_roles_and_permissions_after_same_block_changes",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::check_tests::account_check_then_revoke_rejects_old_or_fresh_cas_at_current_cut",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::check_tests::account_check_rejects_time_before_native_enrollment_even_after_signed_issuance",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::check_tests::account_check_rejects_noncheck_binding_and_oversized_instruction_at_applied_cut",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::history_tests::account_configuration_requires_exact_native_manager_even_at_genesis_and_cas_on_retry",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::history_tests::account_configuration_rejects_foreign_role_purpose_network_and_malformed_handles",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::history_tests::account_configuration_and_enrollment_accept_operator_selected_signer_handles",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::history_tests::account_enrollment_and_check_require_committed_control_predecessors",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::history_tests::account_history_rejects_missing_or_substituted_head_record_height_and_first_use_indexes",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::history_tests::account_rotation_preserves_first_use_indexes_and_rejects_retired_signer_or_attester_reuse",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::capacity::account_normal_capacity_preserves_two_emergency_revocations_without_publishing",
+    "smartcontracts::isi::sorafs_final_promotion_account_custody::tests::capacity::account_preparation_rejects_immutable_collisions_without_publishing_earlier_writes",
+    "executor::tests::final_promotion_account_permission_tests::native_account_custody_requires_exact_action_and_deployment_even_at_genesis",
+    "executor::tests::final_promotion_account_permission_tests::native_account_custody_direct_and_role_delegation_cannot_expand_action_or_deployment",
+    "executor::tests::final_promotion_account_permission_tests::account_custody_self_observation_and_receipt_permissions_fail_closed",
+    "validation_fee::tests::final_promotion_account_custody_actions_remain_available_under_validation_fee_policy",
+    "external_software_signer::tests::final_promotion_account::final_promotion_account_software_provisioning_rejects_all_handles_and_retains_repair",
+    "external_software_signer::tests::final_promotion_account::final_promotion_account_cannot_relabel_a_real_software_binding_or_envelope",
+    "external_software_signer::tests::final_promotion_account::final_promotion_roles_are_rejected_before_native_adapter_endpoint_access",
+    "smartcontracts::ivm::host::tests::stream_token_custody_namespace_reserves_exact_root_and_all_native_key_families",
+    "query::final_promotion_account_custody::observation::tests::exact_account_check_joins_real_finality_and_distinct_current_accounts",
+    "query::final_promotion_account_custody::observation::tests::independent_target_digest_binding_and_observer_are_checked_before_preparation",
+    "query::final_promotion_account_custody::observation::tests::exact_reviewed_target_and_payload_commitment_cannot_be_replaced_in_signed_check",
+    "query::final_promotion_account_custody::observation::tests::successful_check_rechecks_both_accounts_permissions_at_same_or_descendant_cut",
+    "query::final_promotion_account_custody::observation::tests::account_interval_requires_both_endpoints_after_native_enrollment_execution",
+    "query::final_promotion_account_custody::observation::tests::successful_check_cannot_hide_later_same_block_custody_revocation",
+    "query::final_promotion_account_custody::observation::tests::independent_floor_hash_and_committee_context_cannot_come_from_candidate",
+    "query::signer_check::tests::bound_check_cannot_cross_native_purpose_or_replace_its_original_round",
+    "query::signer_check::tests::one_round_issues_and_binds_only_once_and_failure_cannot_be_retried",
+    "query::signer_check::tests::common_binding_rejects_non_check_actions_for_both_closed_purposes",
+    "query::signer_check::tests::complete_external_bytes_and_signature_are_retained_by_the_single_owner",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::shared_history::prepared_shared_control_is_unpublished_and_matches_exact_native_provenance",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::shared_history::receipt_control_bytes_cannot_be_replayed_under_account_custody_namespace",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::shared_history::shared_control_keeps_declared_index_identity_and_bounded_canonical_frames",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::shared_history::first_use::receipt_first_use_rows_require_full_provenance_and_original_height_index",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::shared_history::first_use::account_first_use_rows_require_full_provenance_and_original_height_index",
+    "query::final_promotion_authority::observation::tests::observer::receipt_check_rejects_self_observation_and_substituted_operator_or_observer",
+    "query::final_promotion_authority::observation::tests::observer::receipt_check_retains_distinct_observer_and_operator_through_real_finality",
+    "query::final_promotion_authority::observation::tests::observer::receipt_current_check_requires_the_pinned_operator_registered_and_authorized",
+    "query::final_promotion_authority::observation::tests::observer::receipt_observer_permission_revoked_before_execution_cannot_supply_a_success",
+    "query::final_promotion_authority::observation::tests::observer::receipt_observer_role_permission_and_account_removal_are_rechecked_at_applied_cut",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::observer::receipt_check_observer_and_operator_remain_distinct_even_with_both_grants",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::observer::receipt_check_only_observer_cannot_mutate_custody_or_operations",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::observer::receipt_check_requires_both_exact_deployment_grants_and_original_row_operator",
+    "executor::tests::final_promotion_permission_tests::native_receipt_check_observer_permission_never_grants_mutation_or_self_check",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::current_check_rejects_trusted_time_before_native_enrollment_even_after_valid_issuance",
+    "sorafs::native_transaction_signer::tests::payload_authorization::every_forwarder_action_belongs_to_exactly_one_native_signer_role",
+    "sorafs::native_transaction_signer::tests::payload_authorization::all_native_facades_sign_every_allowed_action_without_rewriting_payload",
+    "sorafs::native_transaction_signer::tests::payload_authorization::every_native_facade_rejects_other_roles_and_wrappers_before_all_provider_calls",
+    "sorafs::native_transaction_signer::tests::payload_authorization::every_native_facade_rejects_foreign_and_genesis_networks_before_all_provider_calls",
+    "sorafs_native_transaction_signer_startup_tests::native_signer_startup_qualifies_exact_configured_provider",
+    "runtime_provider_registry::tests::registry_native_signer_uses_catalog_network_before_any_provider_method",
+    "runtime_provider_broker::protocol::platform::tests::native_role_authorization_tests::native_role_payload_rejection_precedes_server_backend_io",
+    "runtime_provider_broker::protocol::platform::tests::native_role_authorization_tests::native_role_proxy_and_raw_reject_before_probes_or_transport",
+    "runtime_provider_broker::protocol::platform::tests::native_role_authorization_tests::native_network_proxy_and_raw_reject_without_poisoning_or_transport",
+    "external_software_signer::tests::native_role_authorization::native_client_rejects_cross_role_before_accessing_an_unavailable_endpoint",
+    "external_software_signer::tests::native_role_authorization::native_adapter_rejects_cross_role_before_a_revoked_service_and_preserves_valid_signing",
+    "query::final_promotion_authority::observation::tests::time_interval::finite_utc_interval_requires_both_custody_endpoints_at_one_applied_cut",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::request_digest::public_request_digest_matches_each_native_custody_and_operation_transition",
+    "signer_operation::journal::tests::reader::reader_and_pinned_receipt_keep_the_same_exclusive_lease",
+    "signer_operation::tests::final_promotion::lifecycle::concurrent_sign_and_recover_fail_before_io_and_success_releases_the_gate",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::current_check_repeats_without_consuming_ids_fences_audit_or_history",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::check_then_same_block_signer_or_attester_revoke_fences_exact_reexecution_and_applied_cut",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::same_block_completion_invalidates_reserved_check_and_allows_exact_completed_check",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::applied_cut_rechecks_account_and_direct_or_role_permissions_after_native_changes",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::applied_operation_checks_reject_trusted_time_before_original_execution",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::old_completed_checks_survive_new_audit_and_original_expiry_with_fresh_custody",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::whole_check_instruction_bound_precedes_oversized_nested_row_comparison",
+    "smartcontracts::isi::sorafs_final_promotion_authority::tests::check::reserved_subject_requires_the_selected_row_active_head_and_original_audit",
+    "query::final_promotion_authority::observation::tests::exact_executed_check_joins_real_finality_and_current_native_authority",
+    "query::final_promotion_authority::observation::tests::coherent_authenticated_descendant_cut_rechecks_current_authority",
+    "query::final_promotion_authority::observation::tests::successful_check_cannot_hide_later_same_block_custody_revocation",
+    "query::final_promotion_authority::observation::tests::successful_check_cannot_hide_same_block_or_descendant_permission_revocation",
+    "query::final_promotion_authority::observation::tests::rejection_result_is_not_a_successful_check_even_with_real_finality",
+    "query::final_promotion_authority::observation::tests::independent_floor_hash_and_committee_context_cannot_come_from_candidate",
+    "query::final_promotion_authority::observation::tests::historical_future_dated_qc_cannot_stand_in_for_a_new_round",
+    "query::signer_finality::tests::identical_block_and_certificate_cannot_authorize_a_foreign_state_network",
+    "query::signer_finality::tests::invalid_commit_signature_cannot_create_durable_authority",
+    "sorafs::token::signer_finality_native_custody_tests::actual_native_custody_requires_both_durable_artifacts_then_accepts_signed_observation",
+    "sorafs::token::signer_finality_native_custody_tests::actual_native_custody_rejects_same_height_forged_control_digests",
+    "signer_operation::tests::final_promotion::final_promotion_signs_durably_and_public_verification_matches_read_only_recovery",
+    "signer_operation::tests::final_promotion::final_promotion_sign_and_recovery_use_only_the_constructor_pinned_statement",
+    "test_fixtures::finality_descendant_tests::exact_same_epoch_descendants_authenticate_through_the_last_nonboundary_height",
+    "test_fixtures::finality_descendant_tests::descendant_signer_rejects_missing_skipped_and_substituted_parents",
+    "query::signer_check_test_fixture::tests::test_facade_retains_exact_executed_results_membership_and_real_finalized_parents",
+    "query::signer_check_test_fixture::tests::test_facade_rejects_preseeded_history_and_foreign_network_before_publication",
+    "query::final_promotion_account_custody::observation::tests::prepared_account_liveness_keeps_original_challenge_and_gates_expired_runtime_work",
+    "query::final_promotion_account_custody::observation::tests::prepared_account_observer_is_pinned_before_signing_and_preserved_through_finality",
+    "query::final_promotion_account_custody::observation::tests::account_check_preparation_rejects_non_ed25519_observer_before_issuing_a_round",
+    "query::final_promotion_authority::observation::tests::receipt_check_preparation_rejects_non_ed25519_observer_before_issuing_a_round",
+    "query::signer_check::tests::account_envelope::native_signed_envelope_owner_retains_real_check_bytes_and_canonical_replay",
+    "query::signer_check::tests::account_envelope::native_signed_envelope_owner_rejects_sidecars_extras_signatures_and_other_entry_kinds",
+    "query::signer_check::tests::account_envelope::native_signed_envelope_owner_uses_the_same_exact_complete_frame_ceiling",
+    "query::final_promotion_account_custody::observation::tests::account_verified_check_retains_original_full_floor_after_applied_descendants",
+    "query::final_promotion_authority::observation::tests::receipt_verified_check_retains_original_full_floor_after_applied_descendants",
+    "query::final_promotion_account_custody::observation::tests::account_verified_check_retains_exact_external_and_check_block_after_descendants",
+    "query::final_promotion_authority::observation::tests::receipt_verified_check_retains_exact_external_and_check_block_after_descendants",
+    "signer_operation::tests::final_promotion::lifecycle::recovery_only_view_outlives_every_protected_provider_and_retains_the_exact_journal_lease",
+    "signer_operation::tests::final_promotion::lifecycle::recovery_only_view_shares_signing_gate_and_releases_it_after_success",
+    "signer_operation::tests::final_promotion::lifecycle::recovery_only_view_preserves_shared_poison_without_any_observation_or_journal_io",
+)
+SORAFS_COSIGN_QUALIFICATION_HELPER = "ci/qualify_sorafs_cosign.py"
+SORAFS_COSIGN_VERIFIER_POLICY = "ci/sorafs_cosign_verifier.json"
+SORAFS_COSIGN_CRYPTO_TEST = "scripts/tests/sorafs_final_promotion_cosign_crypto_test.py"
+SORAFS_CLI_RUST_OWNER_CONTRACT_TEST = (
+    "scripts/tests/check_sorafs_rust_owner_contract_test.py"
+)
 SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND = (
     "python3 -I -S scripts/check_build_efficiency_provenance.py"
 )
@@ -561,9 +691,14 @@ SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_SOURCE_PATHS = (
     "scripts/check_sorafs_reserve_rent_rollout_evidence.py",
     "scripts/check_sorafs_transparency_rollout_evidence.py",
     "scripts/sorafs_archive_path_components.py",
+    "scripts/sorafs_final_promotion_cosign.py",
+    "scripts/sorafs_final_promotion_evidence.py",
     "scripts/sorafs_required_kinds.py",
+    "scripts/sorafs_verifier_process.py",
+    "scripts/tests/conftest.py",
 )
 SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS = (
+    SORAFS_NATIVE_AUTHORITY_RUNTIME_TEST,
     "scripts/tests/check_sorafs_ai_prescreen_rollout_evidence_test.py",
     "scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py",
     "scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py",
@@ -581,12 +716,34 @@ SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS = (
     "scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py",
     "scripts/tests/check_sorafs_transparency_rollout_evidence_test.py",
     "scripts/tests/sorafs_archive_path_components_test.py",
+    "scripts/tests/sorafs_final_promotion_cosign_test.py",
+    "scripts/tests/qualify_sorafs_cosign_test.py",
+    "scripts/tests/sorafs_final_promotion_evidence_test.py",
     "scripts/tests/sorafs_required_kinds_test.py",
+    "scripts/tests/sorafs_verifier_process_test.py",
 )
 SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TRIGGER_PATHS = frozenset(
     (
         *SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_SOURCE_PATHS,
         *SORAFS_CLI_PRODUCTION_PROMOTION_IMPORT_TESTS,
+        "specs/sorafs/final_promotion_receipt_v1.md",
+        "specs/sorafs/signer_production_authority_inventory.md",
+        # Native authority includes Kura, State, permissions and their test/support leaves.
+        "crates/iroha_core/**",
+        "crates/iroha_sccp/**",
+        SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT,
+        "crates/iroha_executor_data_model/**",
+        "crates/iroha_executor/**",
+        "crates/iroha_schema_gen/**",
+        "specs/references/schema.json",
+        "crates/iroha_torii/src/sorafs/**",
+        "crates/irohad/src/signer_operation.rs",
+        "crates/irohad/src/signer_operation/**",
+        "crates/iroha_cli/src/commands/sorafs/**",
+        "specs/sorafs/final_promotion_native_authority_v1.md",
+        "fixtures/sorafs/final_promotion_cosign/**",
+        SORAFS_COSIGN_QUALIFICATION_HELPER, SORAFS_COSIGN_VERIFIER_POLICY,
+        SORAFS_COSIGN_CRYPTO_TEST,
     )
 )
 SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_TRIGGER_PATHS = frozenset(
@@ -662,14 +819,21 @@ SORAFS_CLI_REPAIR_TRIGGER_PATHS = frozenset(
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py",
     }
 )
-SORAFS_CLI_REDIRECT_TRIGGER_PATHS = frozenset(
+SORAFS_CLI_RUST_OWNER_TRIGGER_PATHS = frozenset(
     {
         ".github/workflows/sorafs-cli-release.yml",
         "ci/check_sorafs_cli_release.sh",
         "crates/iroha_cli/src/commands/sorafs.rs",
-        "scripts/tests/check_sorafs_rollout_gate_contract_test.py",
+        SORAFS_CLI_RUST_OWNER_CONTRACT_TEST,
+        "scripts/tests/sorafs_rollout_gate_source_support.py",
+        "scripts/tests/state_source_bundle.py",
+        "xtask/src/main.rs",
         "xtask/src/sorafs.rs",
         "xtask/src/sorafs/**",
+        "crates/iroha_core/**",
+        "crates/iroha_sccp/**",
+        "crates/iroha_data_model/**",
+        "crates/iroha_executor_data_model/**",
     }
 )
 SORAFS_CLI_PROVIDER_INGEST_TRIGGER_PATHS = frozenset(
@@ -1713,6 +1877,101 @@ def _pull_request_paths(source: str) -> frozenset[str] | None:
     return None if entries is None else frozenset(entries)
 
 
+def _validate_cosign_qualification(root: Path, gate: str) -> list[str]:
+    """Require mandatory real crypto execution and the reviewed installer version."""
+    helper = _read_bytes_no_follow(_require_regular_repo_file(
+        root, SORAFS_COSIGN_QUALIFICATION_HELPER
+    )).decode("utf-8")
+    policy = load_evidence_json(_require_regular_repo_file(
+        root, SORAFS_COSIGN_VERIFIER_POLICY
+    ), 16 * 1024)
+    command = f"python3 {SORAFS_COSIGN_QUALIFICATION_HELPER}\n"
+    sequence = "python3 scripts/check_workflow_action_pins.py\n" + command + "python3 -m pytest -q"
+    errors: list[str] = []
+    if gate.count(command) != 1 or sequence not in gate:
+        errors.append("mandatory cosign qualification must execute exactly once without a conditional skip")
+    required = (
+        SORAFS_COSIGN_CRYPTO_TEST, "--sorafs-cosign-verifier",
+        "--sorafs-cosign-verifier-sha256", "results.passed != REQUIRED_CASES",
+        "results.skipped", "set(results.collected) != REQUIRED_CASES",
+        "len(results.collected) != len(REQUIRED_CASES)",
+        "verifier_process.snapshot_executable(source, executable, policy[\"asset_sha256\"])",
+        "load_evidence_json(path, 16 * 1024)",
+    )
+    if any(marker not in helper for marker in required):
+        errors.append("mandatory cosign qualification must pin executable bytes and execute every required case")
+    release_tag = policy.get("release_tag")
+    if not isinstance(release_tag, str) or re.fullmatch(r"v3\.[0-9]+\.[0-9]+", release_tag) is None:
+        errors.append("mandatory cosign qualification requires a reviewed release version")
+    workflow = _read_bytes_no_follow(_require_regular_repo_file(
+        root, ".github/workflows/sorafs-cli-release.yml"
+    )).decode("utf-8")
+    installer = (
+        "      - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0\n"
+        "        with:\n" + f'          cosign-release: "{release_tag}"\n'
+    )
+    if workflow.count(installer) != 2:
+        errors.append("both cosign installer steps must pin the independently reviewed release version")
+    return errors
+
+
+def _native_authority_shell_contract() -> str:
+    """Exact bounded list/execute contract, with one shared Cargo feature graph."""
+    arrays = (
+        "native_test_packages=(\n"
+        + "".join(f"  -p {package}\n" for package in SORAFS_NATIVE_AUTHORITY_PACKAGES)
+        + ")\nnative_test_filters=(\n"
+        + "".join(f'  "{value}"\n' for value in SORAFS_NATIVE_AUTHORITY_FILTERS)
+        + ")\nnative_test_sentinels=(\n"
+        + "".join(f'  "{value}"\n' for value in SORAFS_NATIVE_AUTHORITY_SENTINELS)
+        + ")\n"
+    )
+    return "set -euo pipefail\n" + arrays + r'''
+native_test_list="$(
+  cargo test --locked "${native_test_packages[@]}" --lib -- \
+    "${native_test_filters[@]}" --list
+)"
+for native_test in "${native_test_sentinels[@]}"; do
+  if [[ "$(grep -Fxc -- "${native_test}: test" <<<"${native_test_list}" || true)" != 1 ]]; then
+    echo "native authority contract must expose each required runnable test exactly once" >&2
+    exit 1
+  fi
+done
+cargo test --locked "${native_test_packages[@]}" --lib -- \
+  "${native_test_filters[@]}" --include-ignored --nocapture
+'''
+
+
+def _validate_native_authority_runtime(root: Path, gate: str) -> list[str]:
+    """Prevent omitted packages, empty collection, conditional execution or ignored tests."""
+    command = f"bash {SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT}"
+    sequence = (
+        "  --exact --include-ignored --nocapture\n" + command
+        + '\necho "[sorafs-release] external software signer protocol and CLI tests"'
+    )
+    errors: list[str] = []
+    contract_command = SORAFS_SIGNER_CONTRACT_COMMAND
+    contract_sequence = (
+        'echo "[sorafs-release] full signer contract libraries"\n'
+        + contract_command + "\n" + command
+    )
+    if gate.count(contract_command) != 1 or contract_sequence not in gate:
+        errors.append("mandatory signer contract libraries must run in full without filtering or a conditional skip")
+    sequence = sequence.replace(command, contract_sequence)
+    if gate.count(command) != 1 or sequence not in gate:
+        errors.append("mandatory native authority runtime must execute exactly once without a conditional skip")
+    helper = _read_bytes_no_follow(_require_regular_repo_file(
+        root, SORAFS_NATIVE_AUTHORITY_RUNTIME_SCRIPT
+    )).decode("utf-8")
+    active = lambda source: [
+        line.strip() for line in source.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if active(helper) != active(_native_authority_shell_contract()):
+        errors.append("mandatory native authority runtime must retain exact packages, filters, collection checks and fail-closed execution")
+    return errors
+
+
 def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
     """Require lineage and source budgets to fail closed before Cargo work."""
 
@@ -1723,7 +1982,8 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
     except UnicodeDecodeError as error:
         raise ValueError(f"{relative}: release gate must be UTF-8") from error
 
-    errors: list[str] = []
+    errors = _validate_cosign_qualification(root, source)
+    errors.extend(_validate_native_authority_runtime(root, source))
     provenance_commands = tuple(
         re.finditer(
             rf"(?m)^{re.escape(SORAFS_CLI_BUILD_EFFICIENCY_PROVENANCE_COMMAND)}$",
@@ -1795,6 +2055,11 @@ def _validate_sorafs_cli_release_gate(root: Path) -> list[str]:
                 f"{relative}: release helper tests must execute production-promotion "
                 f"import regression suite {promotion_import_test!r} exactly once"
             )
+    if source.count(SORAFS_CLI_RUST_OWNER_CONTRACT_TEST) != 1:
+        errors.append(
+            f"{relative}: release helper tests must execute the Rust module-owner "
+            "regression suite exactly once"
+        )
 
     first_cargo_command = re.search(r"(?m)^\s*cargo(?:\s|$)", source)
     if first_cargo_command is None:
@@ -1895,13 +2160,13 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{relative}: pull_request.paths omits repair-client "
                 f"contract trigger(s): {', '.join(missing_repair_triggers)}"
             )
-        missing_redirect_triggers = sorted(
-            SORAFS_CLI_REDIRECT_TRIGGER_PATHS - (pull_request_paths or frozenset())
+        missing_rust_owner_triggers = sorted(
+            SORAFS_CLI_RUST_OWNER_TRIGGER_PATHS - (pull_request_paths or frozenset())
         )
-        if missing_redirect_triggers:
+        if missing_rust_owner_triggers:
             errors.append(
-                f"{relative}: pull_request.paths omits redirect no-follow "
-                f"contract trigger(s): {', '.join(missing_redirect_triggers)}"
+                f"{relative}: pull_request.paths omits Rust module-owner "
+                f"contract trigger(s): {', '.join(missing_rust_owner_triggers)}"
             )
         missing_provider_ingest_triggers = sorted(
             SORAFS_CLI_PROVIDER_INGEST_TRIGGER_PATHS

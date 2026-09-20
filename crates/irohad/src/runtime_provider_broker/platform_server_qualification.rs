@@ -149,6 +149,7 @@ fn requalify_consensus_threshold_signer_binding(
     Ok(false)
 }
 fn qualify_native_transaction_signer_backend(
+    network_id: NetworkId,
     binding: &ProviderBindingWireV1,
     backends: &RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
@@ -158,6 +159,7 @@ fn qualify_native_transaction_signer_backend(
         iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
             let provider = server_backend!(backends, proof_outcome_transaction_signer);
             iroha_torii::qualify_sorafs_proof_outcome_transaction_signer_v1(
+                network_id,
                 exact,
                 Arc::clone(provider),
             )
@@ -166,21 +168,33 @@ fn qualify_native_transaction_signer_backend(
         }
         iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair => {
             let provider = server_backend!(backends, repair_transaction_signer);
-            iroha_torii::qualify_sorafs_repair_transaction_signer_v1(exact, Arc::clone(provider))
-                .map(drop)
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+            iroha_torii::qualify_sorafs_repair_transaction_signer_v1(
+                network_id,
+                exact,
+                Arc::clone(provider),
+            )
+            .map(drop)
+            .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         }
         iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve => {
             let provider = server_backend!(backends, reserve_transaction_signer);
-            iroha_torii::qualify_sorafs_reserve_transaction_signer_v1(exact, Arc::clone(provider))
-                .map(drop)
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+            iroha_torii::qualify_sorafs_reserve_transaction_signer_v1(
+                network_id,
+                exact,
+                Arc::clone(provider),
+            )
+            .map(drop)
+            .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         }
         iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => {
             let provider = server_backend!(backends, orderbook_transaction_signer);
-            iroha_torii::qualify_sorafs_orderbook_transaction_signer_v1(exact, Arc::clone(provider))
-                .map(drop)
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+            iroha_torii::qualify_sorafs_orderbook_transaction_signer_v1(
+                network_id,
+                exact,
+                Arc::clone(provider),
+            )
+            .map(drop)
+            .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         }
     }
 }
@@ -286,6 +300,7 @@ where
     reason = "the fixed V1 observation projection is exhaustive"
 )]
 fn make_server_observation(
+    network_id: NetworkId,
     binding: &ProviderBindingWireV1,
     backends: &RuntimeProviderBrokerBackendsV1,
 ) -> Result<ProviderObservationWireV1, RuntimeProviderBrokerServerErrorV1> {
@@ -340,18 +355,18 @@ fn make_server_observation(
         slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
             // This is immutable routing metadata only. Torii separately authenticates fresh
             // signed custody observations against its independent approved anchor and Core state.
-            let hardware = binding
-                .stream_token_hardware_binding
+            let signer_backend = binding
+                .stream_token_signer_binding
                 .as_ref()
                 .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            let client = server_backend!(backends, stream_token_hardware_client);
+            let client = server_backend!(backends, stream_token_signer_client);
             let observer = server_backend!(backends, stream_token_state_observer);
             for _ in 0..2 {
                 let client_handle = client.handle();
                 let observer_handle = observer.handle();
-                if hardware.validate().is_err()
-                    || client_handle != hardware.custody().runtime_handle
-                    || observer_handle != hardware.observer_handle()
+                if signer_backend.validate().is_err()
+                    || client_handle != signer_backend.custody().runtime_handle
+                    || observer_handle != signer_backend.observer_handle()
                     || client_handle == observer_handle
                 {
                     return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
@@ -996,7 +1011,7 @@ fn make_server_observation(
             qualify_moderation_runtime_backend(binding, boundary.as_ref())?;
         }
         slot if native_transaction_signer_role_for_slot(slot).is_some() => {
-            qualify_native_transaction_signer_backend(binding, backends)?;
+            qualify_native_transaction_signer_backend(network_id, binding, backends)?;
         }
         slot if slot == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() => {
             let exact =
@@ -1486,7 +1501,7 @@ fn validate_exact_backend_set(
             && requested(IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore)
                 == backends.governance_dag_checkpoint_store.is_some()
             && requested(IrohaRuntimeProviderSlotV1::StreamTokenSigner)
-                == backends.stream_token_hardware_client.is_some()
+                == backends.stream_token_signer_client.is_some()
             && requested(IrohaRuntimeProviderSlotV1::StreamTokenSigner)
                 == backends.stream_token_state_observer.is_some()
             && requested(IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission)
@@ -1593,7 +1608,7 @@ fn prepare_server_state(
     validate_exact_backend_set(&catalog, &backends)?;
     let observations = catalog
         .iter()
-        .map(|binding| make_server_observation(binding, &backends))
+        .map(|binding| make_server_observation(*bindings.network_id(), binding, &backends))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(BrokerServerStateV1 {
         decode_pool,
@@ -1629,7 +1644,8 @@ fn prepare_server_state_for_lifecycle(
             let Some(_qualification_permit) = lifecycle.try_begin_qualification() else {
                 return Err(StartupQualificationErrorV1::Cancelled);
             };
-            make_server_observation(binding, &backends).map_err(StartupQualificationErrorV1::Failed)
+            make_server_observation(*bindings.network_id(), binding, &backends)
+                .map_err(StartupQualificationErrorV1::Failed)
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(BrokerServerStateV1 {
@@ -1657,7 +1673,7 @@ fn requalify_server_state(
             let Some(_qualification_permit) = lifecycle.try_begin_qualification() else {
                 return Err(StartupQualificationErrorV1::Cancelled);
             };
-            make_server_observation(binding, &state.backends)
+            make_server_observation(state.network_id, binding, &state.backends)
                 .map_err(StartupQualificationErrorV1::Failed)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1831,7 +1847,7 @@ fn qualify_server_binding(
     if requalify_consensus_threshold_signer_binding(state, binding)? {
         return Ok(configured.clone());
     }
-    let live = make_server_observation(binding, &state.backends)
+    let live = make_server_observation(state.network_id, binding, &state.backends)
         .map_err(|_| BrokerError::StaleOrRevoked)?;
     if &live != configured {
         return Err(BrokerError::StaleOrRevoked);
@@ -1967,12 +1983,17 @@ fn sign_native_transaction(
     payload: iroha_data_model::transaction::TransactionPayload,
 ) -> Result<iroha_data_model::transaction::SignedTransaction, BrokerError> {
     let exact = native_transaction_signer_binding_from_wire(binding)?;
-    if payload.authority() != exact.authority() {
+    if payload.authority() != exact.authority()
+        || !iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(exact.role(), &payload)
+    {
         return Err(BrokerError::Rejected);
     }
+    ensure_transaction_session_network(&payload, &state.network_id)
+        .map_err(|_| BrokerError::Rejected)?;
     match exact.role() {
         iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
             let signer = iroha_torii::qualify_sorafs_proof_outcome_transaction_signer_v1(
+                state.network_id,
                 exact,
                 Arc::clone(broker_backend!(state, proof_outcome_transaction_signer)),
             )
@@ -1995,6 +2016,7 @@ fn sign_native_transaction(
         }
         iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair => {
             let signer = iroha_torii::qualify_sorafs_repair_transaction_signer_v1(
+                state.network_id,
                 exact,
                 Arc::clone(broker_backend!(state, repair_transaction_signer)),
             )
@@ -2017,6 +2039,7 @@ fn sign_native_transaction(
         }
         iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve => {
             let signer = iroha_torii::qualify_sorafs_reserve_transaction_signer_v1(
+                state.network_id,
                 exact,
                 Arc::clone(broker_backend!(state, reserve_transaction_signer)),
             )
@@ -2039,6 +2062,7 @@ fn sign_native_transaction(
         }
         iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => {
             let signer = iroha_torii::qualify_sorafs_orderbook_transaction_signer_v1(
+                state.network_id,
                 exact,
                 Arc::clone(broker_backend!(state, orderbook_transaction_signer)),
             )

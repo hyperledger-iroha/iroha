@@ -229,3 +229,60 @@ fn comparator_entropy_rejection_and_unwind_drop_all_retained_opening_buffers() {
         );
     }
 }
+
+#[test]
+fn prepared_small_signed_dispatch_advances_original_owner_and_consumes_failed_retry() {
+    use crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::{TestPreparedSmallSignedV1, prepared_commitment_test_guard_v1};
+    let _guard = prepared_commitment_test_guard_v1();
+    // Earlier inventory is synthetic; this exercises actual retained dispatch
+    // and the actual signed-value MSM, not an authenticated end-to-end source.
+    let previous = RnsNativeSmallSignedCommitmentsV1::test_completed_continuation_v1();
+    let mut owner = RetainedSourceSessionV1 {
+        phase: Some(RetainedSourcePhaseV1::ComparatorContinuation(previous)),
+    };
+    owner.require_small_signed_position_v1(7_224).unwrap();
+    assert!(owner.require_small_signed_position_v1(7_225).is_err());
+    let fixture = TestPreparedSmallSignedV1::for_ordinal_v1(7_224);
+    owner
+        .commit_prepared_small_signed_v1(&fixture.statement_v1(7_224))
+        .unwrap();
+    assert!(matches!(
+        owner.phase,
+        Some(RetainedSourcePhaseV1::SmallSigned(_))
+    ));
+    owner.require_small_signed_position_v1(7_225).unwrap();
+    assert!(owner.require_comparator_position_v1(688).is_err());
+    assert!(owner.require_difference_start_v1().is_err());
+    assert!(owner.require_low_digit_start_v1().is_err());
+    let before = zeroizing_t256_scalar_vec_drop_count_v1();
+    assert!(
+        owner
+            .commit_prepared_small_signed_v1(&fixture.statement_v1(7_224))
+            .is_err()
+    );
+    assert!(owner.phase.is_none());
+    assert!(zeroizing_t256_scalar_vec_drop_count_v1() >= before + 5);
+    assert!(owner.require_small_signed_position_v1(7_225).is_err());
+}
+
+#[test]
+fn prepared_small_signed_dispatch_refuses_and_consumes_an_earlier_source_stage() {
+    use crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::{TestPreparedSmallSignedV1, prepared_commitment_test_guard_v1};
+    let _guard = prepared_commitment_test_guard_v1();
+    let (source, _) = complete_source_v1();
+    let mut owner = RetainedSourceSessionV1::from_source_complete_v1(source).unwrap();
+    let fixture = TestPreparedSmallSignedV1::for_ordinal_v1(7_224);
+    assert!(owner.require_small_signed_position_v1(7_224).is_err());
+    assert!(
+        owner
+            .commit_prepared_small_signed_v1(&fixture.statement_v1(7_224))
+            .is_err()
+    );
+    assert!(owner.phase.is_none());
+    assert!(owner.require_low_digit_start_v1().is_err());
+    assert!(
+        owner
+            .commit_prepared_small_signed_v1(&fixture.statement_v1(7_224))
+            .is_err()
+    );
+}

@@ -1,4 +1,4 @@
-//! Independent signed stream-receipt simulations; no fixture qualifies physical hardware.
+//! Independent signed stream-receipt fixtures for the shared signer authorization contract.
 
 use super::*;
 use crate::signer::{
@@ -147,7 +147,7 @@ pub(in crate::signer) fn attest_unchecked(
     statement: SignerCustodyStatementV1,
     attester: &KeyPair,
 ) -> Vec<u8> {
-    let mut payload = b"iroha:sorafs:hardware-signer-custody:v1\0".to_vec();
+    let mut payload = crate::signer::custody::SIGNER_CUSTODY_SIGNATURE_DOMAIN_V1.to_vec();
     payload.extend(norito::encode_canonical(&statement).expect("statement oracle"));
     let signature =
         Signature::try_new(attester.private_key(), &payload).expect("independent attestation");
@@ -187,8 +187,8 @@ pub(in crate::signer) fn fixture_with(
     let mut binding = SignerCustodyBindingV1 {
         chain_id: "sorafs-reference".into(),
         network_id: [0x11; 32],
-        runtime_handle: "hsm://sorafs/stream/primary".into(),
-        key_handle: "pkcs11:production/stream/key-7".into(),
+        runtime_handle: "software://sorafs/stream/primary".into(),
+        key_handle: "software://production/stream/key-7".into(),
         service_id: "stream-primary".into(),
         administrator_id: "stream-security-primary".into(),
         role: SignerRoleV1::StreamToken,
@@ -234,11 +234,7 @@ pub(in crate::signer) fn fixture_with(
             predecessor_digest: [0; 32],
             issued_at_unix_ms: 900_000,
             expires_at_unix_ms: 1_900_000,
-            hardware_identity_digest: [0x53; 32],
             evidence_digest: [0x55; 32],
-            generated_in_hardware: true,
-            exportable: false,
-            ever_exported: false,
             revoked: false,
         },
         &attester,

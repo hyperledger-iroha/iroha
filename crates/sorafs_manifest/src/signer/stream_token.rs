@@ -1,8 +1,8 @@
-//! Provider-bound prepared stream-token operations for independently qualified hardware custody.
+//! Provider-bound prepared stream-token operations for independently authorized signer keys.
 //!
 //! A prepared subject is derived from the issuer's own body and pinned binding. It is not custody
 //! or completion evidence. Receipt and authenticated state verification remain required before
-//! any token is released. These values contain no hardware key material or credentials.
+//! any token is released. These values contain no private key material or credentials.
 
 use super::{
     custody::{

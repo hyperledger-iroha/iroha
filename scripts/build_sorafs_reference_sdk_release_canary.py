@@ -4,7 +4,7 @@
 signed_manifest requires an independently pinned absolute source context;
 caller-asserted signing digests/provider/revision flags are not accepted. Raw
 Ed25519 verification alone cannot emit a canary. The native ReleaseManifest
-hardware receipt verifier is mandatory; missing support fails closed.
+operation receipt verifier is mandatory; missing support fails closed.
 """
 
 from __future__ import annotations
@@ -322,7 +322,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             args.now_unix,
         )
         if not isinstance(verified, VerifiedSignedManifestSources):
-            raise SignedManifestSourceError("signed-manifest source authenticator returned without a verified hardware receipt")
+            raise SignedManifestSourceError("signed-manifest source authenticator returned without a verified operation receipt")
         fields = verified.canary_fields()
         if fields["deployment_id"] != args.deployment_id:
             raise SignedManifestSourceError("signed-manifest deployment differs from the authenticated receipt")
@@ -450,7 +450,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
                 args.now_unix,
             )
             if not isinstance(verified, VerifiedSignedManifestSources):
-                raise SignedManifestSourceError("signed-manifest source authenticator returned without a verified hardware receipt")
+                raise SignedManifestSourceError("signed-manifest source authenticator returned without a verified operation receipt")
             if verified.canary_fields()["deployment_id"] != args.deployment_id:
                 raise SignedManifestSourceError("signed-manifest deployment differs from the authenticated receipt")
         except SignedManifestSourceError as error:

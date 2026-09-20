@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import base64
+import copy
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -49,12 +52,38 @@ SIGNER_POLICY_DIGEST = "a7" * 32
 CERTIFICATE_IDENTITY = "https://github.com/hyperledger-iroha/iroha"
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 NOW_UNIX = 1_900_000_000
+CHAIN_ID = "promotion-chain"
+NETWORK_ID_HEX = "11" * 32
+DEPLOYMENT_ID = "production-primary"
+
+
+@pytest.mark.parametrize("identity", ["attester", "attestation", "latest", "contest", "Account-Attester", "a" * 128])
+def test_signer_identity_preserves_real_words_and_exact_bytes(identity: str) -> None:
+    assert MODULE._canonical_identity(identity) == identity
+
+
+@pytest.mark.parametrize("reserved", ["null", "mock", "test", "dev", "demo", "fake", "dummy", "placeholder"])
+@pytest.mark.parametrize("delimiter", [".", "_", "-", ":"])
+def test_signer_identity_rejects_reserved_components(reserved: str, delimiter: str) -> None:
+    assert MODULE._canonical_identity(f"production{delimiter}{reserved.upper()}{delimiter}primary") is None
+
+
+@pytest.mark.parametrize("identity", [None, 1, "", " a", "a ", "a/b", "a@b", "a?b", "a#b", "a%2fb", "a\\nb", "é", "a" * 129])
+def test_signer_identity_rejects_malformed_bytes_and_size(identity: Any) -> None:
+    assert MODULE._canonical_identity(identity) is None
 
 
 def digest(label: str) -> str:
     """Return one deterministic non-zero test digest."""
 
     return hashlib.sha256(label.encode("ascii")).hexdigest()
+
+
+def synthetic_cosign_bundle() -> dict[str, Any]:
+    """Use a public upstream proof for another subject; it cannot prove this promotion."""
+
+    fixture = SCRIPT_DIR.parent / "fixtures/sorafs/final_promotion_cosign/bundle.sigstore.json"
+    return json.loads(fixture.read_bytes())
 
 
 def promotion_payload() -> dict[str, Any]:
@@ -117,7 +146,6 @@ def schema_valid_synthetic_promotion_payload() -> dict[str, Any]:
     authenticated_topology = {
         **base_topology,
         "signer_authentication_kind": "external-ed25519",
-        "signer_backend": "software",
         "signer_service_id": "sorafs-topology-signer-a",
         "signer_administrator_id": "sorafs-topology-admin-b",
         "signer_key_revision": 3,
@@ -131,7 +159,6 @@ def schema_valid_synthetic_promotion_payload() -> dict[str, Any]:
         "receipt_sha256": digest("resilience-receipt"),
         "canonical_receipt_sha256": digest("resilience-canonical-receipt"),
         "receipt_generated_at_unix": generated_at_unix,
-        "signer_backend": "software",
         "signer_service_id": "sorafs-resilience-signer-a",
         "signer_administrator_id": "sorafs-resilience-admin-b",
         "signer_key_revision": 5,
@@ -143,7 +170,6 @@ def schema_valid_synthetic_promotion_payload() -> dict[str, Any]:
     inventory_binding = {
         "schema": lane_inventory.VERIFICATION_SCHEMA,
         "status": "ready",
-        "signer_qualification": "software-key-qualified",
         "inventory_sha256": inventory_sha256,
         "summary_file_count": 17,
         "recognized_summary_count": 17,
@@ -170,7 +196,6 @@ def schema_valid_synthetic_promotion_payload() -> dict[str, Any]:
             "role": lane_inventory.SIGNER_ROLE,
             "service_kind": lane_inventory.SIGNER_KIND,
             "algorithm": "ed25519",
-            "backend": "software",
             "service_id": "sorafs-inventory-signer-a",
             "administrator_id": "sorafs-inventory-admin-b",
             "key_revision": 13,
@@ -224,7 +249,6 @@ def schema_valid_synthetic_promotion_payload() -> dict[str, Any]:
         "environment": environment,
         "release_sequence": 7,
         "previous_envelope_sha256": digest("previous-foundation"),
-        "signer_backend": "software",
         "signer_service_id": "sorafs-foundation-signer-a",
         "signer_administrator_id": "sorafs-foundation-admin-b",
         "signer_key_revision": 7,
@@ -265,7 +289,6 @@ def schema_valid_synthetic_promotion_payload() -> dict[str, Any]:
     return {
         "schema": MODULE.promotion_runner.SUMMARY_SCHEMA,
         "status": "ready",
-        "signer_qualification": "software-key-qualified",
         "required_gates": list(MODULE.promotion_runner.DEFAULT_REQUIRED_GATES),
         "thresholds": {"max_summary_artifact_age_secs": 1_209_600},
         "summary_file_count": 17,
@@ -452,7 +475,6 @@ def write_provenance(
     authentication = {
         "kind": "external-ed25519",
         "algorithm": "ed25519",
-        "backend": "software",
         "service_id": SIGNER_SERVICE_ID,
         "administrator_id": SIGNER_ADMINISTRATOR_ID,
         "key_revision": SIGNER_KEY_REVISION,
@@ -468,9 +490,10 @@ def write_provenance(
         "status": "verified",
         "attestation_scope": MODULE.PROMOTION_ATTESTATION_SCOPE,
         "generated_at_unix": NOW_UNIX - 60,
+        "chain_id": CHAIN_ID,
+        "network_id_hex": NETWORK_ID_HEX,
+        "deployment_id": DEPLOYMENT_ID,
         "signing_provider": MODULE.REQUIRED_SIGNING_PROVIDER,
-        "signing_backend": MODULE.REQUIRED_SIGNING_BACKEND,
-        "signer_qualification": MODULE.REQUIRED_SIGNER_QUALIFICATION,
         "baseline_input_count": positive["input_count"],
         "baseline_input_set_sha256": negative_manifest[
             "baseline_input_set_sha256"
@@ -541,12 +564,7 @@ def build_bundle(
         input_set_sha256=archive_input_set_sha256,
     )
     cosign = root / "promotion.sigstore.json"
-    cosign_raw = MODULE.render_checker_summary(
-        {
-            "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.3",
-            "verificationMaterial": {"certificate": "public-unit-material"},
-        }
-    ).encode("utf-8")
+    cosign_raw = MODULE.render_checker_summary(synthetic_cosign_bundle()).encode("utf-8")
     cosign.write_bytes(cosign_raw)
     provenance = root / "promotion-provenance.json"
     write_provenance(
@@ -587,6 +605,21 @@ def build_bundle(
         CERTIFICATE_IDENTITY,
         "--provenance-oidc-issuer",
         OIDC_ISSUER,
+        "--provenance-receipt-verifier", str(root / "native-verifier"),
+        "--provenance-receipt-verifier-sha256", digest("native-verifier"),
+        "--provenance-signer-policy", str(root / "policy.norito"),
+        "--provenance-signer-policy-sha256", digest("policy"),
+        "--provenance-custody-trust", str(root / "trust.norito"),
+        "--provenance-custody-trust-sha256", digest("trust"),
+        "--provenance-cosign-verifier", str(root / "cosign"),
+        "--provenance-cosign-verifier-sha256", digest("cosign"),
+        "--provenance-cosign-trusted-root", str(root / "sigstore-root.json"),
+        "--provenance-cosign-trusted-root-sha256", digest("sigstore-root"),
+        "--provenance-completed-operation-state", str(root / "state.norito"),
+        "--provenance-operation-receipt", str(root / "receipt.norito"),
+        "--provenance-chain-id", CHAIN_ID,
+        "--provenance-network-id-hex", NETWORK_ID_HEX,
+        "--provenance-deployment-id", DEPLOYMENT_ID,
         "--now-unix",
         str(NOW_UNIX),
     ]
@@ -631,22 +664,50 @@ def run_and_decode(args: list[str], capsys) -> tuple[int, dict[str, Any], str]:
     return exit_code, json.loads(captured.out), captured.err
 
 
-def test_complete_authenticated_bundle_is_the_only_ready_result(
+def mock_cosign_verification(monkeypatch):
+    """Record the adapter boundary without asserting cryptographic qualification."""
+
+    calls = []
+
+    def verify(arguments, subject, bundle):
+        calls.append((arguments, subject, bundle))
+        return []
+
+    monkeypatch.setattr(MODULE.final_promotion_cosign, "verify_final_promotion_cosign", verify)
+    return calls
+
+
+def test_complete_outer_receipt_verification_cannot_qualify_the_inner_chain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
-    args, _paths = build_bundle(tmp_path, monkeypatch)
+    args, paths = build_bundle(tmp_path, monkeypatch)
+    cosign_calls = mock_cosign_verification(monkeypatch)
+    calls = []
+    def verify_native(arguments, statement, signature, key):
+        calls.append((arguments, statement, signature, key))
+        return []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", verify_native)
 
     exit_code, summary, stderr = run_and_decode(args, capsys)
 
-    assert exit_code == 0
-    assert stderr == ""
+    assert exit_code == 1
+    assert "inner approval chain" in stderr
+    assert len(calls) == 1
+    provenance = json.loads(paths["provenance"].read_bytes())
+    assert calls[0][1] == MODULE.promotion_provenance_signing_payload(provenance)
+    assert calls[0][2] == bytes.fromhex(provenance["authentication"]["signature_hex"])
+    assert calls[0][3] == SIGNING_PUBLIC_KEY
+    assert MODULE.verify_ed25519(calls[0][3], calls[0][2], calls[0][1])
+    assert len(cosign_calls) == 1
+    assert cosign_calls[0][2] == paths["cosign"].read_bytes()
+    assert summary["errors"] == MODULE.validate_inner_approval_chain()
     assert set(summary) == MODULE.PROMOTION_SUMMARY_FIELDS
-    assert summary["status"] == "ready"
-    assert summary["externally_authenticated"] is True
-    assert summary["promotion_eligible"] is True
-    assert summary["signer_qualification"] == "software-key-qualified"
+    assert summary["status"] == "blocked"
+    assert summary["externally_authenticated"] is False
+    assert summary["promotion_eligible"] is False
+    assert "signer_qualification" not in summary
     assert summary["baseline_input_count"] == 22
     assert summary["negative_receipt_count"] == 6
     assert [row["mutation_id"] for row in summary["negative_receipts"]] == [
@@ -656,6 +717,7 @@ def test_complete_authenticated_bundle_is_the_only_ready_result(
 
 def test_complete_authenticated_bundle_runs_authoritative_aggregate_validator(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
     aggregate_payload = schema_valid_synthetic_promotion_payload()
@@ -676,13 +738,21 @@ def test_complete_authenticated_bundle_runs_authoritative_aggregate_validator(
         None,
         aggregate_payload=aggregate_payload,
     )
+    calls = []
+    mock_cosign_verification(monkeypatch)
+    def verify_native(arguments, statement, signature, key):
+        calls.append((arguments, statement, signature, key))
+        return []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", verify_native)
     exit_code, summary, stderr = run_and_decode(args, capsys)
 
-    assert exit_code == 0
-    assert stderr == ""
-    assert summary["status"] == "ready"
-    assert summary["externally_authenticated"] is True
-    assert summary["promotion_eligible"] is True
+    assert exit_code == 1
+    assert "inner approval chain" in stderr
+    assert len(calls) == 1
+    assert summary["errors"] == MODULE.validate_inner_approval_chain()
+    assert summary["status"] == "blocked"
+    assert summary["externally_authenticated"] is False
+    assert summary["promotion_eligible"] is False
     assert summary["baseline_input_count"] == 22
     assert paths["first"].read_bytes() == paths["second"].read_bytes()
 
@@ -708,13 +778,13 @@ def test_complete_authenticated_bundle_runs_authoritative_aggregate_validator(
 
     provenance = json.loads(paths["provenance"].read_bytes())
     assert provenance["signing_provider"] == MODULE.REQUIRED_SIGNING_PROVIDER
-    assert provenance["signing_backend"] == "software"
-    assert provenance["signer_qualification"] == "software-key-qualified"
+    assert "signing_backend" not in provenance
+    assert "signer_qualification" not in provenance
     assert provenance["oidc_identity_status"] == "verified"
     assert provenance["cosign_provenance_status"] == "verified"
     assert provenance["authentication"]["kind"] == "external-ed25519"
     assert provenance["authentication"]["algorithm"] == "ed25519"
-    assert provenance["authentication"]["backend"] == "software"
+    assert "backend" not in provenance["authentication"]
     assert summary["cosign_bundle_sha256"] == hashlib.sha256(
         paths["cosign"].read_bytes()
     ).hexdigest()
@@ -962,10 +1032,10 @@ def test_positive_replay_and_cosign_swaps_block(
         )
         expected = "input inventory must be an ordered digest array"
     else:
+        substituted = synthetic_cosign_bundle()
+        substituted["verificationMaterial"]["timestampVerificationData"]["rfc3161Timestamps"][0]["signedTimestamp"] = "c3Vi"
         paths["cosign"].write_bytes(
-            MODULE.render_checker_summary(
-                {"mediaType": "substituted-sigstore-bundle"}
-            ).encode("utf-8")
+            MODULE.render_checker_summary(substituted).encode("utf-8")
         )
         expected = "cosign_bundle_sha256 must match the verified bundle"
 
@@ -1040,11 +1110,8 @@ def test_stale_or_future_provenance_blocks(
             "positive_output_sha256 must match the verified bundle",
         ),
         (
-            lambda payload: (
-                payload.__setitem__("signing_backend", "hsm"),
-                payload["authentication"].__setitem__("backend", "hsm"),
-            ),
-            "signing_backend must be `software`",
+            lambda payload: payload.__setitem__("signing_provider", "self_asserted"),
+            "signing_provider must be `authenticated_external_signer`",
         ),
         (
             lambda payload: payload.__setitem__(
@@ -1230,3 +1297,353 @@ def test_symlinked_provenance_and_hardlinked_cosign_are_rejected(
     assert exit_code == 1
     assert summary["promotion_eligible"] is False
     assert "bounded strict JSON object" in stderr
+
+
+@pytest.mark.parametrize("option", (
+    "--provenance-receipt-verifier", "--provenance-receipt-verifier-sha256",
+    "--provenance-signer-policy", "--provenance-signer-policy-sha256",
+    "--provenance-custody-trust", "--provenance-custody-trust-sha256",
+    "--provenance-completed-operation-state", "--provenance-operation-receipt",
+    "--provenance-chain-id", "--provenance-network-id-hex", "--provenance-deployment-id",
+    "--provenance-cosign-verifier", "--provenance-cosign-verifier-sha256",
+    "--provenance-cosign-trusted-root", "--provenance-cosign-trusted-root-sha256",
+))
+def test_every_native_artifact_and_context_flag_is_required_before_eligibility(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, option: str,
+) -> None:
+    args, _paths = build_bundle(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", lambda *args: calls.append(args))
+    assert MODULE.main(remove_options(args, option)) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert option in captured.err
+    assert calls == []
+
+
+@pytest.mark.parametrize(("option", "replacement", "field"), (
+    ("--provenance-chain-id", "another-chain", "chain_id"),
+    ("--provenance-network-id-hex", "22" * 32, "network_id_hex"),
+    ("--provenance-deployment-id", "another-deployment", "deployment_id"),
+))
+def test_signed_context_substitution_fails_before_native_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+    option: str, replacement: str, field: str,
+) -> None:
+    args, _paths = build_bundle(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", lambda *args: calls.append(args))
+    exit_code, summary, stderr = run_and_decode(replace_option(args, option, replacement), capsys)
+    assert exit_code == 1
+    assert summary["promotion_eligible"] is False
+    assert f"{field} must match operator trust" in stderr
+    assert calls == []
+
+
+@pytest.mark.parametrize("old_schema", (False, True))
+@pytest.mark.parametrize("backend", ("software", "hardware"))
+def test_signed_obsolete_backend_claims_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, old_schema: bool, backend: str,
+) -> None:
+    args, paths = build_bundle(tmp_path, monkeypatch)
+    payload = json.loads(paths["provenance"].read_bytes())
+    payload["signing_backend"] = backend
+    payload["signer_qualification"] = f"{backend}-key-qualified"
+    payload["authentication"]["backend"] = backend
+    if old_schema:
+        for field in ("chain_id", "network_id_hex", "deployment_id"):
+            del payload[field]
+    # Preserve the actual retired signed preimage independently of the current closed-schema helper.
+    unsigned = dict(payload)
+    unsigned["authentication"] = dict(payload["authentication"])
+    del unsigned["authentication"]["signature_hex"]
+    message = MODULE.PROMOTION_PROVENANCE_SIGNATURE_DOMAIN + json.dumps(
+        unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False,
+    ).encode("ascii")
+    signature = sign(SIGNING_SEED, message)
+    assert MODULE.verify_ed25519(SIGNING_PUBLIC_KEY, signature, message)
+    payload["authentication"]["signature_hex"] = signature.hex()
+    paths["provenance"].write_bytes(MODULE.render_checker_summary(payload).encode())
+    calls = []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", lambda *args: calls.append(args))
+    exit_code, summary, stderr = run_and_decode(args, capsys)
+    assert exit_code == 1
+    assert summary["promotion_eligible"] is False
+    assert "schema-closed contract" in stderr
+    if old_schema:
+        assert "schema-closed contract" in stderr
+    assert calls == []
+
+
+def test_native_receipt_failure_cannot_be_overridden_by_valid_outer_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    args, _paths = build_bundle(tmp_path, monkeypatch)
+    calls = []
+    def reject(arguments, statement, signature, key):
+        calls.append((arguments, statement, signature, key))
+        return ["native final promotion receipt failed exact current custody verification"]
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", reject)
+    exit_code, summary, stderr = run_and_decode(args, capsys)
+    assert exit_code == 1
+    assert len(calls) == 1
+    assert summary["promotion_eligible"] is False
+    assert "failed exact current custody" in stderr
+    assert "inner approval chain" in stderr
+
+
+def test_relabelled_inner_aggregate_cannot_supply_missing_custody_proofs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    payload = schema_valid_synthetic_promotion_payload()
+    def relabel(value):
+        if isinstance(value, dict):
+            return {key: relabel(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [relabel(item) for item in value]
+        if value == "software":
+            return "hardware"
+        if value == "software-key-qualified":
+            return "hardware-key-qualified"
+        return value
+    # Isolate the final gate even if an upstream aggregate validator were fooled by relabeling.
+    args, _paths = build_bundle(tmp_path, monkeypatch, aggregate_payload=relabel(payload))
+    mock_cosign_verification(monkeypatch)
+    calls = []
+    def verify_native(*args):
+        calls.append(args)
+        return []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", verify_native)
+    exit_code, summary, stderr = run_and_decode(args, capsys)
+    assert exit_code == 1
+    assert len(calls) == 1
+    assert summary["status"] == "blocked"
+    assert summary["promotion_eligible"] is False
+    assert summary["errors"] == MODULE.validate_inner_approval_chain()
+    for owner in ("foundational", "topology", "resilience", "lane-inventory"):
+        assert owner in stderr
+
+
+def test_arbitrary_cosign_json_stays_blocked_after_other_verification_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    args, paths = build_bundle(tmp_path, monkeypatch)
+    arbitrary_bundle = json.dumps(synthetic_cosign_bundle()).encode()
+    paths["cosign"].write_bytes(arbitrary_bundle)
+    provenance = json.loads(paths["provenance"].read_bytes())
+    provenance["cosign_bundle_sha256"] = hashlib.sha256(arbitrary_bundle).hexdigest()
+    statement = MODULE.promotion_provenance_signing_payload(provenance)
+    signature = sign(SIGNING_SEED, statement)
+    provenance["authentication"]["signature_hex"] = signature.hex()
+    paths["provenance"].write_bytes(MODULE.render_checker_summary(provenance).encode())
+    calls = []
+
+    def verify_native(arguments, actual_statement, actual_signature, key):
+        assert actual_statement == statement
+        assert actual_signature == signature
+        assert MODULE.verify_ed25519(key, actual_signature, actual_statement)
+        calls.append(arguments)
+        return []
+
+    # Scope this regression to the separate cosign gate; these mocks supply no production proof.
+    monkeypatch.setattr(
+        MODULE.final_promotion_evidence, "verify_final_promotion_receipt", verify_native,
+    )
+    monkeypatch.setattr(MODULE, "validate_inner_approval_chain", lambda: [])
+    cosign_calls = []
+    def reject_cosign(arguments, subject, bundle):
+        assert bundle == arbitrary_bundle
+        cosign_calls.append((arguments, subject, bundle))
+        return [MODULE.final_promotion_cosign.FAILURE]
+    monkeypatch.setattr(MODULE.final_promotion_cosign, "verify_final_promotion_cosign", reject_cosign)
+    exit_code, summary, stderr = run_and_decode(args, capsys)
+    assert exit_code == 1
+    assert len(calls) == 1
+    assert len(cosign_calls) == 1
+    assert summary["status"] == "blocked"
+    assert summary["externally_authenticated"] is False
+    assert summary["promotion_eligible"] is False
+    assert "signer_qualification" not in summary
+    assert summary["errors"] == [MODULE.final_promotion_cosign.FAILURE]
+    assert "cosign verification failed for the exact subject and independent trust" in stderr
+
+
+def test_python_signing_preimage_matches_independent_rust_statement_golden() -> None:
+    golden = (SCRIPT_DIR.parent / "crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture.message").read_bytes()
+    unsigned = json.loads(golden.removeprefix(MODULE.PROMOTION_PROVENANCE_SIGNATURE_DOMAIN))
+    assert len(unsigned) == 24
+    assert len(unsigned["authentication"]) == 8
+    unsigned["authentication"]["signature_hex"] = "01" * 64
+    assert MODULE.promotion_provenance_signing_payload(unsigned) == golden
+    unsigned["authentication"]["unrecognized"] = "not-a-wire-field"
+    with pytest.raises(ValueError, match="wrong exact schema"):
+        MODULE.promotion_provenance_signing_payload(unsigned)
+
+
+def unsigned_cosign_fixture() -> dict[str, Any]:
+    """Project the independently stored Rust statement into the initial cosign input."""
+
+    golden = (SCRIPT_DIR.parent / "crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture.message").read_bytes()
+    unsigned = json.loads(golden.removeprefix(MODULE.PROMOTION_PROVENANCE_SIGNATURE_DOMAIN))
+    del unsigned["cosign_bundle_sha256"]
+    return unsigned
+
+
+def test_cosign_subject_matches_exact_non_circular_golden_projection() -> None:
+    golden = (SCRIPT_DIR.parent / "crates/sorafs_manifest/src/signer/final_promotion/tests/statement_fixture.message").read_bytes()
+    raw_body = golden.removeprefix(MODULE.PROMOTION_PROVENANCE_SIGNATURE_DOMAIN)
+    projected, count = re.subn(br'"cosign_bundle_sha256":"[0-9a-f]{64}",', b"", raw_body)
+    assert count == 1
+    unsigned = unsigned_cosign_fixture()
+    original = copy.deepcopy(unsigned)
+    actual = MODULE.promotion_cosign_subject_bytes(unsigned)
+    assert actual == MODULE.PROMOTION_COSIGN_SUBJECT_DOMAIN + projected
+    assert hashlib.sha256(actual).hexdigest() == "0f8eeebca94bc78ee583c8e270b62d4adeb94945cf2b9abf5dd7098b7aac2bf3"
+    assert unsigned == original
+    assert len(unsigned) == 23
+    assert len(unsigned["authentication"]) == 8
+    assert b'"cosign_bundle_sha256"' not in actual
+    assert b'"signature_hex"' not in actual
+
+
+@pytest.mark.parametrize("field", sorted(MODULE.PROMOTION_COSIGN_SUBJECT_FIELDS - {"authentication"}))
+def test_cosign_subject_binds_every_unsigned_root_field(field: str) -> None:
+    unsigned = unsigned_cosign_fixture()
+    baseline = MODULE.promotion_cosign_subject_bytes(unsigned)
+    unsigned[field] = {"changed-bound-value": unsigned[field]}
+    assert MODULE.promotion_cosign_subject_bytes(unsigned) != baseline
+
+
+@pytest.mark.parametrize("field", sorted(MODULE.AUTHENTICATION_FIELDS - {"signature_hex"}))
+def test_cosign_subject_binds_each_authentication_field(field: str) -> None:
+    unsigned = unsigned_cosign_fixture()
+    baseline = MODULE.promotion_cosign_subject_bytes(unsigned)
+    unsigned["authentication"][field] = {"changed-bound-value": unsigned["authentication"][field]}
+    assert MODULE.promotion_cosign_subject_bytes(unsigned) != baseline
+
+
+@pytest.mark.parametrize("mutation", ("extra_root", "missing_root", "bundle_hash", "signature", "extra_auth", "missing_auth", "wrong_auth", "nonfinite", "oversized"))
+def test_cosign_subject_rejects_noncanonical_shape_or_encoding(mutation: str) -> None:
+    unsigned = unsigned_cosign_fixture()
+    if mutation == "extra_root": unsigned["extra"] = "no wire aliases"
+    elif mutation == "missing_root": del unsigned["chain_id"]
+    elif mutation == "bundle_hash": unsigned["cosign_bundle_sha256"] = "00" * 32
+    elif mutation == "signature": unsigned["authentication"]["signature_hex"] = "00" * 64
+    elif mutation == "extra_auth": unsigned["authentication"]["extra"] = "unit"
+    elif mutation == "missing_auth": del unsigned["authentication"]["kind"]
+    elif mutation == "wrong_auth": unsigned["authentication"] = []
+    elif mutation == "nonfinite": unsigned["generated_at_unix"] = float("nan")
+    elif mutation == "oversized": unsigned["chain_id"] = "x" * (256 * 1024)
+    with pytest.raises(ValueError):
+        MODULE.promotion_cosign_subject_bytes(unsigned)
+
+
+def test_cosign_uses_once_captured_bundle_when_source_is_replaced_after_native_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    args, paths = build_bundle(tmp_path, monkeypatch)
+    original = paths["cosign"].read_bytes()
+    provenance = json.loads(paths["provenance"].read_bytes())
+    projected = MODULE._unsigned_promotion_body(provenance)
+    del projected["cosign_bundle_sha256"]
+    expected_subject = MODULE.promotion_cosign_subject_bytes(projected)
+    def verify_native(arguments, statement, signature, key):
+        assert MODULE.verify_ed25519(key, signature, statement)
+        paths["cosign"].write_bytes(b"replacement candidate must not be read")
+        return []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", verify_native)
+    calls = mock_cosign_verification(monkeypatch)
+    exit_code, summary, _ = run_and_decode(args, capsys)
+    assert exit_code == 1
+    assert len(calls) == 1
+    assert calls[0][1:] == (expected_subject, original)
+    assert summary["cosign_bundle_sha256"] == hashlib.sha256(original).hexdigest()
+    assert summary["errors"] == MODULE.validate_inner_approval_chain()
+    assert summary["promotion_eligible"] is False
+
+
+@pytest.mark.parametrize("mutation", ("old_media_type", "dsse", "unknown", "managed_key", "old_log"))
+def test_invalid_cosign_profile_blocks_before_native_or_cosign_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, mutation: str,
+) -> None:
+    args, paths = build_bundle(tmp_path, monkeypatch)
+    payload = synthetic_cosign_bundle()
+    if mutation == "old_media_type": payload["mediaType"] = "application/vnd.dev.sigstore.bundle+json;version=0.3"
+    elif mutation == "dsse": payload["dsseEnvelope"] = payload.pop("messageSignature")
+    elif mutation == "unknown": payload["unknown"] = "unit"
+    elif mutation == "managed_key": payload["verificationMaterial"]["publicKey"] = payload["verificationMaterial"].pop("certificate")
+    elif mutation == "old_log": payload["verificationMaterial"]["tlogEntries"][0]["kindVersion"]["version"] = "0.0.1"
+    paths["cosign"].write_bytes(json.dumps(payload).encode())
+    native_calls = []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", lambda *args: native_calls.append(args))
+    cosign_calls = mock_cosign_verification(monkeypatch)
+    exit_code, summary, stderr = run_and_decode(args, capsys)
+    assert exit_code == 1
+    assert summary["promotion_eligible"] is False
+    assert "Sigstore v0.3 format" in stderr
+    assert native_calls == []
+    assert cosign_calls == []
+
+
+def test_invalid_x509_version_returns_closed_summary_before_either_verifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    args, paths = build_bundle(tmp_path, monkeypatch)
+    payload = synthetic_cosign_bundle()
+    certificate = payload["verificationMaterial"]["certificate"]
+    raw = base64.b64decode(certificate["rawBytes"])
+    original = b"\xa0\x03\x02\x01\x02"
+    assert original in raw
+    certificate["rawBytes"] = base64.b64encode(raw.replace(original, original[:-1] + b"\x03", 1)).decode()
+    paths["cosign"].write_bytes(json.dumps(payload).encode())
+    native_calls = []
+    monkeypatch.setattr(MODULE.final_promotion_evidence, "verify_final_promotion_receipt", lambda *args: native_calls.append(args))
+    cosign_calls = mock_cosign_verification(monkeypatch)
+    exit_code, summary, stderr = run_and_decode(args, capsys)
+    assert exit_code == 1
+    assert summary["status"] == "blocked"
+    assert summary["promotion_eligible"] is False
+    assert "Sigstore v0.3 format" in stderr
+    assert "InvalidVersion" not in stderr
+    assert set(summary) == MODULE.PROMOTION_SUMMARY_FIELDS
+    assert native_calls == []
+    assert cosign_calls == []
+
+
+@pytest.mark.parametrize(("field", "invalid"), (
+    ("service_id", "promotion/service"), ("service_id", "attestation-test"),
+    ("administrator_id", "é"), ("key_revision", True), ("key_revision", 1.0),
+    ("policy_revision", 0), ("policy_revision", 1 << 64),
+    ("policy_digest_sha256", "00" * 32), ("policy_digest_sha256", "AB" * 32),
+))
+def test_signer_coordinates_use_exact_manifest_grammar(field: str, invalid: Any) -> None:
+    row = {
+        "service_id": SIGNER_SERVICE_ID,
+        "administrator_id": SIGNER_ADMINISTRATOR_ID, "key_revision": SIGNER_KEY_REVISION,
+        "policy_revision": SIGNER_POLICY_REVISION, "policy_digest_sha256": SIGNER_POLICY_DIGEST,
+    }
+    errors = []
+    MODULE._validate_signer(row, errors)
+    assert errors == []
+    row[field] = invalid
+    MODULE._validate_signer(row, errors)
+    assert errors
+
+
+def test_chain_identity_and_revision_boundaries_are_exact() -> None:
+    for accepted in ("a", "CHAIN.a_b:c-1", "a" * 128):
+        assert MODULE._canonical_chain_id(accepted) == accepted
+    for invalid in ("", "-chain", "chain_", "x" * 129, "é", "a b", "a\0b"):
+        assert MODULE._canonical_chain_id(invalid) is None
+    row, errors = MODULE._validate_operator_signer_tuple(
+        service_id=SIGNER_SERVICE_ID, administrator_id=SIGNER_ADMINISTRATOR_ID,
+        key_revision=(1 << 64) - 1, policy_revision=(1 << 64) - 1,
+        policy_digest_sha256=SIGNER_POLICY_DIGEST,
+    )
+    assert errors == []
+    assert "signer_backend" not in row
+    _, errors = MODULE._validate_operator_signer_tuple(
+        service_id=SIGNER_SERVICE_ID, administrator_id=SIGNER_SERVICE_ID,
+        key_revision=1, policy_revision=1, policy_digest_sha256=SIGNER_POLICY_DIGEST,
+    )
+    assert "must differ" in errors[0]

@@ -237,7 +237,7 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
         "sorafs.reference_sdk.signed_manifest_canary.v1"
     )
     assert (
-        "hardware_custody_verified"
+        "signer_authority_verified"
         in plan["evidence_contract"]["signed_manifest"]["required_payload_fields"]
     )
     assert plan["evidence_contract"]["supply_chain"]["schema"] == (

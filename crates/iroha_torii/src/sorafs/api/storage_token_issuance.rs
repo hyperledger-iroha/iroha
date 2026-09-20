@@ -223,10 +223,10 @@ pub(crate) async fn handle_post_sorafs_storage_token_authenticated(
                     response
                 }
                 StreamTokenIssuerError::RuntimeSignerUnavailable
-                | StreamTokenIssuerError::HardwareEvidenceInvalid
-                | StreamTokenIssuerError::HardwareStateChanged
-                | StreamTokenIssuerError::HardwareFinalityUnavailable
-                | StreamTokenIssuerError::HardwareClockRollback => {
+                | StreamTokenIssuerError::SignerEvidenceInvalid
+                | StreamTokenIssuerError::SignerStateChanged
+                | StreamTokenIssuerError::SignerFinalityUnavailable
+                | StreamTokenIssuerError::SignerClockRollback => {
                     error!("stream token runtime signer unavailable");
                     let mut response = json_error(
                         StatusCode::SERVICE_UNAVAILABLE,

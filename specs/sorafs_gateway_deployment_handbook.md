@@ -18,7 +18,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 |-------------|-------|
 | Torii build ≥ `2026-02-18` | Must include stream-token enforcement and the `sorafs.gateway` config surface. |
 | GAR admission artefacts | Gateway admission envelope + manifest signed via governance tooling. |
-| Stream token hardware custody | Complete signer/attester/observer public pins, a non-exportable hardware key, separate runtime clients and independently approved finalized custody state. See the [source contract](sorafs/stream_token_hardware_custody.md); public pins and simulated receipts do not qualify a deployment. |
+| Stream token signer custody | Complete signer/attester/observer public pins, an authorized signing key, separate runtime clients and independently approved finalized custody state. See the [source contract](sorafs/stream_token_signer_custody.md); public pins and simulated receipts do not qualify a deployment. |
 | Observability stack | Prometheus + Grafana dashboards (`grafana_sorafs_gateway_*`) shipped in `specs/`. |
 | Smoke tooling | Latest `sorafs-fetch` CLI (`cargo run -p sorafs_fetch -- --help`) with the gateway options described below. |
 
@@ -32,7 +32,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
    enforce_capabilities = true
 
    ```
-   Merge the complete [stream-token public-pin template](sorafs/snippets/stream_token_hardware_binding.toml)
+   Merge the complete [stream-token public-pin template](sorafs/snippets/stream_token_signer_binding.toml)
    into the same configuration, replacing its deliberately invalid placeholders and
    zero trust generations/intervals with independently reviewed values.
 2. Configure distinct proof-outcome, repair, reserve, and orderbook entries under
@@ -46,20 +46,20 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 4. Configure observability exporters (Prometheus scrape of `torii_metrics` endpoint). Dashboards referenced in §4 expect metric names `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_stream_token_denials_total{reason=…}`, etc.
 
 The TOML `enabled` value is the only production activation control. The nested
-`hardware` group contains every signer, attester and observer pin; the sole key
-generation is `hardware.key_revision`. Provider identity comes from storage,
+`signer` group contains every signer, attester and observer pin; the sole key
+generation is `signer.key_revision`. Provider identity comes from storage,
 and the runtime supplies the exact chain/network context. All three authority
 keys and six service/administrator identities are independent. Credentials,
 sessions and PINs remain runtime-only.
 
-The launcher injects the hardware client, independent signed-observer client and
+The launcher injects the signer client, independent signed-observer client and
 approved full custody anchor. Torii rejects missing or unexpected dependencies;
 startup cannot bootstrap trust from either client's output. Every operation has
 fresh phase-bound state reads and exactly one Sign, with bounded read-only recovery
 on ambiguity. The four-signature receipt and independent final completed-state
 evidence must pass local Core finality and expiry checks before token publication.
-See the [hardware custody contract](sorafs/stream_token_hardware_custody.md) for
-precise bindings, ceilings and the unfinished native/device/state qualification
+See the [signer custody contract](sorafs/stream_token_signer_custody.md) for
+precise bindings, ceilings and the unfinished native/signer/state qualification
 requirements. Positive defaults remain bounded: TTL is at most one hour and
 request overrides may only reduce configured ceilings.
 
@@ -203,11 +203,11 @@ Recommended alerts:
 
 ### 5.4 Key Rotation
 
-Use the [hardware custody cutover](sorafs/stream_token_hardware_custody.md#cutover-and-qualification):
-generate a new key inside qualified hardware, obtain independent attestation and
-governed activation, then atomically update public pins, approved custody anchor
+Use the [signer custody cutover](sorafs/stream_token_signer_custody.md#cutover-and-qualification):
+generate a new key with the operator-selected signer, obtain independent
+authorization and governed activation, then atomically update public pins, approved custody anchor
 and authenticated provider inventory. Require fresh signed startup and complete
-release evidence; signature validity alone does not qualify hardware or state.
+release evidence; signature validity alone does not establish current authorized state.
 
 Switch each descriptor's pinned `gateway-key` and token together. Finalize the old
 custody's terminal audit/revocation before revocation takes effect, and never retry

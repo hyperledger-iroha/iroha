@@ -1,0 +1,26 @@
+{
+  "files": {
+    "artifact.txt": {
+      "sha256": "a0cfc71271d6e278e57cd332ff957c3f7043fdda354c4cbb190a30d56efa01bf",
+      "size": 109,
+      "source": "https://raw.githubusercontent.com/sigstore/sigstore-conformance/bf6b322ef65839216ec8853287032750e1f4b92d/test/assets/bundle-verify/a.txt"
+    },
+    "bundle.sigstore.json": {
+      "sha256": "3a5ce62cee2653969be846a41e8332eae82c633cdfafe6db48b10e60939518dd",
+      "size": 10123,
+      "source": "https://raw.githubusercontent.com/sigstore/sigstore-conformance/bf6b322ef65839216ec8853287032750e1f4b92d/test/assets/bundle-verify/rekor2-happy-path/bundle.sigstore.json"
+    },
+    "timestamp_mismatch.bundle.json": {
+      "sha256": "025ebb5b76e5916c49930c4bf454917cf91503a8005a2978e26754ff587ee584",
+      "size": 10079,
+      "source": "https://raw.githubusercontent.com/sigstore/sigstore-conformance/bf6b322ef65839216ec8853287032750e1f4b92d/test/assets/bundle-verify/rekor2-timestamp-payload-mismatch_fail/bundle.sigstore.json"
+    },
+    "trusted_root.json": {
+      "sha256": "ed6a9cf4e7c2e3297a4b5974fce0d17132f03c63512029d7aa3a402b43acab49",
+      "size": 6824,
+      "source": "https://raw.githubusercontent.com/sigstore/sigstore-conformance/bf6b322ef65839216ec8853287032750e1f4b92d/test/assets/bundle-verify/rekor2-happy-path/trusted_root.json"
+    }
+  },
+  "schema": "sorafs.cosign_crypto_fixture_sources.v1",
+  "scope": "public_upstream_conformance_only"
+}

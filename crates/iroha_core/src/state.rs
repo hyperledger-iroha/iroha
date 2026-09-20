@@ -387,9 +387,7 @@ mod carrier_geometry_preparation;
 mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
-pub(crate) use carrier_preparation::{
-    PreparedCarrier, PreparedCarrierJournals, PublishedNativeApply, RetainedCarrier,
-};
+pub(crate) use carrier_preparation::{PreparedCarrier, PublishedNativeApply, RetainedCarrier};
 mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;
@@ -32447,7 +32445,7 @@ impl State {
         self.transactions.view().get(&hash).is_some()
     }
     /// Seed canonical entrypoint membership for focused fixtures.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn record_committed_entrypoints_for_tests(
         &self,
         entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,

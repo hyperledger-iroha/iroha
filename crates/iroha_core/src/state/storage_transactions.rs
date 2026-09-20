@@ -76,7 +76,7 @@ impl TransactionsStorage {
             .map_or(0, |block| block.height.get())
     }
     /// Seed canonical entrypoint membership without constructing fixture blocks.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn record_committed_entrypoint_membership_for_tests(
         &self,
         entrypoints: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,

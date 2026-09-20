@@ -40,6 +40,18 @@ pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_so
 mod prepared_low_digit_plane_v1;
 pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_low_digit_plane_v1::PreparedLowDigitStatementV1;
 
+#[path = "incremental_source_phase23_radix_range_v2/prepared_difference_digit_plane_v1.rs"]
+mod prepared_difference_digit_plane_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_difference_digit_plane_v1::PreparedDifferenceDigitStatementV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_difference_digit_plane_v1::TestPreparedDifferenceDigitV1;
+
+#[path = "incremental_source_phase23_radix_range_v2/prepared_small_signed_plane_v1.rs"]
+mod prepared_small_signed_plane_v1;
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_small_signed_plane_v1::PreparedSmallSignedStatementV1;
+#[cfg(test)]
+pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) use prepared_small_signed_plane_v1::TestPreparedSmallSignedV1;
+
 const RADIX_WITNESS_VERSION_V2: u8 = 2;
 const RADIX_BASE_V2: u16 = 1 << 15;
 const RADIX_LOW_LIMBS_V2: usize = 17;
@@ -970,7 +982,8 @@ struct Phase23RadixWitnessMaterializedV2
     snapshot: ConfidentialSpoolSnapshotV1,
     record: RadixWitnessMaterializationRecordV2,
     materialization_seal: RadixWitnessMaterializationSealV2,
-    // Process-local consuming cursor; never a proof, wire, or readiness field.
+    // Process-local consuming cursor for comparator and subsequent signed
+    // planes; never a proof, wire, or readiness field.
     next_comparator_plane: u16,
 }
 

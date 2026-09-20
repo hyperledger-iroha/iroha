@@ -817,8 +817,8 @@ define_runtime_provider_backends_v1! {
         optional governance_dag_head_authenticator: Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator> => pub fn with_governance_dag_head_authenticator(authenticator);
         /// Attach the deployment-owned Governance DAG sealed checkpoint store.
         optional governance_dag_checkpoint_store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore> => pub fn with_governance_dag_checkpoint_store(store);
-        /// Attach the deployment-owned opaque hardware operation client, never a trust anchor.
-        optional stream_token_hardware_client: Arc<dyn iroha_torii::sorafs::StreamTokenHardwareClientV1> => pub fn with_stream_token_hardware_client(client);
+        /// Attach the deployment-owned opaque signer operation client, never a trust anchor.
+        optional stream_token_signer_client: Arc<dyn iroha_torii::sorafs::StreamTokenSignerClientV1> => pub fn with_stream_token_signer_client(client);
         /// Attach the separately routed, independently authenticated finalized-state observer.
         optional stream_token_state_observer: Arc<dyn iroha_torii::sorafs::StreamTokenStateObserverClientV1> => pub fn with_stream_token_state_observer(observer);
         /// Attach the deployment-owned stream-token quota, sealed-sequence, and

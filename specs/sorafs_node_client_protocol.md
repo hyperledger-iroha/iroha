@@ -610,7 +610,7 @@ the canonical request payload:
   gateway's ceiling.
 
 When issuance is enabled in node TOML and startup has bound the configured
-hardware custody and independent current state, the handler responds with:
+signer custody and independent current state, the handler responds with:
 
 - HTTP `200 OK`.
 - Headers:
@@ -663,20 +663,20 @@ seconds of positive issuance-clock skew. It is rejected at its exact expiry
 second. Nodes return HTTP `404` with
 `{"error": "stream token issuance is not enabled on this node"}` only when
 issuance is disabled in node TOML. Enabled production startup fails closed
-unless the complete `hardware` signer/attester/observer configuration, separate
-hardware and observer clients, and an independently approved full custody anchor
-are present. `hardware.key_revision` is the sole token key generation; the provider
+unless the complete `signer` signer/attester/observer configuration, separate
+signer and observer clients, and an independently approved full custody anchor
+are present. `signer.key_revision` is the sole token key generation; the provider
 comes from storage and the chain/network come from the node context. Fresh signed
 `Startup` and `BeforeProvider` observations precede signing, while exact durable
 completion requires separate `AfterCommit` and `BeforeRelease` observations.
 One ambiguous signing result permits only bounded read-only recovery of the same
 prepared body; it does not make separate HTTP requests idempotent. No signing-seed
 file, key path, or environment enablement is accepted; credentials remain
-runtime-only and the signing key must be independently attested as generated in
-hardware, non-exportable and never previously exported. The
-[hardware custody contract](sorafs/stream_token_hardware_custody.md) defines the
+runtime-only. Software and optional hardware signers use the same independent
+authorization and finalized-state contract, without key-origin claims. The
+[signer custody contract](sorafs/stream_token_signer_custody.md) defines the
 complete public pins, local Core finality checks, expiry fences and remaining
-native/device/state qualification requirements.
+native/signer/state qualification requirements.
 
 Exact-operator issuance and per-token quota state are bounded and
 prune only expired or idle windows. A full state table never evicts an active

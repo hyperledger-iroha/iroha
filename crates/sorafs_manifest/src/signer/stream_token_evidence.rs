@@ -1,8 +1,8 @@
-//! Fresh challenged observer evidence for provider-bound hardware stream-token operations.
+//! Fresh challenged observer evidence for provider-bound authorized stream-token operations.
 //!
 //! Independently configured trust and one caller-owned pending attempt are mandatory. Signed
-//! observer claims authenticate accountable observations; they are not consensus proofs or
-//! hardware attestations. The runtime owns unpredictable challenges, one-use attempt state,
+//! observer claims authenticate accountable observations; they are not consensus proofs.
+//! The runtime owns unpredictable challenges, one-use attempt state,
 //! monotonic clock/finality history and actual authoritative reads after each requested phase.
 
 use super::{
@@ -11,7 +11,7 @@ use super::{
         SignerCustodyAuthorityV1, SignerCustodyBindingV1, SignerCustodyTrustV1,
         SignerCustodyUseContextV1, VerifiedSignerCustodyV1, verify_signer_custody_use_v1,
     },
-    protocol::{digest_parts, valid_identity},
+    protocol::{SIGNER_MAX_ID_BYTES_V1, digest_parts},
     receipt::SignerCompletedOperationV1,
     state_observation::{
         SIGNER_STATE_OBSERVATION_MAX_AGE_MS_V1, SignerStateObservationViewV1,
@@ -25,6 +25,7 @@ use super::{
     },
 };
 use crate::token::StreamTokenV1;
+use iroha_primitives::production_identity::is_production_identity_v1;
 use norito::codec::{Decode, Encode};
 use std::fmt;
 

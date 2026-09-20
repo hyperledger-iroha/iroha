@@ -63,7 +63,7 @@ All artifacts use
 Private evidence, transaction bodies, credentials, tokens, keys, PII, and log
 payloads stay outside the receipt and summary.
 
-## Required external software authentication
+## Required external signer authentication
 
 Qualifying receipts use this schema-closed authentication object:
 
@@ -71,7 +71,6 @@ Qualifying receipts use this schema-closed authentication object:
 {
   "kind": "external-ed25519",
   "algorithm": "ed25519",
-  "backend": "software",
   "service_id": "<isolated-signer-service>",
   "administrator_id": "<independent-administrator>",
   "key_revision": 1,
@@ -84,15 +83,18 @@ Qualifying receipts use this schema-closed authentication object:
 
 The service and administrator identifiers must be canonical, production-marked,
 and distinct. Key and policy revisions are positive, and the policy digest is
-nonzero. Local, HSM, test-marked, incomplete, or substituted authentication is
-rejected; there is no configuration-qualified compatibility mode.
+nonzero. Untrusted, test-marked, incomplete, or substituted authentication is
+rejected. Key storage is the operator's choice; the V1 schema has no backend
+or key-storage qualification field.
 
 The signature covers the domain
 `iroha:sorafs:l1-resilience-qualification:v1\0` followed by canonical JSON of
 the receipt with `authentication.signature_hex` omitted. The checker verifies
 it only against the separate operator-supplied `--trusted-public-key-hex`.
 Private signing material is never accepted. Only this trusted external
-software-signature path can emit `status=evidence-qualified`.
+signature path can emit `status=evidence-qualified`. The pending independent
+signer-authorization and completed-operation integration remains a final
+production-promotion blocker.
 
 ## Promotion consumption
 
@@ -109,12 +111,12 @@ The foundational `prepare` and `finalize` commands reopen and authenticate the
 same summary. They place its exact summary digest, receipt digests, receipt
 timestamp, and resilience signer fingerprint in a
 `resilience_qualification` binding beside `topology_qualification`. The
-binding also carries the software backend, service and administrator
+binding also carries the service and administrator
 identities, key and policy revisions, and policy digest. The existing
 foundational external software signature therefore covers the binding without
 inventing a tenth prerequisite ID. The aggregate requires exact equality
 between that signed binding and its separately reviewed resilience input.
-Missing, non-software, locally signed, stale, tampered, wrong-key, wrong-deployment, or
+Missing, untrusted, stale, tampered, wrong-key, wrong-deployment, or
 wrong-topology summaries block both foundational preparation and promotion.
 
 The production runner snapshots resilience as a separate replay input:

@@ -255,3 +255,10 @@ fn require_top_position_v1<R: crate::vega::MaskedRelaxedRandomSourceV1>(
 #[cfg(test)]
 #[path = "prepared_comparator_commitment_v1_tests.rs"]
 mod tests;
+
+#[path = "prepared_difference_commitment_v1.rs"]
+mod prepared_difference_commitment_v1;
+pub(in super::super) use prepared_difference_commitment_v1::{
+    RnsNativeComparatorContinuationV1, RnsNativeDifferenceCommitmentsV1,
+    RnsNativeSmallSignedCommitmentsV1,
+};

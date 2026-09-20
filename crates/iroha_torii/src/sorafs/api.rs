@@ -31537,7 +31537,7 @@ mod advert_tests {
                 RegistryCreditLedgerEntry, RegistryDeclaration, RegistryDispute,
                 RegistryFeeLedgerEntry,
             },
-            token::hardware_test_support::{ObserverFault, SignedFixture, TestSignerMode},
+            token::signer_test_support::{ObserverFault, SignedFixture, TestSignerMode},
         },
         tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_network_app_headers},
         utils::extractors::JsonOnly,
@@ -38531,7 +38531,7 @@ mod advert_tests {
         }
         signer
             .issuer()
-            .expect("independent signed hardware custody startup")
+            .expect("independent signed signer custody startup")
     }
     fn stream_token_issuer_for_tests(provider: [u8; 32]) -> StreamTokenIssuer {
         stream_token_issuer_for_tests_with_mode(ApiTestStreamTokenSignerMode::Sign, provider, 1)

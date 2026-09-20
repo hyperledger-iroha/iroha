@@ -21,6 +21,8 @@ fn stream_token_purpose_requires_one_nonzero_provider_and_exact_role() {
         SignerRoleV1::StreamToken,
         SignerRoleV1::PopCredentials,
         SignerRoleV1::ReleaseManifest,
+        SignerRoleV1::FinalPromotionProvenance,
+        SignerRoleV1::FinalPromotionAccountTransaction,
     ] {
         assert_eq!(
             purpose.validates_role(role),

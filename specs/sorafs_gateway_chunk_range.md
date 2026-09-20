@@ -77,14 +77,15 @@ Logs:
 ## Token Signing & Rotation
 
 - **Configuration and custody.** Use the complete
-  [public-pin template](sorafs/snippets/stream_token_hardware_binding.toml) and
-  [hardware custody contract](sorafs/stream_token_hardware_custody.md). The nested
-  `hardware` group requires signer, independent attester and independent observer
-  pins; `hardware.key_revision` supplies the sole checked token generation.
-  There is no environment-variable enablement or signing-seed path. The key is
-  generated inside qualified hardware and must never be exportable or previously
-  exported. Credentials and sessions remain runtime-only.
-- **Startup and issuance.** Separate hardware and observer clients and an independent
+  [public-pin template](sorafs/snippets/stream_token_signer_binding.toml) and
+  [signer custody contract](sorafs/stream_token_signer_custody.md). The nested
+  `signer` group requires signer, independent attester and independent observer
+  pins; `signer.key_revision` supplies the sole checked token generation.
+  There is no environment-variable enablement or signing-seed path. Software
+  and optional hardware implementations share the same authorization contract;
+  key origin and exportability are not admission claims. Credentials and
+  sessions remain runtime-only.
+- **Startup and issuance.** Separate signer and observer clients and an independent
   approved full custody anchor are mandatory. Fresh signed current observations
   bind the provider-scoped identity, phase, challenge and finalized floor; the
   issuer retains the exact body association privately. Completed observations
@@ -96,7 +97,7 @@ Logs:
   public key from authenticated deployment inventory and verifies its token before
   HTTP. Compare `X-SoraFS-Verifying-Key` with that approved key; a key returned
   beside a token is not an independent trust anchor.
-- **Rotation and audit.** Follow the contract's governed hardware activation and
+- **Rotation and audit.** Follow the contract's governed signer activation and
   terminal revocation fences. Switch the descriptor's `gateway-key` and token
   atomically. Preserve public fingerprints, generations and approved custody/policy
   digests; do not retain key material or invent a multi-key fallback.

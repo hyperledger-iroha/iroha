@@ -267,8 +267,8 @@ impl SignerStreamTokenStateObservationBodyV1 {
         if self.magic != STATE_MAGIC
             || self.request_digest == [0; 32]
             || !self.subject.valid_phase(self.phase)
-            || !valid_identity(&self.authority.service_id)
-            || !valid_identity(&self.authority.administrator_id)
+            || !is_production_identity_v1(&self.authority.service_id, SIGNER_MAX_ID_BYTES_V1)
+            || !is_production_identity_v1(&self.authority.administrator_id, SIGNER_MAX_ID_BYTES_V1)
             || self.authority.key_revision == 0
             || self.authority.policy_revision == 0
             || self.authority.policy_digest == [0; 32]

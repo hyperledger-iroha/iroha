@@ -83,17 +83,15 @@ fn blocked_socket_read_and_write_share_the_original_expiration() {
     let deadline = BrokerDeadlineV1::new(Duration::from_millis(25)).unwrap();
     let began = Instant::now();
     let mut byte = [0_u8; 1];
-    assert!(
+    assert_eq!(
         DeadlineUnixStreamV1::new(&mut local, deadline)
             .read_exact(&mut byte)
-            .is_err()
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
     );
     assert!(began.elapsed() < Duration::from_secs(5));
-    // Some kernels round timeout granularity down; explicitly use the same now-expired endpoint
-    // to prove that a later output view cannot allocate another independent timeout interval.
-    while deadline.remaining().is_ok() {
-        std::thread::park_timeout(Duration::from_millis(1));
-    }
+    assert!(Instant::now() >= deadline.expires_at());
     assert_eq!(
         DeadlineUnixStreamV1::new(&mut local, deadline)
             .write(b"late")
@@ -101,6 +99,144 @@ fn blocked_socket_read_and_write_share_the_original_expiration() {
             .kind(),
         io::ErrorKind::TimedOut
     );
+}
+
+#[test]
+fn closed_peer_response_is_drained_through_exact_eof_before_deadline() {
+    let (mut local, mut peer) = UnixStream::pair().unwrap();
+    let original_flags = rustix::fs::fcntl_getfl(&local).unwrap();
+    local
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    peer.write_all(b"final buffered broker response").unwrap();
+    drop(peer);
+    let deadline = BrokerDeadlineV1::new(Duration::from_secs(5)).unwrap();
+    let mut view = DeadlineUnixStreamV1::new(&mut local, deadline);
+    let mut prefix = [0; 5];
+    view.read_exact(&mut prefix).unwrap();
+    assert_eq!(&prefix, b"final");
+    let mut remainder = Vec::new();
+    view.read_to_end(&mut remainder).unwrap();
+    assert_eq!(remainder, b" buffered broker response");
+    assert_eq!(local.read_timeout().unwrap(), Some(Duration::from_secs(2)));
+    assert_eq!(rustix::fs::fcntl_getfl(&local).unwrap(), original_flags);
+    assert!(deadline.remaining().is_ok());
+}
+
+#[test]
+fn blocked_write_and_later_drain_never_renew_expired_deadline() {
+    let (mut local, mut peer) = UnixStream::pair().unwrap();
+    rustix::net::sockopt::set_socket_send_buffer_size(&local, 4096).unwrap();
+    let original_flags = rustix::fs::fcntl_getfl(&local).unwrap();
+    local
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let fill = [0x63; 4096];
+    let mut buffered = 0;
+    loop {
+        match rustix::net::send(&local, &fill, rustix::net::SendFlags::DONTWAIT) {
+            Ok(count) => {
+                assert!(count > 0);
+                buffered += count;
+                assert!(
+                    buffered < 16 * 1024 * 1024,
+                    "fixture must reach backpressure"
+                );
+            }
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(rustix::io::Errno::AGAIN) => break,
+            Err(error) => panic!("fill socket: {error}"),
+        }
+    }
+    assert!(buffered > 0);
+    let deadline = BrokerDeadlineV1::new(Duration::from_millis(25)).unwrap();
+    let began = Instant::now();
+    assert_eq!(
+        DeadlineUnixStreamV1::new(&mut local, deadline)
+            .write(b"blocked")
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert!(Instant::now() >= deadline.expires_at());
+    assert!(began.elapsed() < Duration::from_secs(5));
+    let mut received = vec![0; buffered];
+    peer.read_exact(&mut received).unwrap();
+    assert!(received.iter().all(|byte| *byte == 0x63));
+    assert_eq!(
+        DeadlineUnixStreamV1::new(&mut local, deadline)
+            .write(b"late")
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(
+        rustix::net::recv(&peer, &mut [0; 1], rustix::net::RecvFlags::DONTWAIT).unwrap_err(),
+        rustix::io::Errno::AGAIN
+    );
+    assert_eq!(local.write_timeout().unwrap(), Some(Duration::from_secs(2)));
+    assert_eq!(rustix::fs::fcntl_getfl(&local).unwrap(), original_flags);
+}
+
+#[test]
+fn closed_peer_write_fails_without_changing_descriptor_mode() {
+    let (mut local, mut peer) = UnixStream::pair().unwrap();
+    let original_flags = rustix::fs::fcntl_getfl(&local).unwrap();
+    let deadline = BrokerDeadlineV1::new(Duration::from_secs(5)).unwrap();
+    DeadlineUnixStreamV1::new(&mut local, deadline)
+        .write_all(b"open")
+        .unwrap();
+    let mut received = [0; 4];
+    peer.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"open");
+    #[cfg(target_os = "macos")]
+    assert!(rustix::net::sockopt::socket_nosigpipe(&local).unwrap());
+    drop(peer);
+    assert!(
+        DeadlineUnixStreamV1::new(&mut local, deadline)
+            .write(b"closed")
+            .is_err()
+    );
+    assert_eq!(rustix::fs::fcntl_getfl(&local).unwrap(), original_flags);
+    assert!(deadline.remaining().is_ok());
+}
+
+#[test]
+fn empty_io_requires_a_live_deadline_without_touching_the_socket() {
+    let (mut local, peer) = UnixStream::pair().unwrap();
+    let original_flags = rustix::fs::fcntl_getfl(&local).unwrap();
+    let deadline = BrokerDeadlineV1::new(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        DeadlineUnixStreamV1::new(&mut local, deadline)
+            .read(&mut [])
+            .unwrap(),
+        0
+    );
+    drop(peer);
+    assert_eq!(
+        DeadlineUnixStreamV1::new(&mut local, deadline)
+            .write(&[])
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        DeadlineUnixStreamV1::new(&mut local, expired())
+            .read(&mut [])
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(
+        DeadlineUnixStreamV1::new(&mut local, expired())
+            .write(&[])
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(local.read_timeout().unwrap(), None);
+    assert_eq!(local.write_timeout().unwrap(), None);
+    assert_eq!(rustix::fs::fcntl_getfl(&local).unwrap(), original_flags);
+    assert!(deadline.remaining().is_ok());
 }
 
 #[test]

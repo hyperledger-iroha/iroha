@@ -47,6 +47,9 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
+pub mod sorafs_final_promotion_account_custody;
+/// Governed deployment custody and durable final-promotion signer-operation authority.
+pub mod sorafs_final_promotion_authority;
 /// Authoritative `SoraFS` moderation commit/reveal ledger handlers.
 pub mod sorafs_moderation;
 /// Authoritative `SoraFS` orderbook instruction handlers.
@@ -320,6 +323,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MatchSorafsOrderbook> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MaintainSorafsOrderbook> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> => CoreAuthorized,

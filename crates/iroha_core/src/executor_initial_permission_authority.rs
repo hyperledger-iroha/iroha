@@ -34,6 +34,18 @@ fn validate_initial_permission_payload_constraints(
                 .map_err(|error| invalid_initial_permission_payload(permission, error))?;
         }};
     }
+    macro_rules! validate_exact_deployment_permission {
+        ($permission_ty:path) => {{
+            let token = <$permission_ty>::try_from(permission)
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+            if Permission::from(token) != *permission {
+                return Err(invalid_initial_permission_payload(
+                    permission,
+                    "permission requires the exact deployment scope",
+                ));
+            }
+        }};
+    }
     match permission.name().as_ref() {
         "CanRegisterSmartContractCode"
         | "CanManageSmartContractCodeRegistrars"
@@ -61,6 +73,21 @@ fn validate_initial_permission_payload_constraints(
                 ));
             }
         }
+        "CanManageSorafsFinalPromotionCustody" => validate_exact_deployment_permission!(
+            executor_permission::sorafs::CanManageSorafsFinalPromotionCustody
+        ),
+        "CanOperateSorafsFinalPromotion" => validate_exact_deployment_permission!(
+            executor_permission::sorafs::CanOperateSorafsFinalPromotion
+        ),
+        "CanCheckSorafsFinalPromotion" => validate_exact_deployment_permission!(
+            executor_permission::sorafs::CanCheckSorafsFinalPromotion
+        ),
+        "CanManageSorafsFinalPromotionAccountCustody" => validate_exact_deployment_permission!(
+            executor_permission::sorafs::CanManageSorafsFinalPromotionAccountCustody
+        ),
+        "CanCheckSorafsFinalPromotionAccountCustody" => validate_exact_deployment_permission!(
+            executor_permission::sorafs::CanCheckSorafsFinalPromotionAccountCustody
+        ),
         "CanManageSorafsStreamTokenCustody" => {
             let token = executor_permission::sorafs::CanManageSorafsStreamTokenCustody::try_from(
                 permission,
@@ -1483,6 +1510,74 @@ fn validate_initial_native_instruction_authority(
         }
         return deny("Exact provider-scoped stream-token custody permission is required");
     }
+    if let Some(mutation) =
+        any.downcast_ref::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority>()
+    {
+        use iroha_data_model::sorafs::final_promotion_authority::FinalPromotionAuthorityActionV1;
+        if let FinalPromotionAuthorityActionV1::Check(check) = &mutation.action
+            && authority == &check.expected_operator
+        {
+            return deny("Receipt observer must differ from the expected operator");
+        }
+        let permission: Permission = match &mutation.action {
+            FinalPromotionAuthorityActionV1::Configure(_)
+            | FinalPromotionAuthorityActionV1::Enroll(_)
+            | FinalPromotionAuthorityActionV1::Revoke(_) => {
+                executor_permission::sorafs::CanManageSorafsFinalPromotionCustody {
+                    deployment_id: mutation.deployment_id.clone(),
+                }
+                .into()
+            }
+            FinalPromotionAuthorityActionV1::Reserve(_)
+            | FinalPromotionAuthorityActionV1::Complete(_)
+            | FinalPromotionAuthorityActionV1::Expire(_) => {
+                executor_permission::sorafs::CanOperateSorafsFinalPromotion {
+                    deployment_id: mutation.deployment_id.clone(),
+                }
+                .into()
+            }
+            FinalPromotionAuthorityActionV1::Check(_) => {
+                executor_permission::sorafs::CanCheckSorafsFinalPromotion {
+                    deployment_id: mutation.deployment_id.clone(),
+                }
+                .into()
+            }
+        };
+        if initial_authority_has_exact_permission(state_transaction, authority, permission)? {
+            return Ok(());
+        }
+        return deny("Exact deployment-scoped final-promotion action permission is required");
+    }
+    if let Some(mutation) = any
+        .downcast_ref::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody>(
+    ) {
+        use iroha_data_model::sorafs::final_promotion_account_custody::FinalPromotionAccountCustodyActionV1;
+        if let FinalPromotionAccountCustodyActionV1::Check(check) = &mutation.action
+            && authority == &check.expected_account
+        {
+            return deny("Account-custody observer must differ from the target account");
+        }
+        let permission: Permission = match &mutation.action {
+            FinalPromotionAccountCustodyActionV1::Configure(_)
+            | FinalPromotionAccountCustodyActionV1::Enroll(_)
+            | FinalPromotionAccountCustodyActionV1::Revoke(_) => {
+                executor_permission::sorafs::CanManageSorafsFinalPromotionAccountCustody {
+                    deployment_id: mutation.deployment_id.clone(),
+                }
+                .into()
+            }
+            FinalPromotionAccountCustodyActionV1::Check(_) => {
+                executor_permission::sorafs::CanCheckSorafsFinalPromotionAccountCustody {
+                    deployment_id: mutation.deployment_id.clone(),
+                }
+                .into()
+            }
+        };
+        if initial_authority_has_exact_permission(state_transaction, authority, permission)? {
+            return Ok(());
+        }
+        return deny("Exact deployment-scoped account-custody action permission is required");
+    }
     if let Some(create) = any.downcast_ref::<iroha_data_model::isi::kaigi::CreateKaigi>()
         && !is_genesis
         && !can_modify_domain_metadata_initial(
@@ -2545,6 +2640,11 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanOperateSorafsPopIssuer",
     "CanUpsertSorafsProviderCredit",
     "CanManageSorafsStreamTokenCustody",
+    "CanManageSorafsFinalPromotionCustody",
+    "CanOperateSorafsFinalPromotion",
+    "CanCheckSorafsFinalPromotion",
+    "CanManageSorafsFinalPromotionAccountCustody",
+    "CanCheckSorafsFinalPromotionAccountCustody",
     "CanOperateSorafsRepair",
     "CanManageSorafsProofOutcomePolicy",
     "CanRecordSorafsProofOutcome",

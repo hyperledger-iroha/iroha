@@ -15,9 +15,13 @@ current implementation, tests, documentation, and external promotion evidence.
 The accepted 2026-09-06 completion plan is executed through the
 [V1 implementation goals](v1_implementation_goals.md). Those goals define the
 current target and dependency order; this ledger retains observed implementation
-and evidence state. In particular, G02 must replace the currently implemented
-software-only SoraFS promotion profile with the plan's HSM/PKCS#11/KMS custody
-requirements. Existing software-profile passes do not close that new requirement.
+and evidence state. G02 uses one provider-independent signer authorization
+contract and exact-subject Sigstore verification. Software signing is supported;
+HSM/PKCS#11/KMS integrations are optional and cannot determine admission or release
+eligibility. The user's September 13 correction applies repository-wide and
+supersedes every hardware-custody requirement in the original plan and older
+checkpoints below. Those checkpoints retain historical test scope, not current
+hardware prerequisites. See [server signing policy](../server_signing_policy_v1.md).
 
 Repository conformance and production readiness are deliberately separate. A
 row marked `local-complete` has a reviewed implementation and local validation
@@ -33,10 +37,94 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
 
-## 2026-09-10 native custody source checkpoint
+## 2026-09-20 prepared account transaction implementation
 
-This G02 slice is a private source candidate and has not been applied. Native
-StreamToken custody control requires the dedicated provider-scoped permission,
+The integrated source adds `SignerFinalPromotionAccountPreparationV1` and its
+move-only native signing continuation. It derives Reserve/Complete from actual
+executed receipt Checks, binds the full payload and independently approved fees,
+validates and pins Complete's four-signature receipt, and issues fresh account
+and receipt challenges after key I/O before releasing a signed transaction.
+The exact envelope, original deadlines and receipt lease survive submission and
+read-only reconciliation. Four native/adversarial tests cover these boundaries;
+current-candidate Rust execution remains pending. Formatting and whitespace checks
+pass for the new source. These are implementation claims, not deployed evidence.
+
+Configured authenticated software signing, independent observer/UTC/floor,
+approved spending persistence and the native state-source assembly remain open.
+The generic service still rejects its four unfinished purpose dispatches, and the
+inner-approval promotion gate remains closed. No goal or lane is completed;
+HSM access and non-exportability are not prerequisites.
+
+The next source slice adds exact observer receipt/account Check signing and wires
+the account workflow's retained identities into its constructor. It preserves the
+original challenge/deadline across provider I/O, compares the full approved payload
+and fees, rejects both protected keys as the observer, and returns only Core's
+pending observation owner. It also rejects complete account-binding substitutions
+that preserve the public account, network and deployment. Five further adversarial/native
+tests are added; no current-candidate runtime pass is claimed. The test-only Core setup now registers
+accounts and grants its five exact deployment-scoped permissions through native
+instructions; it adds no finalized history or production State mutation interface.
+These changes leave configured service, spending, clock, floor and submission
+assembly open and do not enable any unsupported generic signer purpose.
+
+## 2026-09-13 provider-independent signer correction
+
+The shared V1 custody statement now records authorized public signer identity,
+purpose, policy and enrollment. Hardware identity, key-origin and exportability
+claims were removed from its wire schema and signature/digest domains. Software,
+generic signer and optional HSM/KMS/PKCS#11 handles share the same validation.
+Stream-token configuration is `stream_tokens.signer`; its runtime, broker and
+Torii types use `StreamTokenSigner*`. The retired `.hardware` table is rejected,
+without an alias. Independent authority, finalized-state, expiry, revocation,
+exact-operation and durable recovery checks remain enforced.
+
+Final-promotion statements and receipt verification, reference SDK evidence,
+generic release output and the four inner approval contracts no longer use
+backend-origin or `software-key-qualified` labels as authority. The native
+software signer writes private validation output with mode `0600`, matching its
+Python consumer. Its artifact writer compares stable directory identity rather
+than the link count changed by its own file creation on APFS; regular files
+remain single-link and all ancestry/race protections remain enforced.
+The generic service still rejects its four unimplemented
+purpose dispatches; removing a hardware requirement does not implement them.
+
+The nine-library build passes. Its fresh native selection records 5,829 passes,
+two stale software-handle rejection failures and six existing manual DataModel
+fixture printers ignored. Both failures were corrected without relaxing their
+rejection assertions; all four affected/new Core tests pass on the rebuilt
+harness. The complete 233-test configuration integration suite, all eleven
+signer-executable tests and thirteen CLI receipt tests pass. The standalone
+signer feature build retains 99 unrelated SoraCloud dead-code warnings; its
+executable's unused import was removed and all eleven tests passed again.
+
+Supported Python 3.12 evidence includes 233 outer promotion/native-adapter
+tests, the updated 1,167-case release-CI suite, 264 signer-receipt/release-profile
+tests, 37 collection tests and 26 focused aggregate/runner cases. Another 214
+adapter/cosign/docs tests pass; 29 optional real-cosign tests were skipped
+without an independently pinned executable. These scopes overlap and are not
+summable. Formatting, codec retirement, whitespace and archive checks pass.
+The broader supported inner-contract consumer run records 630 passes and one
+diagnostic-flood test whose artificial 0.5-second launch deadline expired before
+the output limit was exercised. That test now permits five seconds for process
+startup while retaining its exact rejection/no-secret assertions; production
+limits and the separate short hard-timeout/reaping tests are unchanged. All 74
+tests in its foundational module pass on rerun, and twelve focused diagnostic
+expectations pass. The earlier Python 3.9 run is unsupported-interpreter
+diagnostic evidence only and is excluded from qualification.
+
+The provider-independent schema/admission correction is `local-complete`.
+These results do not qualify a deployed signer or close G02/G15. Real software
+provider assembly, the four inner custody/completion integrations, seventeen
+ready lanes and operational qualification remain open. Hardware access is not
+a prerequisite for any of them.
+
+## 2026-09-12 native custody reconciliation and final-promotion work
+
+The resolved September 12 merge at
+`a156eda165531852d97029d1a3f77a1ebfd5d29e` includes the native StreamToken
+custody owner, typed query, executor permission gates, opaque host namespace and
+Torii finality consumer. The earlier statement that these changes were only a
+private candidate is superseded. Native control requires the dedicated provider-scoped permission,
 current account/provider registration and exact revision/digest CAS. Retained
 history binds each transition to its original request, authority and execution
 coordinates. Exact authorized retries make no writes. Enrollment requires the
@@ -52,33 +140,527 @@ independent durable Kura/QC checks. Historical control remains readable after
 provider removal; current mutations, retries and Torii use then fail. No token
 body, per-token journal or compatibility decoder is added to native control.
 
-The coherent source and budget candidate contains **31 newly authored tests and
-one expanded existing test, all native UNRUN**. A separate source-only supplement
-(ready SHA-256 `9f47914b9b6dc04f8ea719ee64a8b57bff0fb736e752933ded95cbcc6efade1c`)
-adds three local fixture tests, for **34 new plus one expanded test, all native
-UNRUN**. The further private namespace candidate
-(ready SHA-256 `6fd1c9f08f64928785bee86bd79fdc9e1556f48756b83e73481e7d449bddcabf`)
-adds six tests, retains eight extracted test selectors, adds the host cap ratchet
-27,505→27,440 (three downward ratchets in total), and reserves the native
-root as opaque alongside existing upstream generic guards, bringing the total
-to **40 new plus one expanded test, all native UNRUN**, without establishing a
-production raw-overwrite finding; the typed custody query remains the API. The native owner and Torii changes
-have independent source reviews. Private source preservation, formatting, patch
-replay and two downward budget ratchets do not establish compilation or runtime
-behavior. Matching native inventory, focused and retained tests, and the required
-full crate suites remain pending. The exact composition receipt is:
+The native root `sorafs_stream_token_custody_v1` is reserved as opaque alongside
+the existing upstream generic-execution guards. The typed custody query remains
+the API. The six namespace tests exercise actual native key families, generic
+guards, valid typed contract values, state operations and debug publication
+refusal; they do not establish a production raw-overwrite exploit. The earlier
+source-review census of **40 new tests plus one expanded test** is historical.
+Current model tests additionally cover the typed revocation payload's flag
+combinations and schema ownership. The old private `target/evidence` and
+`target/privacy-release-evidence` packets were absent during this reconciliation;
+their prior hashes and planning counts cannot establish current retained build
+or execution evidence.
 
-`target/evidence/sorafs-v1/g02-native-stream-token-control-composition-candidate/candidate-ready.json`
-(SHA-256 `def821a0450b186d73d3023fe6bdce5d8674d0056ad5a4537547d6da820b76f5`).
+The following local results were observed in September 12 merge logs:
 
-This checkpoint completes no goal or lane. Positive native custody integration
-with durable certified history, G02-specific generic-state runtime witnesses,
-and genuine HSM/PKCS#11/KMS custody and operation-authority qualification remain
-open. The genuine four-validator deployment with mandatory signed RS16
-DA/RBC, multiple providers, two independently administered regional gateways,
-load/soak, recovery rehearsal, workspace/SDK checks and independent security
-qualification are still required. All 17 signed readiness lanes and the trusted
-nine-prerequisite foundational envelope in its specified order remain mandatory.
+- `cargo test --locked -p iroha_data_model -p iroha_executor --lib stream_token_custody`
+  passed **five model and five executor tests**, with no failures or ignores.
+  The log SHA-256 was
+  `40336b4e509eb256557aae5115442484adc536356806c52c3d7f2e264741d730`.
+- The executor SoraFS permission selection passed **61 tests** and the model
+  instruction-registry selection passed **44 tests**, with no failures or
+  ignores. Their SHA-256 values were
+  `270c132c9f56371c34b6526fd07d850d19dd39ee01b71dd244184c767557f667`
+  and `866d1413a9f8dd0854b99805203399880c7cd4af5a322c7904f9417fc6cc3a0b`.
+  These selections overlap the custody results; their counts are not additive.
+- `cargo check --locked -p iroha_core -p iroha_data_model -p iroha_executor --tests --features iroha_core/iroha-core-tests`
+  finished successfully with compiler warnings. Its log SHA-256 was
+  `93f49d46237102487a9411f799973a3d7666a4c2460a201ef3a262c57f8f3650`.
+
+Those observations came from `/tmp/iroha-merge-custody-tests.log`,
+`/tmp/iroha-merge-sorafs-permission-tests.log`,
+`/tmp/iroha-merge-registry-tests.log` and
+`/tmp/iroha-merge-cargo-check-final.log`. They lack before/after source seals.
+The observed model and executor harness hashes were respectively
+`fe7648c9dceb5a51a59680172f347ac5e7ebada7a67f7ff5e034c3b1a7c19b6d`
+and `82e2fd43bac0b642f99f8f18a425a01b9c9f49fcbb988c24ecdac0fc891ece73`.
+These bounded historical local results do not qualify the entire merged source.
+Rebuild and reconcile the exact current inventory, execute the custody and
+retained selections, then run the complete `sorafs_manifest`, `iroha_data_model`,
+`iroha_executor`, `iroha_core` and `iroha_torii` library suites. In particular,
+the native durable-finality and generic-state runtime witnesses remain pending.
+An old Native30 build plan is not an executed build.
+
+The isolated final-promotion implementation adds a distinct Ed25519
+`FinalPromotionProvenance` role and deployment purpose. Its prepared statement
+requires one canonical domain-prefixed, schema-closed JSON body, the hardware
+profile, exact chain/network/deployment and signer binding, all four positive
+digests, the six ordered negative receipts and toolchain/provenance inputs.
+The typed receipt separately verifies independent custody and completed-operation
+observations; the offline `final-promotion-receipt` command reports only that
+receipt's verification scope. The fresh isolated `sorafs_manifest` library run
+passes **1,048 tests, zero failures and zero ignored** in 48.70 seconds. It
+includes all 41 final-promotion tests (three protocol, eleven receipt, thirteen
+evidence and fourteen parser tests), the new `BeforeAdmission` current-custody
+regression and the expanded existing phase fixtures. The executed command was
+`cargo test --locked -p sorafs_manifest --lib` through `scripts/cargo_fast.sh`
+with stable local metadata, incremental compilation, four build jobs and the
+fresh `target/cargo-fast/final-promotion` slot in the isolated worktree. The log
+is `/Users/takemiyamakoto/.cache/sorafs-v1-20260912/manifest-test-fixed.log`,
+SHA-256 `d2404b8b1d22619f382958ab5ef41b9acae2d6abcb324c0f3772c6f35989f45e`.
+The first compile attempt failed before running tests; this pass follows the
+Norito test-fixture and exhaustive phase-verifier corrections. This is one
+bounded local library result, not the complete five-library custody
+qualification. The producer, offline CLI, Python acceptance path and remaining
+underlying signer profiles must be qualified coherently. A hardware signature
+on the outer statement does not qualify its underlying evidence.
+
+The subsequent local validation checkpoint adds these results:
+
+- The final-promotion CLI selection passes **10 tests**. The daemon selections
+  pass **111 distinct tests**: 71 signer-operation and 40 external-signer tests.
+  The separately executed 12 final-promotion cases overlap those selections and
+  are not added again. All native selections have zero failures and zero ignores.
+- The preceding Python checker and native-receipt adapter selection passed **131 tests**.
+  The release-automation suite, extracted Rust ownership contracts and path/CI
+  guards pass **750 tests**. The canonical ownership suite verifies actual Rust
+  parent/module/include links; the oversized rollout suite is reduced to 28,321
+  lines with only its own source-budget exception ratcheted down.
+- Formatting, the retired-codec dependency guard, workflow action pins, shell
+  syntax and diff checks pass. Project-history archive verification passes for
+  **64,736 records and 67,311 occurrences**.
+
+The retained local source hashes and native/CI log hashes are indexed by
+`/Users/takemiyamakoto/.cache/sorafs-v1-20260912/local-validation-summary.json`,
+which explicitly records `scope=local_validation_only` and
+`release_qualified=false`. There is no before/after whole-source seal. The full
+rollout source-contract run initially had 381 passes and five failures; the path
+identity and two stale source-owner checks were corrected and rechecked. The two
+truthful TODO inventory guards still expose unfinished work. The source-budget
+scan still reports **243 inherited findings**, with none on changed paths and no
+new finding paths. These results do not establish a full workspace, SDK or
+deployment pass. Genuine hardware/finalized-operation adapters and all four inner
+hardware approvals remain incomplete.
+
+The subsequent exact-subject cosign implementation passes **30 cryptographic
+regression cases**, with no failures, skips or warnings, using independently pinned
+cosign v3.1.3. The final result captures **52 unchanged imported repository sources,
+tests, requirements and public fixtures** before and after execution. It is retained
+at `/Users/takemiyamakoto/.cache/sorafs-v1-20260912/cosign-crypto-rekor2-consistency-final-result.json`;
+the corresponding log SHA-256 is
+`b05b554fc459e3ede2c129b1afd46aed775f76a770ff80fb61e3cfd891a4dc55`.
+This is a scoped local adapter result, not a whole-repository or deployment seal.
+
+The V1 contract requires a leaf P256 certificate, a message signature, one Rekor 2
+inclusion proof and one signed RFC3161 timestamp. The adapter rejects contradictory
+proof indexes, tree sizes, root hashes and canonicalized signature bodies; cosign
+authenticates the subject, certificate, signed checkpoint and timestamp using only
+the separately supplied pinned trust root. An initial modern-profile run exposed
+ignored redundant metadata (18 passed, one failed); the final run above verifies
+the consistency corrections. PyCA `cryptography==50.0.1` and its new transitive
+dependencies are explicitly pinned for canonical DER/P256 admission; package
+consistency passes. No Cargo dependency or lockfile changed.
+After the temporary cosign qualification guard was removed, the checker,
+cosign adapter and native-receipt adapter passed **327 focused tests**. The
+mandatory cryptographic check and four unfinished inner hardware gates remain.
+
+Mandatory release CI independently pins the authenticated Linux cosign asset and
+requires the exact 30 collected and passing cases, rejecting skips and omissions.
+Its helper/automation suite passed 816 tests before the final inventory/dependency
+adjustment; all 67 affected tests and exact collection equality then passed. Linux
+execution remains a CI qualification step, not a locally observed pass on macOS.
+The real SoraFS cosign producer and hardware approval chain remain open; public
+upstream cryptographic fixtures do not supply production signing evidence.
+
+### Native deployment authority and schema checkpoint
+
+The same isolated candidate now implements the
+[native role-14 contract](final_promotion_native_authority_v1.md): one
+deployment-scoped mutation with Configure, Enroll, Revoke, Reserve, Complete,
+Expire and Check actions; separate exact custody-management and operation permissions;
+bounded immutable custody/operation histories; permanent operation IDs and
+monotonic fences; and atomic invalidation of outstanding reservations when
+custody changes. Completion requires the original account and coordinates in a
+later block than reservation, strictly before expiry. Native records retain
+commitments without publishing unreleased signatures.
+
+Both native custody owners use one generic Manifest policy/control schema and
+one policy transition implementation. Retired StreamToken-only schema names are
+removed without aliases. Corruption regressions cover orphan retired-key indexes,
+rollback of an old operation's latest index, independently replayed control and
+operation prefixes, and failure without partial publication. The shared Core
+finality helper binds exact same-State and durable Kura history, authenticated
+revision-4 finality and genesis-derived network identity. It deliberately proves
+historical authenticity, not current revocation state.
+
+The canonical schema generator explicitly roots both custody instructions,
+their retained records and scoped permissions. Regression tests check the full
+recursive descriptors while retaining framed policy/enrollment payloads as
+opaque bytes and excluding runtime qualification types. Closed operation JSON
+uses the canonical unit action `{"kind":"sign","value":null}`. Registry goldens
+were recomputed after independently confirming the sole added instruction.
+Broader model tests exposed capture builders that inherited a changed genesis
+policy default; their five input fields are now explicit, with original golden
+bytes and production defaults unchanged and complete header/signature checks.
+
+The September 13 Check checkpoint adds a 32-KiB no-write native challenge and
+six exact current/reserved/completed phase subjects. A move-only Core consumer
+retains its original monotonic interval and exact signed External envelope. It
+requires successful aligned execution, the independently pinned floor/context,
+canonical committee continuity and same-State durable finality through current
+applied cut J. Custody and current account/direct-or-role permissions are rechecked
+together at J; a historical successful transaction or header age is insufficient.
+The constructor rejects malformed request/binding/phase coordinates before entropy
+or State I/O. Tests include exact expiry, same-block and descendant revocations,
+authority/account removal, mismatched entry/result, unapplied decisions, wrong
+floor/context/committee, retained-history corruption and every phase substitution.
+
+| Selection | Result | Retained log under `/Users/takemiyamakoto/.cache/sorafs-v1-20260912/` |
+| --- | --- | --- |
+| Complete Manifest, DataModel, Executor, ExecutorDataModel and SchemaGen libraries | 1,062 + 3,746 + 172 + 37 + 14 = **5,031 passed**; six DataModel manual printers ignored | `native-check-<crate>-tests.log` |
+| Core native authority/finality/permissions and previous scoped regressions | **99 passed**, including 15 Check and 19 observation cases; no ignores | `native-check-iroha_core-tests.log` |
+| Torii token custody/finality/lifecycle | **45 passed**, no ignores | `native-check-iroha_torii-tests.log` |
+| Daemon signer operations and software-provider rejection | **122 passed**, including 13 immutable-statement cases; no ignores | `native-check-irohad-tests.log` |
+| SCCP same-epoch signed four-validator descendants | **Two passed**, no ignores | `native-check-iroha_sccp-tests.log` |
+
+All nine test binaries belong to one successful locked package/feature build.
+All 8,136 captured crate/workspace inputs remain identical from before compilation
+through runtime; binaries and the four pinned runtime-control files also remain
+unchanged. Each of the 23 mandatory CI sentinels is collected exactly once. The
+runner reconciles actual executed names and statuses against each complete selected
+inventory, including standard should-panic output. This is a bounded local source
+capture, not a complete environment/toolchain seal, full Core/Torii library run or
+release qualification. All **5,299 Rust tests** in these selections pass.
+
+The canonical Kagami build succeeds and `scripts/tests/consistency.sh` performs one
+schema update and two byte-identical checks. The artifact has **1,711 descriptors**,
+**574,456 bytes**, and SHA-256
+`12fc01f561a2461808dc0f8015147388ecb0e5b1484dbca9f76960977892b8f9`.
+Check/request/subject wire descriptors are present; runtime proof capabilities
+remain excluded. The same 92 existing Kagami warnings remain.
+
+Release/runtime-owner contracts pass **915 tests**. The broader promotion suite
+passes **864**, with the two active-source inventories still failing; its 29
+crypto skips are subsequently executed using the independently pinned cosign
+binary, and all **30** crypto cases pass. That follow-up has one local pytest
+cache-path warning. These public upstream fixtures do not qualify a deployment.
+Formatting and the codec guard pass; the last source-budget run retains 241
+inherited findings without new exceptions. Strict Clippy remains unqualified.
+
+The exact cache index `native-check-local-checkpoint.json` has SHA-256
+`24a4dc764016a0b43103a07b8e787f34bfda0ab5810f230c766719b8b7dabea3`.
+It binds commands, inventories, logs, source captures, schema generations and
+limitations. The [previous checkpoint](../../docs/history/2026-09-13/sorafs-before-native-check.md)
+retains its original evidence scope. No source mutation occurred during either
+of this checkpoint's builds or test/schema runs.
+
+After this checkpoint, the daemon journal gains a private same-lease read-only
+capability; pinned receipts keep the lease alive after writer/reader drop. The
+final-promotion service now rejects overlapping sign/recover lifecycles before
+I/O and remains unavailable after a lifecycle panic. Native mutation reconciliation
+uses one public Core request-digest helper whose hashing body is unchanged.
+Six journal, four lifecycle and three native digest regressions are added. Their
+fresh locked nine-library build passes, followed by **102 Core, 45 Torii, 132 daemon
+and two SCCP tests**: all **281** pass without ignores. All 8,139 captured inputs,
+four runtime-control files and selected binaries stay unchanged. Formatting,
+codec and history checks pass; the 241 source-budget findings are exactly unchanged.
+The cache index `native-source-boundary-local-checkpoint.json` has SHA-256
+`af71650a0b3faecc79903581e78984ba5281980cff2c3ac870cb359e18c7bbfd`.
+This subsequent checkpoint precedes the explicit time-interval API follow-up below.
+These changes do not implement the production source, separately qualified account
+signer, clock or rollback-resistant floor store. Plain host time, peer-offset health, a local file high-water mark or
+an opaque hardware-looking handle cannot establish those independent authorities.
+
+The UTC interval follow-up replaces the consumer's scalar clock callback with
+one finite `FinalPromotionEligibilityTimeIntervalV1`; both endpoints must satisfy
+custody and phase eligibility against the same native snapshot. Four additional
+regressions cover malformed intervals, custody endpoints, exclusive reservation
+expiry and completed-operation eligibility after that expiry. A fresh locked
+nine-library build succeeds, followed by **106 Core, 45 Torii, 132 daemon and two
+SCCP tests**: all **285 pass**, with no ignored cases. All **8,140** captured inputs,
+selected binaries, four runtime controls and exact build/baseline metadata remain
+unchanged. The 27 mandatory CI sentinels occur exactly once. The runtime parser
+also rejects malformed Cargo metadata, duplicate or missing sentinels and incomplete
+test summaries; these parser checks are synthetic validation only.
+
+Release/runtime-owner contracts now pass **927 tests**, including the guard
+updates for interval, digest, receipt-lease and lifecycle coverage. Formatting,
+codec and history checks pass. The source-budget guard still fails with exactly
+the previous **241 findings** and no new exceptions. The cache index
+`native-time-interval-local-checkpoint.json` has SHA-256
+`9425b813364bb1cc012af10ec34978904f33fca6fe6379c8ca8a16a54d2b178e`;
+it pins `native-time-interval-*` logs and inventories, the exact runner and applied
+patches. This remains a local interval/CI checkpoint, without a whole-build source
+seal or independent production clock qualification. The pending native signer
+role/network authorization work and actual hardware/source/floor integration are
+outside this checkpoint. No goal, lane or release prerequisite is closed.
+
+The native signer follow-up makes the existing four transaction roles accept
+exactly one direct instruction from one shared 16-type inventory, with no proof
+attachments. Their qualifier constructors require the independently selected
+network. Facades and broker clients/server reject wrong roles, wrapped/multiple
+instructions and missing/genesis/foreign networks before provider or transport I/O.
+Software adapters share the pure role/shape guard before their I/O. Caller network rejection preserves a usable
+broker session; drift, substituted output and ambiguous operations retain their
+failure rules. The duplicate software instruction allowlist is removed. Native
+field permissions and fee approval remain their existing owners.
+
+The first corrected nine-library build passed, and its runtime run passed 633
+cases with 22 failures. Every failure occurred in shared fake-broker socket setup:
+`tempfile` expanded a relative directory beneath the deep checkout beyond macOS's
+Unix socket path limit. Both affected socket fixtures now share a short real
+owner-private directory helper, atomically created with mode `0700`. Socket modes,
+endpoint policy, peer UID and security scenario assertions are unchanged. A new
+isolated child test proves two independent fixtures from a long cwd and TMPDIR,
+exactly one named child success, identity checks and cleanup. Its existing test
+endpoint policy does not qualify the production full-ancestor policy.
+
+The socket correction's first 656-test run passes 642 cases and exposes 14
+protocol failures. macOS rejects reapplying socket timeouts after peer close even
+when a complete response is still buffered. The broker now uses one shared
+per-call nonblocking recv/send and bounded poll owner, with the same original
+Instant checked before and after I/O; source reads delegate to that owner.
+Reads drain buffered data through actual EOF, writes suppress SIGPIPE, and neither
+partial I/O nor retry grants another interval. A separate fake accept helper now
+clears macOS's inherited nonblocking flag before its bounded framed reads.
+Four shared-I/O regressions and one accepted-mode regression preserve these rules.
+The failed 656-test result remains at `native-signer-socket-validation-result.json`
+(SHA-256 `bde2e360a7e6690bf68aafce0d73add5b0dc8fd7997976f6ff2d11c26966e5c2`).
+
+The subsequent 661-test run passes 660 cases and finds one further reconnect
+fixture with inherited nonblocking mode. Its accepted socket now explicitly uses
+bounded blocking reads while the listener remains nonblocking; descriptor and
+exact authenticated transcript assertions are retained. All actual stream/datagram
+socket fixtures now share the same short private directory owner. The new helper
+was renamed to `socket_fixture_directory.rs` after capture detected that the
+original `test_directory.rs` filename matched the repository ignore pattern.
+That rejected capture preceded compilation and is retained. No production endpoint
+policy or test identity changed. The third failed runtime remains at
+`native-broker-io-validation-result.json` (SHA-256
+`c41578faae5d3e301d175876b4695e57c555612e5e267b37d3e02275be98bc07`).
+
+A fresh locked nine-library build passes without warnings, then **106 Core,
+70 Torii, 483 daemon and two SCCP tests** all pass: **661**, with no ignores.
+The runner preserves all 656 preceding names plus the five new regressions, and
+proves CI selects exactly those names, including all **38** mandatory sentinels.
+All **8,147** captured inputs, selected binaries, eighteen runtime controls and exact
+build/baseline metadata remain unchanged. The successful runtime result
+`native-broker-final-validation-result.json` has SHA-256 `09ac7c021d24b05d3862afcf19b046800316b014171f2aeec94550699aefc977`.
+The failed result remains unchanged as `native-signer-authorization-validation-result.json`
+(SHA-256 `e5472e94d4068bfe275bc99679a7470cec09a500b52542ebd81945f02ecb936e`).
+Release/CI contracts pass **970**; formatting and codec checks pass.
+The source-budget guard retains exactly the preceding **241 findings** and no
+new exceptions; `Cargo.lock` is unchanged. The cache index
+`native-broker-final-local-checkpoint.json` records this bounded local validation,
+including all three preserved failed runtime runs and exact fixture/transport patches.
+It is not a whole-build source seal, hardware qualification or lane closure.
+
+This checkpoint completes no goal or lane. The canonical software Ed25519 custody,
+production provider/state adapters and operation-authority qualification remain
+open. The genuine four-validator deployment with mandatory signed RS16 DA/RBC,
+multiple providers, two independently administered regional gateways, load/soak,
+recovery rehearsal, workspace/SDK checks and independent security qualification
+are still required. All 17 signed readiness lanes and the trusted nine-prerequisite
+foundational envelope in its specified order remain mandatory.
+
+### Native account custody and shared Check checkpoint
+
+The account-custody checkpoint passes **5,063 tests** across the complete
+Manifest, DataModel, ExecutorDataModel, Executor and SchemaGen libraries; exactly
+six named DataModel manual fixture printers remain ignored. Another
+**714 native tests** (155 Core, 70 Torii, 487 daemon and 2 SCCP) pass with no ignores.
+All 8,181 captured inputs, selected binaries, 42 controls and
+build/baseline bytes remain unchanged; CI selects the same native names and all
+75 mandatory sentinels. **1,094 release/CI contracts** pass.
+The canonical role15 contract has Configure/Enroll/Revoke and a no-write Current
+Check, with deployment scope independent of rotation, its own permanent generation
+indexes and immutable control CAS. It reuses the canonical custody byteframes and
+one closed-purpose native history engine. Account and receipt operation authority
+remain distinct. Observer Check permission, observer != derived target, and target
+Operate permission are checked at native execution and the current applied cut.
+The shared Check proof owner retains the original one-use challenge/deadline,
+exact signed envelope and aligned successful executed-wire result, authenticating
+independent floor/committee continuity through Check H and applied J. Each purpose
+checks both finite UTC endpoints against the same snapshot, including the native
+enrollment execution bound. The source has no JSON compatibility or software fallback.
+
+The first composed build failed on the account instruction's missing explicit
+Norito JSON derives and compilation/import issues; its exact command receipt/log
+remain retained. The corrected source adds the canonical derives, preserves all
+closed JSON and binary assertions, and includes the separately reviewed compiler
+corrections. Every failed attempt remains separate from this successful result.
+
+The warning-bearing diagnostic run recorded 5,770 passes, six failures and six
+known manual fixture printers. The failures were one stale wire-inventory golden,
+four account tests whose attester names hit the existing substring filter, and one
+nondeclarable CNTR descendant fixture. The final corrections retain the intended
+wire assignment and assertions, fix the fixture inputs and exact syscall error
+ordering, and remove two unused staging items that produced compiler warnings.
+That diagnostic attempt remains failed and does not qualify the final source.
+
+The next warning-free clean build's runtime recorded 5,775 passes, one failure
+and six known manual printers. An inherited broker replacement fixture exposed
+a legitimate unavailable interval between unlink and bind. The fixture now uses
+atomic replacement and separately checks actual removal; production endpoint
+validation remains unchanged. The complete clean-attempt evidence is retained
+as a failure, separate from the final runtime below.
+
+The previously unreachable Kagami scaling prototype is now test-only at its
+sole module declaration. Its 92 earlier production-build warnings remain
+historical; fresh schema generation validates the current production command
+graph. Prototype test execution and secure production wiring are separate
+obligations; this classification supplies neither deployment approval nor
+prototype qualification.
+
+The result `final-promotion-account-final-validation-result.json` has SHA256
+`528a9d656285ca400035d6a1c9f635732f7976991fc332c52c2b9c45544c7b2f`.
+Formatting and codec checks pass. The global source-budget guard still reports
+241 findings with no new offender paths; two limits were ratcheted down.
+Cargo.lock is unchanged. This is local captured source/binary execution evidence,
+not a whole-build seal or deployment approval.
+The schema reference has 1,719 descriptors and three byte-identical runs.
+Actual prepared account signing, configured software signer, independently qualified
+observer/UTC/floor authority and daemon submission/state/config integration remain
+open. Core must preserve original observation age across interval endpoints and later use.
+Local proofs do not establish deployed custody or prevent a revocation racing
+an in-flight key call. Four inner custody approvals, all seventeen genuine lanes,
+the foundational envelope, four-validator/provider/gateway deployment, load/24-hour
+soak, workspace/SDK/strict-lint/security and full release qualification remain required.
+No goal or lane is closed.
+
+### Identity, envelope and retained-age checkpoint
+
+The current source uses one allocation-free production identity grammar in
+`iroha_primitives::production_identity`. Identity bytes and case are retained;
+reserved non-production markers are exact delimiter-separated components, so
+`attester`, `attestation`, `latest` and `contest` are valid. Existing byte ceilings,
+key/handle rules, trust pins and administrative-independence checks remain enforced.
+The [Manifest README](../../crates/sorafs_manifest/README.md) describes this contract.
+
+Core's [account-envelope preflight](final_promotion_account_custody_v1.md#history-and-observation)
+reuses the sole 64-KiB complete signed External bound before cloning oversized
+payloads. It checks structure only, not spending approval, phase or key authority.
+Both custody purposes now charge interval width against the original earliest
+observation time. Later `recheck_use_interval` calls retain that same origin,
+authenticated snapshot and original monotonic deadline. Backward intervals,
+excess age, custody expiry and reserved-phase expiry fail; timely completed
+operations preserve their existing recovery semantics. New phases still require
+fresh native Checks. The [receipt authority contract](final_promotion_native_authority_v1.md)
+describes the retained-cut limitations and remaining source integration.
+
+The scoped result is **6,984 passed, zero failed and six named DataModel manual
+fixture printers ignored**, from 6,990 collected tests:
+
+| Scope | Passed | Ignored |
+| --- | ---: | ---: |
+| Complete Manifest, DataModel, ExecutorDataModel, Executor and SchemaGen libraries | 5,067 | 6 |
+| Core native selection | 169 | 0 |
+| Torii native selection | 71 | 0 |
+| Daemon native selection | 489 | 0 |
+| SCCP descendant-proof selection | 2 | 0 |
+| Complete primitives library | 308 | 0 |
+| Complete configuration library | 647 | 0 |
+| Complete `iroha_config_integration` target | 231 | 0 |
+
+Both actual locked Cargo builds are warning-free. The first attempted integration
+command named a source module instead of the declared Cargo target and failed
+before compilation. After correcting that target, the v2 run recorded 6,982
+passes, two failures and six manual printers. Both failures were snapshot tests
+missing Cargo's runtime `CARGO_MANIFEST_DIR`; they failed before comparison.
+The v3 retry supplies the actual configuration package directory and workspace
+path, disables `UPDATE_EXPECT`, and reruns both complete configuration targets.
+It retains the ten successful v2 targets with explicit provenance. This is not
+a claim that all twelve targets executed again in one v3 run. Failed commands,
+runner versions, results and logs remain separate and unchanged.
+
+The combined result `native-account-identity-age-v3-validation-result.json` has
+SHA256 `c6a5aec0fbe329660a19f9ee4c31f93afa50ab58968f6cde311b8dc94760f223`.
+All 8,190 captured inputs, twelve binaries, 112 controls and build metadata remain
+unchanged across their recorded intervals. The 27 new source-owned tests and all
+5,783 previously selected account-checkpoint test names are retained. Native CI
+and local selection still agree on 17 filters and 75 mandatory sentinels.
+All 1,094 release/CI contracts, formatting and the codec guard pass. The global
+source-budget guard remains failing with exactly the same 241 findings; no limit
+was raised for this slice. Cargo.lock is unchanged.
+
+Separately, before these identity/age source changes, the Kagami fixture cleanup
+replaced four duplicated fixture module declarations with one private test owner.
+Its fresh warning-free prototype build passed all 80 unchanged test names with
+8,181 captured inputs and its binary unchanged; result
+`final-promotion-account-kagami-fixture-validation-result.json` has SHA256
+`5c5ca0a102d502a155c97cf2f82e3bb74230c9fa10a7c4beeee7698a832c208a`.
+The earlier warning-bearing diagnostic is retained separately. These 80 tests
+are not part of the current 6,984 total and establish no production reachability.
+The 1,719-descriptor, three-generation schema result remains scoped to the prior
+account checkpoint; it was not regenerated for this slice.
+
+This is local source/binary execution evidence, not a whole-build seal or hardware
+qualification. The prepared account signer, real State/Queue source, independent
+observer/clock/floor/spending authority and daemon configuration/assembly remain
+unfinished. Full workspace, SDK, strict lint, security and genuine deployment/load/
+24-hour soak evidence are still required. No goal, lane or release prerequisite closes.
+
+### Independent receipt-Check observer checkpoint
+
+This later native contract separates receipt observation from mutation signing.
+`FinalPromotionCheckV1` requires the independently pinned `expected_operator`.
+A distinct registered observer needs `CanCheckSorafsFinalPromotion`; the original
+operator must remain registered and currently authorized to Operate the deployment.
+Core applies both checks during native execution and at the authenticated applied
+cut, including direct/role permissions and exact original operation ownership.
+Initial/default executor dispatch and permission/schema registration use the same
+separate Check permission. Account-custody Check permission grants no receipt
+privilege. Reserve/Complete mutation authority is not granted by either Check.
+The existing complete signed-External proof, aligned successful result, committee
+continuity, same-cut predicates and original observation age/deadline remain intact.
+
+A fresh warning-free locked nine-library build and runtime selection records
+**5,811 passed, zero failed and six named DataModel manual fixture printers
+ignored**, from 5,817 collected tests:
+
+| Scope | Passed | Ignored |
+| --- | ---: | ---: |
+| Complete Manifest, DataModel, ExecutorDataModel, Executor and SchemaGen libraries | 5,071 | 6 |
+| Core native selection | 178 | 0 |
+| Torii native selection | 71 | 0 |
+| Daemon native selection | 489 | 0 |
+| SCCP descendant-proof selection | 2 | 0 |
+
+The actual result `receipt-check-observer-corrected-validation-result.json` has
+SHA256 `87f3c9e8b01adf7bf4c93e1b0bd64cfddabf431e28a3ac593844fa241aa5f0f9`.
+All 8,192 captured inputs, nine selected binaries and 91 controls remain unchanged.
+All thirteen added regressions and earlier selected names are retained; native CI
+and local selection agree on 17 filters and 84 mandatory sentinels.
+The first build failed with E0659 because a test's `Debug` derive was ambiguous;
+qualifying `std::fmt::Debug` corrected that fixture before the warning-free build.
+The failed build, corrected composition, both runner versions and actual logs/
+command receipts are retained separately. No failed attempt is counted as a pass.
+
+All **1,121 release/CI contracts**, formatting, codec and diff checks pass. The
+initial budget report additionally requested refreshing the executor's shrunken
+baseline; tightening 5,485 to 5,449 removes that stale-baseline finding. The
+corrected report still fails with the exact same 241 findings as the prior
+identity/age checkpoint. No limit was raised and Cargo.lock remains unchanged.
+
+The actual Kagami schema build is warning-free. Two canonical update/consistency
+generations produce exactly 1,720 descriptors and 577,681 bytes, SHA256
+`654cf393a8ec8f1be4c9d9664b3e8f7e7882f2a051fbbd6eb64aedbf0cb71dee`.
+Only the distinct observer permission descriptor is added; the Check descriptor
+adds `expected_operator` immediately after `network_id`, preserving other owners.
+The schema result `receipt-check-observer-schema-v2-generation-result.json` has
+SHA256 `4eba8ee6965ede2244ca83caacb970c8e9a71134fa171161e12aa6cdda9ed995`.
+The first schema runner was reviewed before execution and never generated output:
+its optimization-sensitive checks, metadata pin order, inherited environment and
+incomplete evidence closure were corrected in a separate v2. Original tool bytes
+and the review findings remain preserved. The actual v2 pins runtime/build input
+and SchemaGen evidence, isolates the capture invocation, and checks exact output,
+receipt, log and predecessor hashes through completion.
+
+The cache checkpoint `receipt-check-observer-local-checkpoint.json` retains the
+actual evidence closure. Earlier configuration, primitives and 80 Kagami prototype
+tests keep their original source scopes and are not added to this total. Earlier
+account/schema and identity/age records remain verbatim above; the exact replaced
+status/goals excerpts are [archived separately](../../docs/history/2026-09-13/sorafs-before-receipt-check-observer.md).
+
+The private prepared mutation signer, observer continuation, native ingress/source,
+qualified UTC-window and sealed floor/spending dependencies remain cache-only
+integration work. They have not supplied production signing or deployment evidence.
+The configured software Ed25519 provider, independently qualified observer/clock/floor authority,
+rollback-resistant exact-attempt spending storage and daemon assembly remain open.
+Full workspace, SDK, strict lint, security, four-validator/provider/gateway execution,
+load/24-hour soak, seventeen genuine lanes and the foundational envelope are still
+required. This local checkpoint closes no goal, lane or release prerequisite.
 
 ## 2026-09-10 merge reconciliation checkpoint
 
@@ -131,7 +713,7 @@ That scoped result does not qualify the SoraFS successors, the later State
 reservation changes, or production proof-size/allocation limits.
 
 G08 is active because its defensive source work is underway; no goal or lane
-is completed by this checkpoint. HSM/KMS qualification, genuine four-validator
+is completed by this checkpoint. Software custody-provider qualification, genuine four-validator
 mandatory-DA/RBC deployment, independently administered regional gateways,
 workspace/SDK checks, load/soak, independent security review, recovery rehearsal
 and all 17 signed readiness lanes remain mandatory. The stopped verifier work
@@ -389,7 +971,7 @@ full Node library's **1,468 tests**, and **both opt-in real local Kubo tests**,
 with zero failures. The Kubo cases run separately from the default Node suite. Coordinated
 common retry 7 exits zero with no source drift; the earlier compilation and
 Kubo failures below remain recorded. These focused component results do not
-qualify the full workspace, genuine hardware custody, or reference deployment.
+qualify the full workspace, genuine signer custody, or reference deployment.
 
 The four previous Node failures now have passing native regressions: quarantine decoding
 now derives a schema-specific cumulative allocation bound from the actual frame;
@@ -716,12 +1298,12 @@ custody/control/completion evidence. The broker's signer binding also lacks an
 expected provider ID; it admits a nonzero provider supplied by an authenticated
 broker caller, although Torii checks the local provider before its own call.
 The next coherent cut requires `StreamToken { provider_id }`, exact provider
-binding at every layer, a canonical hardware operation receipt, and independent
+binding at every layer, a canonical software-key operation receipt, and independent
 signed current/completed-state observations with fresh phase-bound challenges.
 Signing must use mutating transport ambiguity semantics; exact read-only recovery
 must never sign again. These are open implementation findings, with the design
 retained under `target/evidence/sorafs-v1/`; simulated tests will not qualify real
-HSM or authoritative deployment providers.
+software signer or authoritative deployment providers.
 
 ## 2026-09-06 execution checkpoint
 
@@ -945,7 +1527,7 @@ mandatory in the release gate and its source/test changes trigger the workflow.
 Packaging replays with Python 3.12 stop at the unchanged reviewed-source seal;
 the pipeline also rejects its changed signing bootstrap helper. These denials
 are not successful packaging evidence. Source-budget findings, dirty OpenAPI
-manifests, remaining hardware provider/state adapters and atomic custody-profile
+manifests, remaining signer provider/state adapters and atomic custody-profile
 replacement still require closure. The workspace formatting check found the
 receipt CLI's formatting plus unrelated executor/exporter formatting; the
 receipt CLI is now formatted. No other owner's Rust code was reformatted.
@@ -1086,7 +1668,7 @@ Those changes close only the source projection and package inventory gaps. The
 `governance_dag` lane remains `open`: the packaged
 `sorafs_external_software_signer` supplies concrete signer-role adapters, but
 does not supply the complete authenticated Kubo/head and sealed-store backend
-assembly, the newly required HSM custody qualification, or supervision
+    assembly, the custody-provider qualification, or supervision
 evidence. There are still no qualified clean five-target
 release artifacts and smokes, and no L1 deployment qualification or L2
 promotion evidence. The current supported packaging choice is a thin
@@ -1782,14 +2364,14 @@ software-Ed25519 plus cosign/OIDC provenance over the exact manifest, ordered
 receipts, runner/checker/toolchain/runtime, and positive hashes. The local
 archive's deliberate `promotion_eligible=false` cannot satisfy this control.
 
-The current release-signing evidence profile consumed by promotion pins
-`signing_provider=authenticated_external_signer`,
-`signing_backend=software`, and
-`signer_qualification=software-key-qualified`. Resilience and lane-inventory
-receipts bind the equivalent external-Ed25519/software service and independent
-administrator fields in their schema-closed authentication objects. That
-software profile is the sole admitted first-release signer profile. Test-marked,
-incomplete, or substituted signer bindings fail closed.
+Release-signing evidence authenticates the authorized signer, exact purpose,
+canonical signed payload and completed native operation. Software custody is
+supported without an HSM requirement. Backend-origin and key-qualification
+labels cannot establish this authority; the retired `signing_backend` and
+`signer_qualification` fields are not alternate admission profiles. Resilience
+and lane-inventory receipts must prove their own authorization and completed
+operation through the same native receipt contract. Test-marked, incomplete,
+or substituted signer bindings fail closed.
 
 Taira and Minamoto mutation are `cutover-only`. The V1 evidence bundle prepares
 an operator-controlled promotion but does not authorize either live cutover.

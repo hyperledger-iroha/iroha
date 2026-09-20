@@ -1,4 +1,4 @@
-//! Opaque hardware operations with authoritative reservation and signature-release fences.
+//! Opaque signer operations with authoritative reservation and signature-release fences.
 //!
 //! The operation provider has no key import, export, wrapping or generation API. An independently
 //! configured state source authenticates custody state and owns durable exclusive reservations and
@@ -14,8 +14,8 @@
 //! Release manifests use the concrete purpose-bound producer and immutable private receipt journal
 //! below; enrollment, renewal and terminal revocation use the authoritative control transitions.
 //! TODO: Replace the remaining role service/journal private-key sites and migrate their runtime and
-//! receipt consumers atomically. Real hardware and finalized state adapters remain required. This
-//! module's injected test providers are race/failure simulations, never hardware qualification.
+//! receipt consumers atomically. Configured signer and finalized state adapters remain required. This
+//! module's injected test providers exercise races and failures without establishing deployment readiness.
 
 use iroha_crypto::Signature;
 use sorafs_manifest::signer::{
@@ -32,12 +32,17 @@ use sorafs_manifest::signer::{
 use std::{fmt, sync::Arc};
 use zeroize::Zeroizing;
 
+mod authority;
 /// Authoritative enrollment and terminal custody-control transitions.
 pub mod control;
-/// Immutable bounded receipt staging shared by canonical hardware operation producers.
+/// Canonical final-promotion producer with immutable receipts and fresh audit predecessors.
+#[cfg(unix)]
+pub mod final_promotion;
+/// Immutable bounded receipt staging shared by canonical signer operation producers.
 #[cfg(unix)]
 pub mod journal;
 mod recovery;
+use authority::{SignerOperationAuthorityV1, SignerOperationObservationSourceV1};
 /// Exact reviewed release-manifest producer with mandatory durable private receipt staging.
 #[cfg(unix)]
 pub mod release_manifest;
@@ -157,14 +162,18 @@ pub struct SignerOperationSigningStateV1 {
     pub audit_head: SignerOperationAuditHeadV1,
 }
 
-/// Independently configured authoritative custody and durable operation-state boundary.
+/// Independently configured custody observations and durable ordinary-operation authority.
 ///
 /// Implementations authenticate finalized per-role custody control state, trust and current time
 /// independently of candidate requests. Reservations/journal commits are outside the custody
 /// control-state digest. Every CAS must compare the exact role, active record/generation/control
 /// state, action, operation id, request digest, journal predecessor and reservation fence. Expired,
 /// failed or abandoned reservations retain replay tombstones; they cannot silently become fresh
-/// operations. No in-memory or software fallback is an acceptable production implementation.
+/// operations. Authenticated software providers are supported; an in-memory journal or an
+/// unauthenticated local-state fallback cannot replace finalized durable operation authority.
+/// Enrollment and audited terminal custody mutation require the separate explicit
+/// [`control::SignerCustodyEnrollmentStateSourceV1`] and
+/// [`control::SignerCustodyControlStateSourceV1`] capabilities.
 pub trait SignerOperationStateSourceV1: Send + Sync {
     /// Authenticate a fresh signing snapshot and its exact current per-binding audit predecessor.
     ///
@@ -215,8 +224,9 @@ pub trait SignerOperationStateSourceV1: Send + Sync {
     /// Atomically compare all expectations, verify durable audit/response persistence and commit.
     ///
     /// The returned context is authenticated after the durable completion transaction. Success
-    /// must not precede persistence or be synthesized from the request. This ordinary-use CAS
-    /// cannot rotate or revoke custody; those are separate governed terminal transitions.
+    /// must prove completion before the reservation's exclusive expiry, never precede persistence
+    /// or be synthesized from the request. Finality and observation may occur after that expiry;
+    /// current custody must remain eligible. This ordinary-use CAS cannot rotate or revoke custody.
     ///
     /// # Errors
     /// Fails closed if the exact reservation and immutable successor cannot be committed.
@@ -243,41 +253,6 @@ pub trait SignerOperationStateSourceV1: Send + Sync {
         &self,
         request: &SignerOperationCommitRequestV1<'_>,
         phase: SignerCommittedObservationPhaseV1,
-    ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1>;
-
-    /// Authenticate the next enrollment slot and governed expected successor configuration.
-    ///
-    /// # Errors
-    /// Fails unless the independently configured successor exactly matches `binding`.
-    fn observe_enrollment(
-        &self,
-        binding: &SignerCustodyBindingV1,
-    ) -> Result<
-        sorafs_manifest::signer::custody::SignerCustodyEnrollmentContextV1,
-        SignerOperationErrorV1,
-    >;
-
-    /// Authoritatively enroll the initial independently qualified generation using durable CAS.
-    ///
-    /// # Errors
-    /// Fails unless this is the exact initial predecessor slot and no generation is active.
-    fn enroll_initial(
-        &self,
-        request: &control::SignerCustodyEnrollmentRequestV1<'_>,
-    ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1>;
-
-    /// Atomically finalize the exact terminal audit before activating or revoking custody.
-    ///
-    /// The transaction compares the exact exclusive reservation, current control state, old active
-    /// head, expected terminal intent and audit successor. Activation additionally compares the
-    /// independently governed successor binding and exact enrollment sequence/predecessor. No
-    /// response or further old-key signing is authorized after this transaction takes effect.
-    ///
-    /// # Errors
-    /// Fails when audit durability, authoritative enrollment/control CAS or finality cannot be proved.
-    fn commit_custody_transition(
-        &self,
-        request: &control::SignerCustodyTransitionRequestV1<'_>,
     ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1>;
 }
 
@@ -320,16 +295,16 @@ impl fmt::Debug for SignerKeyOperationRequestV1<'_> {
     }
 }
 
-/// Deployment-injected non-exportable hardware signing operations, with no private-key API.
+/// Deployment-injected signing operations, with no private-key export API.
 ///
-/// The adapter resolves the exact opaque handle from verified custody, verifies the hardware's
-/// identity and honors the operation fence. It must never import, export or substitute a software
-/// key. Vendor credentials stay inside the adapter; no candidate record selects an implementation.
+/// The adapter resolves the exact opaque handle from verified authorization, uses the bound key
+/// and honors the operation fence. Software and optional hardware providers share this contract.
+/// Key material and credentials stay inside the adapter; no candidate record selects an implementation.
 pub trait SignerKeyOperationProviderV1: Send + Sync {
     /// Sign the exact authorized message with the exact independently qualified opaque key.
     ///
     /// # Errors
-    /// Returns a fixed failure class when hardware, credentials or the operation fence fail.
+    /// Returns a fixed failure class when the provider, credentials or the operation fence fail.
     fn sign(
         &self,
         request: &SignerKeyOperationRequestV1<'_>,
@@ -349,9 +324,9 @@ pub enum SignerOperationErrorV1 {
     StateUnavailable,
     /// A reservation, journal predecessor, expiry or durable completion CAS failed.
     ReservationConflict,
-    /// Hardware rejected or could not perform the operation.
+    /// The configured signer rejected or could not perform the operation.
     ProviderUnavailable,
-    /// Hardware returned an invalid or incorrect-key/message signature.
+    /// The configured signer returned an invalid or incorrect-key/message signature.
     InvalidSignature,
     /// A previous failed sub-operation made this operation permanently unusable.
     Poisoned,
@@ -364,15 +339,15 @@ impl fmt::Display for SignerOperationErrorV1 {
             Self::CustodyChanged => "signer operation custody changed",
             Self::StateUnavailable => "signer authoritative state unavailable",
             Self::ReservationConflict => "signer operation reservation conflict",
-            Self::ProviderUnavailable => "signer hardware operation unavailable",
-            Self::InvalidSignature => "signer hardware signature invalid",
+            Self::ProviderUnavailable => "signer provider operation unavailable",
+            Self::InvalidSignature => "signer signature invalid",
             Self::Poisoned => "signer operation poisoned",
         })
     }
 }
 impl std::error::Error for SignerOperationErrorV1 {}
 
-/// Service-owned coordinator with separately injected hardware and authoritative-state owners.
+/// Service-owned coordinator with separately injected signer and authoritative-state owners.
 pub struct SignerOperationCoordinatorV1 {
     binding: SignerCustodyBindingV1,
     record: Vec<u8>,
@@ -406,12 +381,20 @@ impl SignerOperationCoordinatorV1 {
         Ok(coordinator)
     }
 
+    fn authority(&self) -> SignerOperationAuthorityV1<'_> {
+        SignerOperationAuthorityV1 {
+            binding: &self.binding,
+            record: &self.record,
+            trust: &self.trust,
+            source: &self.source,
+        }
+    }
+
     fn verify(
         &self,
         context: &SignerCustodyUseContextV1,
     ) -> Result<VerifiedSignerCustodyV1, SignerOperationErrorV1> {
-        verify_signer_custody_use_v1(&self.record, &self.binding, &self.trust, context)
-            .map_err(SignerOperationErrorV1::Custody)
+        self.authority().verify(context)
     }
 
     /// Begin only after the trusted service has validated the canonical role/purpose request.
@@ -450,6 +433,35 @@ impl fmt::Debug for SignerOperationCoordinatorV1 {
     }
 }
 
+fn reservation_check<'a>(
+    intent: &'a SignerOperationIntentV1,
+    intent_digest: [u8; 32],
+    custody: &'a VerifiedSignerCustodyV1,
+    reservation: SignerOperationReservationV1,
+) -> SignerOperationReservationCheckV1<'a> {
+    SignerOperationReservationCheckV1 {
+        request: SignerOperationReservationRequestV1 {
+            intent,
+            intent_digest,
+            custody,
+        },
+        reservation,
+    }
+}
+
+fn required_purposes(action: SignerOperationActionV1) -> &'static [SignerKeyOperationPurposeV1] {
+    use SignerKeyOperationPurposeV1::{AuditRecord, Provenance, Response, RolePayload};
+    match action {
+        SignerOperationActionV1::Sign => &[RolePayload, AuditRecord, Provenance, Response],
+        SignerOperationActionV1::Qualify | SignerOperationActionV1::Status => {
+            &[AuditRecord, Provenance, Response]
+        }
+        SignerOperationActionV1::ActivateCustody | SignerOperationActionV1::RevokeCustody => {
+            &[AuditRecord]
+        }
+    }
+}
+
 /// Internal in-progress action. Staged signatures never cross the public release boundary.
 struct SignerOperationV1<'a> {
     coordinator: &'a SignerOperationCoordinatorV1,
@@ -467,14 +479,12 @@ struct StagedSignature {
 }
 impl SignerOperationV1<'_> {
     fn check(&self) -> SignerOperationReservationCheckV1<'_> {
-        SignerOperationReservationCheckV1 {
-            request: SignerOperationReservationRequestV1 {
-                intent: &self.intent,
-                intent_digest: self.intent_digest,
-                custody: &self.custody,
-            },
-            reservation: self.reservation,
-        }
+        reservation_check(
+            &self.intent,
+            self.intent_digest,
+            &self.custody,
+            self.reservation,
+        )
     }
     fn validate_reservation(&self) -> Result<(), SignerOperationErrorV1> {
         let now = self.custody.verified_at_unix_ms();
@@ -488,7 +498,7 @@ impl SignerOperationV1<'_> {
         }
         Ok(())
     }
-    fn accept_context(
+    fn accept_custody_context(
         &mut self,
         context: &SignerCustodyUseContextV1,
     ) -> Result<(), SignerOperationErrorV1> {
@@ -497,7 +507,7 @@ impl SignerOperationV1<'_> {
             return Err(SignerOperationErrorV1::CustodyChanged);
         }
         self.custody = current;
-        self.validate_reservation()
+        Ok(())
     }
     fn refresh_reserved(
         &mut self,
@@ -507,19 +517,8 @@ impl SignerOperationV1<'_> {
             .coordinator
             .source
             .observe_reserved(&self.check(), phase)?;
-        self.accept_context(&context)
-    }
-    fn required_purposes(&self) -> &'static [SignerKeyOperationPurposeV1] {
-        use SignerKeyOperationPurposeV1::{AuditRecord, Provenance, Response, RolePayload};
-        match self.intent.action {
-            SignerOperationActionV1::Sign => &[RolePayload, AuditRecord, Provenance, Response],
-            SignerOperationActionV1::Qualify | SignerOperationActionV1::Status => {
-                &[AuditRecord, Provenance, Response]
-            }
-            SignerOperationActionV1::ActivateCustody | SignerOperationActionV1::RevokeCustody => {
-                &[AuditRecord]
-            }
-        }
+        self.accept_custody_context(&context)?;
+        self.validate_reservation()
     }
     /// Prepare a sub-signature solely for internal canonical journal/response construction.
     ///
@@ -536,7 +535,7 @@ impl SignerOperationV1<'_> {
         }
         // Poison first: every early error, including invalid ordering, permanently fences retries.
         self.poisoned = true;
-        if self.required_purposes().get(self.signatures.len()) != Some(&purpose)
+        if required_purposes(self.intent.action).get(self.signatures.len()) != Some(&purpose)
             || message.is_empty()
             || message.len() > SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1
             || (purpose != SignerKeyOperationPurposeV1::RolePayload && message.len() != 32)
@@ -587,7 +586,7 @@ impl SignerOperationV1<'_> {
         ) {
             return Err(SignerOperationErrorV1::InvalidOperation);
         }
-        if self.signatures.len() != self.required_purposes().len()
+        if self.signatures.len() != required_purposes(self.intent.action).len()
             || commitment.audit.sequence != self.intent.previous_audit.sequence + 1
             || commitment.audit.digest == [0; 32]
             || commitment.audit.digest == self.intent.previous_audit.digest
@@ -637,38 +636,41 @@ impl SignerOperationV1<'_> {
             .map_err(|_| SignerOperationErrorV1::InvalidOperation)?,
         );
         let signatures_digest = digest_parts(SIGNATURES_DOMAIN, &[encoded_signatures.as_slice()]);
+        let original_custody = SignerOperationCustodyV1::from_verified(&self.custody);
         let commit = SignerOperationCommitRequestV1 {
             check: self.check(),
             commitment,
             signatures_digest,
-            original_custody: SignerOperationCustodyV1::from_verified(&self.custody),
+            original_custody,
         };
         let committed = self.coordinator.source.commit(&commit)?;
-        self.accept_context(&committed)?;
+        // The source proves timely durable completion. Later finality observations must recheck
+        // current custody and the exact completed row, without renewing the spent reservation.
+        self.accept_custody_context(&committed)?;
         let commit = SignerOperationCommitRequestV1 {
             check: self.check(),
             commitment,
             signatures_digest,
-            original_custody: SignerOperationCustodyV1::from_verified(&self.custody),
+            original_custody,
         };
         let after_commit = self
             .coordinator
             .source
             .observe_committed(&commit, SignerCommittedObservationPhaseV1::AfterCommit)?;
-        self.accept_context(&after_commit)?;
+        self.accept_custody_context(&after_commit)?;
         let commit = SignerOperationCommitRequestV1 {
             check: self.check(),
             commitment,
             signatures_digest,
-            original_custody: SignerOperationCustodyV1::from_verified(&self.custody),
+            original_custody,
         };
         let final_context = self
             .coordinator
             .source
             .observe_committed(&commit, SignerCommittedObservationPhaseV1::BeforeRelease)?;
-        self.accept_context(&final_context)?;
+        self.accept_custody_context(&final_context)?;
         Ok(CompletedSignerOperationV1 {
-            original_custody: SignerOperationCustodyV1::from_verified(&self.custody),
+            original_custody,
             custody: self.custody,
             reservation: self.reservation,
             commitment,

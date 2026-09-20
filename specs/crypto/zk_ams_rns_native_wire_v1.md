@@ -130,9 +130,43 @@ The ordered two-file plan binds 306,504 slots and 5,026,665,600 encrypted bytes,
 with the existing per-file and whole-proof limits unchanged.
 
 The source and D/S inventory ordinals remain 0..12,040. D/S production order is
-group-major (17 D-low then 17 S-low); inventory storage is purpose-major. A
-later consuming driver must also produce all 5,848 delta commitments between
-`bS` and `beta`. Reconciled descriptors and storage permits do not mint source
-authority, supply production entropy, or complete that driver. The source
-session, authenticated source-to-storage handoff, and complete opening checks
-retain their explicit unfinished gates.
+group-major (17 D-low then 17 S-low); inventory storage is purpose-major. The
+consuming difference-digit driver now fills all 5,848 delta inventory positions
+12,728..18,576 after the 688 `bD`/`bS` commitments. It rereads the original
+canonical source in order, checks all three sealed comparator lanes against
+that source, and derives the 17 base-2^15 subtraction digits per group. Each
+point is the actual prepared-value MSM with rho sampled and retained by the
+same original session before value emission; external points and randomness
+cannot enter this transition. Integer underflow or an out-of-range delta
+rejects before a field residue can conceal a malformed borrow.
+
+The original source returns only after every delta plane emits its 32 canonical
+value chunks and the complete authenticated source-read schedule matches the
+materialization record. Only this exact completed delta owner admits the next
+sealed-value comparator phase: 6,192 beta and 344 m commitments occupy physical
+inventory 18,576..25,112 and retain another 209,152 bytes of original-session
+blindings. Incomplete delta, wrong/repeated logical ordinals and occupied slots
+reject before commitment work. The exact completed continuation now admits
+1,032 signed source commitments and then 1,032 negative-magnitude commitments
+at physical inventory 25,112..27,176. These read the original authenticated
+compact signed slots in natural `1024*local_block+i` order, enforce the existing
+role bounds, and retain another 66,048 bytes of original-session blindings.
+The positive point and mask are derived by addition; a derived identity rejects
+the owner without replacing randomness. The next unimplemented purpose is
+`QMaskDigit`. Consuming stored-opening tails remain TODOs.
+The retained snapshot plan is unchanged: delta planes are not added to the
+9,288 comparator/sign planes. The driver introduces one further full canonical
+source reread and one read of each compact comparator slot; these must be
+included in eventual whole-proof lifecycle accounting. No existing resource
+cap or qualification flag changes. See the source-coupled
+[difference preparation contract](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_radix_range_v2/prepared_difference_digit_plane_v1.md).
+The two additional signed-source compact passes contribute 33,849,600
+authenticated read bytes to that same pending accounting; see the
+[signed preparation contract](../../crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe/collective/incremental_source_phase23_radix_range_v2/prepared_small_signed_plane_v1.md).
+
+This bounded implementation has arithmetic and session-transition tests, not a
+complete authenticated-source proof or executed full delta/signed MSM inventories.
+Reconciled descriptors and storage permits do not mint source authority or
+complete source-to-storage handoff. Production scratch-sink/proof authority,
+complete opening checks, and resource/hardware qualification retain their
+explicit unfinished gates.

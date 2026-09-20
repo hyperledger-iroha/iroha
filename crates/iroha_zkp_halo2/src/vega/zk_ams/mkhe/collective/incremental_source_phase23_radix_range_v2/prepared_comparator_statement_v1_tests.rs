@@ -19,7 +19,7 @@ impl TestPreparedComparatorV1 {
     pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn for_ordinal_v1(
         ordinal: u16,
     ) -> Self {
-        assert!(ordinal < 688);
+        assert!(ordinal < COMPARATOR_PLANE_COUNT_V1);
         let coordinate = comparator_coordinate_v1(ordinal).unwrap();
         let mut packed = ConfidentialSpoolChunkV1::new_zeroed_v1(16_384).unwrap();
         for position in SPARSE_POSITIONS_V1 {
@@ -82,7 +82,7 @@ fn actual_top_bit_values_match_independent_sparse_group_equation_and_late_coordi
 fn statement_origin_order_zero_blinding_and_emission_fail_before_commitment() {
     let _guard = super::super::tests::radix_witness_test_guard_v2();
     let mut fixture = TestPreparedComparatorV1::new_v1();
-    for ordinal in [0, 343, 344, 687] {
+    for ordinal in [0, 343, 344, 687, 688, 6_879, 6_880, 7_223] {
         let statement = fixture.statement_v1(ordinal);
         statement
             .validate_origin_v1([0x61; 32], [0x62; 32])

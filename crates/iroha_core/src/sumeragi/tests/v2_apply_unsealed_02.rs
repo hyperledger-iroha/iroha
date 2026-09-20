@@ -1342,10 +1342,32 @@ v2_apply_test!(
             fixture.restart_service_from_last_finalized_snapshot();
         assert_eq!(restarted_state.committed_height(), 0);
         let mut restarted_store = fixture.reopen_body_store();
+        restarted_store
+            .revalidate_recovered_markers(|body| {
+                restarted_service.revalidate_recovered_candidate(&fixture.context, body)
+            })
+            .expect("authenticate finalized markers while State remains unapplied");
+        assert_eq!(restarted_state.committed_height(), 0);
+        assert_eq!(
+            restarted_service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed,),
+            0,
+            "finalized cold markers leave the only recovery execution to Apply"
+        );
         restarted_service
             .execute(&fixture.context, &mut restarted_store, &fixture.task)
             .expect("authenticated WAL/body retry reapplies the sole Kura tip");
         assert_eq!(restarted_state.committed_height(), 1);
+        assert_eq!(
+            restarted_service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed,),
+            1,
+            "the persisted but unapplied height must execute exactly once"
+        );
         let first_artifact = fixture
             .kura
             .v2_finality_artifact(1)
@@ -1377,6 +1399,14 @@ v2_apply_test!(
                 .expect("stable valid fixture snapshot"),
             durable_state_hash,
             "idempotent retry must not execute the block twice"
+        );
+        assert_eq!(
+            restarted_service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed,),
+            1,
+            "repair of an already applied height cannot enter either validator"
         );
         fixture.assert_complete_for_state(restarted_state.as_ref());
     }
@@ -1421,9 +1451,215 @@ v2_apply_test!(restart_recovers_manifest_after_pre_wsv_finality, {
     );
     drop(store);
     let mut reopened = fixture.reopen_body_store();
+    let executions = fixture
+        .service
+        .test_failures
+        .candidate_executions
+        .load(std::sync::atomic::Ordering::Relaxed);
+    reopened
+        .revalidate_recovered_markers(|body| {
+            fixture
+                .service
+                .revalidate_recovered_candidate(&fixture.context, body)
+        })
+        .expect("applied marker recovery authenticates the canonical execution image");
     fixture.execute(&mut reopened).expect("complete manifest");
+    assert_eq!(
+        fixture
+            .service
+            .test_failures
+            .candidate_executions
+            .load(std::sync::atomic::Ordering::Relaxed,),
+        executions,
+        "applied marker recovery and metadata repair must never execute again"
+    );
     fixture.assert_complete();
 });
+v2_apply_test!(
+    applied_marker_recovery_without_finality_remains_quarantined,
+    {
+        let fixture = ApplyFixture::new();
+        fixture
+            .execute(&mut fixture.reopen_body_store())
+            .expect("apply fixture");
+        let executions = fixture
+            .service
+            .test_failures
+            .candidate_executions
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let finality_path = fixture.kura.v2_finality_artifact_path_for_testing(1);
+        let finality = std::fs::read(&finality_path).expect("read original finality");
+        fixture
+            .kura
+            .remove_v2_finality_without_binding_for_tests(1)
+            .expect("remove only finalized evidence");
+        assert!(
+            matches!(
+                fixture
+                    .service
+                    .revalidate_recovered_candidate(&fixture.context, &fixture.body),
+                Err(V2ApplyError::LocalCanonicalState(_))
+            ),
+            "applied State with missing finality must refuse before ordinary validation"
+        );
+        let mut recovered = fixture.reopen_body_store();
+        let error = recovered
+            .revalidate_recovered_markers(|body| {
+                fixture
+                    .service
+                    .revalidate_recovered_candidate(&fixture.context, body)
+            })
+            .expect_err("applied State cannot substitute for missing finality");
+        assert!(matches!(
+            error,
+            crate::sumeragi::v2_body_store::V2BodyStoreError::LocalValidation(_)
+        ));
+        assert!(recovered.validated_recovery_catalog().is_empty());
+        assert!(recovered.rejected_recovery_catalog().is_empty());
+        assert_eq!(fixture.state.committed_height(), 1);
+        assert_eq!(
+            fixture
+                .service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed,),
+            executions,
+            "missing evidence must not reexecute against advanced State"
+        );
+        fixture
+            .kura
+            .overwrite_v2_finality_bytes_for_tests(1, &finality)
+            .expect("restore the exact original finality bytes");
+        recovered
+            .revalidate_recovered_markers(|body| {
+                fixture
+                    .service
+                    .revalidate_recovered_candidate(&fixture.context, body)
+            })
+            .expect("repair restores the original quarantined marker");
+        assert_eq!(recovered.validated_recovery_catalog().len(), 1);
+        assert_eq!(
+            fixture
+                .service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed,),
+            executions,
+            "repaired applied markers require authentication only"
+        );
+    }
+);
+v2_apply_test!(
+    finalized_marker_recovery_requires_canonical_execution_image,
+    {
+        for applied in [false, true] {
+            let fixture = ApplyFixture::new();
+            if !applied {
+                fixture.service.fail_after_wsv_checkpoint_for_test();
+            }
+            let result = fixture.execute(&mut fixture.reopen_body_store());
+            if applied {
+                result.expect("apply the actual canonical image");
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(V2ApplyError::InjectedCrashAfterWsvCheckpoint)
+                ));
+            }
+            let state_height = fixture.state.committed_height();
+            let executions = fixture
+                .service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(state_height, usize::from(applied));
+            let original_finality = fixture
+                .kura
+                .v2_finality_artifact(1)
+                .expect("authenticate finality before body loss")
+                .expect("finality exists on both sides of State publication");
+            fixture
+                .kura
+                .remove_block_body_for_recovery_test(NonZeroUsize::new(1).unwrap())
+                .expect("lose only the actual canonical body");
+            assert_eq!(
+                fixture.kura.v2_finality_artifact(1).unwrap(),
+                Some(original_finality),
+                "retained metadata can still authenticate finality without the execution image"
+            );
+            let mut recovered = fixture.reopen_body_store();
+            let error = recovered
+                .revalidate_recovered_markers(|body| {
+                    fixture
+                        .service
+                        .revalidate_recovered_candidate(&fixture.context, body)
+                })
+                .expect_err("finality alone cannot restore the canonical execution image");
+            assert!(matches!(
+                error,
+                crate::sumeragi::v2_body_store::V2BodyStoreError::LocalValidation(_)
+            ));
+            assert!(recovered.validated_recovery_catalog().is_empty());
+            assert!(recovered.rejected_recovery_catalog().is_empty());
+            assert_eq!(fixture.state.committed_height(), state_height);
+            assert_eq!(
+                fixture
+                    .service
+                    .test_failures
+                    .candidate_executions
+                    .load(std::sync::atomic::Ordering::Relaxed,),
+                executions,
+                "local body loss cannot enter either execution path"
+            );
+        }
+    }
+);
+v2_apply_test!(
+    recovered_marker_rejects_state_height_mismatch_before_execution,
+    {
+        let fixture = ApplyFixture::new();
+        let executions = fixture
+            .service
+            .test_failures
+            .candidate_executions
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let mut later = fixture.context.clone();
+        later.height = 3;
+        assert!(matches!(
+            fixture
+                .service
+                .revalidate_recovered_candidate(&later, &fixture.body),
+            Err(V2ApplyError::StateGap {
+                state_height: 0,
+                decision_height: 3
+            })
+        ));
+        // Simulate a recovered State prefix ahead of this marker. These test-only
+        // entries alter the actual committed-height owner, not a supplied scalar.
+        let mut hashes = fixture.state.block_hashes.block();
+        hashes.push_for_tests(fixture.body.hash());
+        hashes.push_for_tests(fixture.body.hash());
+        hashes.commit();
+        assert!(matches!(
+            fixture
+                .service
+                .revalidate_recovered_candidate(&fixture.context, &fixture.body),
+            Err(V2ApplyError::StateAhead {
+                state_height: 2,
+                decision_height: 1
+            })
+        ));
+        assert_eq!(
+            fixture
+                .service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed,),
+            executions,
+            "invalid recovery geometry must fail before execution"
+        );
+    }
+);
 v2_apply_test!(restart_recovers_kura_block_before_pre_wsv_finality, {
     let fixture = ApplyFixture::new();
     let mut store = fixture.reopen_body_store();

@@ -1,4 +1,4 @@
-"""Bounded source authentication and fail-closed hardware dependency regressions."""
+"""Bounded source authentication and fail-closed signer-authority regressions."""
 
 from __future__ import annotations
 
@@ -310,13 +310,13 @@ def test_builder_cannot_emit_a_canary_with_only_raw_signature_sources(source_con
     assert not output.exists()
 
 
-def test_checker_rejects_an_authenticator_return_without_a_typed_hardware_result(monkeypatch):
+def test_checker_rejects_an_authenticator_return_without_a_typed_operation_result(monkeypatch):
     monkeypatch.setattr(checker, "authenticate_signed_manifest_sources", lambda *_args: None)
     _, errors = checker.validate_evidence_payload(_forged_canary(), _options())
-    assert "signed-manifest source authenticator returned without a verified hardware receipt" in errors
+    assert "signed-manifest source authenticator returned without a verified operation receipt" in errors
 
 
-def test_builder_rejects_an_authenticator_return_without_a_typed_hardware_result(tmp_path, monkeypatch, capsys):
+def test_builder_rejects_an_authenticator_return_without_a_typed_operation_result(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(builder, "authenticate_signed_manifest_sources", lambda *_args: None)
     output = tmp_path / "canary.json"
     assert builder.main([
@@ -324,7 +324,7 @@ def test_builder_rejects_an_authenticator_return_without_a_typed_hardware_result
         "--deployment-id", "release-sdk-primary", "--environment", "production",
         "--generated-at-unix", "1800699999", "--now-unix", "1800700000",
     ]) == 2
-    assert "without a verified hardware receipt" in capsys.readouterr().err
+    assert "without a verified operation receipt" in capsys.readouterr().err
     assert not output.exists()
 
 

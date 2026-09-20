@@ -68,6 +68,16 @@ notification mutexes initialize before they can be needed by reclamation. See
 remaining node, nested payload and aggregate-policy requirements. Production
 maps still use explicit untracked allocation custody until those are complete.
 
+`CellSeeded::deserialize_charged` consumes an already prepaid current/undo pair
+before using the existing Norito parser. It moves both exact decoded values into
+their real EBR allocations, preserving nonempty undo without dummy generations
+or payload clones. Charged Cells and staged blocks use the same JSON encoding;
+there is no implicit charged decoder. Admission refusal stays with the original
+allocation budget, while parse failure releases the unused pair. The outer EBR
+charges survive published readers and deferred reclamation. Seed payloads,
+parser scratch, publication identities, notifications, collector bookkeeping
+and later nested growth remain separate funding obligations.
+
 Funded synchronous operations can use an original budget's
 `with_deferred_refund_notifications` scope to return freed credits immediately
 and wake retries after their physical guards are released. Other threads and

@@ -82,13 +82,13 @@ fn fenced_privacy_head_reader_binding_is_exact_and_drift_checked() {
         Arc::new(ServerTestFencedPrivacyHeadReader::substituted()),
     );
     assert_eq!(
-        make_server_observation(&binding, &substituted),
+        make_server_observation(network_id(), &binding, &substituted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
     let drifted = RuntimeProviderBrokerBackendsV1::new()
         .with_fenced_privacy_head_reader(Arc::new(ServerTestFencedPrivacyHeadReader::drifting()));
     assert_eq!(
-        make_server_observation(&binding, &drifted),
+        make_server_observation(network_id(), &binding, &drifted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
 }
@@ -105,7 +105,7 @@ fn fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact() {
     let reader = Arc::new(ServerTestFencedPrivacyHeadReader::exact());
     let backends =
         RuntimeProviderBrokerBackendsV1::new().with_fenced_privacy_head_reader(reader.clone());
-    let observed = make_server_observation(&binding, &backends)
+    let observed = make_server_observation(network_id(), &binding, &backends)
         .expect("qualify stable fenced privacy head reader");
     let state = singleton_state(
         "fenced-privacy-head-reader-test-chain",
@@ -209,15 +209,15 @@ fn fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact() {
     );
     assert_eq!(reader.read_calls.load(Ordering::SeqCst), 2);
     let substituted_reader = Arc::new(ServerTestFencedPrivacyHeadReader::substituted_proof());
-    let substituted_backends = RuntimeProviderBrokerBackendsV1::new()
+    let proof_backends = RuntimeProviderBrokerBackendsV1::new()
         .with_fenced_privacy_head_reader(substituted_reader.clone());
-    let substituted_observed = make_server_observation(&binding, &substituted_backends)
+    let substituted_observed = make_server_observation(network_id(), &binding, &proof_backends)
         .expect("qualify head reader that substitutes proof evidence");
     let substituted_state = singleton_state(
         "fenced-privacy-substituted-head-proof-test-chain",
         binding.clone(),
         substituted_observed,
-        substituted_backends,
+        proof_backends,
     );
     assert_eq!(
         dispatch_server_operation(&substituted_state, &request),
@@ -227,7 +227,7 @@ fn fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact() {
     let drift_reader = Arc::new(ServerTestFencedPrivacyHeadReader::drifting_after_read());
     let drift_backends = RuntimeProviderBrokerBackendsV1::new()
         .with_fenced_privacy_head_reader(drift_reader.clone());
-    let drift_observed = make_server_observation(&binding, &drift_backends)
+    let drift_observed = make_server_observation(network_id(), &binding, &drift_backends)
         .expect("head reader is stable before its authenticated read");
     let drift_state = singleton_state(
         "fenced-privacy-head-read-drift-test-chain",
@@ -285,7 +285,7 @@ fn por_replay_archive_binding_is_exact_bounded_and_drift_checked() {
         validate_exact_backend_set(std::slice::from_ref(&binding), &backends),
         Ok(())
     );
-    make_server_observation(&binding, &backends)
+    make_server_observation(network_id(), &binding, &backends)
         .expect("stable exact replay archive qualifies twice");
     assert_eq!(
         validate_exact_backend_set(&[], &backends),
@@ -324,7 +324,7 @@ fn por_replay_archive_binding_is_exact_bounded_and_drift_checked() {
         Arc::new(ServerTestPorReplayArchive::drifting(exact, later)),
     );
     assert_eq!(
-        make_server_observation(&binding, &drifted),
+        make_server_observation(network_id(), &binding, &drifted),
         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
     );
 }
@@ -446,8 +446,8 @@ fn por_replay_archive_operations_are_bounded_and_append_is_ambiguous() {
     let exact = por_replay_archive_exact_binding(&binding).expect("exact replay-archive binding");
     let backends = RuntimeProviderBrokerBackendsV1::new()
         .with_por_finalized_replay_archive(Arc::new(ServerTestPorReplayArchive::exact(exact)));
-    let observed =
-        make_server_observation(&binding, &backends).expect("qualify stable replay archive");
+    let observed = make_server_observation(network_id(), &binding, &backends)
+        .expect("qualify stable replay archive");
     let state = singleton_state(
         "por-replay-archive-test-chain",
         binding.clone(),
@@ -722,8 +722,8 @@ fn reputation_runtime_bindings_and_observations_are_exactly_slot_shaped() {
             "{slot:?}"
         );
         let mut role_confused = binding;
-        role_confused.stream_token_hardware_binding =
-            token_signer_binding().stream_token_hardware_binding;
+        role_confused.stream_token_signer_binding =
+            token_signer_binding().stream_token_signer_binding;
         assert_eq!(
             validate_wire_binding(&role_confused),
             Err(BrokerError::BindingMismatch),

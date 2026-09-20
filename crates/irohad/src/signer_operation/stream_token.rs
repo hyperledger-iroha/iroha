@@ -4,9 +4,10 @@
 //! atomically reserves that pair, and independently verifies durable receipt bytes before commit.
 //! The returned bounded receipt is still an untrusted claim to the external consumer: only its
 //! independent, fresh challenged BeforeRelease evidence verification may release a token.
-//! No software key, observer-picked trust, or alternate signing/recovery path exists here.
-//! TODO: supply and qualify genuine hardware, authoritative journal/finality and observer adapters;
-//! injected source/provider tests exercise races and persistence, never physical hardware custody.
+//! Authenticated software providers use this same path. No embedded service key, observer-picked
+//! trust, or alternate signing/recovery path exists here.
+//! TODO: supply and qualify software signing, authoritative journal/finality and observer adapters;
+//! injected source/provider tests exercise races and persistence, not a deployed service.
 //! TODO: the genuine state/provider adapters must reconstruct the same window and request digest
 //! from exact canonical body bytes plus independently pinned custody before admission. The generic
 //! reservation interface currently exposes the bound intent digest, not a separately authenticated
@@ -38,7 +39,7 @@ use zeroize::Zeroize as _;
 pub enum SignerStreamTokenErrorV1 {
     /// Exact canonical body, purpose, token time or receipt binding was rejected.
     Receipt(SignerStreamTokenReceiptErrorV1),
-    /// Current custody, exclusive reservation, hardware or authoritative completion failed.
+    /// Current custody, exclusive reservation, signing or authoritative completion failed.
     Operation(SignerOperationErrorV1),
     /// Private bounded receipt persistence or retained identity failed.
     Journal,

@@ -1,4 +1,4 @@
-//! Full signed receipt simulations; these do not qualify a deployed hardware provider.
+//! Full signed receipt fixtures for independent signer authorization and current state.
 
 use super::*;
 use crate::signer::receipt::tests::{Fixture, fixture};

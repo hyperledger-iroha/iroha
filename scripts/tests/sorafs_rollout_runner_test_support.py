@@ -36,7 +36,6 @@ def authenticated_topology_binding(binding: dict[str, Any]) -> dict[str, Any]:
     return {
         **binding,
         "signer_authentication_kind": "external-ed25519",
-        "signer_backend": "software",
         "signer_service_id": TOPOLOGY_SIGNER_SERVICE_ID,
         "signer_administrator_id": TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
         "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,

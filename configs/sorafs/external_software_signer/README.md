@@ -1,9 +1,11 @@
 # SoraFS external software signer V1
 
 This package runs one isolated software signing role per Unix service identity
-for the roles listed below. Stream-token and release-manifest signing require
-the opaque hardware operation boundary and independent custody/completion
-evidence; this package rejects those roles.
+for the roles listed below. The purpose-specific dispatch for stream-token,
+release-manifest, final-promotion provenance and final-promotion account
+transactions is unfinished, so this package rejects those four roles. Their
+dedicated provider interfaces support software signing and optional hardware
+under the same authorization and completed-operation contract.
 
 Private keys exist only inside a mode-0700 state directory as a
 ChaCha20-Poly1305 envelope and, while serving, as runtime memory. The 32-byte
@@ -166,6 +168,7 @@ sorafs_external_software_signer verify-receipt \
 ```
 
 Exit zero means the new payload-free validation artifact was fsynced with
+owner-only mode `0600`,
 schema
 `sorafs.external_software_signer.signature_receipt_validation.v1` and
 `status=valid`. Validation pins the complete reviewed binding, exact payload,
@@ -245,8 +248,8 @@ live provenance sequence and head before promotion tooling accepts them.
 
 Rotation writes a new binding rather than replacing the reviewed predecessor.
 Promotion and qualification tooling should consume that successor only after
-independent review. These artifacts remain software-key-qualified and carry no
-hardware-specific backend claim.
+independent review. Verification binds the authorized public key and operation;
+the artifacts carry no key-origin or backend-qualification claim.
 
 ## Windows exclusion
 

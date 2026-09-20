@@ -307,6 +307,8 @@ struct SourceReplayIngressV1<R, K, P> {
 }
 #[path = "global_lookup_source_replay_v1/original_source_ingress_v1.rs"]
 mod original_source_ingress_v1;
+#[path = "global_lookup_source_replay_v1/prepared_small_signed_source_v1.rs"]
+mod prepared_small_signed_source_v1;
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P> SourceReplayAssemblyV1<R, K, P> {
     fn authenticate_next_canonical_block_v1(
         &mut self,
@@ -644,6 +646,24 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>
         statement
             .validate_origin_v1(self.record.record_digest, self.record.source_receipt_digest)?;
         self.openings.commit_prepared_comparator_v1(statement)
+    }
+
+    /// Delta preparation requires the exact completed bD/bS stage before I/O.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn validate_difference_digit_preparation_start_v1(
+        &self,
+        replay_record_digest: [u8; 32],
+        source_receipt_digest: [u8; 32],
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_radix_materialization_source_v1(replay_record_digest, source_receipt_digest)?;
+        self.openings.require_difference_start_v1()
+    }
+
+    /// Every delta commitment and retained rho must exist before returning source.
+    pub(in crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23) fn validate_difference_digit_preparation_complete_v1(
+        &self,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        validate_replay_evidence_v1(self)?;
+        self.openings.require_difference_complete_v1()
     }
 
     /// Admit the earlier low-digit pass only at the actual source-complete stage.

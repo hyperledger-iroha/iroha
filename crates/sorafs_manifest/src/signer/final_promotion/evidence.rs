@@ -1,0 +1,423 @@
+//! Authenticate final-promotion receipt inputs using independently pinned policy and state-observer trust.
+//!
+//! The observer is responsible for authenticating consensus finality and the exact custody and
+//! operation rows before signing. Its signature is an accountable observation, not a consensus
+//! proof. Policy/trust digests and verification time must come from the
+//! promotion coordinator, independently of all candidate artifacts. Only public data crosses here.
+
+use super::super::{
+    custody::{
+        SignerCustodyActiveHeadV1, SignerCustodyAnchorV1, SignerCustodyAuthorityV1,
+        SignerCustodyBindingV1, SignerCustodyTrustV1, SignerCustodyUseContextV1,
+    },
+    final_promotion::{
+        SIGNER_FINAL_PROMOTION_STATEMENT_MAX_BYTES_V1, SignerFinalPromotionExpectedV1,
+        SignerFinalPromotionReceiptErrorV1, VerifiedFinalPromotionSignerReceiptV1,
+        signer_final_promotion_digest_v1, statement::prepare_final_promotion_statement_v1,
+        verify_final_promotion_signer_receipt_v1,
+    },
+    protocol::{
+        SIGNER_MAX_ID_BYTES_V1, SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1,
+    },
+    receipt::SignerCompletedOperationV1,
+    state_observation::{
+        SIGNER_STATE_OBSERVATION_MAX_AGE_MS_V1, SignerStateObservationViewV1,
+        SignerStateObserverTrustV1,
+    },
+};
+use iroha_crypto::{Algorithm, PublicKey, sha256};
+use iroha_primitives::production_identity::is_production_identity_v1;
+use norito::codec::{Decode, Encode};
+use std::fmt;
+
+/// Maximum canonical public policy, trust or signed observation frame.
+pub const SIGNER_FINAL_PROMOTION_EVIDENCE_DOCUMENT_MAX_BYTES_V1: usize = 64 * 1024;
+const POLICY_MAGIC: [u8; 8] = *b"IRSFP001";
+const TRUST_MAGIC: [u8; 8] = *b"IRSFPT01";
+const STATE_MAGIC: [u8; 8] = *b"IRSFPS01";
+const STATE_DOMAIN: &[u8] = b"iroha.sorafs.final-promotion.finalized-state.v1\0";
+
+/// Independently reviewed request and exact public signer identity.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::signer::final_promotion::evidence::SignerFinalPromotionEvidencePolicyV1"
+)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct SignerFinalPromotionEvidencePolicyV1 {
+    /// Sole V1 marker; obtain it with [`Self::magic`].
+    pub magic: [u8; 8],
+    /// Exact canonical final-promotion role, deployment, key and signing policy.
+    pub binding: SignerCustodyBindingV1,
+    /// Unique operation issued by the coordinator before signing.
+    pub operation_id: [u8; 32],
+    /// SHA-256 of the exact reviewed statement bytes, without JSON reserialization.
+    pub statement_sha256: [u8; 32],
+    /// Exact reviewed statement byte count.
+    pub statement_size: u64,
+    /// Independently known finalized lower bound, including its exact block at equal height.
+    pub minimum_anchor: SignerCustodyAnchorV1,
+}
+impl SignerFinalPromotionEvidencePolicyV1 {
+    /// Sole canonical V1 policy marker.
+    pub const fn magic() -> [u8; 8] {
+        POLICY_MAGIC
+    }
+}
+
+/// Independently pinned observer and attestation trust; contains no runtime credentials.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::signer::final_promotion::evidence::SignerFinalPromotionEvidenceTrustV1"
+)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct SignerFinalPromotionEvidenceTrustV1 {
+    /// Sole V1 marker; obtain it with [`Self::magic`].
+    pub magic: [u8; 8],
+    /// Exact independent signer authorization authority and policy.
+    pub custody_authority: SignerCustodyAuthorityV1,
+    /// Pinned Ed25519 custody attestation public key.
+    pub custody_public_key: PublicKey,
+    /// Inclusive beginning of attestation-key eligibility.
+    pub custody_active_from_unix_ms: u64,
+    /// Exclusive end of attestation-key eligibility.
+    pub custody_active_until_unix_ms: u64,
+    /// Maximum custody record lifetime, checked by the custody verifier.
+    pub custody_max_validity_ms: u64,
+    /// Separate state-observation authority and governance policy.
+    pub state_authority: SignerCustodyAuthorityV1,
+    /// Pinned Ed25519 state observer key, distinct from signer and attester.
+    pub state_public_key: PublicKey,
+    /// Inclusive beginning of observer-key eligibility.
+    pub state_active_from_unix_ms: u64,
+    /// Exclusive end of observer-key eligibility.
+    pub state_active_until_unix_ms: u64,
+    /// Positive observation lifetime/age bound, at most five minutes.
+    pub max_state_age_ms: u64,
+}
+impl SignerFinalPromotionEvidenceTrustV1 {
+    /// Sole canonical V1 trust marker.
+    pub const fn magic() -> [u8; 8] {
+        TRUST_MAGIC
+    }
+}
+
+/// Exact current finalized state signed by the independently trusted observer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::signer::final_promotion::evidence::SignerFinalPromotionStateObservationBodyV1"
+)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct SignerFinalPromotionStateObservationBodyV1 {
+    /// Sole V1 marker; obtain it with [`Self::magic`].
+    pub magic: [u8; 8],
+    /// SHA-256 of the exact independently reviewed canonical policy frame.
+    pub reviewed_policy_sha256: [u8; 32],
+    /// SHA-256 of the complete domain-prefixed reviewed statement.
+    pub statement_sha256: [u8; 32],
+    /// Exact complete domain-prefixed reviewed statement size.
+    pub statement_size: u64,
+    /// Exact trusted observer identity and policy generation.
+    pub authority: SignerCustodyAuthorityV1,
+    /// Canonical chain label verified against the reviewed policy.
+    pub chain_id: String,
+    /// Exact genesis-derived network identity.
+    pub network_id: [u8; 32],
+    /// Exact promotion deployment from the purpose-specific reviewed binding.
+    pub deployment_id: String,
+    /// When authoritative state was actually observed, not when this file was copied.
+    pub observed_at_unix_ms: u64,
+    /// Exclusive validity end, at most the independently pinned age bound after observation.
+    pub expires_at_unix_ms: u64,
+    /// Current genuinely finalized custody-control state.
+    pub current_anchor: SignerCustodyAnchorV1,
+    /// Exact authoritative ACTIVE custody head under that control state.
+    pub active_head: SignerCustodyActiveHeadV1,
+    /// Current authoritative signer revocation flag.
+    pub signer_revoked: bool,
+    /// Current authoritative custody attester revocation flag.
+    pub attester_revoked: bool,
+    /// Exact completed operation, authenticated under its finalized journal anchor.
+    pub completed_operation: SignerCompletedOperationV1,
+}
+impl SignerFinalPromotionStateObservationBodyV1 {
+    /// Sole canonical V1 state marker.
+    pub const fn magic() -> [u8; 8] {
+        STATE_MAGIC
+    }
+
+    /// Domain-separated exact canonical bytes for the independent observer to sign.
+    ///
+    /// # Errors
+    /// Rejects malformed markers, identities, times or oversized canonical frames.
+    pub fn signing_payload(&self) -> Result<Vec<u8>, SignerFinalPromotionEvidenceErrorV1> {
+        if self.magic != STATE_MAGIC
+            || self.reviewed_policy_sha256 == [0; 32]
+            || self.statement_sha256 == [0; 32]
+            || self.statement_size == 0
+            || self.statement_size > SIGNER_FINAL_PROMOTION_STATEMENT_MAX_BYTES_V1 as u64
+            || !is_production_identity_v1(&self.deployment_id, SIGNER_MAX_ID_BYTES_V1)
+            || iroha_primitives::chain_id::validate_chain_id(&self.chain_id).is_err()
+            || !is_production_identity_v1(&self.authority.service_id, SIGNER_MAX_ID_BYTES_V1)
+            || !is_production_identity_v1(&self.authority.administrator_id, SIGNER_MAX_ID_BYTES_V1)
+            || self.authority.key_revision == 0
+            || self.authority.policy_revision == 0
+            || self.authority.policy_digest == [0; 32]
+            || self.network_id == [0; 32]
+            || self.expires_at_unix_ms <= self.observed_at_unix_ms
+            || self.expires_at_unix_ms - self.observed_at_unix_ms
+                > SIGNER_STATE_OBSERVATION_MAX_AGE_MS_V1
+        {
+            return Err(SignerFinalPromotionEvidenceErrorV1::InvalidState);
+        }
+        // Every variable-width field is bounded above before serialization. The remaining
+        // observation, custody and completed-operation members contain only fixed-width values.
+        let frame_size = {
+            let _canonical =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::core::encoded_frame_len(self)
+                .map_err(|_| SignerFinalPromotionEvidenceErrorV1::InvalidDocument)?
+        };
+        if frame_size > SIGNER_FINAL_PROMOTION_EVIDENCE_DOCUMENT_MAX_BYTES_V1 - STATE_DOMAIN.len() {
+            return Err(SignerFinalPromotionEvidenceErrorV1::InvalidDocument);
+        }
+        let frame = norito::encode_canonical(self)
+            .map_err(|_| SignerFinalPromotionEvidenceErrorV1::InvalidDocument)?;
+        if frame.len() > SIGNER_FINAL_PROMOTION_EVIDENCE_DOCUMENT_MAX_BYTES_V1 - STATE_DOMAIN.len()
+        {
+            return Err(SignerFinalPromotionEvidenceErrorV1::InvalidDocument);
+        }
+        let mut message = Vec::with_capacity(STATE_DOMAIN.len() + frame.len());
+        message.extend_from_slice(STATE_DOMAIN);
+        message.extend_from_slice(&frame);
+        Ok(message)
+    }
+}
+
+/// Canonical signed finalized-state observation; its signing key is never selected from this file.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::signer::final_promotion::evidence::SignerFinalPromotionStateObservationV1"
+)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct SignerFinalPromotionStateObservationV1 {
+    /// Exact signed observation.
+    pub body: SignerFinalPromotionStateObservationBodyV1,
+    /// Raw Ed25519 signature by the separately pinned observer key.
+    pub signature: [u8; 64],
+}
+
+/// Independent source pins and trusted verification time supplied by the promotion coordinator.
+///
+/// No decoder/default is provided: these expectations must not be derived from a receipt.
+#[derive(Clone, Copy, Debug)]
+pub struct SignerFinalPromotionEvidenceExpectedV1 {
+    /// SHA-256 of the independently reviewed canonical policy file.
+    pub policy_sha256: [u8; 32],
+    /// SHA-256 of the independently reviewed canonical trust file.
+    pub trust_sha256: [u8; 32],
+    /// Independently pinned SHA-256 of the raw Ed25519 statement public key.
+    pub public_key_fingerprint_sha256: [u8; 32],
+    /// Trusted current time, independent of the candidate state and receipt.
+    pub now_unix_ms: u64,
+}
+
+/// Bounded, secret-free evidence verification failures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignerFinalPromotionEvidenceErrorV1 {
+    /// A document is malformed, oversized or noncanonical.
+    InvalidDocument,
+    /// Independent reviewed policy, trust, key or exact statement bytes do not match.
+    SourceMismatch,
+    /// Observer trust is invalid or not independently administered.
+    InvalidTrust,
+    /// Observation signature, identity, finality lower bound, freshness or status is invalid.
+    InvalidState,
+    /// The authenticated state does not establish this exact signing receipt.
+    Receipt(SignerFinalPromotionReceiptErrorV1),
+}
+impl fmt::Display for SignerFinalPromotionEvidenceErrorV1 {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str(match self {
+            Self::InvalidDocument => "invalid canonical final-promotion evidence document",
+            Self::SourceMismatch => {
+                "final-promotion evidence differs from independently reviewed inputs"
+            }
+            Self::InvalidTrust => "final-promotion evidence lacks independent observer trust",
+            Self::InvalidState => {
+                "final-promotion evidence lacks authenticated fresh finalized state"
+            }
+            Self::Receipt(_) => {
+                "final-promotion evidence does not verify the exact signing receipt"
+            }
+        })
+    }
+}
+impl std::error::Error for SignerFinalPromotionEvidenceErrorV1 {}
+
+fn decode<T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize>(
+    bytes: &[u8],
+) -> Result<T, SignerFinalPromotionEvidenceErrorV1> {
+    if bytes.is_empty() || bytes.len() > SIGNER_FINAL_PROMOTION_EVIDENCE_DOCUMENT_MAX_BYTES_V1 {
+        return Err(SignerFinalPromotionEvidenceErrorV1::InvalidDocument);
+    }
+    norito::decode_canonical_with_limits(
+        bytes,
+        norito::DecodeLimits::new(
+            4096,
+            SIGNER_FINAL_PROMOTION_EVIDENCE_DOCUMENT_MAX_BYTES_V1,
+            1024,
+            256 * 1024,
+            24,
+        ),
+    )
+    .map_err(|_| SignerFinalPromotionEvidenceErrorV1::InvalidDocument)
+}
+
+/// Authenticate independent state observations, then verify the complete purpose-specific receipt.
+///
+/// # Errors
+/// Rejects candidate-selected trust, stale/forked/revoked/substituted state, altered reviewed bytes,
+/// shared signer/observer/attester authority and any canonical receipt verification failure.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_final_promotion_evidence_v1(
+    policy_bytes: &[u8],
+    trust_bytes: &[u8],
+    state_bytes: &[u8],
+    receipt_bytes: &[u8],
+    message: &[u8],
+    detached_signature: &[u8],
+    raw_public_key: &[u8; 32],
+    expected: &SignerFinalPromotionEvidenceExpectedV1,
+) -> Result<VerifiedFinalPromotionSignerReceiptV1, SignerFinalPromotionEvidenceErrorV1> {
+    // Bounds precede hashing and decoding, including independently supplied files.
+    if [policy_bytes, trust_bytes, state_bytes]
+        .iter()
+        .any(|b| b.is_empty() || b.len() > SIGNER_FINAL_PROMOTION_EVIDENCE_DOCUMENT_MAX_BYTES_V1)
+        || message.is_empty()
+        || message.len() > SIGNER_FINAL_PROMOTION_STATEMENT_MAX_BYTES_V1
+    {
+        return Err(SignerFinalPromotionEvidenceErrorV1::InvalidDocument);
+    }
+    if expected.policy_sha256 == [0; 32]
+        || expected.trust_sha256 == [0; 32]
+        || sha256(policy_bytes) != expected.policy_sha256
+        || sha256(trust_bytes) != expected.trust_sha256
+        || sha256(raw_public_key) != expected.public_key_fingerprint_sha256
+    {
+        return Err(SignerFinalPromotionEvidenceErrorV1::SourceMismatch);
+    }
+    let policy: SignerFinalPromotionEvidencePolicyV1 = decode(policy_bytes)?;
+    let trust: SignerFinalPromotionEvidenceTrustV1 = decode(trust_bytes)?;
+    let observation: SignerFinalPromotionStateObservationV1 = decode(state_bytes)?;
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, raw_public_key)
+        .map_err(|_| SignerFinalPromotionEvidenceErrorV1::SourceMismatch)?;
+    let SignerPurposeBindingV1::FinalPromotionProvenance { deployment_id } =
+        &policy.binding.purpose
+    else {
+        return Err(SignerFinalPromotionEvidenceErrorV1::SourceMismatch);
+    };
+    if policy.magic != POLICY_MAGIC
+        || policy.binding.role != SignerRoleV1::FinalPromotionProvenance
+        || policy.binding.algorithm != SignerKeyAlgorithmV1::Ed25519
+        || policy.binding.public_key != public_key
+        || policy.operation_id == [0; 32]
+        || policy.statement_sha256 != sha256(message)
+        || u64::try_from(message.len()).ok() != Some(policy.statement_size)
+        || policy.minimum_anchor.height == 0
+        || policy.minimum_anchor.block_hash == [0; 32]
+        || policy.minimum_anchor.state_digest == [0; 32]
+    {
+        return Err(SignerFinalPromotionEvidenceErrorV1::SourceMismatch);
+    }
+    prepare_final_promotion_statement_v1(message, &policy.binding)
+        .map_err(|_| SignerFinalPromotionEvidenceErrorV1::SourceMismatch)?;
+    // The final-promotion wire marker remains purpose-owned. Shared observer trust is constructed only
+    // after the exact source-pinned trust frame and reviewed signer policy have been admitted.
+    if trust.magic != TRUST_MAGIC {
+        return Err(SignerFinalPromotionEvidenceErrorV1::InvalidTrust);
+    }
+    let observer_trust = SignerStateObserverTrustV1 {
+        authority: trust.state_authority,
+        public_key: trust.state_public_key,
+        active_from_unix_ms: trust.state_active_from_unix_ms,
+        active_until_unix_ms: trust.state_active_until_unix_ms,
+        max_state_age_ms: trust.max_state_age_ms,
+    };
+    let custody_trust = SignerCustodyTrustV1 {
+        authority: trust.custody_authority,
+        public_key: trust.custody_public_key,
+        active_from_unix_ms: trust.custody_active_from_unix_ms,
+        active_until_unix_ms: trust.custody_active_until_unix_ms,
+        max_validity_ms: trust.custody_max_validity_ms,
+        max_anchor_age_ms: trust.max_state_age_ms,
+    };
+    observer_trust
+        .validate(&policy.binding, &custody_trust, expected.now_unix_ms)
+        .map_err(|_| SignerFinalPromotionEvidenceErrorV1::InvalidTrust)?;
+    let body = &observation.body;
+    let anchor = body.current_anchor;
+    let state = SignerStateObservationViewV1 {
+        authority: &body.authority,
+        chain_id: &body.chain_id,
+        network_id: &body.network_id,
+        observed_at_unix_ms: body.observed_at_unix_ms,
+        expires_at_unix_ms: body.expires_at_unix_ms,
+        current_anchor: anchor,
+        signer_revoked: body.signer_revoked,
+        attester_revoked: body.attester_revoked,
+    };
+    if body.reviewed_policy_sha256 != expected.policy_sha256
+        || body.statement_sha256 != policy.statement_sha256
+        || body.statement_size != policy.statement_size
+        || !state.matches_identity(&observer_trust, &policy.binding)
+        || &body.deployment_id != deployment_id
+    {
+        return Err(SignerFinalPromotionEvidenceErrorV1::InvalidState);
+    }
+    state
+        .validate_freshness(&observer_trust, expected.now_unix_ms)
+        .map_err(|_| SignerFinalPromotionEvidenceErrorV1::InvalidState)?;
+    // Keep the purpose-specific completed-row check between freshness and finality, as in the
+    // original receipt verifier. A shared current-state view does not manufacture completion.
+    if body.completed_operation.completed_at_unix_ms > body.observed_at_unix_ms {
+        return Err(SignerFinalPromotionEvidenceErrorV1::InvalidState);
+    }
+    state
+        .validate_finality(&observer_trust, &policy.minimum_anchor)
+        .map_err(|_| SignerFinalPromotionEvidenceErrorV1::InvalidState)?;
+    let state_message = body.signing_payload()?;
+    observer_trust
+        .verify_signature(&state_message, &observation.signature)
+        .map_err(|_| SignerFinalPromotionEvidenceErrorV1::InvalidState)?;
+    let current = SignerCustodyUseContextV1 {
+        now_unix_ms: expected.now_unix_ms,
+        anchor_observed_at_unix_ms: body.observed_at_unix_ms,
+        current_anchor: anchor,
+        active_head: body.active_head,
+        signer_revoked: body.signer_revoked,
+        attester_revoked: body.attester_revoked,
+    };
+    let verified = verify_final_promotion_signer_receipt_v1(
+        receipt_bytes,
+        message,
+        detached_signature,
+        &SignerFinalPromotionExpectedV1 {
+            operation_id: policy.operation_id,
+            statement_digest: signer_final_promotion_digest_v1(message),
+            statement_size: policy.statement_size,
+        },
+        &policy.binding,
+        &custody_trust,
+        &current,
+        &body.completed_operation,
+    )
+    .map_err(SignerFinalPromotionEvidenceErrorV1::Receipt)?;
+    if verified.custody().statement().issued_at_unix_ms > body.observed_at_unix_ms {
+        return Err(SignerFinalPromotionEvidenceErrorV1::InvalidState);
+    }
+    Ok(verified)
+}
+
+#[cfg(test)]
+#[path = "tests/evidence_tests.rs"]
+mod tests;

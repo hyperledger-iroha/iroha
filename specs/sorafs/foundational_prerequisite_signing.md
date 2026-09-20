@@ -1,6 +1,6 @@
 ---
 title: SoraFS Foundational Prerequisite Signing
-summary: Two-phase external-software-signer procedure for the payload-free V1 foundational prerequisite envelope.
+summary: Two-phase authenticated external-signer procedure for the payload-free V1 foundational prerequisite envelope.
 ---
 
 # SoraFS foundational prerequisite signing
@@ -49,8 +49,8 @@ The flow has two phases:
    prerequisite ID or an eighteenth lane. The full aggregate gate rehashes all
    supplied bytes and rejects any missing, stale, unauthenticated, substituted,
    reordered, post-approval, topology-mismatched, or context-mismatched input.
-2. The isolated external software signer signs those exact bytes with plain
-   Ed25519. Its signed binding fixes the `software` backend, distinct service
+2. The configured external signer signs those exact bytes with plain
+   Ed25519. Its signed binding fixes distinct service
    and administrator identities, positive key and policy revisions, a non-zero
    policy digest, and the operator-trusted public-key fingerprint. Do not hash,
    wrap, re-encode, or use Ed25519ph. Export exactly 64 raw signature bytes and
@@ -62,8 +62,8 @@ The flow has two phases:
    binding, payload, signature, and receipt into a private temporary directory
    and runs `verify-receipt` with a 30-second bound. Finalization fails unless
    the verifier binary matches the reviewed SHA-256 and returns schema-closed,
-   canonical, payload-free validation for the exact operation, software
-   backend, distinct service and administrator identities, promotion role and
+   canonical, payload-free validation for the exact operation,
+   distinct service and administrator identities, promotion role and
    domain, Ed25519 key, positive key/policy revisions, policy SHA-256, payload,
    signature, audit commit, live provenance and response attestations. Revoked,
    substituted, stale-head, noisy, malformed, or unverifiable receipts block.
@@ -226,9 +226,11 @@ signed per-prerequisite mapping, cross-binds its grouped digest rows to the
 signed top-level `lane_summaries`, then rehashes the independently supplied 17
 aggregate inputs and requires every gate digest to match. A valid signature
 over an old singular package, a digest-only wrapper, or a mismapped lane cannot
-bypass these checks. The payload-free aggregate reports
-`signer_qualification=software-key-qualified` only after this signed software
-binding is valid; `hsm-qualified` is not an admitted value. Tests may exercise
+bypass these checks. The payload-free aggregate has no signer backend or
+key-storage qualification field. Software keys and optional hardware signers
+share the same public signature and authority contract. The pending independent
+signer-authorization and completed-operation integration remains a final
+production-promotion blocker. Tests may exercise
 the path with fixture content, but
 fixtures have no production evidentiary standing and must never be submitted
 as promotion evidence.

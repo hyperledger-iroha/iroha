@@ -9783,8 +9783,8 @@ impl Iroha {
         let sorafs_governance_dag_signer = runtime_deps.sorafs_governance_dag_signer.clone();
         let sorafs_governance_dag_checkpoint_store =
             runtime_deps.sorafs_governance_dag_checkpoint_store.clone();
-        let sorafs_stream_token_hardware_client =
-            runtime_deps.sorafs_stream_token_hardware_client.clone();
+        let sorafs_stream_token_signer_client =
+            runtime_deps.sorafs_stream_token_signer_client.clone();
         let sorafs_stream_token_state_observer =
             runtime_deps.sorafs_stream_token_state_observer.clone();
         let sorafs_stream_token_approved_anchor = runtime_deps.sorafs_stream_token_approved_anchor;
@@ -10687,8 +10687,8 @@ impl Iroha {
         } else {
             runtime_deps
         };
-        let runtime_deps = if let Some(client) = sorafs_stream_token_hardware_client {
-            runtime_deps.with_sorafs_stream_token_hardware_client(client)
+        let runtime_deps = if let Some(client) = sorafs_stream_token_signer_client {
+            runtime_deps.with_sorafs_stream_token_signer_client(client)
         } else {
             runtime_deps
         };
@@ -15647,7 +15647,7 @@ mod tests {
     #[test]
     fn standard_launcher_does_not_derive_six_sorafs_authority_signers_from_node_key() {
         let dependencies = IrohaRuntimeDeps::default();
-        assert!(dependencies.sorafs_stream_token_hardware_client.is_none());
+        assert!(dependencies.sorafs_stream_token_signer_client.is_none());
         assert!(dependencies.sorafs_stream_token_state_observer.is_none());
         assert!(dependencies.sorafs_stream_token_approved_anchor.is_none());
         assert!(dependencies.sorafs_proof_outcome_signer.is_none());
@@ -16608,7 +16608,7 @@ mod tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         for builder in [
-            "with_sorafs_stream_token_hardware_client",
+            "with_sorafs_stream_token_signer_client",
             "with_sorafs_stream_token_state_observer",
             "with_sorafs_stream_token_approved_anchor",
             "with_sorafs_proof_outcome_signer",

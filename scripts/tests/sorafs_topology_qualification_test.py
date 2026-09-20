@@ -41,7 +41,7 @@ SIGNER_POLICY_DIGEST = hashlib.sha256(
 SIGNING_SEED = hashlib.sha256(b"sorafs-topology-qualification-test-key").digest()
 PUBLIC_KEY = public_key_from_seed(SIGNING_SEED)
 EXPECTED_TOPOLOGY_SIGNING_PAYLOAD_SHA256 = (
-    "cfad64a4bcc5c8b20a4766ad3eec2418ff4a8f2f49563ab3cc22f5839e9dee1e"
+    "98736fb655e40fedc6562fec7df658e11913430a57cd815e40fda2314711a015"
 )
 
 
@@ -141,7 +141,6 @@ def signed_fixture(
         "schema": TOPOLOGY.SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
         **binding,
         "signer_authentication_kind": "external-ed25519",
-        "signer_backend": "software",
         "signer_service_id": SIGNER_SERVICE_ID,
         "signer_administrator_id": SIGNER_ADMINISTRATOR_ID,
         "signer_key_revision": SIGNER_KEY_REVISION,
@@ -264,14 +263,14 @@ def test_signed_envelope_authenticates_exact_unsigned_binding(tmp_path: Path) ->
     )
     signing_bytes = TOPOLOGY.topology_qualification_envelope_signing_bytes(envelope)
     assert signing_bytes.startswith(TOPOLOGY.TOPOLOGY_QUALIFICATION_SIGNATURE_DOMAIN)
-    assert b'"signer_backend":"software"' in signing_bytes
+    assert b'"signer_backend"' not in signing_bytes
     assert b'"signer_administrator_id":"sorafs-topology-admin-b"' in signing_bytes
     assert b'"signature_algorithm":"ed25519"' in signing_bytes
     assert b"signature_hex" not in signing_bytes
 
 
 @pytest.mark.parametrize(
-    "missing_field", ["signature_hex", "signer_service_id", "signer_backend"]
+    "missing_field", ["signature_hex", "signer_service_id", "signer_key_revision"]
 )
 def test_unsigned_or_incomplete_envelope_fails_closed(
     tmp_path: Path,
@@ -305,22 +304,28 @@ def test_exact_summary_bytes_are_bound(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("backend", ["local", "hsm", "pkcs11", "hardware"])
-def test_non_software_signer_backend_is_rejected(
+@pytest.mark.parametrize("backend", ["software", "local", "hsm", "pkcs11", "hardware"])
+def test_backend_claim_is_rejected(
     tmp_path: Path,
     backend: str,
 ) -> None:
-    """The signed topology policy accepts only the revised software backend."""
+    """The signed topology has no key-storage attestation field."""
 
     summary_path, envelope_path, _binding, envelope = signed_fixture(tmp_path)
     envelope["signer_backend"] = backend
-    sign_envelope(envelope)
+    with pytest.raises(ValueError, match="wrong exact schema"):
+        TOPOLOGY.topology_qualification_envelope_signing_bytes(envelope)
+    unsigned = {key: value for key, value in envelope.items() if key != "signature_hex"}
+    sign_envelope(envelope, signing_bytes=(
+        TOPOLOGY.TOPOLOGY_QUALIFICATION_SIGNATURE_DOMAIN
+        + json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ))
     write_json(envelope_path, envelope)
 
     authenticated, errors = verify(summary_path, envelope_path)
 
     assert authenticated is None
-    assert any("signer backend must be `software`" in error for error in errors)
+    assert any("schema-closed contract" in error for error in errors)
     assert not any("signature must authenticate" in error for error in errors)
 
 
@@ -461,19 +466,19 @@ def test_noncanonical_validator_roster_is_rejected_before_signature_review(
     [
         (
             {"trusted_signer_service_id": "another-topology-signer"},
-            "signer_service_id must match the trusted external software signer",
+            "signer_service_id must match the trusted authenticated external signer",
         ),
         (
             {"trusted_signer_administrator_id": "another-topology-admin"},
-            "signer_administrator_id must match the trusted external software signer",
+            "signer_administrator_id must match the trusted authenticated external signer",
         ),
         (
             {"trusted_key_revision": SIGNER_KEY_REVISION + 1},
-            "signer_key_revision must match the trusted external software signer",
+            "signer_key_revision must match the trusted authenticated external signer",
         ),
         (
             {"trusted_policy_revision": SIGNER_POLICY_REVISION + 1},
-            "signer_policy_revision must match the trusted external software signer",
+            "signer_policy_revision must match the trusted authenticated external signer",
         ),
         (
             {
@@ -481,7 +486,7 @@ def test_noncanonical_validator_roster_is_rejected_before_signature_review(
                     b"another-topology-policy"
                 ).hexdigest()
             },
-            "signer_policy_digest_sha256 must match the trusted external software signer",
+            "signer_policy_digest_sha256 must match the trusted authenticated external signer",
         ),
         (
             {
@@ -592,7 +597,7 @@ def test_cli_prepare_finalize_verify_round_trip_is_deterministic_and_payload_fre
         b"sorafs-l1-topology-qualification-envelope-v1\x00"
         + independent_unsigned
     )
-    assert len(payload_a.read_bytes()) == 1_132
+    assert len(payload_a.read_bytes()) == 1_104
     assert hashlib.sha256(payload_a.read_bytes()).hexdigest() == (
         EXPECTED_TOPOLOGY_SIGNING_PAYLOAD_SHA256
     )

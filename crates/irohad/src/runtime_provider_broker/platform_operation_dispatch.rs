@@ -221,7 +221,7 @@ fn dispatch_server_operation_with_session(
         (slot, OPERATION_QUALIFY_V1) if slot == stream_token_slot => {
             requalify()?;
             encode_canonical(
-                required_binding_ref!(&request.binding, stream_token_hardware_binding),
+                required_binding_ref!(&request.binding, stream_token_signer_binding),
                 MAX_QUALIFICATION_FRAME_BYTES_V1,
             )
         }

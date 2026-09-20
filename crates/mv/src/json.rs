@@ -6,7 +6,7 @@
 //! shim has been removed; callers should import these helpers directly.
 use crate::{
     Key, Value,
-    cell::{Block as CellBlock, Cell},
+    cell::{Block as CellBlock, Cell, CellAllocationCharges},
     storage::{Block as StorageBlock, Storage, StorageReadOnly},
 };
 use concread::{
@@ -414,6 +414,34 @@ where
         &self,
         parser: &mut json::Parser<'_>,
     ) -> Result<Cell<S::Value>, json::Error> {
+        self.deserialize_charged(parser, CellAllocationCharges::untracked())
+    }
+
+    /// Restore exact current/undo values into their original prepaid EBR owners.
+    ///
+    /// Both charges must be admitted before this call. Capacity refusal belongs
+    /// to that admission operation and is never converted into a JSON error.
+    /// This uses the same `{ "revert": <Option>, "blocks": <Value> }` parser as
+    /// [`Self::deserialize`], without cloning values or creating dummy generations.
+    /// Parse failure drops the unused charges; success moves them into the actual
+    /// EBR allocations until physical reclamation, including retired readers.
+    ///
+    /// The charges cover only what the caller prepaid. The exact outer layouts
+    /// from [`Cell::allocation_layouts`] exclude seed payloads, parser scratch,
+    /// publication identities, notifications and collector bookkeeping. Their
+    /// funding, later nested growth and aggregate State admission remain separate.
+    /// No default charged decoder can infer or acquire those resources.
+    ///
+    /// ```compile_fail
+    /// use mv::{allocation::AllocationCharge, cell::Cell};
+    /// fn requires_default_decode<T: norito::json::JsonDeserialize>() {}
+    /// requires_default_decode::<Cell<u64, AllocationCharge>>();
+    /// ```
+    pub fn deserialize_charged<Charge: Send + Sync + 'static>(
+        &self,
+        parser: &mut json::Parser<'_>,
+        charges: CellAllocationCharges<Charge>,
+    ) -> Result<Cell<S::Value, Charge>, json::Error> {
         let mut map = json::MapVisitor::new(parser)?;
         let mut revert: Option<Option<S::Value>> = None;
         let mut blocks: Option<S::Value> = None;
@@ -447,13 +475,7 @@ where
         map.finish()?;
         let revert = revert.ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
-        Ok(Cell {
-            publication: crate::publication::Publication::new(),
-            revert_released: crate::ReleaseNotification::default(),
-            blocks_released: crate::ReleaseNotification::default(),
-            revert: EbrCell::new(revert),
-            blocks: EbrCell::new(blocks),
-        })
+        Ok(Cell::from_values_charged(blocks, revert, charges))
     }
 }
 impl<K, V> JsonSerialize for Storage<K, V>
@@ -581,9 +603,10 @@ fn write_storage_json_entry<K: JsonKeyCodec, V: JsonSerialize>(
     out.push(':');
     value.json_serialize(out);
 }
-impl<V> JsonSerialize for Cell<V>
+impl<V, Charge> JsonSerialize for Cell<V, Charge>
 where
     V: JsonSerialize + Value,
+    Charge: Send + Sync + 'static,
 {
     fn json_serialize(&self, out: &mut String) {
         let revert = self.revert.read();
@@ -597,9 +620,10 @@ where
         out.push('}');
     }
 }
-impl<V> JsonSerialize for CellBlock<'_, V>
+impl<V, Charge> JsonSerialize for CellBlock<'_, V, Charge>
 where
     V: JsonSerialize + Value,
+    Charge: Send + Sync + 'static,
 {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -676,6 +700,10 @@ where
     }
     out.push('}');
 }
+#[cfg(test)]
+#[path = "json/charged_cell_tests.rs"]
+mod charged_cell_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

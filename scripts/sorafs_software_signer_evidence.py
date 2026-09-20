@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Schema-closed public provenance checks for external software signers."""
+"""Schema-closed public provenance checks for authenticated external signers."""
 
 from __future__ import annotations
 
@@ -337,7 +337,6 @@ def validate_foundational_software_signer(
     """Validate and return payload-free promotion signer provenance."""
 
     result = {
-        "signer_backend": None,
         "signer_service_id": None,
         "signer_administrator_id": None,
         "signer_key_revision": None,
@@ -346,10 +345,6 @@ def validate_foundational_software_signer(
     }
     if signature is None:
         return result
-    if signature.get("backend") != "software":
-        errors.append("foundational prerequisite signer backend must be `software`")
-    else:
-        result["signer_backend"] = "software"
     for field, output in (
         ("service_id", "signer_service_id"),
         ("administrator_id", "signer_administrator_id"),
@@ -399,7 +394,6 @@ def validate_aggregate_software_signer(
     """Revalidate the payload-free signer provenance copied to an aggregate."""
 
     signature = {
-        "backend": row.get("signer_backend"),
         "service_id": row.get("signer_service_id"),
         "administrator_id": row.get("signer_administrator_id"),
         "key_revision": row.get("signer_key_revision"),

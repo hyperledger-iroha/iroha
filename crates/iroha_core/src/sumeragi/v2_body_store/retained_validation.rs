@@ -34,8 +34,14 @@ impl V2BodyStore {
                 super::super::v2_apply::validation_custody::CarrierCustodyError::Identity.into(),
             );
         }
-        let envelope = self.load_validation_envelope(&durable, expected_manifest_hash)?;
         let key = (durable.round(), durable.subject());
+        // A retained rejection needs no candidate descriptor. Otherwise refuse
+        // local capacity before frame I/O and its decoded allocations; this
+        // read-only projection cannot authorize any validation marker.
+        if !self.rejected.contains_key(&key) {
+            service.preflight_marker(&durable)?;
+        }
+        let envelope = self.load_validation_envelope(&durable, expected_manifest_hash)?;
         if let Some(rejected) = self.rejected.get(&key) {
             if rejected.durable != durable {
                 return Err(V2BodyStoreError::ReceiptMismatch);

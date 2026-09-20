@@ -10,6 +10,9 @@ on:
       - ".github/workflows/sorafs-fixtures-nightly.yml"
       - ".github/workflows/sorafs-orchestrator-sdk.yml"
       - "ci/check_sorafs_cli_release.sh"
+      - "ci/check_sorafs_native_authority_runtime.sh"
+      - "ci/qualify_sorafs_cosign.py"
+      - "ci/sorafs_cosign_verifier.json"
       - "ci/build_efficiency_provenance.json"
       - "ci/source_file_budget.json"
       - "ci/check_nexus_lane_smoke.sh"
@@ -65,6 +68,9 @@ on:
       - "scripts/sorafs_software_signer_evidence.py"
       - "scripts/sorafs_software_signer_receipt.py"
       - "scripts/sorafs_evidence_json.py"
+      - "scripts/sorafs_final_promotion_cosign.py"
+      - "scripts/sorafs_final_promotion_evidence.py"
+      - "scripts/sorafs_verifier_process.py"
       - "scripts/sorafs_response_args.py"
       - "scripts/sorafs_runner_preflight.py"
       - "scripts/sorafs_reference_sdk_supply_chain.py"
@@ -109,6 +115,7 @@ on:
       - "scripts/release_sorafs_cli.sh"
       - "scripts/tests/check_sorafs_release_version_map_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
+      - "scripts/tests/sorafs_native_authority_runtime_test.py"
       - "scripts/tests/check_sorafs_mobile_parity_reports_test.py"
       - "scripts/tests/check_build_efficiency_provenance_test.py"
       - "scripts/tests/check_sorafs_provider_ingest_runtime_contract_test.py"
@@ -149,6 +156,12 @@ on:
       - "scripts/tests/sorafs_l1_lane_evidence_inventory_test.py"
       - "scripts/tests/sorafs_l1_lane_inventory_test_support.py"
       - "scripts/tests/sorafs_evidence_json_test.py"
+      - "scripts/tests/conftest.py"
+      - "scripts/tests/sorafs_final_promotion_cosign_test.py"
+      - "scripts/tests/sorafs_final_promotion_cosign_crypto_test.py"
+      - "scripts/tests/qualify_sorafs_cosign_test.py"
+      - "scripts/tests/sorafs_final_promotion_evidence_test.py"
+      - "scripts/tests/sorafs_verifier_process_test.py"
       - "scripts/tests/sorafs_foundational_receipt_test_support.py"
       - "scripts/tests/sorafs_production_artifact_cases.py"
       - "scripts/tests/sorafs_production_foundational_cases.py"
@@ -169,6 +182,13 @@ on:
       - "scripts/tests/validate_release_image_bases_test.py"
       - "scripts/tests/release_sorafs_cli_test.py"
       - "scripts/tests/check_sorafs_rollout_gate_contract_test.py"
+      - "scripts/tests/check_sorafs_rust_owner_contract_test.py"
+      - "scripts/tests/sorafs_rollout_gate_source_support.py"
+      - "scripts/tests/state_source_bundle.py"
+      - "xtask/src/main.rs"
+      - "crates/iroha_core/**"
+      - "crates/iroha_sccp/**"
+      - "crates/iroha_executor_data_model/**"
       - "scripts/tests/sorafs_ledger_sdk_contracts.py"
       - "scripts/tests/check_workflow_action_pins_test.py"
       - "scripts/tests/release_profile_validation_test.py"
@@ -189,9 +209,20 @@ on:
       - "specs/sorafs/l1_deployment_qualification.md"
       - "specs/sorafs/l1_resilience_qualification.md"
       - "specs/sorafs/negative_promotion_archive.md"
+      - "specs/sorafs/final_promotion_receipt_v1.md"
+      - "specs/sorafs/signer_production_authority_inventory.md"
+      - "crates/iroha_executor/**"
+      - "crates/iroha_schema_gen/**"
+      - "specs/references/schema.json"
+      - "crates/iroha_torii/src/sorafs/**"
+      - "crates/irohad/src/signer_operation.rs"
+      - "crates/irohad/src/signer_operation/**"
+      - "crates/iroha_cli/src/commands/sorafs/**"
+      - "specs/sorafs/final_promotion_native_authority_v1.md"
       - "specs/sorafs_pdp_plan.md"
       - "specs/sorafs/runbooks/index.md"
       - "fixtures/documentation/sorafs_release_notes.md"
+      - "fixtures/sorafs/final_promotion_cosign/**"
       - "specs/sorafs_release_pipeline_plan*.md"
       - "specs/release_automation_plan*.md"
       - "specs/release_runbook*.md"
@@ -773,6 +804,8 @@ jobs:
           name: sorafs-release-authentication-${{ github.run_id }}
           path: signed-input/release-authentication
       - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
+        with:
+          cosign-release: "v3.1.3"
       - name: Verify authenticated release-manifest candidate binding before provenance
         run: |
           python3 scripts/generate_sorafs_cli_release_manifest.py check \
@@ -920,6 +953,8 @@ jobs:
         with:
           python-version: "3.12"
       - uses: sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22 # v4.1.0
+        with:
+          cosign-release: "v3.1.3"
       - name: Download the authenticated signed release input
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:

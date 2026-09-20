@@ -31947,11 +31947,10 @@ fn sorafs_por_rejects_obsolete_competing_state_paths() {
 }
 #[path = "user/stream_token_admission.rs"]
 mod stream_token_admission;
-#[path = "user/stream_token_hardware.rs"]
-mod stream_token_hardware;
-pub use stream_token_hardware::{
-    SorafsStreamTokenAttesterConfig, SorafsStreamTokenHardwareConfig,
-    SorafsStreamTokenObserverConfig,
+#[path = "user/stream_token_signer.rs"]
+mod stream_token_signer;
+pub use stream_token_signer::{
+    SorafsStreamTokenAttesterConfig, SorafsStreamTokenObserverConfig, SorafsStreamTokenSignerConfig,
 };
 /// User-level configuration for stream-token issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -31959,9 +31958,9 @@ pub struct SorafsStreamTokenConfig {
     /// Enable stream-token issuance.
     #[config(default = "defaults::sorafs::storage::tokens::ENABLED")]
     pub enabled: bool,
-    /// Complete hardware signer and independent attester/observer trust.
+    /// Complete signer and independent attester/observer trust.
     #[config(nested)]
-    pub hardware: SorafsStreamTokenHardwareConfig,
+    pub signer: SorafsStreamTokenSignerConfig,
     /// Credential-free deployment-owned quota/sequence/outbox provider handle.
     pub admission_provider_handle: Option<String>,
     /// Exact non-zero external admission-provider contract revision.
@@ -31997,7 +31996,7 @@ impl Default for SorafsStreamTokenConfig {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
-            hardware: SorafsStreamTokenHardwareConfig::default(),
+            signer: SorafsStreamTokenSignerConfig::default(),
             admission_provider_handle: None,
             admission_provider_revision: None,
             admission_provider_policy_digest_hex: None,
@@ -32040,7 +32039,7 @@ impl SorafsStreamTokenConfig {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
                 "sorafs.storage.stream_tokens runtime bindings are forbidden while issuance is disabled"));
         }
-        let hardware = self.hardware.parse(self.enabled, emitter);
+        let signer = self.signer.parse(self.enabled, emitter);
         let admission_provider_policy_digest = stream_token_admission::decode_policy_digest(
             self.admission_provider_policy_digest_hex.as_deref(),
             "admission_provider_policy_digest_hex",
@@ -32049,7 +32048,7 @@ impl SorafsStreamTokenConfig {
         stream_token_admission::validate_binding_and_bounds(&self, emitter);
         actual::SorafsTokenConfig {
             enabled: self.enabled,
-            hardware,
+            signer,
             admission_provider_handle: self.admission_provider_handle,
             admission_provider_revision: self.admission_provider_revision,
             admission_provider_policy_digest,

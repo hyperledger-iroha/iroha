@@ -1392,8 +1392,8 @@ fn make_handshake_request(
     validate_catalog_slot_ids(requested_catalog.iter().map(|binding| binding.slot))?;
     for binding in &requested_catalog {
         validate_wire_binding(binding)?;
-        if let Some(hardware) = &binding.stream_token_hardware_binding {
-            hardware
+        if let Some(signer_backend) = &binding.stream_token_signer_binding {
+            signer_backend
                 .validate_network(chain_id, network_id.as_bytes())
                 .map_err(|_| BrokerError::BindingMismatch)?;
         }
@@ -1974,12 +1974,12 @@ fn validate_operation_request_with_session(
         return Err(BrokerError::Protocol);
     }
     validate_wire_binding(&request.binding)?;
-    if let Some(hardware) = &request.binding.stream_token_hardware_binding {
+    if let Some(signer_backend) = &request.binding.stream_token_signer_binding {
         if let Some(chain_id) = session_chain_id {
-            hardware
+            signer_backend
                 .validate_network(chain_id, session_network_id.as_bytes())
                 .map_err(|_| BrokerError::BindingMismatch)?;
-        } else if &hardware.custody().network_id != session_network_id.as_bytes() {
+        } else if &signer_backend.custody().network_id != session_network_id.as_bytes() {
             return Err(BrokerError::BindingMismatch);
         }
     }

@@ -1234,18 +1234,23 @@ fn unrequested_native_signers_are_rejected_individually() {
     let proof_provider = Arc::new(ProofOutcomeTestSigner::new());
     let proof_binding = proof_provider.expected_binding();
     let proof_signer = iroha_torii::qualify_sorafs_proof_outcome_transaction_signer_v1(
+        runtime_provider_test_network_id(),
         proof_binding,
         proof_provider,
     )
     .expect("qualify proof-outcome test signer");
     let repair_provider = Arc::new(RepairTestSigner::new());
     let repair_binding = repair_provider.expected_binding();
-    let repair_signer =
-        iroha_torii::qualify_sorafs_repair_transaction_signer_v1(repair_binding, repair_provider)
-            .expect("qualify repair test signer");
+    let repair_signer = iroha_torii::qualify_sorafs_repair_transaction_signer_v1(
+        runtime_provider_test_network_id(),
+        repair_binding,
+        repair_provider,
+    )
+    .expect("qualify repair test signer");
     let reserve_provider = Arc::new(ReserveTestSigner::new());
     let reserve_binding = reserve_provider.expected_binding();
     let reserve_signer = iroha_torii::qualify_sorafs_reserve_transaction_signer_v1(
+        runtime_provider_test_network_id(),
         reserve_binding,
         reserve_provider,
     )
@@ -1253,6 +1258,7 @@ fn unrequested_native_signers_are_rejected_individually() {
     let orderbook_provider = Arc::new(OrderbookTestSigner::new());
     let orderbook_binding = orderbook_provider.expected_binding();
     let orderbook_signer = iroha_torii::qualify_sorafs_orderbook_transaction_signer_v1(
+        runtime_provider_test_network_id(),
         orderbook_binding,
         orderbook_provider,
     )
@@ -1275,4 +1281,113 @@ fn unrequested_native_signers_are_rejected_individually() {
             Err(IrohaRuntimeProviderRegistryErrorV1::UnexpectedProviders)
         ));
     }
+}
+
+#[test]
+fn registry_native_signer_uses_catalog_network_before_any_provider_method() {
+    use iroha_data_model::{
+        isi::sorafs::{
+            SorafsPdpProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
+            SubmitSorafsProofOutcome,
+        },
+        transaction::{
+            FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
+        },
+    };
+    use iroha_torii::{
+        SoraFsProofOutcomeSigningError, SoraFsProofOutcomeTransactionSigner,
+        SorafsNativeTransactionSignerProbeErrorV1, SorafsNativeTransactionSignerProviderV1,
+        SorafsNativeTransactionSignerQualificationV1, SorafsNativeTransactionSignerRoleV1,
+    };
+    struct CountedSigner {
+        inner: ProofOutcomeTestSigner,
+        calls: Arc<AtomicUsize>,
+    }
+    impl SorafsNativeTransactionSignerProviderV1 for CountedSigner {
+        fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.role()
+        }
+        fn handle(&self) -> &str {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.handle()
+        }
+        fn authority(&self) -> iroha_data_model::account::AccountId {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.authority()
+        }
+        fn public_key(
+            &self,
+        ) -> Result<iroha_crypto::PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.public_key()
+        }
+        fn qualification(
+            &self,
+        ) -> Result<
+            SorafsNativeTransactionSignerQualificationV1,
+            SorafsNativeTransactionSignerProbeErrorV1,
+        > {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.qualification()
+        }
+    }
+    impl SoraFsProofOutcomeTransactionSigner for CountedSigner {
+        fn sign(
+            &self,
+            _payload: TransactionPayload,
+        ) -> Result<SignedTransaction, SoraFsProofOutcomeSigningError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(SoraFsProofOutcomeSigningError::Unavailable)
+        }
+    }
+    let inner = ProofOutcomeTestSigner::new();
+    let exact = inner.expected_binding();
+    let network_id = test_network_id(0x79);
+    assert_ne!(network_id, runtime_provider_test_network_id());
+    let bindings = native_signer_catalog([(
+        IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner,
+        exact.clone(),
+    )])
+    .with_network_id_for_test(network_id);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = Arc::new(CountedSigner {
+        inner,
+        calls: Arc::clone(&calls),
+    });
+    let registry =
+        FixedRegistry(IrohaRuntimeDeps::default().with_sorafs_proof_outcome_signer(provider));
+    let resolved = resolve_runtime_deps_from_bindings(&bindings, Some(&registry)).unwrap();
+    let signer = resolved.sorafs_proof_outcome_signer.unwrap();
+    // Only envelope eligibility is exercised here; native execution owns archive validation.
+    let payload = TransactionBuilder::new(
+        network_id,
+        exact.authority().clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([SubmitSorafsProofOutcome::new(
+        SorafsProofOutcomeSubmissionV1::Pdp(SorafsPdpProofOutcomeSubmissionV1 {
+            archive_payload: vec![1],
+        }),
+    )])
+    .into_payload()
+    .unwrap();
+    let mut foreign = payload.clone();
+    foreign.domain = iroha_data_model::transaction::TransactionDomain::Network(
+        runtime_provider_test_network_id(),
+    );
+    let before = calls.load(Ordering::SeqCst);
+    assert_eq!(
+        signer.sign(foreign),
+        Err(SoraFsProofOutcomeSigningError::Refused)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), before);
+    assert_eq!(
+        signer.sign(payload),
+        Err(SoraFsProofOutcomeSigningError::Unavailable)
+    );
+    assert!(
+        calls.load(Ordering::SeqCst) > before,
+        "the exact network reaches the provider"
+    );
 }

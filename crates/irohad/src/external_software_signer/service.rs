@@ -10,27 +10,17 @@ use super::{
     },
     protocol::{
         AdminCommandV1, AdminRequestV1, AdminResponseV1, AdminStatusV1, ExternalSignerBackendV1,
-        SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1,
+        SIGNER_MAX_ID_BYTES_V1, SIGNER_MAX_REQUEST_PAYLOAD_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1,
         SIGNER_PUBLIC_BINDING_MAGIC_V1, SignRequestV1, SignResponseV1, SignStatusV1,
         SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1, SoftwareSignerLiveProvenanceV1,
         SoftwareSignerPublicBindingV1, admin_request_digest, admin_response_digest,
         digest_canonical, payload_digest, public_key_digest, sign_request_digest,
-        sign_response_digest, valid_identity, valid_software_signer_handle,
+        sign_response_digest, valid_software_signer_handle,
     },
 };
 use iroha_crypto::{KeyPair, Signature};
-use iroha_data_model::{
-    account::AccountId,
-    isi::sorafs::{
-        AdvanceSorafsReserveLifecycle, ApplySorafsRepairTaskAction, ChargeSorafsReserveRent,
-        DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
-        MaintainSorafsOrderbook, MatchSorafsOrderbook, RecordSorafsOrderbookSettlementReceipt,
-        RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
-        SubmitSorafsProofOutcome, SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
-        SubmitSorafsReserveAppeal,
-    },
-    transaction::{Executable, TransactionBuilder, TransactionPayload},
-};
+use iroha_data_model::{account::AccountId, transaction::TransactionBuilder};
+use iroha_primitives::production_identity::is_production_identity_v1;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 use std::{
@@ -79,8 +69,8 @@ pub struct SoftwareSignerProvisioningV1 {
 impl SoftwareSignerProvisioningV1 {
     fn validate_binding(&self) -> Result<(), SoftwareSignerErrorV1> {
         if !valid_software_signer_handle(self.role, &self.handle)
-            || !valid_identity(&self.service_id)
-            || !valid_identity(&self.administrator_id)
+            || !is_production_identity_v1(&self.service_id, SIGNER_MAX_ID_BYTES_V1)
+            || !is_production_identity_v1(&self.administrator_id, SIGNER_MAX_ID_BYTES_V1)
             || self.service_id == self.administrator_id
             || self.service_uid == self.client_uid
             || self.service_uid == self.administrator_uid
@@ -368,7 +358,12 @@ impl SoftwareSignerServiceV1 {
                     .map_err(|_| SoftwareSignerErrorV1::Rejected)?;
                 let expected_authority = AccountId::new(state.binding.public_key.clone());
                 if builder.payload().authority != expected_authority
-                    || !native_payload_matches_role(state.binding.role, builder.payload())
+                    || !super::protocol::native_role(state.binding.role).is_some_and(|role| {
+                        iroha_torii::sorafs::native_transaction_signer::sorafs_native_transaction_payload_matches_role_v1(
+                            role,
+                            builder.payload(),
+                        )
+                    })
                 {
                     return state.sign_error_response(request, SignStatusV1::Rejected);
                 }
@@ -765,81 +760,6 @@ fn valid_promotion_payload(payload: &[u8]) -> bool {
         && std::str::from_utf8(json).is_ok()
 }
 
-pub(super) fn native_payload_matches_role(
-    role: SignerRoleV1,
-    payload: &TransactionPayload,
-) -> bool {
-    let Executable::Instructions(instructions) = payload.instructions() else {
-        return false;
-    };
-    let [instruction] = instructions.as_ref() else {
-        return false;
-    };
-    let instruction = instruction.as_any();
-    match role {
-        SignerRoleV1::ProofOutcome => instruction
-            .downcast_ref::<SubmitSorafsProofOutcome>()
-            .is_some(),
-        SignerRoleV1::Repair => {
-            instruction
-                .downcast_ref::<SubmitSorafsRepairTask>()
-                .is_some()
-                || instruction
-                    .downcast_ref::<ApplySorafsRepairTaskAction>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<SubmitSorafsRepairAppeal>()
-                    .is_some()
-        }
-        SignerRoleV1::Reserve => {
-            instruction
-                .downcast_ref::<RegisterSorafsReserveAccount>()
-                .is_some()
-                || instruction
-                    .downcast_ref::<RequestSorafsReserveMovement>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<DecideSorafsReserveMovement>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<ChargeSorafsReserveRent>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<AdvanceSorafsReserveLifecycle>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<DrawSorafsReserveCredit>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<RepaySorafsReserveCredit>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<SubmitSorafsReserveAppeal>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<DecideSorafsReserveAppeal>()
-                    .is_some()
-        }
-        SignerRoleV1::Orderbook => {
-            instruction.downcast_ref::<MatchSorafsOrderbook>().is_some()
-                || instruction
-                    .downcast_ref::<MaintainSorafsOrderbook>()
-                    .is_some()
-                || instruction
-                    .downcast_ref::<RecordSorafsOrderbookSettlementReceipt>()
-                    .is_some()
-        }
-        SignerRoleV1::Promotion
-        | SignerRoleV1::GovernanceDag
-        | SignerRoleV1::PotrGateway
-        | SignerRoleV1::PotrProvider
-        | SignerRoleV1::BillingStatement
-        | SignerRoleV1::EvidenceViewer
-        | SignerRoleV1::StreamToken
-        | SignerRoleV1::PopCredentials
-        | SignerRoleV1::ReleaseManifest => false,
-    }
-}
 fn binding_from_recovered(
     recovered: &RecoveredJournalV1,
 ) -> Result<SoftwareSignerPublicBindingV1, SoftwareSignerErrorV1> {

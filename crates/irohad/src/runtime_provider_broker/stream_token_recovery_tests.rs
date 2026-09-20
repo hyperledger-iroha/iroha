@@ -57,7 +57,7 @@ fn lose_one_sign(fixture: &mut Fixture) -> Vec<u8> {
     fixture.peer.shutdown(std::net::Shutdown::Write).unwrap();
     assert_eq!(
         signing.join().unwrap().err(),
-        Some(StreamTokenHardwareCallErrorV1::AmbiguousCompletion)
+        Some(StreamTokenSignerCallErrorV1::AmbiguousCompletion)
     );
     assert_fenced(&fixture.signer, &fixture.reconnect_listener, 3);
     receipt
@@ -69,14 +69,14 @@ fn ambiguous_sign_allows_only_explicit_exact_recovery_and_never_clears_sign_latc
     let receipt = lose_one_sign(&mut fixture);
     let mut other_body = token_body();
     other_body.token_id = "1123456789abcdef0123456789abcdef".to_owned();
-    let other_expected = stream_token_hardware_test_support::expected(&other_body);
+    let other_expected = stream_token_signer_test_support::expected(&other_body);
     assert_eq!(
         fixture.signer.recover(&expected(), &other_body).err(),
-        Some(StreamTokenHardwareCallErrorV1::Refused)
+        Some(StreamTokenSignerCallErrorV1::Refused)
     );
     assert_eq!(
         fixture.signer.recover(&other_expected, &other_body).err(),
-        Some(StreamTokenHardwareCallErrorV1::Refused)
+        Some(StreamTokenSignerCallErrorV1::Refused)
     );
     assert_fenced(&fixture.signer, &fixture.reconnect_listener, 3);
     let client = fixture.signer.clone();
@@ -114,7 +114,7 @@ fn recovery_failure_and_substituted_receipt_cannot_reopen_signing() {
                 other_body.signing_payload_bytes().unwrap(),
             )
             .unwrap();
-            let receipt = stream_token_hardware_test_support::receipt(&other.payload)
+            let receipt = stream_token_signer_test_support::receipt(&other.payload)
                 .encode_canonical()
                 .unwrap();
             write_response(&mut peer, &other, receipt);
@@ -124,9 +124,9 @@ fn recovery_failure_and_substituted_receipt_cannot_reopen_signing() {
         assert_eq!(
             recovering.join().unwrap().err(),
             Some(if substituted {
-                StreamTokenHardwareCallErrorV1::InvalidResponse
+                StreamTokenSignerCallErrorV1::InvalidResponse
             } else {
-                StreamTokenHardwareCallErrorV1::Unavailable
+                StreamTokenSignerCallErrorV1::Unavailable
             })
         );
         assert_fenced(&fixture.signer, &fixture.reconnect_listener, 3);
@@ -145,16 +145,16 @@ fn observer_remains_a_separate_exact_read_after_sign_is_ambiguous() {
         observer_handle: fixture
             .signer
             .binding
-            .stream_token_hardware_binding
+            .stream_token_signer_binding
             .as_ref()
             .unwrap()
             .observer_handle()
             .to_owned(),
     };
     assert_ne!(observer.handle(), fixture.signer.handle());
-    let query = stream_token_hardware_test_support::query();
+    let query = stream_token_signer_test_support::query();
     let expected_query = query.encode_canonical().unwrap();
-    let observation = stream_token_hardware_test_support::state_claim(&query)
+    let observation = stream_token_signer_test_support::state_claim(&query)
         .encode_canonical()
         .unwrap();
     let raw = StreamTokenObserverReplyV1::current(
@@ -187,9 +187,9 @@ fn observer_remains_a_separate_exact_read_after_sign_is_ambiguous() {
 #[test]
 fn observer_closed_forms_and_query_network_challenge_are_exact() {
     let binding = token_signer_binding();
-    let query = stream_token_hardware_test_support::query();
+    let query = stream_token_signer_test_support::query();
     let payload = query.encode_canonical().unwrap();
-    let claim = stream_token_hardware_test_support::state_claim(&query);
+    let claim = stream_token_signer_test_support::state_claim(&query);
     let bytes = claim.encode_canonical().unwrap();
     let completed = StreamTokenObserverReplyV1::completed(bytes.clone()).unwrap();
     assert_eq!(
@@ -237,7 +237,7 @@ fn observer_closed_forms_and_query_network_challenge_are_exact() {
 fn stream_token_full_binding_network_is_checked_at_handshake_and_operation_admission() {
     let binding = token_signer_binding();
     let chain = binding
-        .stream_token_hardware_binding
+        .stream_token_signer_binding
         .as_ref()
         .unwrap()
         .custody()
@@ -297,7 +297,7 @@ fn stream_token_wire_leaf_ceilings_fit_finite_operation_admission() {
         if record.len() == SIGNER_CUSTODY_MAX_BYTES_V1 && observation.len() == SIGNER_STREAM_TOKEN_EVIDENCE_MAX_BYTES_V1)
     );
     let binding = token_signer_binding();
-    let query = stream_token_hardware_test_support::query();
+    let query = stream_token_signer_test_support::query();
     let request = make_operation_request(
         TEST_SESSION_ID,
         1,
@@ -311,7 +311,7 @@ fn stream_token_wire_leaf_ceilings_fit_finite_operation_admission() {
     // measure transport admission independently of the caller's authenticated evidence verifier.
     let small = StreamTokenObserverReplyV1::current(
         vec![0xa9; 32],
-        stream_token_hardware_test_support::state_claim(&query)
+        stream_token_signer_test_support::state_claim(&query)
             .encode_canonical()
             .unwrap(),
     )
@@ -448,7 +448,7 @@ fn stream_token_wire_leaf_ceilings_fit_finite_operation_admission() {
     assert_eq!(
         StreamTokenObserverReplyV1::current(vec![0; SIGNER_CUSTODY_MAX_BYTES_V1 + 1], vec![1])
             .err(),
-        Some(StreamTokenHardwareCallErrorV1::InvalidResponse)
+        Some(StreamTokenSignerCallErrorV1::InvalidResponse)
     );
     assert_eq!(
         StreamTokenObserverReplyV1::completed(vec![
@@ -456,12 +456,12 @@ fn stream_token_wire_leaf_ceilings_fit_finite_operation_admission() {
             SIGNER_STREAM_TOKEN_EVIDENCE_MAX_BYTES_V1 + 1
         ])
         .err(),
-        Some(StreamTokenHardwareCallErrorV1::InvalidResponse)
+        Some(StreamTokenSignerCallErrorV1::InvalidResponse)
     );
     assert_eq!(
-        StreamTokenHardwareReceiptV1::new(vec![0; SIGNER_STREAM_TOKEN_RECEIPT_MAX_BYTES_V1 + 1])
+        StreamTokenSignerReceiptV1::new(vec![0; SIGNER_STREAM_TOKEN_RECEIPT_MAX_BYTES_V1 + 1])
             .err(),
-        Some(StreamTokenHardwareCallErrorV1::InvalidResponse)
+        Some(StreamTokenSignerCallErrorV1::InvalidResponse)
     );
     let (mut sender, mut receiver) = UnixStream::pair().unwrap();
     sender
@@ -484,7 +484,7 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
         recoveries: AtomicU64,
         original: Mutex<Option<([u8; 32], Vec<u8>)>>,
     }
-    impl StreamTokenHardwareClientV1 for Hardware {
+    impl StreamTokenSignerClientV1 for Hardware {
         fn handle(&self) -> &str {
             "hsm://sorafs/stream-token/primary-a"
         }
@@ -492,30 +492,30 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
             &self,
             expected: &SignerStreamTokenExpectedV1,
             body: &sorafs_manifest::StreamTokenBodyV1,
-        ) -> Result<StreamTokenHardwareReceiptV1, StreamTokenHardwareCallErrorV1> {
+        ) -> Result<StreamTokenSignerReceiptV1, StreamTokenSignerCallErrorV1> {
             assert_eq!(
                 expected,
-                &stream_token_hardware_test_support::expected(body)
+                &stream_token_signer_test_support::expected(body)
             );
             self.signs.fetch_add(1, Ordering::SeqCst);
             let bytes =
-                stream_token_hardware_test_support::receipt(&body.signing_payload_bytes().unwrap())
+                stream_token_signer_test_support::receipt(&body.signing_payload_bytes().unwrap())
                     .encode_canonical()
                     .unwrap();
             let mut original = self.original.lock().unwrap();
             assert!(original.is_none(), "the fixture signs only once");
             *original = Some((expected.operation_id(), bytes.clone()));
-            StreamTokenHardwareReceiptV1::new(bytes)
+            StreamTokenSignerReceiptV1::new(bytes)
         }
 
         fn recover(
             &self,
             expected: &SignerStreamTokenExpectedV1,
             body: &sorafs_manifest::StreamTokenBodyV1,
-        ) -> Result<StreamTokenHardwareReceiptV1, StreamTokenHardwareCallErrorV1> {
+        ) -> Result<StreamTokenSignerReceiptV1, StreamTokenSignerCallErrorV1> {
             assert_eq!(
                 expected,
-                &stream_token_hardware_test_support::expected(body)
+                &stream_token_signer_test_support::expected(body)
             );
             self.recoveries.fetch_add(1, Ordering::SeqCst);
             let original = self.original.lock().unwrap();
@@ -523,7 +523,7 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
                 .as_ref()
                 .expect("read only a previously stored receipt");
             assert_eq!(*operation, expected.operation_id());
-            StreamTokenHardwareReceiptV1::new(bytes.clone())
+            StreamTokenSignerReceiptV1::new(bytes.clone())
         }
     }
 
@@ -537,18 +537,18 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
         fn observe(
             &self,
             query: &SignerStreamTokenObservationRequestV1,
-        ) -> Result<StreamTokenObserverReplyV1, StreamTokenHardwareCallErrorV1> {
-            assert_eq!(query, &stream_token_hardware_test_support::query());
+        ) -> Result<StreamTokenObserverReplyV1, StreamTokenSignerCallErrorV1> {
+            assert_eq!(query, &stream_token_signer_test_support::query());
             self.reads.fetch_add(1, Ordering::SeqCst);
             StreamTokenObserverReplyV1::current(
                 vec![0xab; 32],
-                stream_token_hardware_test_support::state_claim(query)
+                stream_token_signer_test_support::state_claim(query)
                     .encode_canonical()
                     .unwrap(),
             )
         }
     }
-    let hardware = Arc::new(Hardware {
+    let signer_backend = Arc::new(Hardware {
         signs: AtomicU64::new(0),
         recoveries: AtomicU64::new(0),
         original: Mutex::new(None),
@@ -559,18 +559,18 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
     let binding = token_signer_binding();
     for backends in [
         RuntimeProviderBrokerBackendsV1::new(),
-        RuntimeProviderBrokerBackendsV1::new().with_stream_token_hardware_client(hardware.clone()),
+        RuntimeProviderBrokerBackendsV1::new().with_stream_token_signer_client(signer_backend.clone()),
         RuntimeProviderBrokerBackendsV1::new().with_stream_token_state_observer(observer.clone()),
     ] {
         assert!(
-            make_server_observation(&binding, &backends).is_err(),
+            make_server_observation(network_id(), &binding, &backends).is_err(),
             "one slot needs both separate clients"
         );
     }
     let backends = RuntimeProviderBrokerBackendsV1::new()
-        .with_stream_token_hardware_client(hardware.clone())
+        .with_stream_token_signer_client(signer_backend.clone())
         .with_stream_token_state_observer(observer.clone());
-    let observed = make_server_observation(&binding, &backends).unwrap();
+    let observed = make_server_observation(network_id(), &binding, &backends).unwrap();
     let state = singleton_state(
         "stream-token-mutation-test-chain",
         binding.clone(),
@@ -603,7 +603,7 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
         returned[0], returned[1],
         "read-only recovery returns the same sole raw canonical receipt"
     );
-    let query = stream_token_hardware_test_support::query();
+    let query = stream_token_signer_test_support::query();
     let payload = query.encode_canonical().unwrap();
     let request = make_operation_request(
         TEST_SESSION_ID,
@@ -632,8 +632,8 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
     .unwrap();
     let result = dispatch_server_operation(&state, &request).unwrap();
     validate_stream_token_metadata_result(&binding, &result).unwrap();
-    assert_eq!(hardware.signs.load(Ordering::SeqCst), 1);
-    assert_eq!(hardware.recoveries.load(Ordering::SeqCst), 1);
+    assert_eq!(signer_backend.signs.load(Ordering::SeqCst), 1);
+    assert_eq!(signer_backend.recoveries.load(Ordering::SeqCst), 1);
     assert_eq!(
         observer.reads.load(Ordering::SeqCst),
         1,
@@ -651,7 +651,7 @@ fn completed_observer_reply_preserves_only_raw_exact_phase_evidence() {
     };
     let binding = token_signer_binding();
     let expected = expected();
-    let mut query = stream_token_hardware_test_support::query();
+    let mut query = stream_token_signer_test_support::query();
     query.phase = SignerStreamTokenObservationPhaseV1::BeforeRelease;
     query.subject = SignerStreamTokenObservationRequestSubjectV1::CompletedOperation {
         binding_digest: expected.binding_digest(),
@@ -661,8 +661,8 @@ fn completed_observer_reply_preserves_only_raw_exact_phase_evidence() {
         receipt_digest: [0xac; 32],
         signatures_digest: [0xad; 32],
     };
-    let receipt = stream_token_hardware_test_support::receipt(&signing_payload());
-    let mut observation = stream_token_hardware_test_support::state_claim(&query);
+    let receipt = stream_token_signer_test_support::receipt(&signing_payload());
+    let mut observation = stream_token_signer_test_support::state_claim(&query);
     observation.body.subject = SignerStreamTokenStateSubjectV1::CompletedOperation {
         binding_digest: expected.binding_digest(),
         operation_id: expected.operation_id(),
@@ -712,7 +712,7 @@ fn stream_token_decoded_receipt_signatures_are_scrubbed_on_success_and_every_rej
     .unwrap();
     let expected = expected();
     for fault in 0..4 {
-        let mut receipt = stream_token_hardware_test_support::receipt(&request.payload);
+        let mut receipt = stream_token_signer_test_support::receipt(&request.payload);
         match fault {
             0 => {}
             1 => {

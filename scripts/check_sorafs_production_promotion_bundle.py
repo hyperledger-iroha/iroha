@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -26,10 +27,8 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import run_sorafs_production_readiness as promotion_runner  # noqa: E402
 import run_sorafs_production_readiness_negative_archive as negative_runner  # noqa: E402
-import sorafs_software_signer_evidence as software_signer_evidence  # noqa: E402
-from check_sorafs_l1_resilience_qualification import (  # noqa: E402
-    AUTHENTICATION_FIELDS,
-)
+import sorafs_final_promotion_cosign as final_promotion_cosign  # noqa: E402
+import sorafs_final_promotion_evidence as final_promotion_evidence  # noqa: E402
 from check_sorafs_production_readiness import (  # noqa: E402
     MAX_SUMMARY_BYTES,
     canonical_lower_hex,
@@ -61,9 +60,10 @@ PROMOTION_ATTESTATION_SCOPE = "production-promotion-bundle"
 PROMOTION_PROVENANCE_SIGNATURE_DOMAIN = (
     b"iroha:sorafs:production-readiness:production-promotion-provenance:v1\x00"
 )
+PROMOTION_COSIGN_SUBJECT_DOMAIN = (
+    b"iroha:sorafs:production-readiness:production-promotion-cosign-subject:v1\x00"
+)
 REQUIRED_SIGNING_PROVIDER = "authenticated_external_signer"
-REQUIRED_SIGNING_BACKEND = "software"
-REQUIRED_SIGNER_QUALIFICATION = "software-key-qualified"
 DEFAULT_MAX_PROVENANCE_AGE_SECS = 14 * 24 * 60 * 60
 MAX_TIMESTAMP = (1 << 63) - 1
 MAX_PROMOTION_PROVENANCE_BYTES = 256 * 1024
@@ -75,9 +75,10 @@ PROMOTION_PROVENANCE_FIELDS = frozenset(
         "status",
         "attestation_scope",
         "generated_at_unix",
+        "chain_id",
+        "network_id_hex",
+        "deployment_id",
         "signing_provider",
-        "signing_backend",
-        "signer_qualification",
         "baseline_input_count",
         "baseline_input_set_sha256",
         "negative_archive_manifest_sha256",
@@ -96,6 +97,15 @@ PROMOTION_PROVENANCE_FIELDS = frozenset(
         "errors",
     }
 )
+AUTHENTICATION_FIELDS = frozenset(
+    {
+        "kind", "algorithm", "service_id", "administrator_id",
+        "key_revision", "policy_revision", "policy_digest_sha256",
+        "public_key_fingerprint_sha256", "signature_hex",
+    }
+)
+PROMOTION_COSIGN_SUBJECT_FIELDS = PROMOTION_PROVENANCE_FIELDS - {"cosign_bundle_sha256"}
+
 PROMOTION_SUMMARY_FIELDS = frozenset(
     {
         "schema",
@@ -103,7 +113,6 @@ PROMOTION_SUMMARY_FIELDS = frozenset(
         "attestation_scope",
         "externally_authenticated",
         "promotion_eligible",
-        "signer_qualification",
         "baseline_input_count",
         "baseline_input_set_sha256",
         "positive_output_sha256",
@@ -120,6 +129,14 @@ PROMOTION_SUMMARY_FIELDS = frozenset(
         "errors",
     }
 )
+
+
+@dataclass(frozen=True)
+class CosignBundleEvidence:
+    """Exact captured bundle bytes and their digest; this is not a verification result."""
+
+    raw: bytes
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -397,38 +414,33 @@ def load_negative_archive(
 
 def load_cosign_bundle(
     path: Path | None,
-) -> tuple[str | None, list[str]]:
-    """Open the exact non-empty JSON cosign bundle named by provenance."""
+) -> tuple[CosignBundleEvidence | None, list[str]]:
+    """Capture the exact bounded Sigstore v0.3 bundle once for binding and verification."""
 
     if path is None:
         return None, ["production promotion requires an exact cosign bundle"]
-    errors: list[str] = []
-    loaded = _load_json_bytes(
-        path,
-        MAX_COSIGN_BUNDLE_BYTES,
-        label="cosign provenance bundle",
-        errors=errors,
-    )
-    if loaded is None:
-        return None, errors
-    payload, raw = loaded
-    if not payload:
-        return None, ["cosign provenance bundle must be a non-empty JSON object"]
-    return _sha256(raw), []
+    try:
+        raw = read_evidence_bytes(path, MAX_COSIGN_BUNDLE_BYTES)
+        final_promotion_cosign.validate_cosign_bundle(raw)
+    except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
+        return None, ["cosign provenance bundle must be a bounded strict JSON object in Sigstore v0.3 format"]
+    return CosignBundleEvidence(raw, _sha256(raw)), []
 
 
-def promotion_provenance_signing_payload(payload: Mapping[str, Any]) -> bytes:
-    """Return the exact domain-separated bytes the external signer authenticates."""
-
+def _unsigned_promotion_body(payload: Mapping[str, Any]) -> dict[str, Any]:
     if set(payload) != PROMOTION_PROVENANCE_FIELDS:
         raise ValueError("production promotion provenance has the wrong exact schema")
     unsigned = dict(payload)
     authentication = unsigned.get("authentication")
-    if not isinstance(authentication, Mapping):
-        raise ValueError("production promotion authentication must be an object")
+    if not isinstance(authentication, Mapping) or set(authentication) != AUTHENTICATION_FIELDS:
+        raise ValueError("production promotion authentication has the wrong exact schema")
     unsigned_authentication = dict(authentication)
     unsigned_authentication.pop("signature_hex", None)
     unsigned["authentication"] = unsigned_authentication
+    return unsigned
+
+
+def _encode_promotion_subject(unsigned: Mapping[str, Any], domain: bytes) -> bytes:
     try:
         encoded = json.dumps(
             unsigned,
@@ -441,7 +453,31 @@ def promotion_provenance_signing_payload(payload: Mapping[str, Any]) -> bytes:
         raise ValueError(
             "production promotion provenance is not canonically encodable"
         ) from error
-    return PROMOTION_PROVENANCE_SIGNATURE_DOMAIN + encoded
+    message = domain + encoded
+    if len(message) > MAX_PROMOTION_PROVENANCE_BYTES:
+        raise ValueError("production promotion signing statement exceeds the byte limit")
+    return message
+
+
+def promotion_provenance_signing_payload(payload: Mapping[str, Any]) -> bytes:
+    """Return the exact domain-separated bytes the configured signer authenticates."""
+
+    return _encode_promotion_subject(_unsigned_promotion_body(payload), PROMOTION_PROVENANCE_SIGNATURE_DOMAIN)
+
+
+def promotion_cosign_subject_bytes(unsigned: Mapping[str, Any]) -> bytes:
+    """Encode the closed 23-field subject before any bundle or signer signature exists.
+
+    This codec checks the exact unsigned shape; the caller owns evidence and trust validation.
+    Every final-provenance field except its bundle hash and detached signature remains bound.
+    """
+
+    if not isinstance(unsigned, Mapping) or set(unsigned) != PROMOTION_COSIGN_SUBJECT_FIELDS:
+        raise ValueError("promotion cosign subject has the wrong exact schema")
+    authentication = unsigned.get("authentication")
+    if not isinstance(authentication, Mapping) or set(authentication) != AUTHENTICATION_FIELDS - {"signature_hex"}:
+        raise ValueError("promotion cosign authentication has the wrong exact schema")
+    return _encode_promotion_subject(unsigned, PROMOTION_COSIGN_SUBJECT_DOMAIN)
 
 
 def _expected_provenance_binding(
@@ -463,6 +499,55 @@ def _expected_provenance_binding(
     }
 
 
+def _canonical_identity(value: Any) -> str | None:
+    """Match the Manifest custody identity grammar without normalizing supplied text."""
+
+    return (
+        value
+        if isinstance(value, str)
+        and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value) is not None
+        and not {
+            "null", "mock", "test", "dev", "demo", "fake", "dummy", "placeholder",
+        }.intersection(re.split(r"[^A-Za-z0-9]+", value.lower()))
+        else None
+    )
+
+
+def _canonical_chain_id(value: Any) -> str | None:
+    """Match the shared exact ASCII chain-label grammar."""
+
+    return (
+        value
+        if isinstance(value, str)
+        and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?", value)
+        is not None
+        else None
+    )
+
+
+def _validate_signer(
+    row: Mapping[str, Any], errors: list[str],
+) -> dict[str, Any]:
+    """Validate public coordinates; only the native receipt establishes signer custody."""
+
+    result = {f"signer_{field}": row.get(field) for field in (
+        "service_id", "administrator_id", "key_revision",
+        "policy_revision", "policy_digest_sha256",
+    )}
+    for field in ("service_id", "administrator_id"):
+        if _canonical_identity(row.get(field)) is None:
+            errors.append(f"final promotion signer {field} must be a canonical custody identity")
+    if row.get("service_id") == row.get("administrator_id"):
+        errors.append("final promotion signer service_id and administrator_id must differ")
+    for field in ("key_revision", "policy_revision"):
+        value = row.get(field)
+        if type(value) is not int or not 0 < value <= (1 << 64) - 1:
+            errors.append(f"final promotion signer {field} must be in 1..2^64-1")
+    if _canonical_nonzero_sha256(row.get("policy_digest_sha256")) is None:
+        errors.append("final promotion signer policy_digest_sha256 must be non-zero canonical SHA-256")
+    return result
+
+
 def _validate_operator_signer_tuple(
     *,
     service_id: str | None,
@@ -472,7 +557,6 @@ def _validate_operator_signer_tuple(
     policy_digest_sha256: str | None,
 ) -> tuple[dict[str, Any], list[str]]:
     expected = {
-        "signer_backend": REQUIRED_SIGNING_BACKEND,
         "signer_service_id": service_id,
         "signer_administrator_id": administrator_id,
         "signer_key_revision": key_revision,
@@ -480,7 +564,7 @@ def _validate_operator_signer_tuple(
         "signer_policy_digest_sha256": policy_digest_sha256,
     }
     errors: list[str] = []
-    software_signer_evidence.validate_aggregate_software_signer(expected, errors)
+    _validate_signer({field.removeprefix("signer_"): value for field, value in expected.items()}, errors)
     return expected, errors
 
 
@@ -498,10 +582,13 @@ def validate_promotion_provenance(
     trusted_policy_digest_sha256: str | None,
     trusted_certificate_identity: str | None,
     trusted_oidc_issuer: str | None,
+    trusted_chain_id: str | None,
+    trusted_network_id_hex: str | None,
+    trusted_deployment_id: str | None,
     now_unix: int,
     max_provenance_age_secs: int,
 ) -> list[str]:
-    """Authenticate the exact software-signer and cosign/OIDC binding."""
+    """Validate exact final-provenance structure and signature before native receipt verification."""
 
     if not isinstance(payload, Mapping):
         return ["production promotion provenance must be an object"]
@@ -515,8 +602,6 @@ def validate_promotion_provenance(
         "status": "verified",
         "attestation_scope": PROMOTION_ATTESTATION_SCOPE,
         "signing_provider": REQUIRED_SIGNING_PROVIDER,
-        "signing_backend": REQUIRED_SIGNING_BACKEND,
-        "signer_qualification": REQUIRED_SIGNER_QUALIFICATION,
         "oidc_identity_status": "verified",
         "cosign_provenance_status": "verified",
     }
@@ -527,6 +612,16 @@ def validate_promotion_provenance(
             )
     if payload.get("errors") != []:
         errors.append("production promotion provenance errors must be empty")
+
+    for field, expected, canonical in (
+        ("chain_id", trusted_chain_id, _canonical_chain_id),
+        ("network_id_hex", trusted_network_id_hex, _canonical_nonzero_sha256),
+        ("deployment_id", trusted_deployment_id, _canonical_identity),
+    ):
+        if canonical(expected) is None or canonical(payload.get(field)) is None:
+            errors.append(f"production promotion {field} must have canonical independent trust")
+        elif payload.get(field) != expected:
+            errors.append(f"production promotion {field} must match operator trust")
 
     generated_at = payload.get("generated_at_unix")
     if (
@@ -599,14 +694,13 @@ def validate_promotion_provenance(
                 "production promotion authentication.algorithm must be `ed25519`"
             )
         signer_row = {
-            "backend": authentication.get("backend"),
             "service_id": authentication.get("service_id"),
             "administrator_id": authentication.get("administrator_id"),
             "key_revision": authentication.get("key_revision"),
             "policy_revision": authentication.get("policy_revision"),
             "policy_digest_sha256": authentication.get("policy_digest_sha256"),
         }
-        observed_signer = software_signer_evidence.validate_foundational_software_signer(
+        observed_signer = _validate_signer(
             signer_row,
             errors,
         )
@@ -702,6 +796,20 @@ def _cross_validate_positive_and_negative(
     return errors
 
 
+def validate_inner_approval_chain() -> list[str]:
+    """Keep production closed until every prerequisite's custody proof is independently verified."""
+
+    # TODO: Migrate foundational, topology, resilience and lane-inventory authorities together.
+    # Their aggregate/replay schemas carry signatures and digest summaries,
+    # not independently verified purpose-owned signer custody and completed-operation proofs.
+    # Replacing those labels, or signing their hashes with the outer signing key, cannot supply
+    # the missing authority. Replace this gate only with verification of all four actual contracts.
+    return [
+        "production promotion remains blocked: foundational, topology, resilience and lane-inventory "
+        "signer custody proofs are not integrated; complete and verify the inner approval chain"
+    ]
+
+
 def validate_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
     """Validate every conjunct and return one payload-free promotion summary."""
 
@@ -714,16 +822,14 @@ def validate_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]
     errors.extend(f"positive replay: {error}" for error in positive_errors)
     negative, negative_errors = load_negative_archive(args.negative_archive_dir)
     errors.extend(f"negative archive: {error}" for error in negative_errors)
-    cosign_sha256, cosign_errors = load_cosign_bundle(args.cosign_bundle)
+    cosign_bundle, cosign_errors = load_cosign_bundle(args.cosign_bundle)
+    cosign_sha256 = cosign_bundle.sha256 if cosign_bundle is not None else None
     errors.extend(cosign_errors)
 
-    trusted_key_errors: list[str] = []
-    trusted_public_key = software_signer_evidence.parse_foundational_signer_public_key(
-        args.provenance_verification_public_key_hex,
-        trusted_key_errors,
-        path="--provenance-verification-public-key-hex",
-    )
-    errors.extend(trusted_key_errors)
+    trusted_key_hex = _canonical_nonzero_sha256(args.provenance_verification_public_key_hex)
+    trusted_public_key = bytes.fromhex(trusted_key_hex) if trusted_key_hex else None
+    if trusted_public_key is None:
+        errors.append("--provenance-verification-public-key-hex must be non-zero canonical 32-byte hex")
     certificate_identity = (
         args.provenance_certificate_identity
         if canonical_public_provenance_url(args.provenance_certificate_identity)
@@ -785,11 +891,29 @@ def validate_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]
                 ),
                 trusted_certificate_identity=certificate_identity,
                 trusted_oidc_issuer=oidc_issuer,
+                trusted_chain_id=args.provenance_chain_id,
+                trusted_network_id_hex=args.provenance_network_id_hex,
+                trusted_deployment_id=args.provenance_deployment_id,
                 now_unix=args.now_unix,
                 max_provenance_age_secs=args.max_provenance_age_secs,
             )
         )
 
+    # The native adapter receives only the structurally valid, authenticated canonical subject.
+    # It independently pins the executable, policy, trust, current observation and complete receipt.
+    if not errors and provenance_payload is not None and trusted_public_key is not None:
+        statement = promotion_provenance_signing_payload(provenance_payload)
+        signature = bytes.fromhex(provenance_payload["authentication"]["signature_hex"])
+        errors.extend(final_promotion_evidence.verify_final_promotion_receipt(
+            args, statement, signature, trusted_public_key,
+        ))
+        if not errors and cosign_bundle is not None:
+            unsigned_subject = _unsigned_promotion_body(provenance_payload)
+            del unsigned_subject["cosign_bundle_sha256"]
+            errors.extend(final_promotion_cosign.verify_final_promotion_cosign(
+                args, promotion_cosign_subject_bytes(unsigned_subject), cosign_bundle.raw,
+            ))
+    errors.extend(validate_inner_approval_chain())
     qualified = not errors
     summary: dict[str, Any] = {
         "schema": PROMOTION_SUMMARY_SCHEMA,
@@ -797,9 +921,6 @@ def validate_bundle(args: argparse.Namespace) -> tuple[dict[str, Any], list[str]
         "attestation_scope": PROMOTION_ATTESTATION_SCOPE,
         "externally_authenticated": qualified,
         "promotion_eligible": qualified,
-        "signer_qualification": (
-            REQUIRED_SIGNER_QUALIFICATION if qualified else None
-        ),
         "baseline_input_count": positive.input_count if positive else 0,
         "baseline_input_set_sha256": (
             positive.input_set_sha256 if positive else None
@@ -837,7 +958,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = EvidenceArgumentParser(
         description=(
             "Conjunctively verify the final SoraFS positive replay, fixed "
-            "negative archive, and external software-signer/cosign provenance."
+            "negative archive, and signer receipt/cosign provenance."
         ),
     )
     parser.add_argument("--first-aggregate", required=True, type=Path)
@@ -860,7 +981,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--provenance-signer-service-id",
-        help="Operator-trusted external software signer service identity.",
+        help="Operator-trusted signer service identity.",
     )
     parser.add_argument(
         "--provenance-signer-administrator-id",
@@ -883,6 +1004,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--provenance-oidc-issuer",
         help="Operator-trusted public HTTPS OIDC issuer.",
     )
+    for option in (
+        "--provenance-receipt-verifier", "--provenance-signer-policy",
+        "--provenance-custody-trust", "--provenance-completed-operation-state",
+        "--provenance-operation-receipt",
+        "--provenance-cosign-verifier", "--provenance-cosign-trusted-root",
+    ):
+        parser.add_argument(option, required=True, type=Path)
+    for option in (
+        "--provenance-receipt-verifier-sha256", "--provenance-signer-policy-sha256",
+        "--provenance-custody-trust-sha256", "--provenance-chain-id",
+        "--provenance-network-id-hex", "--provenance-deployment-id",
+        "--provenance-cosign-verifier-sha256", "--provenance-cosign-trusted-root-sha256",
+    ):
+        parser.add_argument(option, required=True)
     parser.add_argument("--now-unix", required=True, type=positive_int_arg)
     parser.add_argument(
         "--max-provenance-age-secs",

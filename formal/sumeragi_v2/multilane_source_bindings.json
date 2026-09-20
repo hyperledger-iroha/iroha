@@ -13622,6 +13622,23 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
           "kind": "method",
+          "symbol": "RetainedBodyValidationService::preflight_marker",
+          "required_tokens": [
+            "&self",
+            "let candidate = self",
+            ".find(|row| row.subject == durable.subject())",
+            "if candidate.is_some_and(|row| row.owner.is_none())",
+            "return Err(CarrierCustodyError::MissingOwner)",
+            "!self.markers.iter().any(|row| row.durable == *durable)",
+            "self.markers.len() == self.limit",
+            "candidate.is_none() && self.candidates.len() == self.limit",
+            "return Err(CarrierCustodyError::Capacity)",
+            "Ok(())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
           "symbol": "RetainedBodyValidationService::prepare_marker",
           "required_tokens": [
             "if marker.is_none() && self.markers.len() == self.limit",
@@ -13629,8 +13646,16 @@
             "return Err(CarrierCustodyError::MissingOwner)",
             "if self.candidates.len() == self.limit",
             "return Err(CarrierCustodyError::Capacity)",
+            "let index = self.candidates.len()",
+            "self.candidates.push(Candidate {",
+            "subject: durable.subject()",
+            "owner: None",
             "let owner = match self.validator.prepare(context, body)",
-            "owner: Some(owner)",
+            "let vacant = self.candidates.pop().expect(\"reserved candidate descriptor\")",
+            "debug_assert_eq!(vacant.subject, durable.subject())",
+            "debug_assert!(vacant.owner.is_none())",
+            "return Ok(CarrierMarkerPreparation::ValidationError(error))",
+            "self.candidates[index].owner = Some(owner)",
             "if !owner.matches_candidate(context, body)",
             "return Err(CarrierCustodyError::Identity)",
             "let commitment = match owner.ready_commitment()",
@@ -13691,6 +13716,9 @@
           "symbol": "V2BodyStore::execute_retained_durable_validation",
           "required_tokens": [
             "if !service.matches_store(&self.instance_identity())",
+            "if !self.rejected.contains_key(&key)",
+            "service.preflight_marker(&durable)?",
+            "self.load_validation_envelope(&durable, expected_manifest_hash)?",
             "service.prepare_marker(",
             "already_validated.is_some() || reused.is_some()",
             "let validated = self.persist_validated_receipt(&durable, commitment)?",

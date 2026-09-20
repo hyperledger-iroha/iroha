@@ -207,7 +207,8 @@ def test_exact_17_inventory_is_deterministic_and_payload_free(tmp_path: Path) ->
     replay_b = MODULE.verify_inventory(inventory, specs, **trust())
     assert MODULE.canonical_file_bytes(replay_a) == MODULE.canonical_file_bytes(replay_b)
     assert replay_a["status"] == "ready"
-    assert replay_a["signer_qualification"] == "software-key-qualified"
+    assert "signer_qualification" not in replay_a
+    assert "backend" not in replay_a["signer"]
 
 
 def test_verified_artifact_status_is_a_canonical_success(tmp_path: Path) -> None:
@@ -297,17 +298,18 @@ def test_stale_and_future_lane_evidence_fail(tmp_path: Path) -> None:
         )
 
 
-def test_nonsoftware_backend_fails_even_with_a_fresh_signature(tmp_path: Path) -> None:
+@pytest.mark.parametrize("backend", ["software", "hsm", "hardware"])
+def test_backend_claim_fails_even_with_a_fresh_signature(tmp_path: Path, backend: str) -> None:
     inventory, specs = finalize(tmp_path)
     unsigned = copy.deepcopy(inventory)
     unsigned["signer"].pop("signature_hex")
-    unsigned["signer"]["backend"] = "hsm"
-    inventory["signer"]["backend"] = "hsm"
+    unsigned["signer"]["backend"] = backend
+    inventory["signer"]["backend"] = backend
     inventory["signer"]["signature_hex"] = sign(
         SEED,
-        MODULE.signing_bytes(unsigned),
+        MODULE.SIGNING_DOMAIN + MODULE.canonical_json_bytes(unsigned),
     ).hex()
-    with pytest.raises(MODULE.InventoryError, match="deterministic summary replay"):
+    with pytest.raises(MODULE.InventoryError, match="wrong exact schema"):
         MODULE.verify_inventory(inventory, specs, **trust())
 
 

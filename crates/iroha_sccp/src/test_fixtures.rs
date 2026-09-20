@@ -106,7 +106,7 @@ pub struct SccpExactTonOutboundTestFixtureV1 {
 }
 /// Complete block plus finality produced only through the exact test signer.
 ///
-/// Private fields keep the parent invariant closed: a height-two fixture can
+/// Private fields keep the parent invariant closed: a same-epoch successor can
 /// inherit only a parent `CommitQC` already bound to both its canonical resultless
 /// proposal and complete result-bearing block wire images by this module.
 #[derive(Clone, Debug)]
@@ -878,7 +878,7 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
         "the finalized header SCCP root must match successful record instructions exactly"
     );
 }
-/// Finalize one complete height-one or height-two block with the test-only Taira roster.
+/// Finalize a complete pre-boundary block in the fixed first epoch with the test-only Taira roster.
 ///
 /// This helper is available only to crate tests or consumers of the existing
 /// `test-fixtures` feature. It provides no caller-selected signing material and
@@ -888,7 +888,7 @@ fn assert_exact_fixture_block_body(block: &SignedBlock) {
 ///
 /// # Panics
 ///
-/// Panics if `block` is outside the exact two-height fixture corridor, has an
+/// Panics if `block` is outside heights 1 through 9 of the fixed first epoch, has an
 /// invalid or non-exact parent, has malformed source/output joins or a stale output cache,
 /// or cannot be bound to a cryptographically valid artifact.
 #[must_use]
@@ -903,8 +903,8 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     let block_header = block.header();
     let height = block_header.height().get();
     assert!(
-        (1..=2).contains(&height),
-        "the exact SCCP finality signer supports fixture heights one and two only"
+        (1..=9).contains(&height),
+        "the exact SCCP finality signer supports only pre-boundary heights in its fixed first epoch"
     );
     assert_exact_fixture_block_body(block);
     let mut keypairs = [
@@ -966,11 +966,17 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             kagemusha_mint_finality_epoch_id,
             kagemusha_mint_finality_epoch_roster,
         },
-        (2, Some(parent_hash), Some(parent)) => {
+        (2..=9, Some(parent_hash), Some(parent)) => {
             assert_exact_finalized_block_fixture(parent);
-            assert_eq!(parent.block().header().height().get(), 1);
+            assert_eq!(
+                parent.block().header().height().get().checked_add(1),
+                Some(height)
+            );
             assert_eq!(parent_hash, parent.block().hash());
-            assert_eq!(parent.proof().finality_artifact.height, 1);
+            assert_eq!(
+                parent.proof().finality_artifact.height.checked_add(1),
+                Some(height)
+            );
             assert!(
                 parent
                     .proof()
@@ -978,9 +984,10 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
                     .height_context
                     .next_epoch_snapshot
                     .is_none(),
-                "the two-height exact corridor does not synthesize an epoch transition"
+                "the exact fixture does not synthesize an epoch transition"
             );
             let parent_context = &parent.proof().finality_artifact.height_context;
+            assert!(height < parent_context.epoch_end_height);
             HeightContext {
                 network_id: parent_context.network_id,
                 protocol_version: PROTOCOL_VERSION,
@@ -1004,7 +1011,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             }
         }
         _ => panic!(
-            "height one requires no parent and height two requires the exact complete parent fixture"
+            "height one requires no parent and every successor requires its exact complete parent"
         ),
     };
     let subject = BlockSubject {
@@ -1071,6 +1078,9 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
     assert_exact_finalized_block_fixture(&finalized);
     finalized
 }
+
+#[cfg(test)]
+mod finality_descendant_tests;
 fn exact_sccp_fixture_block(
     context: SccpOutboundMessageContextV1,
     payload: &SccpPayloadV1,

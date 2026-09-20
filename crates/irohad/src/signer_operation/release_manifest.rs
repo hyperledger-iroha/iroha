@@ -3,8 +3,8 @@
 //! The reviewed manifest and audit predecessor are pinned at construction, never accepted from
 //! signing request fields. Every signature uses the shared purpose-specific canonical contract.
 //! The complete receipt is durably staged before authoritative completion and stays internal until
-//! both journal identity and fresh completed custody are rechecked. Recovery never invokes hardware.
-//! TODO: Wire this producer into the canonical runtime/CLI contract and real hardware/finalized
+//! both journal identity and fresh completed custody are rechecked. Recovery never signs again.
+//! TODO: Wire this producer into the canonical runtime/CLI contract and real signer/finalized
 //! state adapters before retiring all remaining software service paths. This is not deployment
 //! qualification, and its injected test providers cannot qualify production custody.
 
@@ -40,7 +40,7 @@ impl fmt::Display for SignerReleaseManifestErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Receipt(_) => "release manifest receipt binding rejected",
-            Self::Operation(_) => "release manifest hardware operation rejected",
+            Self::Operation(_) => "release manifest signer operation rejected",
             Self::Journal => "release manifest private journal unavailable",
         })
     }
@@ -214,7 +214,7 @@ impl SignerReleaseManifestServiceV1 {
     ///
     /// # Errors
     /// Rejects incomplete reservations, altered journal bytes, payload drift, replaced/revoked
-    /// custody or any changed original completion. Never reserves, commits or invokes hardware.
+    /// custody or any changed original completion. Never reserves, commits or signs again.
     pub fn recover(
         &self,
         manifest: &[u8],

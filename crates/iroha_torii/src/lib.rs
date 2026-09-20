@@ -42086,7 +42086,7 @@ pub struct ToriiRuntimeDeps {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     #[cfg(feature = "app_api")]
-    sorafs_stream_token_hardware_client: Option<Arc<dyn sorafs::StreamTokenHardwareClientV1>>,
+    sorafs_stream_token_signer_client: Option<Arc<dyn sorafs::StreamTokenSignerClientV1>>,
     #[cfg(feature = "app_api")]
     sorafs_stream_token_state_observer: Option<Arc<dyn sorafs::StreamTokenStateObserverClientV1>>,
     #[cfg(feature = "app_api")]
@@ -42215,7 +42215,7 @@ impl ToriiRuntimeDeps {
             soracloud_runtime: None,
             sorafs_node: None,
             #[cfg(feature = "app_api")]
-            sorafs_stream_token_hardware_client: None,
+            sorafs_stream_token_signer_client: None,
             #[cfg(feature = "app_api")]
             sorafs_stream_token_state_observer: None,
             #[cfg(feature = "app_api")]
@@ -42902,132 +42902,8 @@ fn torii_start_binds_before_launching_background_workers() {
     }
 }
 
-#[cfg(feature = "app_api")]
-fn qualify_configured_sorafs_native_transaction_signer_for_startup<S>(
-    role: SorafsNativeTransactionSignerRoleV1,
-    required: bool,
-    configured: Option<&iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding>,
-    provider: Option<Arc<S>>,
-    qualify: impl FnOnce(
-        SorafsNativeTransactionSignerBindingV1,
-        Arc<S>,
-    ) -> Result<Arc<S>, SorafsNativeTransactionSignerQualificationErrorV1>,
-) -> Result<Option<Arc<S>>, String>
-where
-    S: SorafsNativeTransactionSignerProviderV1 + ?Sized,
-{
-    let role_label = role.as_str();
-    match (required, configured.is_some()) {
-        (true, false) => {
-            return Err(format!(
-                "required SoraFS {role_label} signer role is missing its configured binding for storage-enabled durable drain or role generation"
-            ));
-        }
-        (false, true) => {
-            return Err(format!(
-                "inactive SoraFS {role_label} signer role rejects a configured binding without storage-enabled durable drain or role generation"
-            ));
-        }
-        _ => {}
-    }
-    match (configured.is_some(), provider.is_some()) {
-        (true, false) => {
-            return Err(format!(
-                "configured SoraFS {role_label} signer role is missing its runtime provider"
-            ));
-        }
-        (false, true) => {
-            return Err(format!(
-                "unconfigured SoraFS {role_label} signer role rejects an injected runtime provider"
-            ));
-        }
-        _ => {}
-    }
-    let (Some(configured), Some(provider)) = (configured, provider) else {
-        return Ok(None);
-    };
-    if configured.public_key.try_algorithm() != Ok(configured.algorithm) {
-        return Err(format!(
-            "configured SoraFS {role_label} signer binding has a substituted key algorithm"
-        ));
-    }
-    let binding = SorafsNativeTransactionSignerBindingV1::try_new(
-        role,
-        configured.handle.clone(),
-        configured.authority.clone(),
-        configured.public_key.clone(),
-        SorafsNativeTransactionSignerQualificationV1::new(
-            configured.revision,
-            configured.policy_digest,
-        ),
-    )
-    .map_err(|_| format!("configured SoraFS {role_label} signer binding is invalid"))?;
-    qualify(binding, provider).map(Some).map_err(|_| {
-        format!(
-            "SoraFS {role_label} signer provider is substituted, stale, test-marked, unavailable, or unstable"
-        )
-    })
-}
-#[cfg(feature = "app_api")]
-const fn sorafs_native_signer_role_required(
-    storage_enabled: bool,
-    role_generation_enabled: bool,
-) -> bool {
-    storage_enabled || role_generation_enabled
-}
-#[cfg(feature = "app_api")]
-fn preflight_sorafs_native_transaction_signers(
-    config: &Config,
-    runtime_deps: &mut ToriiRuntimeDeps,
-) -> Result<(), String> {
-    let configured = &config.sorafs_storage.native_transaction_signers;
-    let proof_provider = runtime_deps.sorafs_proof_outcome_signer.take();
-    runtime_deps.sorafs_proof_outcome_signer =
-        qualify_configured_sorafs_native_transaction_signer_for_startup(
-            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            sorafs_native_signer_role_required(config.sorafs_storage.enabled, false),
-            configured.proof_outcome.as_ref(),
-            proof_provider,
-            qualify_sorafs_proof_outcome_transaction_signer_v1,
-        )?;
-    let repair_provider = runtime_deps.sorafs_repair_transaction_signer.take();
-    runtime_deps.sorafs_repair_transaction_signer =
-        qualify_configured_sorafs_native_transaction_signer_for_startup(
-            SorafsNativeTransactionSignerRoleV1::Repair,
-            sorafs_native_signer_role_required(
-                config.sorafs_storage.enabled,
-                config.sorafs_repair.enabled,
-            ),
-            configured.repair.as_ref(),
-            repair_provider,
-            qualify_sorafs_repair_transaction_signer_v1,
-        )?;
-    let reserve_provider = runtime_deps.sorafs_reserve_transaction_signer.take();
-    runtime_deps.sorafs_reserve_transaction_signer =
-        qualify_configured_sorafs_native_transaction_signer_for_startup(
-            SorafsNativeTransactionSignerRoleV1::Reserve,
-            sorafs_native_signer_role_required(
-                config.sorafs_storage.enabled,
-                config.sorafs_storage.reserve_worker.enabled,
-            ),
-            configured.reserve.as_ref(),
-            reserve_provider,
-            qualify_sorafs_reserve_transaction_signer_v1,
-        )?;
-    let orderbook_provider = runtime_deps.sorafs_orderbook_transaction_signer.take();
-    runtime_deps.sorafs_orderbook_transaction_signer =
-        qualify_configured_sorafs_native_transaction_signer_for_startup(
-            SorafsNativeTransactionSignerRoleV1::Orderbook,
-            sorafs_native_signer_role_required(
-                config.sorafs_storage.enabled,
-                config.sorafs_storage.orderbook_worker.enabled,
-            ),
-            configured.orderbook.as_ref(),
-            orderbook_provider,
-            qualify_sorafs_orderbook_transaction_signer_v1,
-        )?;
-    Ok(())
-}
+include!("native_transaction_signer_preflight.rs");
+
 #[cfg(feature = "app_api")]
 fn sorafs_signed_governance_binding_matches(
     left: &sorafs_node::config::StorageConfig,
@@ -46020,14 +45896,13 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let mut runtime_deps = runtime_deps;
         #[cfg(feature = "app_api")]
-        preflight_sorafs_native_transaction_signers(&config, &mut runtime_deps).map_err(
-            |error| {
+        preflight_sorafs_native_transaction_signers(network_id, &config, &mut runtime_deps)
+            .map_err(|error| {
                 ToriiBuildError::invalid_runtime_dependency(
                     "sorafs.native_transaction_signers",
                     error,
                 )
-            },
-        )?;
+            })?;
         #[cfg(feature = "app_api")]
         sorafs::stream_token_runtime::preflight_admission_capture(
             &network_id,
@@ -46082,8 +45957,8 @@ impl Torii {
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
-        let shared_sorafs_stream_token_hardware_client =
-            runtime_deps.sorafs_stream_token_hardware_client.clone();
+        let shared_sorafs_stream_token_signer_client =
+            runtime_deps.sorafs_stream_token_signer_client.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_stream_token_state_observer =
             runtime_deps.sorafs_stream_token_state_observer.clone();
@@ -47209,7 +47084,7 @@ impl Torii {
                 &config.sorafs_storage,
                 chain_id.as_ref(),
                 *network_id.as_bytes(),
-                shared_sorafs_stream_token_hardware_client,
+                shared_sorafs_stream_token_signer_client,
                 shared_sorafs_stream_token_state_observer,
                 shared_sorafs_stream_token_approved_anchor,
                 Arc::clone(&state),

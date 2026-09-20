@@ -28,7 +28,6 @@ mod execution_prefix;
     )
 )]
 mod journals;
-pub(crate) use journals::PreparedCarrierJournals;
 pub(crate) use journals::PublishedNativeApply;
 pub(crate) use journals::RetainedCarrier;
 

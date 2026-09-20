@@ -278,12 +278,12 @@ impl PreparedLowDigitStatementV1<'_> {
 
 // Values retain authenticated source order (block, coefficient); projection
 // applies the existing v=coefficient*64+block permutation exactly once.
-struct LowDigitGroupV1 {
-    group: u16,
-    values: ZeroizingT256ScalarVecV1,
+pub(super) struct LowDigitGroupV1 {
+    pub(super) group: u16,
+    pub(super) values: ZeroizingT256ScalarVecV1,
 }
 
-fn read_low_digit_group_v1<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
+pub(super) fn read_low_digit_group_v1<R: crate::vega::MaskedRelaxedRandomSourceV1, K, P>(
     cursor: &mut Phase23GlobalLookupRadixSourceCursorV2<R, K, P>,
     group: u16,
 ) -> Result<LowDigitGroupV1, ZkAmsMkheErrorV1> {

@@ -1,8 +1,7 @@
 /// Read a source transcript against one absolute operation deadline.
 ///
-/// Nonblocking recv followed by bounded poll can drain a closed peer's buffered
-/// trailer and EOF. Reconfiguring `SO_RCVTIMEO`/`SO_SNDTIMEO` instead fails with
-/// `EINVAL` on macOS after peer close, even while authenticated bytes remain.
+/// The common broker I/O owner retains this transcript's original deadline and
+/// drains a closed peer's buffered trailer and EOF without changing timeouts.
 struct ProviderSourceDeadlineReader<'stream> {
     stream: &'stream UnixStream,
     deadline: std::time::Instant,

@@ -204,3 +204,7 @@ mod stream_token_custody_permission_tests {
         }
     }
 }
+
+include!("executor_final_promotion_permission_tests.rs");
+
+include!("executor_final_promotion_account_permission_tests.rs");

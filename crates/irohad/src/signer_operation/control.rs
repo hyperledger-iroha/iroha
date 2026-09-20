@@ -7,6 +7,54 @@ use sorafs_manifest::signer::custody::{
     VerifiedSignerCustodyEnrollmentV1, verify_signer_custody_enrollment_v1,
 };
 
+/// Explicit enrollment authority for an ordinary state source.
+///
+/// These methods and the inherited observations must use the same independently configured
+/// authority. Ordinary signing sources need not implement this capability, and enrollment
+/// authority does not imply permission to perform an old-key terminal transition.
+pub trait SignerCustodyEnrollmentStateSourceV1: SignerOperationStateSourceV1 {
+    /// Authenticate the next enrollment slot and governed expected successor configuration.
+    ///
+    /// # Errors
+    /// Fails unless the independently configured successor exactly matches `binding`.
+    fn observe_enrollment(
+        &self,
+        binding: &SignerCustodyBindingV1,
+    ) -> Result<
+        sorafs_manifest::signer::custody::SignerCustodyEnrollmentContextV1,
+        SignerOperationErrorV1,
+    >;
+
+    /// Authoritatively enroll the initial independently qualified generation using durable CAS.
+    ///
+    /// # Errors
+    /// Fails unless this is the exact initial predecessor slot and no generation is active.
+    fn enroll_initial(
+        &self,
+        request: &SignerCustodyEnrollmentRequestV1<'_>,
+    ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1>;
+}
+
+/// Explicit audited custody-transition authority over the same enrollment and operation source.
+///
+/// Native emergency revocation without the old key is separately governed and cannot substitute
+/// for this capability's exact old-key terminal audit contract.
+pub trait SignerCustodyControlStateSourceV1: SignerCustodyEnrollmentStateSourceV1 {
+    /// Atomically finalize the exact terminal audit before activating or revoking custody.
+    ///
+    /// The transaction compares the exact exclusive reservation, current control state, old active
+    /// head, expected terminal intent and audit successor. Activation additionally compares the
+    /// independently governed successor binding and exact enrollment sequence/predecessor. No
+    /// response or further old-key signing is authorized after this transaction takes effect.
+    ///
+    /// # Errors
+    /// Fails when audit durability, authoritative enrollment/control CAS or finality cannot be proved.
+    fn commit_custody_transition(
+        &self,
+        request: &SignerCustodyTransitionRequestV1<'_>,
+    ) -> Result<SignerCustodyUseContextV1, SignerOperationErrorV1>;
+}
+
 /// Privately verified enrollment request; candidate bytes never choose the trusted configuration.
 pub struct SignerCustodyEnrollmentRequestV1<'a> {
     record: &'a [u8],
@@ -140,7 +188,7 @@ pub fn enroll_initial_signer_custody_v1(
     binding: &SignerCustodyBindingV1,
     record: &[u8],
     trust: &SignerCustodyTrustV1,
-    source: &dyn SignerOperationStateSourceV1,
+    source: &dyn SignerCustodyEnrollmentStateSourceV1,
 ) -> Result<VerifiedSignerCustodyV1, SignerOperationErrorV1> {
     let context = source.observe_enrollment(binding)?;
     if context.next_sequence != 1 || context.predecessor_digest != [0; 32] {
@@ -185,12 +233,13 @@ impl SignerOperationCoordinatorV1 {
     /// Prepare only against independently governed expected successor configuration and trust.
     pub(in crate::signer_operation) fn prepare_custody_activation(
         &self,
+        source: &dyn SignerCustodyEnrollmentStateSourceV1,
         binding: SignerCustodyBindingV1,
         record: Vec<u8>,
         trust: SignerCustodyTrustV1,
     ) -> Result<PreparedSignerCustodyActivationV1, SignerOperationErrorV1> {
         validate_successor(&self.binding, &binding)?;
-        let context = self.source.observe_enrollment(&binding)?;
+        let context = source.observe_enrollment(&binding)?;
         let enrollment = verify_signer_custody_enrollment_v1(&record, &binding, &trust, &context)
             .map_err(SignerOperationErrorV1::Custody)?;
         Ok(PreparedSignerCustodyActivationV1 {
@@ -290,6 +339,7 @@ impl SignerOperationV1<'_> {
     /// Finalize an old-key audit and activate the exact independent successor without old-key reply.
     pub(in crate::signer_operation) fn finish_custody_activation(
         mut self,
+        source: &dyn SignerCustodyControlStateSourceV1,
         prepared: PreparedSignerCustodyActivationV1,
         audit: SignerOperationAuditHeadV1,
     ) -> Result<CompletedSignerCustodyTransitionV1, SignerOperationErrorV1> {
@@ -321,17 +371,15 @@ impl SignerOperationV1<'_> {
             &context,
         )
         .map_err(SignerOperationErrorV1::Custody)?;
-        let current = self.coordinator.source.commit_custody_transition(
-            &SignerCustodyTransitionRequestV1 {
-                check: self.check(),
-                audit,
-                transition_digest: enrollment.record_digest(),
-                activation: Some(SignerCustodyEnrollmentRequestV1 {
-                    record: &prepared.record,
-                    enrollment: &enrollment,
-                }),
-            },
-        )?;
+        let current = source.commit_custody_transition(&SignerCustodyTransitionRequestV1 {
+            check: self.check(),
+            audit,
+            transition_digest: enrollment.record_digest(),
+            activation: Some(SignerCustodyEnrollmentRequestV1 {
+                record: &prepared.record,
+                enrollment: &enrollment,
+            }),
+        })?;
         let active = verify_activation(
             &prepared.record,
             &prepared.binding,
@@ -348,7 +396,7 @@ impl SignerOperationV1<'_> {
             &prepared.record,
             &prepared.binding,
             &prepared.trust,
-            &self.coordinator.source.observe(&prepared.binding)?,
+            &source.observe(&prepared.binding)?,
         )
         .map_err(SignerOperationErrorV1::Custody)?;
         if !final_state.continues_active_state(&active) {
@@ -365,6 +413,7 @@ impl SignerOperationV1<'_> {
     /// Finalize the old-key revocation audit, revoke custody, and return only transition metadata.
     pub(in crate::signer_operation) fn finish_custody_revocation(
         mut self,
+        source: &dyn SignerCustodyControlStateSourceV1,
         reason_digest: [u8; 32],
         audit: SignerOperationAuditHeadV1,
     ) -> Result<CompletedSignerCustodyTransitionV1, SignerOperationErrorV1> {
@@ -372,16 +421,14 @@ impl SignerOperationV1<'_> {
             return Err(SignerOperationErrorV1::InvalidOperation);
         }
         self.prepare_terminal(audit, reason_digest)?;
-        let current = self.coordinator.source.commit_custody_transition(
-            &SignerCustodyTransitionRequestV1 {
-                check: self.check(),
-                audit,
-                transition_digest: reason_digest,
-                activation: None,
-            },
-        )?;
+        let current = source.commit_custody_transition(&SignerCustodyTransitionRequestV1 {
+            check: self.check(),
+            audit,
+            transition_digest: reason_digest,
+            activation: None,
+        })?;
         self.verify_revocation(&current)?;
-        let final_state = self.coordinator.source.observe(&self.coordinator.binding)?;
+        let final_state = source.observe(&self.coordinator.binding)?;
         self.verify_revocation(&final_state)?;
         if final_state.now_unix_ms < current.now_unix_ms
             || final_state.current_anchor.height < current.current_anchor.height

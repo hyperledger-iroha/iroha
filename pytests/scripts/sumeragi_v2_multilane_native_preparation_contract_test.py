@@ -63,6 +63,11 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("VALIDATION_CUSTODY", "fn new", "markers.try_reserve_exact(limit)?;", "// marker admission removed"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "if self.candidates.len() == self.limit", "if false"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "if requires_existing_owner", "if false"),
+    ("VALIDATION_CUSTODY", "fn preflight_marker", "candidate.is_some_and(|row| row.owner.is_none())", "false"),
+    ("VALIDATION_CUSTODY", "fn preflight_marker", "self.markers.len() == self.limit", "false"),
+    ("VALIDATION_CUSTODY", "fn preflight_marker", "candidate.is_none() && self.candidates.len() == self.limit", "false"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", ".pop()", ".first()"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "self.candidates[index].owner = Some(owner);", "drop(owner);"),
     ("JOURNALS", "fn matches_candidate", "self.journals\n            .matches_validation_candidate(context, proposal)", "true"),
     ("DECISION_CARRIER", "fn resume_capture", ".map(Self::Validated)", ".map(|_| unreachable!())"),
     ("DECISION_CARRIER", "fn resume_capture", "(Self::Capturing(carrier), error)", "(Self::Capturing(other), error)"),
@@ -92,6 +97,8 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("VALIDATION_CUSTODY", "fn drop(&mut self)", "self.service.candidates[self.index].owner = Some(owner);", "self.service.candidates[0].owner = Some(owner);"),
     ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "if !service.matches_store(&self.instance_identity())", "if false"),
     ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "already_validated.is_some() || reused.is_some()", "false"),
+    ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "service.preflight_marker(&durable)?;", "// predecode admission removed"),
+    ("RETAINED_VALIDATION", "fn execute_retained_durable_validation", "if !self.rejected.contains_key(&key)", "if true"),
 ])
 def test_retained_carrier_rejects_owner_or_refusal_substitution(fixture, owner, anchor, old, new):
     root, helper, checker, _ = fixture
@@ -184,13 +191,22 @@ def test_retained_carrier_requires_sealed_phase_owner(fixture, mutation):
     assert any("retained carrier" in e for e in validate(fixture))
 
 
-@pytest.mark.parametrize("mutation", ["execute-before-capacity", "resume-before-install", "marker-before-resume", "persist-before-install", "confirm-before-persist"])
+@pytest.mark.parametrize("mutation", ["execute-before-capacity", "execute-before-slot", "resume-before-install", "marker-before-resume", "decode-before-capacity", "persist-before-install", "confirm-before-persist"])
 def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation):
     root, helper, checker, _ = fixture
     c = checker.native_preparation_contract
     if mutation == "execute-before-capacity":
         helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
                                   "let existing = self", "self.validator.prepare(context, body); let existing = self")
+    elif mutation == "execute-before-slot":
+        path = root / c.VALIDATION_CUSTODY
+        source = path.read_text()
+        start = source.index("                self.candidates.push(Candidate {", source.index("fn prepare_marker"))
+        end = source.index("                let owner = match self.validator.prepare", start)
+        reservation = source[start:end]
+        source = source[:start] + source[end:]
+        at = source.index("                self.candidates[index].owner = Some(owner);", start)
+        path.write_text(source[:at] + reservation + source[at:])
     elif mutation == "resume-before-install":
         helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
                                   "self.candidates.push(Candidate {", "self.resume_candidate(0, context, body); self.candidates.push(Candidate {")
@@ -203,6 +219,14 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
         source = source[:start] + source[end:]
         at = source.index("        let commitment = match owner.ready_commitment()", source.index("fn prepare_marker"))
         path.write_text(source[:at] + marker + source[at:])
+    elif mutation == "decode-before-capacity":
+        path = root / c.RETAINED_VALIDATION
+        source = path.read_text()
+        load = "        let envelope = self.load_validation_envelope(&durable, expected_manifest_hash)?;\n"
+        assert source.count(load) == 1
+        source = source.replace(load, "", 1)
+        at = source.index("        if !self.rejected.contains_key(&key)")
+        path.write_text(source[:at] + load + source[at:])
     else:
         path = root / c.RETAINED_VALIDATION
         anchor = "fn execute_retained_durable_validation"
@@ -215,6 +239,16 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
             helper.replace_once_after(path, anchor, persistence, "service.confirm(&validated)?;\n" + persistence)
     errors = validate(fixture)
     assert any("reorders executable relation" in e or "repeats execution" in e or "installed owner" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+def test_retained_service_keeps_original_producer_until_payload_release(fixture):
+    root, helper, checker, _ = fixture
+    path = root / checker.native_preparation_contract.VALIDATION_CUSTODY
+    helper.replace_once_after(path, "struct RetainedBodyValidationService", "    validator: P,", "")
+    helper.replace_once_after(path, "struct RetainedBodyValidationService", "    candidates:", "    validator: P,\n    candidates:")
+    errors = validate(fixture)
+    assert any("retained carrier" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
 
 

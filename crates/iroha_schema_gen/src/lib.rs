@@ -1,5 +1,9 @@
 //! Iroha schema generation support library. Contains the `build_schemas` `fn`, which is the
 //! function which decides which types are included in the schema.
+//!
+//! Dynamic native instructions need explicit roots because `InstructionBox` has opaque metadata.
+//! Nested public types are expanded through their canonical `IntoSchema` implementations.
+//! Regenerate the checked-in reference with `bash scripts/tests/consistency.sh --update schema`.
 use iroha_data_model::{
     block::stream::{BlockMessage, BlockSubscriptionRequest},
     query::{QueryResponse, SignedQuery},
@@ -94,6 +98,22 @@ macro_rules! schema_types {
             iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
             iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
             iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
+            // Native provider custody uses opaque framed Manifest policy/enrollment payloads.
+            iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody,
+            iroha_data_model::sorafs::stream_token_custody::StreamTokenCustodyControlRecordV1,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody,
+            // Native deployment authority and commitment-only retained histories.
+            iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority,
+            iroha_data_model::sorafs::final_promotion_authority::FinalPromotionCustodyRecordV1,
+            iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationRecordV1,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsFinalPromotionCustody,
+            iroha_executor_data_model::permission::sorafs::CanOperateSorafsFinalPromotion,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsFinalPromotion,
+            // Distinct account custody reuses opaque canonical Manifest frames.
+            iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody,
+            iroha_data_model::sorafs::final_promotion_account_custody::FinalPromotionAccountCustodyRecordV1,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsFinalPromotionAccountCustody,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsFinalPromotionAccountCustody,
             // Multi-signature operations
             iroha_executor_data_model::isi::multisig::MultisigInstructionBox,
             // Multi-signature account metadata
@@ -183,6 +203,9 @@ pub mod complete_data_model {
 mod tests {
     use super::{IntoSchema, complete_data_model::*};
     use iroha_schema::{MetaMap, Metadata};
+    mod final_promotion;
+    mod final_promotion_account_custody;
+    mod stream_token_custody;
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {
         let mut map = BTreeMap::new();
         macro_rules! insert_into_test_map {

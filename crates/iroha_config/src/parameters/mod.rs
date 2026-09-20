@@ -4,6 +4,7 @@ pub mod defaults;
 /// Checked Inrou startup probe geometry.
 pub mod inrou_startup_probe;
 pub mod user;
+use iroha_primitives::production_identity::has_reserved_nonproduction_component_v1;
 use url::{Host, Url};
 /// Reason a runtime-provider handle cannot identify a production adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,16 +179,7 @@ pub fn validate_production_runtime_handle(value: &str) -> Result<(), ProductionR
     {
         return Err(ProductionRuntimeHandleError::InvalidSyntax);
     }
-    let lowercase = value.to_ascii_lowercase();
-    if lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "demo" | "fake" | "dummy" | "placeholder"
-            )
-        })
-    {
+    if has_reserved_nonproduction_component_v1(value) {
         return Err(ProductionRuntimeHandleError::TestMarked);
     }
     Ok(())
@@ -327,3 +319,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "production_identity_tests.rs"]
+mod production_identity_tests;

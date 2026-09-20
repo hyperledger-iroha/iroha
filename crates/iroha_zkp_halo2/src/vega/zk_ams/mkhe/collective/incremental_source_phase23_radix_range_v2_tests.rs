@@ -424,11 +424,15 @@ fn cursor_materializer_and_authority_source_guards_forbid_bypass_and_escape() {
     }
     let low_digit_source =
         include_str!("incremental_source_phase23_radix_range_v2/prepared_low_digit_plane_v1.rs");
+    let difference_digit_source = include_str!(
+        "incremental_source_phase23_radix_range_v2/prepared_difference_digit_plane_v1.rs"
+    );
     let completion_calls = [
         PRODUCTION_SOURCE_V2,
         CURSOR_SOURCE_V2,
         REPLAY_SOURCE_V2,
         low_digit_source,
+        difference_digit_source,
     ]
     .into_iter()
     .map(|source| {
@@ -437,7 +441,7 @@ fn cursor_materializer_and_authority_source_guards_forbid_bypass_and_escape() {
             .count()
     })
     .sum::<usize>();
-    assert_eq!(completion_calls, 2);
+    assert_eq!(completion_calls, 3);
     assert!(PRODUCTION_SOURCE_V2.contains("cursor.complete_authenticated_source_replay_v1()?"));
     assert!(
         PRODUCTION_SOURCE_V2.contains("materialization_seal: RadixWitnessMaterializationSealV2")

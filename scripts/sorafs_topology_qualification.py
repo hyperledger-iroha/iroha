@@ -96,7 +96,6 @@ TOPOLOGY_BINDING_FIELDS = frozenset(
 AUTHENTICATED_TOPOLOGY_BINDING_FIELDS = TOPOLOGY_BINDING_FIELDS | frozenset(
     {
         "signer_authentication_kind",
-        "signer_backend",
         "signer_service_id",
         "signer_administrator_id",
         "signer_key_revision",
@@ -154,7 +153,7 @@ def add_signed_topology_qualification_arguments(parser: Any) -> None:
     parser.add_argument(
         "--topology-qualification-signer-service-id",
         required=True,
-        help="Operator-trusted external software signer service identity.",
+        help="Operator-trusted authenticated external signer service identity.",
     )
     parser.add_argument(
         "--topology-qualification-signer-administrator-id",
@@ -487,7 +486,6 @@ def load_signed_topology_qualification_binding(
         errors.append("trusted topology public key must be exactly 32 non-zero bytes")
     trusted_signer = software_signer_evidence.validate_foundational_software_signer(
         {
-            "backend": "software",
             "service_id": trusted_signer_service_id,
             "administrator_id": trusted_signer_administrator_id,
             "key_revision": trusted_key_revision,
@@ -587,7 +585,6 @@ def load_signed_topology_qualification_binding(
         )
     software_signer_evidence.validate_aggregate_software_signer(envelope, errors)
     for field in (
-        "signer_backend",
         "signer_service_id",
         "signer_administrator_id",
         "signer_key_revision",
@@ -597,7 +594,7 @@ def load_signed_topology_qualification_binding(
         if envelope.get(field) != trusted_signer[field]:
             errors.append(
                 f"signed topology qualification envelope {field} must match "
-                "the trusted external software signer"
+                "the trusted authenticated external signer"
             )
     assert isinstance(trusted_public_key, bytes)
     trusted_fingerprint = hashlib.sha256(trusted_public_key).hexdigest()
@@ -670,7 +667,6 @@ def load_signed_topology_qualification_binding(
     return {
         **binding,
         "signer_authentication_kind": envelope["signer_authentication_kind"],
-        "signer_backend": envelope["signer_backend"],
         "signer_service_id": envelope["signer_service_id"],
         "signer_administrator_id": envelope["signer_administrator_id"],
         "signer_key_revision": envelope["signer_key_revision"],
@@ -850,7 +846,7 @@ def validate_authenticated_topology_binding_object(
     expected: Mapping[str, Any] | None = None,
     path: str = "topology_qualification",
 ) -> list[str]:
-    """Require full external software-signer provenance in a binding."""
+    """Require full authenticated external-signer provenance in a binding."""
 
     return _validate_topology_binding_object(
         value, expected=expected, path=path, authenticated_required=True

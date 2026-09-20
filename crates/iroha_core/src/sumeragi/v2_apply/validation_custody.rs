@@ -180,11 +180,13 @@ struct Marker {
 
 /// Descriptor-bounded service storage. Payload capacity remains inside each owner.
 pub(crate) struct RetainedBodyValidationService<P: CarrierValidator> {
-    validator: P,
-    identity: V2BodyStoreInstanceIdentity,
     candidates: Vec<Candidate<P::Owner>>,
     markers: Vec<Marker>,
+    identity: V2BodyStoreInstanceIdentity,
     limit: usize,
+    // Field drop order keeps the original service and its resource policy alive
+    // until every retained payload and descriptor allocation has been released.
+    validator: P,
 }
 
 impl<P: CarrierValidator> RetainedBodyValidationService<P> {
@@ -209,6 +211,30 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
 
     pub(crate) fn matches_store(&self, identity: &V2BodyStoreInstanceIdentity) -> bool {
         self.identity.same_instance(identity)
+    }
+
+    /// Refuse unavailable descriptor custody before BodyStore reads or decodes
+    /// another candidate. This fresh observation reserves nothing and grants no
+    /// marker authority; preparation rechecks capacity after authenticating the
+    /// body. Existing occurrences remain serviceable at the configured limit.
+    pub(crate) fn preflight_marker(
+        &self,
+        durable: &DurableBodyReceipt,
+    ) -> Result<(), CarrierCustodyError> {
+        let candidate = self
+            .candidates
+            .iter()
+            .find(|row| row.subject == durable.subject());
+        if candidate.is_some_and(|row| row.owner.is_none()) {
+            return Err(CarrierCustodyError::MissingOwner);
+        }
+        if (!self.markers.iter().any(|row| row.durable == *durable)
+            && self.markers.len() == self.limit)
+            || (candidate.is_none() && self.candidates.len() == self.limit)
+        {
+            return Err(CarrierCustodyError::Capacity);
+        }
+        Ok(())
     }
 
     /// Install before capture retry or fsync. Incomplete capture retains only its
@@ -238,15 +264,31 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
                 if self.candidates.len() == self.limit {
                     return Err(CarrierCustodyError::Capacity);
                 }
-                let owner = match self.validator.prepare(context, body) {
-                    Ok(owner) => owner,
-                    Err(error) => return Ok(CarrierMarkerPreparation::ValidationError(error)),
-                };
+                // Occupy the already allocated descriptor before execution.
+                // Unwind must leave a subject tombstone, just as consuming
+                // capture and publication do, rather than permit reexecution.
+                let index = self.candidates.len();
                 self.candidates.push(Candidate {
                     subject: durable.subject(),
-                    owner: Some(owner),
+                    owner: None,
                 });
-                self.candidates.len() - 1
+                let owner = match self.validator.prepare(context, body) {
+                    Ok(owner) => owner,
+                    Err(error) => {
+                        // The producer's explicit error contract guarantees no
+                        // detached owner exists. Only this branch can release
+                        // the vacant descriptor for a later admission attempt.
+                        let vacant = self
+                            .candidates
+                            .pop()
+                            .expect("reserved candidate descriptor");
+                        debug_assert_eq!(vacant.subject, durable.subject());
+                        debug_assert!(vacant.owner.is_none());
+                        return Ok(CarrierMarkerPreparation::ValidationError(error));
+                    }
+                };
+                self.candidates[index].owner = Some(owner);
+                index
             }
         };
         let owner = self.candidates[index]

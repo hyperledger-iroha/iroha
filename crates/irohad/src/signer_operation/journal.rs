@@ -2,6 +2,7 @@
 
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use sorafs_manifest::signer::{
+    final_promotion::SIGNER_FINAL_PROMOTION_RECEIPT_MAX_BYTES_V1,
     receipt::SIGNER_RELEASE_MANIFEST_RECEIPT_MAX_BYTES_V1,
     stream_token::SIGNER_STREAM_TOKEN_RECEIPT_MAX_BYTES_V1,
 };
@@ -14,7 +15,7 @@ use std::{
         fs::{FileExt as _, MetadataExt as _, PermissionsExt as _},
     },
     path::{Component, Path},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 use zeroize::Zeroizing;
 
@@ -28,6 +29,8 @@ const SUFFIX: &str = ".receipt.norito";
 /// The owning producer still verifies its full canonical receipt and authoritative completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignerReceiptPurposeV1 {
+    /// Exact reviewed final production-promotion provenance receipts.
+    FinalPromotionProvenance,
     /// Exact reviewed aggregate release-manifest operation receipts.
     ReleaseManifest,
     /// Exact provider-scoped stream-token operation receipts.
@@ -36,6 +39,7 @@ pub enum SignerReceiptPurposeV1 {
 impl SignerReceiptPurposeV1 {
     const fn max_bytes(self) -> usize {
         match self {
+            Self::FinalPromotionProvenance => SIGNER_FINAL_PROMOTION_RECEIPT_MAX_BYTES_V1,
             Self::ReleaseManifest => SIGNER_RELEASE_MANIFEST_RECEIPT_MAX_BYTES_V1,
             Self::StreamToken => SIGNER_STREAM_TOKEN_RECEIPT_MAX_BYTES_V1,
         }
@@ -61,12 +65,17 @@ struct Directory {
 /// Mandatory durable receipt staging with no key material and no path-following fallback.
 ///
 /// The directory must already exist, be owned by the current UID and have mode 0700. Every
-/// ancestor is opened without symlink following and retained until the journal is dropped.
-/// A nonblocking exclusive directory lease is held for the full journal lifetime, preventing
-/// independent instances/processes from racing the aggregate retention ceiling. Unsupported
-/// locking fails closed. Records are immutable, single-link mode-0400 files. Failed partial writes are retained as
-/// fail-closed tombstones; automatic cleanup never removes a substituted path.
+/// ancestor is opened without symlink following and retained by the writer, its read-only
+/// capabilities and every pinned receipt. A nonblocking exclusive directory lease lasts until
+/// their final shared owner drops, preventing independent instances/processes from racing the
+/// aggregate retention ceiling. Unsupported locking fails closed. Records are immutable,
+/// single-link mode-0400 files. Failed partial writes remain fail-closed tombstones;
+/// automatic cleanup never removes a substituted path.
 pub struct SignerReceiptJournalV1 {
+    reader: SignerReceiptJournalReaderV1,
+}
+
+struct JournalInner {
     lineage: Vec<Directory>,
     owner: u32,
     mutation: Mutex<()>,
@@ -141,21 +150,66 @@ impl SignerReceiptJournalV1 {
             rustix::fs::FlockOperation::NonBlockingLockExclusive,
         )
         .map_err(|_| fail())?;
-        let journal = Self {
+        let inner = Arc::new(JournalInner {
             lineage,
             owner,
             mutation: Mutex::new(()),
             purpose,
-        };
-        journal.verify_lineage()?;
-        journal.inventory()?;
-        Ok(journal)
+        });
+        inner.verify_lineage()?;
+        inner.inventory()?;
+        Ok(Self {
+            reader: SignerReceiptJournalReaderV1 { inner },
+        })
     }
     /// Immutable receipt purpose, checked by the owning producer before any key operation.
     #[must_use]
-    pub const fn purpose(&self) -> SignerReceiptPurposeV1 {
-        self.purpose
+    pub fn purpose(&self) -> SignerReceiptPurposeV1 {
+        self.reader.purpose()
     }
+    /// Grant read-only access to this exact existing lease; never reopen the path.
+    pub(super) fn reader(&self) -> SignerReceiptJournalReaderV1 {
+        SignerReceiptJournalReaderV1 {
+            inner: Arc::clone(&self.reader.inner),
+        }
+    }
+    pub(super) fn stage(
+        &self,
+        operation_id: [u8; 32],
+        bytes: &[u8],
+    ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
+        self.reader.inner.stage(operation_id, bytes)
+    }
+    pub(super) fn recover(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
+        self.reader().recover(operation_id)
+    }
+}
+
+/// Read-only capability over an already opened journal's exact directory lease.
+///
+/// There is no path constructor, write method, dereference, or writer conversion. Only the
+/// owning signer-operation module can obtain this capability; receipt bytes remain internal.
+pub(super) struct SignerReceiptJournalReaderV1 {
+    inner: Arc<JournalInner>,
+}
+impl SignerReceiptJournalReaderV1 {
+    /// Exact receipt-family ceiling retained by the original writer's lease.
+    pub(super) fn purpose(&self) -> SignerReceiptPurposeV1 {
+        self.inner.purpose
+    }
+    /// Pin bounded untrusted receipt bytes; semantic verification remains the purpose owner.
+    pub(super) fn recover(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
+        self.inner.recover(operation_id)
+    }
+}
+
+impl JournalInner {
     fn directory(&self) -> &File {
         &self
             .lineage
@@ -234,11 +288,11 @@ impl SignerReceiptJournalV1 {
         self.verify_lineage()?;
         Ok((count, size))
     }
-    pub(super) fn stage(
-        &self,
+    fn stage(
+        self: &Arc<Self>,
         operation_id: [u8; 32],
         bytes: &[u8],
-    ) -> Result<PinnedReceipt<'_>, SignerReceiptJournalErrorV1> {
+    ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
         let _guard = self
             .mutation
             .lock()
@@ -274,7 +328,7 @@ impl SignerReceiptJournalV1 {
             .map_err(|_| SignerReceiptJournalErrorV1)?;
         let identity = file.metadata().map_err(|_| SignerReceiptJournalErrorV1)?;
         let pinned = PinnedReceipt {
-            journal: self,
+            journal: Arc::clone(self),
             name,
             file,
             identity,
@@ -283,10 +337,10 @@ impl SignerReceiptJournalV1 {
         pinned.recheck()?;
         Ok(pinned)
     }
-    pub(super) fn recover(
-        &self,
+    fn recover(
+        self: &Arc<Self>,
         operation_id: [u8; 32],
-    ) -> Result<PinnedReceipt<'_>, SignerReceiptJournalErrorV1> {
+    ) -> Result<PinnedReceipt, SignerReceiptJournalErrorV1> {
         self.verify_lineage()?;
         if operation_id == [0; 32] {
             return Err(SignerReceiptJournalErrorV1);
@@ -304,7 +358,7 @@ impl SignerReceiptJournalV1 {
         let identity = file.metadata().map_err(|_| SignerReceiptJournalErrorV1)?;
         let bytes = read_stable(&file, &identity, self.owner, self.purpose)?;
         let pinned = PinnedReceipt {
-            journal: self,
+            journal: Arc::clone(self),
             name,
             file,
             identity,
@@ -315,14 +369,15 @@ impl SignerReceiptJournalV1 {
     }
 }
 
-pub(super) struct PinnedReceipt<'a> {
-    journal: &'a SignerReceiptJournalV1,
+/// Exact immutable byte snapshot retaining the original journal lease until drop.
+pub(super) struct PinnedReceipt {
+    journal: Arc<JournalInner>,
     name: String,
     file: File,
     identity: Metadata,
     bytes: Zeroizing<Vec<u8>>,
 }
-impl PinnedReceipt<'_> {
+impl PinnedReceipt {
     pub(super) fn bytes(&self) -> &[u8] {
         self.bytes.as_slice()
     }

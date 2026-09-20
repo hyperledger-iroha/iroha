@@ -24,8 +24,7 @@ artefacts:
 - Prepare to upload parity harness logs (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
   alongside the aggregate release-manifest verification receipt.
 - Confirm the protected signing job uses
-  `signing_provider=authenticated_external_signer` with exact
-  `signing_backend=software`, the governed raw Ed25519 public key and reviewed
+  `signing_provider=authenticated_external_signer`, the governed raw Ed25519 public key and reviewed
   fingerprint, and the exact `iroha` path plus reviewed SHA256.
 
 Include these artefacts when notifying governance and publishing the release.
@@ -53,13 +52,10 @@ unpinned native verifiers, malformed keys/signatures, and unsafe paths.
 
 ## 2. Apply the versioning policy
 
-All SoraFS CLI/SDK crates use SemVer:
-
-- `MAJOR`: Introduced for the first 1.0 release. Before 1.0 the `0.y` minor bump
-  **indicates breaking changes** in the CLI surface or Norito schemas.
-  fields gated behind optional policy, telemetry additions).
-- `PATCH`: Bug fixes, documentation-only releases, and dependency updates that
-  do not change observable behaviour.
+This is the first release. Ship one canonical V1 CLI, SDK and Norito contract;
+remove superseded interfaces and reject retired layouts. Backward compatibility,
+aliases and migration shims are prohibited. The version inventory identifies the
+single candidate qualified by the release evidence.
 
 Always keep `sorafs_car`, `sorafs_manifest`, and `sorafs_chunker` on the same
 version so downstream SDK consumers can depend on a single aligned version
@@ -79,7 +75,7 @@ directory and fill in the sections with concrete details).
 
 Minimum content:
 
-- **Highlights**: feature headlines and compatibility requirements for CLI and
+- **Highlights**: feature headlines and the canonical V1 requirements for CLI and
   SDK consumers.
 - **Upgrade steps**: TL;DR commands for bumping cargo dependencies and rerunning
   deterministic fixtures.
@@ -116,15 +112,18 @@ Tips:
 - Base CI automation on `.github/workflows/sorafs-cli-release.yml`; it runs the
   release gate and deterministic candidate packaging, then publishes the
   run-bound unsigned foundational manifest. Download and sign those exact bytes
-  outside GitHub with the independently administered external software Ed25519
+  outside GitHub with the independently administered external Ed25519
   signer. Provision only the raw signature, raw public key, reviewed signer
   fingerprint, pinned native verifier path, and reviewed verifier SHA256 on the
   protected `sorafs-release-auth` runner; approve the
   `sorafs-release-authentication` environment only after that handoff. The
-  workflow verifies and archives the public tuple and
-  `signer_qualification=software-key-qualified` receipt before provenance or the
-  promoted artifact can run. No private key or software-signing operation enters
+  workflow verifies and archives the public tuple and its exact verification
+  receipt before provenance or the promoted artifact can run. No private key or signing operation enters
   GitHub Actions.
+
+Signer implementation and key storage are operator choices. Release verification
+authenticates public keys, signatures and approved source inputs without asserting
+software or hardware key origin.
 
 The protected environment must define
 `SORAFS_RELEASE_SIGNATURE_PATH`, `SORAFS_RELEASE_PUBLIC_KEY_PATH`,

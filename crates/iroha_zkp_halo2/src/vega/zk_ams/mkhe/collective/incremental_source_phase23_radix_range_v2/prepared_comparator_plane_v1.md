@@ -15,12 +15,13 @@ The actual comparator value mapping remains:
 | 688–6880 | `beta[group][0..18]` | lane 0 bits 2–7, lane 1 bits 0–7, lane 2 bits 0–3 |
 | 6880–7224 | `m[group]` | lane 2, bit 4 |
 
-The current consuming commitment transition covers the first 688 planes only.
+The first consuming commitment stage covers the 688 top-bit planes.
 It starts from the actual completed D/S owner at native inventory 12040: 344 bD
 points occupy 12040–12384 and 344 bS occupy 12384–12728. Coordinates come from the
 shared native40 inventory. The next physical purpose is 5,848 delta commitments;
-preparation at comparator ordinal 688 rejects before I/O until that predecessor
-has a real producer. It cannot jump directly to beta at inventory 18576.
+preparation at comparator ordinal 688 rejects before I/O until the difference
+producer has completed that exact predecessor. It cannot jump directly from
+bS to beta at inventory 18576.
 
 Completed D/S opening material, its single append permit and the original
 session are moved into the private top-commitment owner. D/S validation retains
@@ -62,9 +63,32 @@ matching original-session sampled rho/point, ordered native roles and consuming
 failure/drop boundaries. The existing full-shape patterned D/S inventory fixture
 is not live authenticated source proof. No positive source authority is fabricated.
 
-TODO: implement actual delta-value commitments at 12728–18576 using the same
-retained session and source; then continue beta/m and signed roles. Connect the
+The [difference-digit driver](prepared_difference_digit_plane_v1.md) now
+consumes this exact completed top stage and produces delta commitments at
+12728–18576 using the same retained session and original source. Its completion
+returns the original source at beta. The retained comparator continuation now
+requires that exact completed delta owner before the sealed-value preparer can
+resume at logical ordinal 688. It fills 6,192 beta and 344 m commitments in
+physical inventory order 18576–25112 using the same original entropy, actual
+prepared-value MSM and retained rho. The 209,152-byte blinding vector retains
+all earlier source/D/S/top/delta openings and the original append permit.
+Neither an incomplete delta stage nor a skipped/repeated comparator ordinal
+can advance. Final m stops at `SmallSigned` ordinal 25112; no signed-plane
+admission or composite proof authority is added. The fixed native descriptor,
+9,288-plane storage plan and resource ceilings remain unchanged.
+
+Continuation tests check exact beta/m physical coordinates, incomplete/wrong
+stage refusal, original opening custody, actual first/last beta and first/last m
+MSMs, final signed-stage refusal, and failure/drop boundaries. Prior inventory
+points remain explicitly scoped fixtures, not full-source proof evidence.
+
+TODO: implement signed roles after the comparator continuation. Connect the
 complete source-consuming plane writer to these values and retained blindings,
 including its canonical 33rd slot and authenticated ordered pair. Full 688 actual
 commitment execution, full-source positive tests and whole-proof resource evidence
 remain separate qualification work.
+
+The 2026-09-20 original delta pass covered 12 focused tests before beta/m
+admission was added. Runtime validation of the new beta/m continuation and its
+optimized prior-fixture setup is pending on the updated combined source.
+Full-source, full-size resource and composite proof qualification remain open.

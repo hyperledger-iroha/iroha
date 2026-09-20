@@ -421,7 +421,7 @@ fn collect_storage_security_bindings(
             IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore,
         ));
     }
-    if let Some(pins) = iroha_torii::sorafs::StreamTokenHardwarePinsV1::from_config(
+    if let Some(pins) = iroha_torii::sorafs::StreamTokenSignerPinsV1::from_config(
         storage,
         &config.common.chain.to_string(),
         *NetworkId::from_genesis_hash(config.genesis.expected_hash).as_bytes(),
@@ -431,13 +431,13 @@ fn collect_storage_security_bindings(
             IrohaRuntimeProviderSlotV1::StreamTokenSigner,
         )
     })? {
-        let hardware = StreamTokenHardwareRuntimeBindingV1::new(
+        let signer_backend = StreamTokenSignerRuntimeBindingV1::new(
             pins.binding().clone(),
             pins.observer_handle().to_owned(),
             pins.config_digest(),
         )?;
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
-            hardware,
+            signer_backend,
         )?);
     }
     match (

@@ -71,7 +71,7 @@ struct RuntimeProviderBindingWireV1 {
     handle: String,
     revision: Option<u64>,
     policy_digest: Option<[u8; 32]>,
-    stream_token_hardware_binding: Option<StreamTokenHardwareRuntimeBindingV1>,
+    stream_token_signer_binding: Option<StreamTokenSignerRuntimeBindingV1>,
     stream_token_gateway_admission_qualification:
         Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>,
     stream_token_gateway_admission_max_pending: Option<u32>,
@@ -469,7 +469,7 @@ fn validate_catalog_relationships(
     let find = |slot| catalog.iter().find(|binding| binding.slot() == slot);
     if let Some(binding) = find(IrohaRuntimeProviderSlotV1::StreamTokenSigner) {
         binding
-            .stream_token_hardware_binding()
+            .stream_token_signer_binding()
             .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?
             .validate_network(catalog.chain_id(), catalog.network_id().as_bytes())
             .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
@@ -702,7 +702,7 @@ impl RuntimeProviderBindingWireV1 {
             handle: binding.handle().to_owned(),
             revision: binding.revision(),
             policy_digest: binding.policy_digest(),
-            stream_token_hardware_binding: binding.stream_token_hardware_binding().cloned(),
+            stream_token_signer_binding: binding.stream_token_signer_binding().cloned(),
             stream_token_gateway_admission_qualification: binding
                 .stream_token_gateway_admission_qualification(),
             stream_token_gateway_admission_max_pending: binding
@@ -841,7 +841,7 @@ impl RuntimeProviderBindingWireV1 {
             }
             IrohaRuntimeProviderSlotV1::StreamTokenSigner => {
                 binding = IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
-                    self.stream_token_hardware_binding
+                    self.stream_token_signer_binding
                         .ok_or(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?,
                 )
                 .map_err(|_| IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)?;
@@ -2477,8 +2477,8 @@ mod tests {
             Err(IrohaRuntimeProviderCatalogErrorV1::InvalidBinding)
         );
         let mut substituted = canonical_wire();
-        substituted.bindings[0].stream_token_hardware_binding =
-            Some(super::super::stream_token_hardware_binding::tests::fixture());
+        substituted.bindings[0].stream_token_signer_binding =
+            Some(super::super::stream_token_signer_binding::tests::fixture());
         let bytes = norito::encode_canonical(&substituted).expect("encode substituted fixture");
         assert_eq!(
             IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes),

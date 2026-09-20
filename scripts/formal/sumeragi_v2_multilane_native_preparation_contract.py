@@ -987,12 +987,25 @@ RETAINED_CARRIER_BINDINGS = (
         "candidates.try_reserve_exact(limit)?", "markers.try_reserve_exact(limit)?",
         "Ok(Self {\n            validator,\n            identity,\n            candidates,\n            markers,\n            limit,\n        })",
     )),
+    (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::preflight_marker", (
+        "&self", "let candidate = self", ".find(|row| row.subject == durable.subject())",
+        "if candidate.is_some_and(|row| row.owner.is_none())",
+        "return Err(CarrierCustodyError::MissingOwner)",
+        "!self.markers.iter().any(|row| row.durable == *durable)",
+        "self.markers.len() == self.limit", "candidate.is_none() && self.candidates.len() == self.limit",
+        "return Err(CarrierCustodyError::Capacity)", "Ok(())",
+    )),
     (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::prepare_marker", (
         "if marker.is_none() && self.markers.len() == self.limit",
         "if requires_existing_owner", "return Err(CarrierCustodyError::MissingOwner)",
         "if self.candidates.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
+        "let index = self.candidates.len()", "self.candidates.push(Candidate {",
+        "subject: durable.subject()", "owner: None",
         "let owner = match self.validator.prepare(context, body)",
-        "owner: Some(owner)", "if !owner.matches_candidate(context, body)",
+        "let vacant = self.candidates.pop().expect(\"reserved candidate descriptor\")",
+        "debug_assert_eq!(vacant.subject, durable.subject())", "debug_assert!(vacant.owner.is_none())",
+        "return Ok(CarrierMarkerPreparation::ValidationError(error))",
+        "self.candidates[index].owner = Some(owner)", "if !owner.matches_candidate(context, body)",
         "return Err(CarrierCustodyError::Identity)", "let commitment = match owner.ready_commitment()",
         "Some(commitment) => commitment", "self.resume_candidate(index, context, body)?",
         "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
@@ -1027,7 +1040,9 @@ RETAINED_CARRIER_BINDINGS = (
         "RetainedBodyValidationService::new(", "self.instance_identity()", "self.capacity.max_body_entries",
     )),
     (RETAINED_VALIDATION, "method", "V2BodyStore::execute_retained_durable_validation", (
-        "if !service.matches_store(&self.instance_identity())", "service.prepare_marker(",
+        "if !service.matches_store(&self.instance_identity())",
+        "if !self.rejected.contains_key(&key)", "service.preflight_marker(&durable)?",
+        "self.load_validation_envelope(&durable, expected_manifest_hash)?", "service.prepare_marker(",
         "already_validated.is_some() || reused.is_some()",
         "let validated = self.persist_validated_receipt(&durable, commitment)?",
         "service.confirm(&validated)?",
@@ -1110,8 +1125,20 @@ def validate_native_preparation_contract(
             Ready(wire::ExecutionCommitment), Deferred(LocalValidationRefusal), ValidationError(E),
         }""",
         "RetainedBodyValidationService": """{
-            validator: P, identity: V2BodyStoreInstanceIdentity,
-            candidates: Vec<Candidate<P::Owner>>, markers: Vec<Marker>, limit: usize,
+            candidates: Vec<Candidate<P::Owner>>, markers: Vec<Marker>,
+            identity: V2BodyStoreInstanceIdentity, limit: usize, validator: P,
+        }""",
+        "RetainedBodyValidationService::preflight_marker": """{
+            let candidate = self.candidates.iter().find(|row| row.subject == durable.subject());
+            if candidate.is_some_and(|row| row.owner.is_none()) {
+                return Err(CarrierCustodyError::MissingOwner);
+            }
+            if (!self.markers.iter().any(|row| row.durable == *durable)
+                && self.markers.len() == self.limit)
+                || (candidate.is_none() && self.candidates.len() == self.limit) {
+                return Err(CarrierCustodyError::Capacity);
+            }
+            Ok(())
         }""",
         "SelectedValidationCarrier": """{
             service: &'a mut RetainedBodyValidationService<P>, index: usize, owner: Option<P::Owner>,
@@ -1175,7 +1202,11 @@ def validate_native_preparation_contract(
             "if marker.is_none() && self.markers.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
             "if requires_existing_owner", "return Err(CarrierCustodyError::MissingOwner)",
             "if self.candidates.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
-            "self.validator.prepare(context, body)", "owner: Some(owner)",
+            "let index = self.candidates.len()", "self.candidates.push(Candidate {",
+            "subject: durable.subject()", "owner: None",
+            "self.validator.prepare(context, body)", "Err(error) => {",
+            "self.candidates.pop()", "return Ok(CarrierMarkerPreparation::ValidationError(error))",
+            "self.candidates[index].owner = Some(owner)",
             "if !owner.matches_candidate(context, body)",
             "let commitment = match owner.ready_commitment()", "Some(commitment) => commitment", "None => {",
             "self.resume_candidate(index, context, body)?",
@@ -1191,6 +1222,8 @@ def validate_native_preparation_contract(
     prepare = items.get("RetainedBodyValidationService::prepare_marker", "")
     if prepare.count(_code("self.validator.prepare(")) != 1:
         errors.append("Native preparation retained carrier repeats execution before or after descriptor admission")
+    if prepare.count(_code("self.candidates.push(")) != 1 or prepare.count(_code("self.candidates.pop(")) != 1:
+        errors.append("Native preparation retained carrier loses reserved descriptor custody")
     resume = items.get("RetainedBodyValidationService::resume_candidate", "")
     if prepare.count(_code("self.resume_candidate(")) != 1 or resume.count(_code("self.validator.resume(")) != 1:
         errors.append("Native preparation retained carrier does not resume exactly its installed owner")
@@ -1209,7 +1242,9 @@ def validate_native_preparation_contract(
         if _code(forbidden) in consume:
             errors.append(f"Native preparation retained carrier loses its current owner or tombstone: {forbidden}")
     ordered("V2BodyStore::execute_retained_durable_validation",
-            "service.matches_store(&self.instance_identity())", "service.prepare_marker(",
+            "service.matches_store(&self.instance_identity())", "if !self.rejected.contains_key(&key)",
+            "service.preflight_marker(&durable)?",
+            "self.load_validation_envelope(&durable, expected_manifest_hash)?", "service.prepare_marker(",
             "self.persist_validated_receipt(&durable, commitment)?", "service.confirm(&validated)?")
 
     # The owner trait's path-qualified impl is outside the generic item parser.

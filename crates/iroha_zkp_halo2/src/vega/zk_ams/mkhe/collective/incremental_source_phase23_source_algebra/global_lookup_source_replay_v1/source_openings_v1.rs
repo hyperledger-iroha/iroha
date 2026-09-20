@@ -800,6 +800,24 @@ pub(in crate::vega::zk_ams::mkhe) struct GlobalLookupSourceOpeningMaterialV1<R> 
     proof_session: commitment_session_v1::RetainedSourceSessionV1<R>,
 }
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMaterialV1<R> {
+    pub(super) fn require_small_signed_position_v1(
+        &self,
+        ordinal: u16,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session.require_small_signed_position_v1(ordinal)
+    }
+
+    pub(super) fn commit_prepared_small_signed_v1(
+        &mut self,
+        statement: &crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::PreparedSmallSignedStatementV1<'_>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session
+            .commit_prepared_small_signed_v1(statement)?;
+        self.validate_v1()
+    }
+
     pub(super) fn require_comparator_position_v1(
         &self,
         ordinal: u16,
@@ -815,6 +833,26 @@ impl<R: crate::vega::MaskedRelaxedRandomSourceV1> GlobalLookupSourceOpeningMater
         self.validate_v1()?;
         self.proof_session
             .commit_prepared_comparator_v1(statement)?;
+        self.validate_v1()
+    }
+
+    pub(super) fn require_difference_start_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session.require_difference_start_v1()
+    }
+
+    pub(super) fn require_difference_complete_v1(&self) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session.require_difference_complete_v1()
+    }
+
+    pub(super) fn commit_prepared_difference_digit_v1(
+        &mut self,
+        statement: &crate::vega::zk_ams::mkhe::collective::incremental_source::incremental_source_phase23::radix_range_v2::PreparedDifferenceDigitStatementV1<'_>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        self.validate_v1()?;
+        self.proof_session
+            .commit_prepared_difference_digit_v1(statement)?;
         self.validate_v1()
     }
 
