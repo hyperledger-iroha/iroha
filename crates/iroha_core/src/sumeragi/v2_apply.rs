@@ -3538,7 +3538,8 @@ pub(crate) struct V2ApplyService {
     test_failures: tests::FailureInjection,
 }
 impl V2ApplyService {
-    /// Borrow this service's original State/Queue pair for synchronous publication.
+    /// Borrow this service's original State/Queue pair in publication tests.
+    #[cfg(test)]
     pub(crate) fn carrier_queue_source(
         &self,
     ) -> carrier_queue_retirement::OriginalCarrierQueue<'_> {

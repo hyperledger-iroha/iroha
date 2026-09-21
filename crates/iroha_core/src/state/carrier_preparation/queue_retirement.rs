@@ -16,7 +16,6 @@ use iroha_data_model::block::BlockHeader;
 use iroha_model_base::topology::{DataSpaceId, LaneId};
 
 /// Local retirement refusal; no variant is a consensus-invalidity verdict.
-#[derive(Debug)]
 pub(in crate::state) enum CarrierQueueRetirementError {
     /// No original service Queue capability was supplied for an actual retirement.
     Missing,
@@ -40,6 +39,35 @@ pub(in crate::state) enum CarrierQueueRetirementError {
     Unavailable(QueueLaneRetirementUnavailable),
     /// The captured retiring route lost its canonical predecessor identity.
     Geometry(LaneLifecycleError),
+}
+
+impl std::fmt::Debug for CarrierQueueRetirementError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => f.write_str("Missing"),
+            Self::ForeignState => f.write_str("ForeignState"),
+            Self::ForeignQueue => f.write_str("ForeignQueue"),
+            Self::Busy { field, wait } => f
+                .debug_struct("Busy")
+                .field("field", field)
+                .field("wait", wait)
+                .finish(),
+            Self::Pending {
+                lane,
+                dataspace,
+                incarnation,
+                wait,
+            } => f
+                .debug_struct("Pending")
+                .field("lane", lane)
+                .field("dataspace", dataspace)
+                .field("incarnation", incarnation)
+                .field("wait", wait)
+                .finish(),
+            Self::Unavailable(error) => f.debug_tuple("Unavailable").field(error).finish(),
+            Self::Geometry(error) => f.debug_tuple("Geometry").field(error).finish(),
+        }
+    }
 }
 
 /// Move-only custody retained until all authoritative State components are visible.

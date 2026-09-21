@@ -196,7 +196,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
     locks.locks.insert(owner, rec);
     let prev_height = raw_state.view().height();
     assert_eq!(prev_height, 0, "fresh test state should start at height 0");
-    iroha_core::query::insert_gov_referendum_for_test(&mut raw_state, rid.clone(), rr);
+    iroha_core::query::insert_gov_referendum_for_test(&mut raw_state, rid.clone(), rr.clone());
     iroha_core::query::insert_gov_locks_for_test(&mut raw_state, rid.clone(), locks);
     let empty_rid = "empty-rid".to_string();
     iroha_core::query::insert_gov_referendum_for_test(&mut raw_state, empty_rid.clone(), rr);

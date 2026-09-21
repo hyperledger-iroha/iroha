@@ -126,7 +126,7 @@ fn final_promotion_account_exact_holders_can_grant_and_revoke_without_capability
     );
     let context = Context {
         authority: authority.clone(),
-        curr_block: BlockHeader::new(NonZeroU64::new(2).expect("height"), None, None, None, 0, 0),
+        curr_block: BlockHeader::new(NonZeroU64::new(2).expect("height"), None, None, 0, 0),
     };
     for manage in [false, true] {
         let exact = token(manage, "production-primary");

@@ -183,6 +183,47 @@ fn poll(wait: &mut concread::release::ReleaseFuture) -> Poll<()> {
 }
 
 #[test]
+fn retirement_diagnostics_preserve_the_refusal_details_and_release_wait() {
+    let lock = crate::publication_lock::PublicationMutex::<()>::default();
+    let held = lock.lock();
+    let wait = lock.try_lock_or_wait().err().unwrap();
+    let error = CarrierQueueRetirementError::Busy {
+        field: "lane_reservation_transition_lock",
+        wait,
+    };
+    let diagnostic = format!("{error:?}");
+    assert!(diagnostic.contains("lane_reservation_transition_lock"));
+    assert!(diagnostic.contains("ReleaseWait"));
+    let CarrierQueueRetirementError::Busy { wait, .. } = error else {
+        unreachable!()
+    };
+    let mut wait = wait.wait_for_release();
+    assert!(poll(&mut wait).is_pending());
+    drop(held);
+    assert!(poll(&mut wait).is_ready());
+
+    for (error, expected) in [
+        (CarrierQueueRetirementError::Missing, "Missing"),
+        (CarrierQueueRetirementError::ForeignState, "ForeignState"),
+        (CarrierQueueRetirementError::ForeignQueue, "ForeignQueue"),
+        (
+            CarrierQueueRetirementError::Unavailable(
+                crate::queue::QueueLaneRetirementUnavailable::DurabilityFault,
+            ),
+            "Unavailable(DurabilityFault)",
+        ),
+        (
+            CarrierQueueRetirementError::Geometry(LaneLifecycleError::Storage(
+                "missing predecessor".to_owned(),
+            )),
+            "Geometry(Storage(\"missing predecessor\"))",
+        ),
+    ] {
+        assert_eq!(format!("{error:?}"), expected);
+    }
+}
+
+#[test]
 fn pending_queue_work_releases_without_applying_the_blocked_carrier() {
     let (mut state, _) = fixture(false);
     let (queue, clock) = crate::queue::tests::carrier_retirement_queue_fixture(&mut state);
@@ -209,6 +250,16 @@ fn pending_queue_work_releases_without_applying_the_blocked_carrier() {
     .unwrap();
     drop(lifecycle);
     drop(cleanup);
+    let diagnostic = format!("{refused:?}");
+    for detail in [
+        "Pending",
+        "lane:",
+        "dataspace:",
+        "incarnation:",
+        "ReleaseWait",
+    ] {
+        assert!(diagnostic.contains(detail), "{diagnostic}");
+    }
     let CarrierQueueRetirementError::Pending {
         lane,
         dataspace,

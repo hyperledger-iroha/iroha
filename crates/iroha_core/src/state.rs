@@ -2103,9 +2103,11 @@ pub(crate) struct DetachedBlockHashes {
     reserved_tip: Option<usize>,
 }
 impl DetachedBlockHashes {
+    #[cfg(test)]
     pub(crate) fn mode(&self) -> mv::BlockMode {
         self.mode
     }
+    #[cfg(test)]
     pub(crate) fn prefix(&self) -> BlockHashRange<'_> {
         BlockHashRange {
             source: self,
@@ -2113,6 +2115,7 @@ impl DetachedBlockHashes {
             end: self.visible_len,
         }
     }
+    #[cfg(test)]
     pub(crate) fn pending(&self) -> BlockHashRange<'_> {
         BlockHashRange {
             source: self,
@@ -2120,6 +2123,7 @@ impl DetachedBlockHashes {
             end: self.len(),
         }
     }
+    #[cfg(test)]
     pub(crate) fn matches_current(&self, target: &BlockHashes) -> bool {
         self.observe_current(target) == Ok(true)
     }
@@ -2132,6 +2136,7 @@ impl DetachedBlockHashes {
         };
         self.work.try_matches_current(map)
     }
+    #[cfg(test)]
     pub(crate) fn matches_block_predecessor(&self, block: &BlockHashesBlock<'_>) -> bool {
         self.mode == block.mode
             && self
