@@ -1591,7 +1591,7 @@ macro_rules! build_world_transaction_from_fields {
         [$($privacy:ident,)*]
         [$($suffix:ident,)*]
     ) => {
-        WorldTransaction {
+        Box::new(WorldTransaction {
             dataspace_catalog: $state.dataspace_catalog.clone(),
             axt_last_authorization_identities: axt_authorization_identities($state),
             axt_authorization_transitioned: BTreeSet::new(),
@@ -1608,7 +1608,7 @@ macro_rules! build_world_transaction_from_fields {
             #[cfg(feature = "telemetry")]
             telemetry: $telemetry,
             internal_event_buf: Vec::new(),
-        }
+        })
     };
 }
 macro_rules! build_world_transaction {
@@ -7627,7 +7627,12 @@ impl WorldBlock<'_> {
         out
     }
 }
-/// Struct for single transaction's aggregated changes
+/// Aggregated changes and original rollback journals for one transaction.
+///
+/// World block constructors return this journal in a [`Box`], retaining its
+/// allocation through execution and apply. Moving an enclosing transaction must
+/// not copy every store's checkpoint onto each caller's stack. Dropping the box
+/// without applying it restores the original store and cell checkpoints.
 pub struct WorldTransaction<'block, 'world> {
     /// Dataspace alias catalog used to qualify domain-backed aliases.
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
@@ -15190,8 +15195,9 @@ pub struct StateTransaction<'block, 'state> {
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
     touched_lanes: &'block mut BTreeSet<LaneId>,
-    /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
-    pub world: WorldTransaction<'block, 'state>,
+    /// Heap-owned World journal retained through execution, apply, and discard.
+    /// Enclosing transaction handoffs move the owner without copying all checkpoints.
+    pub world: Box<WorldTransaction<'block, 'state>>,
     /// Blockchain.
     pub block_hashes: BlockHashesTransaction<'block>,
     /// Merge-ledger cache retaining recent entries for this transaction scope.
@@ -23439,7 +23445,7 @@ macro_rules! impl_world_ro {
     )*};
 }
 impl_world_ro! {
-    WorldBlock<'_>, WorldTransaction<'_, '_>, WorldView<'_>
+    WorldBlock<'_>, WorldTransaction<'_, '_>, Box<WorldTransaction<'_, '_>>, WorldView<'_>
 }
 #[cfg(test)]
 mod bootle_lantern_policy_world_read_tests {
@@ -23698,7 +23704,7 @@ impl<'world> WorldBlock<'world> {
         #[cfg(feature = "telemetry")] telemetry: Option<&'world StateTelemetry>,
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
-    ) -> WorldTransaction<'_, 'world> {
+    ) -> Box<WorldTransaction<'_, 'world>> {
         let axt_lane_map = axt_lane_map_from_lane_config(&axt_lane_config);
         self.trasaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
@@ -23714,7 +23720,7 @@ impl<'world> WorldBlock<'world> {
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
         axt_lane_map: BTreeMap<DataSpaceId, LaneId>,
-    ) -> WorldTransaction<'_, 'world> {
+    ) -> Box<WorldTransaction<'_, 'world>> {
         build_world_transaction!(
             self,
             telemetry,
@@ -23731,7 +23737,7 @@ impl<'world> WorldBlock<'world> {
         &mut self,
         axt_lane_config: LaneConfig,
         axt_current_slot: u64,
-    ) -> WorldTransaction<'_, 'world> {
+    ) -> Box<WorldTransaction<'_, 'world>> {
         #[cfg(feature = "telemetry")]
         {
             self.trasaction(None, axt_lane_config, axt_current_slot)
@@ -26457,293 +26463,294 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) {
         self.track_confidential_policy_transition(definition_id, effective_height);
     }
-    /// Apply transaction's changes
+    /// Apply the heap-owned transaction journal to its original World block.
     #[allow(clippy::too_many_lines)]
-    pub fn apply(self) {
-        // NOTE: intentionally destruct self not to forget commit some fields
+    pub fn apply(mut self: Box<Self>) {
+        // Keep exhaustive field coverage without moving the complete journal
+        // off its heap allocation before applying the individual fields.
         let Self {
-            dataspace_catalog,
-            dataspace_catalog_sink,
-            parameters,
-            peers,
-            domain_committees,
-            domain_endorsement_policies,
-            domain_endorsements,
-            domain_endorsements_by_domain,
-            domains,
-            domains_by_owner,
-            kaigi_relay_registry,
-            kaigi_account_dependencies,
-            accounts,
-            uaid_accounts,
-            account_aliases,
-            account_aliases_by_account,
-            account_scope_directory,
-            account_scope_accounts,
-            opaque_uaids,
-            ram_lfe_program_policies,
-            identifier_policies,
-            fee_sponsor_programs,
-            fee_sponsor_program_revisions,
-            fee_sponsor_enrollments,
-            fee_sponsor_vaults,
-            fee_sponsor_budget_counters,
-            identifier_claims,
-            account_rekey_records,
-            account_rekey_records_by_account,
-            account_recovery_policies,
-            account_recovery_requests,
-            asset_definitions,
-            asset_definition_aliases,
-            asset_definition_alias_bindings,
-            contract_aliases,
-            contract_alias_bindings,
-            asset_definition_domains,
-            domain_asset_definitions,
-            asset_definitions_by_owner,
-            asset_definition_holders,
-            asset_definition_assets,
-            assets_by_account,
-            assets_by_domain,
-            asset_definition_nonzero_holders,
-            assets,
-            asset_metadata,
-            nfts,
-            nfts_by_owner,
-            nfts_by_domain,
-            rwas,
-            rwas_by_owner,
-            rwas_by_status,
-            rwas_by_frozen,
-            roles,
-            account_permissions,
-            account_roles,
-            oracle_feeds,
-            oracle_observations,
-            oracle_history,
-            oracle_provider_stats,
-            oracle_disputes,
-            oracle_changes,
-            defi_oracle_attestations,
-            twitter_bindings,
-            twitter_bindings_by_uaid,
-            viral_reward_budget,
-            viral_campaign_budget,
-            viral_daily_counters,
-            viral_binding_claims,
-            viral_escrows,
-            viral_bonus_paid,
-            asset_escrows,
-            asset_escrows_by_seller,
-            asset_escrows_by_buyer,
-            asset_escrows_by_status,
-            execution_proof_profiles,
-            execution_proof_verifications,
-            game_sessions,
-            nft_sale_offers,
-            nft_custody_records,
-            nft_custody_by_nft,
-            nft_custody_owner_refs,
-            nft_custody_domain_refs,
-            game_custody_by_account,
-            game_account_references,
-            game_asset_references,
-            vpn_leases,
-            vpn_active_lease_by_account,
-            vpn_active_lease_by_address_slot,
-            vpn_settled_leases_by_account,
-            uaid_dataspaces,
-            axt_policies,
-            axt_handle_counters,
-            axt_asset_incarnations,
-            axt_replay_ledger,
-            axt_handle_budget_ledger,
-            sccp_registry,
-            sccp_route_liabilities,
-            sccp_ton_breaker_observations,
-            sccp_replay_forests,
-            sccp_outbound_pending_usage,
-            sccp_outbound_pending_messages,
-            sccp_outbound_message_locator,
-            sccp_outbound_message_index,
-            sccp_inbound_anchor_high_water,
-            space_directory_manifests,
-            tx_sequences,
-            triggers,
-            executor,
-            executor_data_model,
-            verifying_keys,
-            verifying_keys_by_circuit,
-            consensus_keys,
-            consensus_keys_by_pk,
-            pedersen_params,
-            poseidon_params,
-            runtime_upgrades,
-            privacy_consensus_policy,
-            privacy_exact12_qualification,
-            privacy_activations,
-            private_settlement_governance,
-            private_settlement_pools,
-            private_settlement_roots,
-            private_settlement_nullifiers,
-            private_settlement_outputs,
-            private_settlement_recipient_index,
-            private_settlement_staged_locks,
-            private_settlement_receipts,
-            private_settlement_aborts,
-            privacy_pgc_accounts,
-            privacy_pgc_pool_invariants,
-            privacy_nullifiers,
-            privacy_commitments,
-            privacy_roots,
-            privacy_root_heads,
-            proofs,
-            proofs_by_status,
-            proof_tags,
-            proofs_by_tag,
-            contract_manifests,
-            contract_code,
-            contract_code_uploads,
-            contract_code_upload_chunks,
-            contract_instances,
-            contract_subject_bindings,
-            contract_subject_addresses,
-            smart_contract_state,
-            musubi_namespace_bindings,
-            musubi_domain_ownership_generations,
-            musubi_packages,
-            musubi_package_metadata,
-            musubi_package_members,
-            musubi_package_invitations,
-            musubi_maintainer_directory,
-            musubi_releases,
-            musubi_archives,
-            musubi_provider_bundle_attestations,
-            musubi_archive_locations,
-            musubi_locations_by_pin,
-            musubi_locations_by_replication_order,
-            musubi_locations_by_provider,
-            musubi_archive_availability,
-            musubi_archive_reverse_references,
-            musubi_resolver_index,
-            musubi_resolver_index_checkpoints,
-            musubi_public_directory,
-            musubi_aliases,
-            musubi_alias_history,
-            musubi_governance_decisions,
-            musubi_registry_policy,
-            musubi_resolver_index_revision,
-            musubi_replication_shortfall_releases,
-            soracloud_sequence_watermark,
-            soracloud_service_revisions,
-            soracloud_service_deployments,
-            soracloud_app_infra_states,
-            soracloud_service_runtime,
-            soracloud_inrou_replica_runtime,
-            soracloud_service_audit_events,
-            soracloud_app_infra_audit_events,
-            soracloud_service_state_entries,
-            soracloud_decryption_request_records,
-            soracloud_agent_apartments,
-            soracloud_agent_apartment_audit_events,
-            soracloud_training_jobs,
-            soracloud_training_job_audit_events,
-            soracloud_model_registries,
-            soracloud_model_weight_versions,
-            soracloud_model_weight_audit_events,
-            soracloud_model_artifacts,
-            soracloud_model_artifact_audit_events,
-            soracloud_uploaded_model_bundles,
-            soracloud_inrou_host_capabilities,
-            soracloud_hf_sources,
-            soracloud_hf_shared_lease_pools,
-            soracloud_hf_shared_lease_members,
-            soracloud_hf_shared_lease_audit_events,
-            soracloud_inrou_service_placements,
-            soracloud_mailbox_messages,
-            soracloud_runtime_receipts,
-            capacity_declarations,
-            capacity_fee_ledger,
-            capacity_disputes,
-            sorafs_pricing,
-            provider_credit_ledger,
-            provider_owners,
-            provider_ingest_completion_authorities,
-            da_pin_intents_by_ticket,
-            da_pin_intents_by_alias,
-            da_pin_intents_by_manifest,
-            da_pin_intents_by_lane_epoch,
-            pin_manifests,
-            manifest_aliases,
-            replication_orders,
-            content_bundles,
-            content_chunks,
-            soradns_directory_records,
-            soradns_directory_pending,
-            soradns_directory_latest,
-            soradns_directory_history,
-            soradns_directory_prev_of,
-            soradns_directory_revocations,
-            soradns_release_signers,
-            soradns_rotation_policy,
-            soradns_last_publish_ms,
-            soradns_history_len,
-            settlement_receipts,
-            kagemusha_reserve_pools,
-            kagemusha_reserve_operations,
-            kagemusha_mint_credit_operations,
-            kagemusha_issuance_operations,
-            kagemusha_redemption_id_operations,
-            kagemusha_terminal_nullifier_operations,
-            public_lane_validators,
-            public_lane_stake_shares,
-            public_lane_rewards,
-            public_lane_reward_claims,
-            lane_relay_emergency_validators,
-            repo_agreements,
-            repo_agreements_by_initiator,
-            repo_agreements_by_counterparty,
-            repo_agreements_by_custodian,
-            zk_assets,
-            confidential_policy_transition_index,
-            confidential_policy_transition_counts,
-            elections,
-            citizens,
-            ministry_agenda_proposals,
-            governance_proposals,
-            governance_referenda,
-            governance_locks,
-            governance_lock_expiry_index,
-            validation_fee_proposal_index,
-            governance_slashes,
-            governance_last_unlock_sweep_height,
-            governance_unlock_stats,
-            parliament_attempts,
-            parliament_attempt_counts,
-            parliament_member_reference_counts,
-            parliament_timed_ovn_resource_reservations,
-            parliament_timed_ovn_casting_candidates,
-            parliament_required_beacon_pulse_slots,
-            parliament_certified_enactments,
-            parliament_unavailable_beacon_pulse_slots,
-            parliament_tle_key_session_retention_deadlines,
-            tle_key_session_selection_intervals,
-            tle_key_sessions,
-            tle_key_session_rosters,
-            tle_key_session_lifecycles,
-            tle_active_key_session,
-            timed_ovn_evidence,
-            global_beacon_dkg,
-            global_beacon_key_sessions,
-            global_beacon_active_session,
-            global_beacon_latest_pulse,
-            global_beacon_pulses,
-            global_beacon_pulse_slots,
-            consensus_evidence,
-            external_event_sink,
-            mut external_event_buf,
-            merge_hint_roots,
-            merge_global_state_root,
+            dataspace_catalog: _,
+            dataspace_catalog_sink: _,
+            parameters: _,
+            peers: _,
+            domain_committees: _,
+            domain_endorsement_policies: _,
+            domain_endorsements: _,
+            domain_endorsements_by_domain: _,
+            domains: _,
+            domains_by_owner: _,
+            kaigi_relay_registry: _,
+            kaigi_account_dependencies: _,
+            accounts: _,
+            uaid_accounts: _,
+            account_aliases: _,
+            account_aliases_by_account: _,
+            account_scope_directory: _,
+            account_scope_accounts: _,
+            opaque_uaids: _,
+            ram_lfe_program_policies: _,
+            identifier_policies: _,
+            fee_sponsor_programs: _,
+            fee_sponsor_program_revisions: _,
+            fee_sponsor_enrollments: _,
+            fee_sponsor_vaults: _,
+            fee_sponsor_budget_counters: _,
+            identifier_claims: _,
+            account_rekey_records: _,
+            account_rekey_records_by_account: _,
+            account_recovery_policies: _,
+            account_recovery_requests: _,
+            asset_definitions: _,
+            asset_definition_aliases: _,
+            asset_definition_alias_bindings: _,
+            contract_aliases: _,
+            contract_alias_bindings: _,
+            asset_definition_domains: _,
+            domain_asset_definitions: _,
+            asset_definitions_by_owner: _,
+            asset_definition_holders: _,
+            asset_definition_assets: _,
+            assets_by_account: _,
+            assets_by_domain: _,
+            asset_definition_nonzero_holders: _,
+            assets: _,
+            asset_metadata: _,
+            nfts: _,
+            nfts_by_owner: _,
+            nfts_by_domain: _,
+            rwas: _,
+            rwas_by_owner: _,
+            rwas_by_status: _,
+            rwas_by_frozen: _,
+            roles: _,
+            account_permissions: _,
+            account_roles: _,
+            oracle_feeds: _,
+            oracle_observations: _,
+            oracle_history: _,
+            oracle_provider_stats: _,
+            oracle_disputes: _,
+            oracle_changes: _,
+            defi_oracle_attestations: _,
+            twitter_bindings: _,
+            twitter_bindings_by_uaid: _,
+            viral_reward_budget: _,
+            viral_campaign_budget: _,
+            viral_daily_counters: _,
+            viral_binding_claims: _,
+            viral_escrows: _,
+            viral_bonus_paid: _,
+            asset_escrows: _,
+            asset_escrows_by_seller: _,
+            asset_escrows_by_buyer: _,
+            asset_escrows_by_status: _,
+            execution_proof_profiles: _,
+            execution_proof_verifications: _,
+            game_sessions: _,
+            nft_sale_offers: _,
+            nft_custody_records: _,
+            nft_custody_by_nft: _,
+            nft_custody_owner_refs: _,
+            nft_custody_domain_refs: _,
+            game_custody_by_account: _,
+            game_account_references: _,
+            game_asset_references: _,
+            vpn_leases: _,
+            vpn_active_lease_by_account: _,
+            vpn_active_lease_by_address_slot: _,
+            vpn_settled_leases_by_account: _,
+            uaid_dataspaces: _,
+            axt_policies: _,
+            axt_handle_counters: _,
+            axt_asset_incarnations: _,
+            axt_replay_ledger: _,
+            axt_handle_budget_ledger: _,
+            sccp_registry: _,
+            sccp_route_liabilities: _,
+            sccp_ton_breaker_observations: _,
+            sccp_replay_forests: _,
+            sccp_outbound_pending_usage: _,
+            sccp_outbound_pending_messages: _,
+            sccp_outbound_message_locator: _,
+            sccp_outbound_message_index: _,
+            sccp_inbound_anchor_high_water: _,
+            space_directory_manifests: _,
+            tx_sequences: _,
+            triggers: _,
+            executor: _,
+            executor_data_model: _,
+            verifying_keys: _,
+            verifying_keys_by_circuit: _,
+            consensus_keys: _,
+            consensus_keys_by_pk: _,
+            pedersen_params: _,
+            poseidon_params: _,
+            runtime_upgrades: _,
+            privacy_consensus_policy: _,
+            privacy_exact12_qualification: _,
+            privacy_activations: _,
+            private_settlement_governance: _,
+            private_settlement_pools: _,
+            private_settlement_roots: _,
+            private_settlement_nullifiers: _,
+            private_settlement_outputs: _,
+            private_settlement_recipient_index: _,
+            private_settlement_staged_locks: _,
+            private_settlement_receipts: _,
+            private_settlement_aborts: _,
+            privacy_pgc_accounts: _,
+            privacy_pgc_pool_invariants: _,
+            privacy_nullifiers: _,
+            privacy_commitments: _,
+            privacy_roots: _,
+            privacy_root_heads: _,
+            proofs: _,
+            proofs_by_status: _,
+            proof_tags: _,
+            proofs_by_tag: _,
+            contract_manifests: _,
+            contract_code: _,
+            contract_code_uploads: _,
+            contract_code_upload_chunks: _,
+            contract_instances: _,
+            contract_subject_bindings: _,
+            contract_subject_addresses: _,
+            smart_contract_state: _,
+            musubi_namespace_bindings: _,
+            musubi_domain_ownership_generations: _,
+            musubi_packages: _,
+            musubi_package_metadata: _,
+            musubi_package_members: _,
+            musubi_package_invitations: _,
+            musubi_maintainer_directory: _,
+            musubi_releases: _,
+            musubi_archives: _,
+            musubi_provider_bundle_attestations: _,
+            musubi_archive_locations: _,
+            musubi_locations_by_pin: _,
+            musubi_locations_by_replication_order: _,
+            musubi_locations_by_provider: _,
+            musubi_archive_availability: _,
+            musubi_archive_reverse_references: _,
+            musubi_resolver_index: _,
+            musubi_resolver_index_checkpoints: _,
+            musubi_public_directory: _,
+            musubi_aliases: _,
+            musubi_alias_history: _,
+            musubi_governance_decisions: _,
+            musubi_registry_policy: _,
+            musubi_resolver_index_revision: _,
+            musubi_replication_shortfall_releases: _,
+            soracloud_sequence_watermark: _,
+            soracloud_service_revisions: _,
+            soracloud_service_deployments: _,
+            soracloud_app_infra_states: _,
+            soracloud_service_runtime: _,
+            soracloud_inrou_replica_runtime: _,
+            soracloud_service_audit_events: _,
+            soracloud_app_infra_audit_events: _,
+            soracloud_service_state_entries: _,
+            soracloud_decryption_request_records: _,
+            soracloud_agent_apartments: _,
+            soracloud_agent_apartment_audit_events: _,
+            soracloud_training_jobs: _,
+            soracloud_training_job_audit_events: _,
+            soracloud_model_registries: _,
+            soracloud_model_weight_versions: _,
+            soracloud_model_weight_audit_events: _,
+            soracloud_model_artifacts: _,
+            soracloud_model_artifact_audit_events: _,
+            soracloud_uploaded_model_bundles: _,
+            soracloud_inrou_host_capabilities: _,
+            soracloud_hf_sources: _,
+            soracloud_hf_shared_lease_pools: _,
+            soracloud_hf_shared_lease_members: _,
+            soracloud_hf_shared_lease_audit_events: _,
+            soracloud_inrou_service_placements: _,
+            soracloud_mailbox_messages: _,
+            soracloud_runtime_receipts: _,
+            capacity_declarations: _,
+            capacity_fee_ledger: _,
+            capacity_disputes: _,
+            sorafs_pricing: _,
+            provider_credit_ledger: _,
+            provider_owners: _,
+            provider_ingest_completion_authorities: _,
+            da_pin_intents_by_ticket: _,
+            da_pin_intents_by_alias: _,
+            da_pin_intents_by_manifest: _,
+            da_pin_intents_by_lane_epoch: _,
+            pin_manifests: _,
+            manifest_aliases: _,
+            replication_orders: _,
+            content_bundles: _,
+            content_chunks: _,
+            soradns_directory_records: _,
+            soradns_directory_pending: _,
+            soradns_directory_latest: _,
+            soradns_directory_history: _,
+            soradns_directory_prev_of: _,
+            soradns_directory_revocations: _,
+            soradns_release_signers: _,
+            soradns_rotation_policy: _,
+            soradns_last_publish_ms: _,
+            soradns_history_len: _,
+            settlement_receipts: _,
+            kagemusha_reserve_pools: _,
+            kagemusha_reserve_operations: _,
+            kagemusha_mint_credit_operations: _,
+            kagemusha_issuance_operations: _,
+            kagemusha_redemption_id_operations: _,
+            kagemusha_terminal_nullifier_operations: _,
+            public_lane_validators: _,
+            public_lane_stake_shares: _,
+            public_lane_rewards: _,
+            public_lane_reward_claims: _,
+            lane_relay_emergency_validators: _,
+            repo_agreements: _,
+            repo_agreements_by_initiator: _,
+            repo_agreements_by_counterparty: _,
+            repo_agreements_by_custodian: _,
+            zk_assets: _,
+            confidential_policy_transition_index: _,
+            confidential_policy_transition_counts: _,
+            elections: _,
+            citizens: _,
+            ministry_agenda_proposals: _,
+            governance_proposals: _,
+            governance_referenda: _,
+            governance_locks: _,
+            governance_lock_expiry_index: _,
+            validation_fee_proposal_index: _,
+            governance_slashes: _,
+            governance_last_unlock_sweep_height: _,
+            governance_unlock_stats: _,
+            parliament_attempts: _,
+            parliament_attempt_counts: _,
+            parliament_member_reference_counts: _,
+            parliament_timed_ovn_resource_reservations: _,
+            parliament_timed_ovn_casting_candidates: _,
+            parliament_required_beacon_pulse_slots: _,
+            parliament_certified_enactments: _,
+            parliament_unavailable_beacon_pulse_slots: _,
+            parliament_tle_key_session_retention_deadlines: _,
+            tle_key_session_selection_intervals: _,
+            tle_key_sessions: _,
+            tle_key_session_rosters: _,
+            tle_key_session_lifecycles: _,
+            tle_active_key_session: _,
+            timed_ovn_evidence: _,
+            global_beacon_dkg: _,
+            global_beacon_key_sessions: _,
+            global_beacon_active_session: _,
+            global_beacon_latest_pulse: _,
+            global_beacon_pulses: _,
+            global_beacon_pulse_slots: _,
+            consensus_evidence: _,
+            external_event_sink: _,
+            external_event_buf: _,
+            merge_hint_roots: _,
+            merge_global_state_root: _,
             #[cfg(feature = "telemetry")]
                 telemetry: _,
             internal_event_buf: _,
@@ -26753,289 +26760,290 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             axt_last_authorization_identities: _,
             axt_authorization_transitioned: _,
             current_dataspace_id: _,
-        } = self;
-        *dataspace_catalog_sink = dataspace_catalog;
-        if !external_event_buf.is_empty() {
-            external_event_sink.append(&mut external_event_buf);
+        } = self.as_ref();
+        *self.dataspace_catalog_sink = self.dataspace_catalog;
+        if !self.external_event_buf.is_empty() {
+            self.external_event_sink
+                .append(&mut self.external_event_buf);
         }
-        executor_data_model.apply();
-        executor.apply();
-        triggers.apply();
-        verifying_keys.apply();
-        verifying_keys_by_circuit.apply();
-        consensus_keys.apply();
-        consensus_keys_by_pk.apply();
-        pedersen_params.apply();
-        poseidon_params.apply();
-        runtime_upgrades.apply();
-        privacy_consensus_policy.apply();
-        privacy_exact12_qualification.apply();
-        privacy_activations.apply();
-        private_settlement_governance.apply();
-        private_settlement_pools.apply();
-        private_settlement_roots.apply();
-        private_settlement_nullifiers.apply();
-        private_settlement_outputs.apply();
-        private_settlement_recipient_index.apply();
-        private_settlement_staged_locks.apply();
-        private_settlement_receipts.apply();
-        private_settlement_aborts.apply();
-        privacy_pgc_accounts.apply();
-        privacy_pgc_pool_invariants.apply();
-        privacy_nullifiers.apply();
-        privacy_commitments.apply();
-        privacy_roots.apply();
-        privacy_root_heads.apply();
-        proofs.apply();
-        proofs_by_status.apply();
-        proof_tags.apply();
-        proofs_by_tag.apply();
-        consensus_evidence.apply();
-        merge_global_state_root.apply();
-        merge_hint_roots.apply();
-        contract_manifests.apply();
-        contract_code.apply();
-        contract_code_uploads.apply();
-        contract_code_upload_chunks.apply();
-        contract_instances.apply();
-        contract_subject_bindings.apply();
-        contract_subject_addresses.apply();
-        smart_contract_state.apply();
-        musubi_namespace_bindings.apply();
-        musubi_domain_ownership_generations.apply();
-        musubi_packages.apply();
-        musubi_package_metadata.apply();
-        musubi_package_members.apply();
-        musubi_package_invitations.apply();
-        musubi_maintainer_directory.apply();
-        musubi_releases.apply();
-        musubi_archives.apply();
-        musubi_provider_bundle_attestations.apply();
-        musubi_archive_locations.apply();
-        musubi_locations_by_pin.apply();
-        musubi_locations_by_replication_order.apply();
-        musubi_locations_by_provider.apply();
-        musubi_archive_availability.apply();
-        musubi_archive_reverse_references.apply();
-        musubi_resolver_index.apply();
-        musubi_resolver_index_checkpoints.apply();
-        musubi_public_directory.apply();
-        musubi_aliases.apply();
-        musubi_alias_history.apply();
-        musubi_governance_decisions.apply();
-        musubi_registry_policy.apply();
-        musubi_resolver_index_revision.apply();
-        musubi_replication_shortfall_releases.apply();
-        soracloud_sequence_watermark.apply();
-        soracloud_service_revisions.apply();
-        soracloud_service_deployments.apply();
-        soracloud_app_infra_states.apply();
-        soracloud_service_runtime.apply();
-        soracloud_inrou_replica_runtime.apply();
-        soracloud_service_audit_events.apply();
-        soracloud_app_infra_audit_events.apply();
-        soracloud_service_state_entries.apply();
-        soracloud_decryption_request_records.apply();
-        soracloud_agent_apartments.apply();
-        soracloud_agent_apartment_audit_events.apply();
-        soracloud_training_jobs.apply();
-        soracloud_training_job_audit_events.apply();
-        soracloud_model_registries.apply();
-        soracloud_model_weight_versions.apply();
-        soracloud_model_weight_audit_events.apply();
-        soracloud_model_artifacts.apply();
-        soracloud_model_artifact_audit_events.apply();
-        soracloud_uploaded_model_bundles.apply();
-        soracloud_inrou_host_capabilities.apply();
-        soracloud_hf_sources.apply();
-        soracloud_hf_shared_lease_pools.apply();
-        soracloud_hf_shared_lease_members.apply();
-        soracloud_hf_shared_lease_audit_events.apply();
-        soracloud_inrou_service_placements.apply();
-        soracloud_mailbox_messages.apply();
-        soracloud_runtime_receipts.apply();
-        capacity_disputes.apply();
-        capacity_fee_ledger.apply();
-        capacity_declarations.apply();
-        sorafs_pricing.apply();
-        provider_credit_ledger.apply();
-        provider_owners.apply();
-        provider_ingest_completion_authorities.apply();
-        da_pin_intents_by_ticket.apply();
-        da_pin_intents_by_alias.apply();
-        da_pin_intents_by_manifest.apply();
-        da_pin_intents_by_lane_epoch.apply();
-        pin_manifests.apply();
-        manifest_aliases.apply();
-        replication_orders.apply();
-        content_chunks.apply();
-        content_bundles.apply();
-        soradns_directory_records.apply();
-        soradns_directory_pending.apply();
-        soradns_directory_history.apply();
-        soradns_directory_prev_of.apply();
-        soradns_directory_revocations.apply();
-        soradns_release_signers.apply();
-        soradns_directory_latest.apply();
-        soradns_rotation_policy.apply();
-        soradns_last_publish_ms.apply();
-        soradns_history_len.apply();
-        settlement_receipts.apply();
-        kagemusha_reserve_pools.apply();
-        kagemusha_reserve_operations.apply();
-        kagemusha_mint_credit_operations.apply();
-        kagemusha_issuance_operations.apply();
-        kagemusha_redemption_id_operations.apply();
-        kagemusha_terminal_nullifier_operations.apply();
-        domain_committees.apply();
-        domain_endorsement_policies.apply();
-        domain_endorsements.apply();
-        domain_endorsements_by_domain.apply();
-        public_lane_validators.apply();
-        public_lane_stake_shares.apply();
-        public_lane_rewards.apply();
-        public_lane_reward_claims.apply();
-        lane_relay_emergency_validators.apply();
-        repo_agreements.apply();
-        repo_agreements_by_initiator.apply();
-        repo_agreements_by_counterparty.apply();
-        repo_agreements_by_custodian.apply();
-        zk_assets.apply();
-        confidential_policy_transition_index.apply();
-        confidential_policy_transition_counts.apply();
-        elections.apply();
-        citizens.apply();
-        ministry_agenda_proposals.apply();
-        governance_proposals.apply();
-        governance_referenda.apply();
-        governance_locks.apply();
-        governance_lock_expiry_index.apply();
-        validation_fee_proposal_index.apply();
-        governance_slashes.apply();
-        governance_last_unlock_sweep_height.apply();
-        governance_unlock_stats.apply();
-        parliament_attempts.apply();
-        parliament_attempt_counts.apply();
-        parliament_member_reference_counts.apply();
-        parliament_timed_ovn_resource_reservations.apply();
-        parliament_timed_ovn_casting_candidates.apply();
-        parliament_required_beacon_pulse_slots.apply();
-        parliament_certified_enactments.apply();
-        parliament_unavailable_beacon_pulse_slots.apply();
-        parliament_tle_key_session_retention_deadlines.apply();
-        tle_key_session_selection_intervals.apply();
-        tle_key_sessions.apply();
-        tle_key_session_rosters.apply();
-        tle_key_session_lifecycles.apply();
-        tle_active_key_session.apply();
-        timed_ovn_evidence.apply();
-        global_beacon_dkg.apply();
-        global_beacon_key_sessions.apply();
-        global_beacon_active_session.apply();
-        global_beacon_latest_pulse.apply();
-        global_beacon_pulses.apply();
-        global_beacon_pulse_slots.apply();
-        tx_sequences.apply();
-        oracle_disputes.apply();
-        oracle_changes.apply();
-        defi_oracle_attestations.apply();
-        oracle_provider_stats.apply();
-        oracle_history.apply();
-        oracle_observations.apply();
-        oracle_feeds.apply();
-        twitter_bindings_by_uaid.apply();
-        twitter_bindings.apply();
-        viral_bonus_paid.apply();
-        viral_escrows.apply();
-        asset_escrows.apply();
-        asset_escrows_by_seller.apply();
-        asset_escrows_by_buyer.apply();
-        asset_escrows_by_status.apply();
-        execution_proof_profiles.apply();
-        execution_proof_verifications.apply();
-        game_sessions.apply();
-        nft_sale_offers.apply();
-        nft_custody_records.apply();
-        nft_custody_by_nft.apply();
-        nft_custody_owner_refs.apply();
-        nft_custody_domain_refs.apply();
-        game_custody_by_account.apply();
-        game_account_references.apply();
-        game_asset_references.apply();
-        vpn_leases.apply();
-        vpn_active_lease_by_account.apply();
-        vpn_active_lease_by_address_slot.apply();
-        vpn_settled_leases_by_account.apply();
-        viral_binding_claims.apply();
-        viral_daily_counters.apply();
-        viral_campaign_budget.apply();
-        viral_reward_budget.apply();
-        account_roles.apply();
-        uaid_dataspaces.apply();
-        axt_policies.apply();
-        axt_handle_counters.apply();
-        axt_asset_incarnations.apply();
-        axt_replay_ledger.apply();
-        axt_handle_budget_ledger.apply();
-        sccp_registry.apply();
-        sccp_route_liabilities.apply();
-        sccp_ton_breaker_observations.apply();
-        sccp_replay_forests.apply();
-        sccp_outbound_pending_usage.apply();
-        sccp_outbound_pending_messages.apply();
-        sccp_outbound_message_locator.apply();
-        sccp_outbound_message_index.apply();
-        sccp_inbound_anchor_high_water.apply();
-        space_directory_manifests.apply();
-        account_permissions.apply();
-        roles.apply();
-        rwas.apply();
-        rwas_by_owner.apply();
-        rwas_by_status.apply();
-        rwas_by_frozen.apply();
-        nfts.apply();
-        nfts_by_owner.apply();
-        nfts_by_domain.apply();
-        identifier_claims.apply();
-        identifier_policies.apply();
-        fee_sponsor_programs.apply();
-        fee_sponsor_program_revisions.apply();
-        fee_sponsor_enrollments.apply();
-        fee_sponsor_vaults.apply();
-        fee_sponsor_budget_counters.apply();
-        ram_lfe_program_policies.apply();
-        account_recovery_requests.apply();
-        account_recovery_policies.apply();
-        account_rekey_records.apply();
-        account_rekey_records_by_account.apply();
-        asset_metadata.apply();
-        assets.apply();
-        asset_definition_alias_bindings.apply();
-        asset_definition_aliases.apply();
-        contract_alias_bindings.apply();
-        contract_aliases.apply();
-        asset_definition_domains.apply();
-        asset_definition_nonzero_holders.apply();
-        assets_by_domain.apply();
-        assets_by_account.apply();
-        asset_definition_assets.apply();
-        asset_definition_holders.apply();
-        asset_definitions_by_owner.apply();
-        domain_asset_definitions.apply();
-        asset_definitions.apply();
-        accounts.apply();
-        uaid_accounts.apply();
-        account_aliases.apply();
-        account_aliases_by_account.apply();
-        account_scope_directory.apply();
-        account_scope_accounts.apply();
-        opaque_uaids.apply();
-        domains.apply();
-        domains_by_owner.apply();
-        kaigi_relay_registry.apply();
-        kaigi_account_dependencies.apply();
-        peers.apply();
-        parameters.apply();
+        self.executor_data_model.apply();
+        self.executor.apply();
+        self.triggers.apply();
+        self.verifying_keys.apply();
+        self.verifying_keys_by_circuit.apply();
+        self.consensus_keys.apply();
+        self.consensus_keys_by_pk.apply();
+        self.pedersen_params.apply();
+        self.poseidon_params.apply();
+        self.runtime_upgrades.apply();
+        self.privacy_consensus_policy.apply();
+        self.privacy_exact12_qualification.apply();
+        self.privacy_activations.apply();
+        self.private_settlement_governance.apply();
+        self.private_settlement_pools.apply();
+        self.private_settlement_roots.apply();
+        self.private_settlement_nullifiers.apply();
+        self.private_settlement_outputs.apply();
+        self.private_settlement_recipient_index.apply();
+        self.private_settlement_staged_locks.apply();
+        self.private_settlement_receipts.apply();
+        self.private_settlement_aborts.apply();
+        self.privacy_pgc_accounts.apply();
+        self.privacy_pgc_pool_invariants.apply();
+        self.privacy_nullifiers.apply();
+        self.privacy_commitments.apply();
+        self.privacy_roots.apply();
+        self.privacy_root_heads.apply();
+        self.proofs.apply();
+        self.proofs_by_status.apply();
+        self.proof_tags.apply();
+        self.proofs_by_tag.apply();
+        self.consensus_evidence.apply();
+        self.merge_global_state_root.apply();
+        self.merge_hint_roots.apply();
+        self.contract_manifests.apply();
+        self.contract_code.apply();
+        self.contract_code_uploads.apply();
+        self.contract_code_upload_chunks.apply();
+        self.contract_instances.apply();
+        self.contract_subject_bindings.apply();
+        self.contract_subject_addresses.apply();
+        self.smart_contract_state.apply();
+        self.musubi_namespace_bindings.apply();
+        self.musubi_domain_ownership_generations.apply();
+        self.musubi_packages.apply();
+        self.musubi_package_metadata.apply();
+        self.musubi_package_members.apply();
+        self.musubi_package_invitations.apply();
+        self.musubi_maintainer_directory.apply();
+        self.musubi_releases.apply();
+        self.musubi_archives.apply();
+        self.musubi_provider_bundle_attestations.apply();
+        self.musubi_archive_locations.apply();
+        self.musubi_locations_by_pin.apply();
+        self.musubi_locations_by_replication_order.apply();
+        self.musubi_locations_by_provider.apply();
+        self.musubi_archive_availability.apply();
+        self.musubi_archive_reverse_references.apply();
+        self.musubi_resolver_index.apply();
+        self.musubi_resolver_index_checkpoints.apply();
+        self.musubi_public_directory.apply();
+        self.musubi_aliases.apply();
+        self.musubi_alias_history.apply();
+        self.musubi_governance_decisions.apply();
+        self.musubi_registry_policy.apply();
+        self.musubi_resolver_index_revision.apply();
+        self.musubi_replication_shortfall_releases.apply();
+        self.soracloud_sequence_watermark.apply();
+        self.soracloud_service_revisions.apply();
+        self.soracloud_service_deployments.apply();
+        self.soracloud_app_infra_states.apply();
+        self.soracloud_service_runtime.apply();
+        self.soracloud_inrou_replica_runtime.apply();
+        self.soracloud_service_audit_events.apply();
+        self.soracloud_app_infra_audit_events.apply();
+        self.soracloud_service_state_entries.apply();
+        self.soracloud_decryption_request_records.apply();
+        self.soracloud_agent_apartments.apply();
+        self.soracloud_agent_apartment_audit_events.apply();
+        self.soracloud_training_jobs.apply();
+        self.soracloud_training_job_audit_events.apply();
+        self.soracloud_model_registries.apply();
+        self.soracloud_model_weight_versions.apply();
+        self.soracloud_model_weight_audit_events.apply();
+        self.soracloud_model_artifacts.apply();
+        self.soracloud_model_artifact_audit_events.apply();
+        self.soracloud_uploaded_model_bundles.apply();
+        self.soracloud_inrou_host_capabilities.apply();
+        self.soracloud_hf_sources.apply();
+        self.soracloud_hf_shared_lease_pools.apply();
+        self.soracloud_hf_shared_lease_members.apply();
+        self.soracloud_hf_shared_lease_audit_events.apply();
+        self.soracloud_inrou_service_placements.apply();
+        self.soracloud_mailbox_messages.apply();
+        self.soracloud_runtime_receipts.apply();
+        self.capacity_disputes.apply();
+        self.capacity_fee_ledger.apply();
+        self.capacity_declarations.apply();
+        self.sorafs_pricing.apply();
+        self.provider_credit_ledger.apply();
+        self.provider_owners.apply();
+        self.provider_ingest_completion_authorities.apply();
+        self.da_pin_intents_by_ticket.apply();
+        self.da_pin_intents_by_alias.apply();
+        self.da_pin_intents_by_manifest.apply();
+        self.da_pin_intents_by_lane_epoch.apply();
+        self.pin_manifests.apply();
+        self.manifest_aliases.apply();
+        self.replication_orders.apply();
+        self.content_chunks.apply();
+        self.content_bundles.apply();
+        self.soradns_directory_records.apply();
+        self.soradns_directory_pending.apply();
+        self.soradns_directory_history.apply();
+        self.soradns_directory_prev_of.apply();
+        self.soradns_directory_revocations.apply();
+        self.soradns_release_signers.apply();
+        self.soradns_directory_latest.apply();
+        self.soradns_rotation_policy.apply();
+        self.soradns_last_publish_ms.apply();
+        self.soradns_history_len.apply();
+        self.settlement_receipts.apply();
+        self.kagemusha_reserve_pools.apply();
+        self.kagemusha_reserve_operations.apply();
+        self.kagemusha_mint_credit_operations.apply();
+        self.kagemusha_issuance_operations.apply();
+        self.kagemusha_redemption_id_operations.apply();
+        self.kagemusha_terminal_nullifier_operations.apply();
+        self.domain_committees.apply();
+        self.domain_endorsement_policies.apply();
+        self.domain_endorsements.apply();
+        self.domain_endorsements_by_domain.apply();
+        self.public_lane_validators.apply();
+        self.public_lane_stake_shares.apply();
+        self.public_lane_rewards.apply();
+        self.public_lane_reward_claims.apply();
+        self.lane_relay_emergency_validators.apply();
+        self.repo_agreements.apply();
+        self.repo_agreements_by_initiator.apply();
+        self.repo_agreements_by_counterparty.apply();
+        self.repo_agreements_by_custodian.apply();
+        self.zk_assets.apply();
+        self.confidential_policy_transition_index.apply();
+        self.confidential_policy_transition_counts.apply();
+        self.elections.apply();
+        self.citizens.apply();
+        self.ministry_agenda_proposals.apply();
+        self.governance_proposals.apply();
+        self.governance_referenda.apply();
+        self.governance_locks.apply();
+        self.governance_lock_expiry_index.apply();
+        self.validation_fee_proposal_index.apply();
+        self.governance_slashes.apply();
+        self.governance_last_unlock_sweep_height.apply();
+        self.governance_unlock_stats.apply();
+        self.parliament_attempts.apply();
+        self.parliament_attempt_counts.apply();
+        self.parliament_member_reference_counts.apply();
+        self.parliament_timed_ovn_resource_reservations.apply();
+        self.parliament_timed_ovn_casting_candidates.apply();
+        self.parliament_required_beacon_pulse_slots.apply();
+        self.parliament_certified_enactments.apply();
+        self.parliament_unavailable_beacon_pulse_slots.apply();
+        self.parliament_tle_key_session_retention_deadlines.apply();
+        self.tle_key_session_selection_intervals.apply();
+        self.tle_key_sessions.apply();
+        self.tle_key_session_rosters.apply();
+        self.tle_key_session_lifecycles.apply();
+        self.tle_active_key_session.apply();
+        self.timed_ovn_evidence.apply();
+        self.global_beacon_dkg.apply();
+        self.global_beacon_key_sessions.apply();
+        self.global_beacon_active_session.apply();
+        self.global_beacon_latest_pulse.apply();
+        self.global_beacon_pulses.apply();
+        self.global_beacon_pulse_slots.apply();
+        self.tx_sequences.apply();
+        self.oracle_disputes.apply();
+        self.oracle_changes.apply();
+        self.defi_oracle_attestations.apply();
+        self.oracle_provider_stats.apply();
+        self.oracle_history.apply();
+        self.oracle_observations.apply();
+        self.oracle_feeds.apply();
+        self.twitter_bindings_by_uaid.apply();
+        self.twitter_bindings.apply();
+        self.viral_bonus_paid.apply();
+        self.viral_escrows.apply();
+        self.asset_escrows.apply();
+        self.asset_escrows_by_seller.apply();
+        self.asset_escrows_by_buyer.apply();
+        self.asset_escrows_by_status.apply();
+        self.execution_proof_profiles.apply();
+        self.execution_proof_verifications.apply();
+        self.game_sessions.apply();
+        self.nft_sale_offers.apply();
+        self.nft_custody_records.apply();
+        self.nft_custody_by_nft.apply();
+        self.nft_custody_owner_refs.apply();
+        self.nft_custody_domain_refs.apply();
+        self.game_custody_by_account.apply();
+        self.game_account_references.apply();
+        self.game_asset_references.apply();
+        self.vpn_leases.apply();
+        self.vpn_active_lease_by_account.apply();
+        self.vpn_active_lease_by_address_slot.apply();
+        self.vpn_settled_leases_by_account.apply();
+        self.viral_binding_claims.apply();
+        self.viral_daily_counters.apply();
+        self.viral_campaign_budget.apply();
+        self.viral_reward_budget.apply();
+        self.account_roles.apply();
+        self.uaid_dataspaces.apply();
+        self.axt_policies.apply();
+        self.axt_handle_counters.apply();
+        self.axt_asset_incarnations.apply();
+        self.axt_replay_ledger.apply();
+        self.axt_handle_budget_ledger.apply();
+        self.sccp_registry.apply();
+        self.sccp_route_liabilities.apply();
+        self.sccp_ton_breaker_observations.apply();
+        self.sccp_replay_forests.apply();
+        self.sccp_outbound_pending_usage.apply();
+        self.sccp_outbound_pending_messages.apply();
+        self.sccp_outbound_message_locator.apply();
+        self.sccp_outbound_message_index.apply();
+        self.sccp_inbound_anchor_high_water.apply();
+        self.space_directory_manifests.apply();
+        self.account_permissions.apply();
+        self.roles.apply();
+        self.rwas.apply();
+        self.rwas_by_owner.apply();
+        self.rwas_by_status.apply();
+        self.rwas_by_frozen.apply();
+        self.nfts.apply();
+        self.nfts_by_owner.apply();
+        self.nfts_by_domain.apply();
+        self.identifier_claims.apply();
+        self.identifier_policies.apply();
+        self.fee_sponsor_programs.apply();
+        self.fee_sponsor_program_revisions.apply();
+        self.fee_sponsor_enrollments.apply();
+        self.fee_sponsor_vaults.apply();
+        self.fee_sponsor_budget_counters.apply();
+        self.ram_lfe_program_policies.apply();
+        self.account_recovery_requests.apply();
+        self.account_recovery_policies.apply();
+        self.account_rekey_records.apply();
+        self.account_rekey_records_by_account.apply();
+        self.asset_metadata.apply();
+        self.assets.apply();
+        self.asset_definition_alias_bindings.apply();
+        self.asset_definition_aliases.apply();
+        self.contract_alias_bindings.apply();
+        self.contract_aliases.apply();
+        self.asset_definition_domains.apply();
+        self.asset_definition_nonzero_holders.apply();
+        self.assets_by_domain.apply();
+        self.assets_by_account.apply();
+        self.asset_definition_assets.apply();
+        self.asset_definition_holders.apply();
+        self.asset_definitions_by_owner.apply();
+        self.domain_asset_definitions.apply();
+        self.asset_definitions.apply();
+        self.accounts.apply();
+        self.uaid_accounts.apply();
+        self.account_aliases.apply();
+        self.account_aliases_by_account.apply();
+        self.account_scope_directory.apply();
+        self.account_scope_accounts.apply();
+        self.opaque_uaids.apply();
+        self.domains.apply();
+        self.domains_by_owner.apply();
+        self.kaigi_relay_registry.apply();
+        self.kaigi_account_dependencies.apply();
+        self.peers.apply();
+        self.parameters.apply();
     }
     /// Get `Domain` with an ability to modify it.
     ///
