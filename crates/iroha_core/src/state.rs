@@ -5417,8 +5417,47 @@ enum ParliamentTimedOvnResourceReservationErrorV1 {
 
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
+///
+/// Storage fields retain one heap allocation across construction, state handoff
+/// and snapshot restoration. Moving a world never moves its complete collection
+/// of storage owners through nested stack frames.
+#[derive(Default)]
+pub struct World(Box<WorldData>);
+
+impl std::ops::Deref for World {
+    type Target = WorldData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for World {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl json::FastJsonWrite for World {
+    fn json_object_field_order() -> Option<&'static [&'static str]> {
+        <WorldData as json::FastJsonWrite>::json_object_field_order()
+    }
+
+    fn write_json(&self, output: &mut String) {
+        self.0.write_json(output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(output)
+    }
+}
+
+/// Heap-owned storage fields of [`World`], serialized in canonical schema order.
 #[derive(Default, JsonSerialize)]
-pub struct World {
+pub struct WorldData {
     /// Iroha on-chain parameters.
     pub(crate) parameters: Cell<Parameters>,
     /// Identifications of discovered peers.
@@ -12681,7 +12720,7 @@ mod view_lock_contention_log_tests {
 ///
 /// Merge-ledger finality plumbing is specified in `specs/merge_ledger.md`.
 /// The lane/global reduction metadata exposed by the merge ledger is stored in
-/// [`World::merge_hint_roots`] and [`World::merge_global_state_root`] so queries can
+/// [`WorldData::merge_hint_roots`] and [`WorldData::merge_global_state_root`] so queries can
 /// surface the latest committee commitments.
 pub struct State {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
@@ -20279,7 +20318,7 @@ impl World {
             .map(IntoKeyValue::into_key_value)
             .collect();
         let nfts = nfts.into_iter().map(IntoKeyValue::into_key_value).collect();
-        let mut world = Self {
+        let mut world = Self(Box::new(WorldData {
             domains,
             domains_by_owner: Storage::default(),
             kaigi_relay_registry: Storage::default(),
@@ -20352,8 +20391,8 @@ impl World {
             governance_last_unlock_sweep_height: Cell::default(),
             governance_unlock_stats: Cell::default(),
             parliament_attempts: Storage::default(),
-            ..Self::new()
-        };
+            ..WorldData::default()
+        }));
         world
             .validate_numeric_asset_invariants()
             .expect("invalid numeric asset state in world constructor");

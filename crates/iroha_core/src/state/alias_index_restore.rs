@@ -50,9 +50,9 @@ fn inverse<K: mv::Key, V: mv::Value, A: mv::Key + std::fmt::Display>(
 }
 
 pub(super) fn assets(world: &mut World) -> Result<(), String> {
-    let definitions = world.asset_definitions.history();
-    let domains = world.domains.history();
-    let bindings = world.asset_definition_alias_bindings.history();
+    let definitions = world.0.asset_definitions.history();
+    let domains = world.0.domains.history();
+    let bindings = world.0.asset_definition_alias_bindings.history();
     // Inline aliases are invalid in either image, including deleted definitions.
     for (id, definition) in definitions
         .current()

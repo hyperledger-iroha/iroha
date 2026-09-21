@@ -37,6 +37,11 @@ initializer callbacks and handoff. Replay preparation also retains a boxed State
 the daemon converts its owned restored State to `Arc<State>`. Nested helpers must
 not return whole State values on each stack frame. Ordinary-stack snapshot tests
 cover this ownership boundary; no thread-stack override is part of restoration.
+`World` likewise retains its storage fields in one boxed `WorldData` through
+ordinary State construction and snapshot assembly. Its pointer-sized handle
+forwards canonical field order and checked JSON serialization to those fields;
+the allocation adds no wrapper object to the snapshot schema. Fixed 2 MiB stack
+regressions cover construction, approved-pin validation and current/undo restore.
 
 Current and actual predecessor records must be validated together. A derived
 index must reconstruct both projections from the corresponding authoritative

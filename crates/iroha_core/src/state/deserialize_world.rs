@@ -8132,7 +8132,7 @@ fn parse_world(
     let da_pin_intents_by_manifest = take_required(&mut map, "da_pin_intents_by_manifest")?;
     let da_pin_intents_by_lane_epoch = take_required(&mut map, "da_pin_intents_by_lane_epoch")?;
     reject_unknown(&map, "world")?;
-    let mut world = World {
+    let mut world = World(Box::new(WorldData {
         parameters,
         peers,
         domains,
@@ -8413,7 +8413,7 @@ fn parse_world(
         merge_global_state_root,
         consensus_evidence,
         external_event_buf,
-    };
+    }));
     validate_da_pin_persistence(&world)?;
     validate_asset_transfer_control_persistence_v1(&world)?;
     world
