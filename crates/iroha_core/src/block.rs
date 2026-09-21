@@ -2659,9 +2659,19 @@ impl fmt::Display for AxtEnvelopeValidationDetails {
         write!(f, ")")
     }
 }
+impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockValidationError {
+    fn from(error: crate::state::StateBlockStartError<Self>) -> Self {
+        match error {
+            crate::state::StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
+            crate::state::StateBlockStartError::Stage(error) => error,
+        }
+    }
+}
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum BlockValidationError {
+    /// Local hash-history admission failed before State execution: {0}
+    BlockHashAdmission(crate::state::BlockHashAdmissionError),
     /// Block has committed transactions
     HasCommittedTransactions,
     /// Block contained no committed overlays
@@ -2857,6 +2867,7 @@ impl BlockValidationError {
     ) -> Self {
         use crate::state::MergeLedgerCommitError;
         match error {
+            MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
             MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
                 Self::MissingCertifiedMergeSidecar { entry_hash }
             }
@@ -7177,7 +7188,8 @@ pub(crate) mod valid {
                             })?;
                         apply_npos(state_block)
                     })
-                    .map(Box::new);
+                    .map(Box::new)
+                    .map_err(BlockValidationError::from);
             }
             if let Some(reference) = merge_reference {
                 if soft_fork {
@@ -7216,7 +7228,8 @@ pub(crate) mod valid {
                             apply_npos(state_block)
                         }
                     })
-                    .map(Box::new);
+                    .map(Box::new)
+                    .map_err(BlockValidationError::from);
             }
             let state_block = if soft_fork {
                 state.block_and_revert_with_pristine_stage(block.header(), apply_npos)
@@ -7493,11 +7506,31 @@ pub(crate) mod valid {
                     .is_some_and(|parent_creation_time| {
                         state.time_trigger_clock_progress_required_fast(parent_creation_time)
                     });
-                if !candidate_block_has_proposal_work(
+                let proposal_work = candidate_block_has_proposal_work(
                     &block,
                     state,
                     time_trigger_clock_progress_required,
-                ) {
+                );
+                let has_work = match proposal_work {
+                    Ok(has_work) => has_work,
+                    Err(error) => {
+                        let error = match error {
+                            crate::state::StateBlockStartError::History(error) => {
+                                BlockValidationError::BlockHashAdmission(error)
+                            }
+                            crate::state::StateBlockStartError::Stage(error) => {
+                                BlockValidationError::LocalStorageRecoveryRequired {
+                                    reason: format!(
+                                        "persisted runtime ABI admission failed: {error:?}"
+                                    ),
+                                }
+                            }
+                        };
+                        record_timings(&mut timings, stateless_start.elapsed(), None);
+                        return WithEvents::new(Err((Box::new(block), Box::new(error))));
+                    }
+                };
+                if !has_work {
                     let stateless_elapsed = stateless_start.elapsed();
                     record_timings(&mut timings, stateless_elapsed, None);
                     let error = BlockValidationError::EmptyBlock;
@@ -8271,7 +8304,12 @@ pub(crate) mod valid {
             let expected_actions = applier
                 .derive_npos_penalty_actions(&block.header())
                 .map_err(|err| {
-                    Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
+                    if let Some(local) = err.downcast_ref::<crate::state::BlockHashAdmissionError>()
+                    {
+                        BlockValidationError::BlockHashAdmission(local.clone())
+                    } else {
+                        Self::npos_effects_error(format!("failed to derive NPoS effects: {err}"))
+                    }
                 })?;
             let actual_actions = actual_effects
                 .map(|effects| effects.penalty_actions.as_slice())
@@ -24139,7 +24177,8 @@ mod event {
     ) -> Option<iroha_data_model::block::error::BlockRejectionReason> {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
-            BlockValidationError::LocalStorageRecoveryRequired { .. } => return None,
+            BlockValidationError::LocalStorageRecoveryRequired { .. }
+            | BlockValidationError::BlockHashAdmission(_) => return None,
             BlockValidationError::HasCommittedTransactions => Reason::ContainsCommittedTransactions,
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions

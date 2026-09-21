@@ -23,14 +23,13 @@ use iroha_config::parameters::{
 };
 use iroha_core::{
     queue::{Error as QueueError, Queue},
-    state::{State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
+    state::{BlockHashRead, State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::BlockHeader,
     isi::sorafs::CompleteReplicationOrder,
     musubi::{
         MusubiArchiveCommitmentV1, MusubiProviderBundleAttestationKeyV1,
@@ -2426,16 +2425,18 @@ impl ProviderIngestRuntimeHandleV1 {
 fn committed_head_matches_hash_journal(
     head_height: u64,
     head_hash: [u8; 32],
-    committed_hashes: &[HashOf<BlockHeader>],
+    committed_hashes: &(impl BlockHashRead + ?Sized),
 ) -> bool {
-    usize::try_from(head_height).ok() == Some(committed_hashes.len())
+    usize::try_from(head_height).ok() == Some(committed_hashes.hash_count())
         && committed_hashes
-            .last()
+            .hash_count()
+            .checked_sub(1)
+            .and_then(|index| committed_hashes.hash_at(index))
             .is_some_and(|hash| *hash.as_ref() == head_hash)
 }
 fn cursor_matches_committed_hashes(
     cursor: ProviderIngestFinalizedCursorV1,
-    committed_hashes: &[HashOf<BlockHeader>],
+    committed_hashes: &(impl BlockHashRead + ?Sized),
 ) -> bool {
     let Some(index) = usize::try_from(cursor.height)
         .ok()
@@ -2445,7 +2446,7 @@ fn cursor_matches_committed_hashes(
     };
     cursor.block_hash != [0; 32]
         && committed_hashes
-            .get(index)
+            .hash_at(index)
             .is_some_and(|hash| *hash.as_ref() == cursor.block_hash)
 }
 fn completion_payload_anchor_matches_committed_chain(
@@ -2455,7 +2456,7 @@ fn completion_payload_anchor_matches_committed_chain(
     head_height: u64,
     head_hash: [u8; 32],
     head_at_unix_ms: u64,
-    committed_hashes: &[HashOf<BlockHeader>],
+    committed_hashes: &(impl BlockHashRead + ?Sized),
 ) -> bool {
     let finalized_unix_epoch = finalized_at_unix_ms / MILLIS_PER_UNIX_SECOND;
     let head_unix_epoch = head_at_unix_ms / MILLIS_PER_UNIX_SECOND;
@@ -2469,7 +2470,7 @@ fn completed_cursor_matches_committed_chain(
     completed: Option<ProviderIngestFinalizedCursorV1>,
     head_height: u64,
     head_hash: [u8; 32],
-    committed_hashes: &[HashOf<BlockHeader>],
+    committed_hashes: &(impl BlockHashRead + ?Sized),
 ) -> bool {
     let Some(completed) = completed else {
         return false;

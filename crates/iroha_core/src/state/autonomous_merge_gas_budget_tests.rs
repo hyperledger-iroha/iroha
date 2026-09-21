@@ -228,7 +228,7 @@ fn autonomous_merge_gas_priority_preserves_old_source_and_canonical_order_on_con
                 1,
                 empty_global_block_after(Some(&parent)).header(),
                 selected,
-            )
+            ).expect("fixture hash admission")
             .expect("selected sources are restored to canonical execution order");
         assert_eq!(
             batch

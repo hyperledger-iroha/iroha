@@ -114,7 +114,7 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
         iroha_torii::Error::Query(vf) => match vf {
             iroha_data_model::ValidationFail::QueryFailed(qf) => match qf {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(msg) => {
-                    assert_eq!(msg, "invalid id");
+                    assert_eq!(msg, "proposal id must be exact lowercase 32-byte hex");
                 }
                 other => panic!("unexpected query fail variant: {other:?}"),
             },
@@ -131,7 +131,7 @@ async fn gov_proposal_get_invalid_id_and_missing_entry() {
         iroha_torii::Error::Query(vf) => match vf {
             iroha_data_model::ValidationFail::QueryFailed(qf) => match qf {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(msg) => {
-                    assert_eq!(msg, "invalid id length");
+                    assert_eq!(msg, "proposal id must be exact lowercase 32-byte hex");
                 }
                 other => panic!("unexpected query fail variant: {other:?}"),
             },
@@ -196,6 +196,8 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
     assert_eq!(prev_height, 0, "fresh test state should start at height 0");
     iroha_core::query::insert_gov_referendum_for_test(&mut raw_state, rid.clone(), rr);
     iroha_core::query::insert_gov_locks_for_test(&mut raw_state, rid.clone(), locks);
+    let empty_rid = "empty-rid".to_string();
+    iroha_core::query::insert_gov_referendum_for_test(&mut raw_state, empty_rid.clone(), rr);
     let state = Arc::new(raw_state);
     // GET referendum
     let resp_r = iroha_torii::handle_gov_get_referendum(state.clone(), AxPath(rid.clone()))
@@ -249,7 +251,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         vt.get("approve").and_then(norito::json::Value::as_u64),
         Some(expected_approve as u64)
     );
-    // Missing ids: referendum/locks not present → found=false; tally zeros
+    // Missing referendum/locks return found=false; an absent tally returns NotFound.
     let missing_id = "missing-rid".to_string();
     let resp_rm = iroha_torii::handle_gov_get_referendum(state.clone(), AxPath(missing_id.clone()))
         .await
@@ -271,9 +273,19 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         vlm.get("found").and_then(norito::json::Value::as_bool),
         Some(false)
     );
-    let resp_tm = iroha_torii::handle_gov_get_tally(state, AxPath(missing_id))
+    let missing_tally = iroha_torii::handle_gov_get_tally(state.clone(), AxPath(missing_id))
         .await
-        .expect("handler ok")
+        .expect_err("an absent referendum cannot establish a zero tally");
+    assert!(matches!(
+        missing_tally,
+        iroha_torii::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound
+        ))
+    ));
+    // An existing referendum without votes has a genuine zero tally.
+    let resp_tm = iroha_torii::handle_gov_get_tally(state, AxPath(empty_rid))
+        .await
+        .expect("empty referendum tally")
         .into_response();
     let btm = resp_tm.into_body().collect().await.unwrap().to_bytes();
     let vtm: norito::json::Value = norito::json::from_slice(&btm).unwrap();

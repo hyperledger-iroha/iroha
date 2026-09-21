@@ -3581,6 +3581,8 @@ impl MaybeTelemetry {
                 blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
                 lane_history_retention:
                     iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+                block_hash_history_bytes:
+                    iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
                 fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
                 replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
                 debug_output_new_blocks: false,
@@ -7533,6 +7535,8 @@ pub(crate) mod sccp_first_release_api_tests {
             blocks_in_memory: std::num::NonZeroUsize::new(1).expect("one retained body"),
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,

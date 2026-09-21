@@ -1,9 +1,9 @@
-//! Minimal MV (multi-version) storage traits used in tests and lightweight
-//! components. This crate defines the `Key` and `Value` marker traits and
-//! exposes simple cell and storage modules for multi-version concurrency.
+//! Multi-version storage for deterministic State execution and retained publication.
 //!
-//! The abstractions here are intentionally small to avoid pulling heavy dependencies. They are
-//! suitable for in-memory testing or thin adapters in higher-level crates.
+//! Cells and ordered maps preserve their original current and undo generations
+//! through private edits, rollback, detached publication and retained readers.
+//! Explicit prepaid modes attach layout credits to their actual allocation owners;
+//! callers must separately admit nested payloads and aggregate execution work.
 use core::fmt::Debug;
 /// Finite prepaid custody for explicitly enumerated allocation layouts.
 pub mod allocation;

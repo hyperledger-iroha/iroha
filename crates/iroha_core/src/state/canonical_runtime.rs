@@ -56,7 +56,6 @@ impl CapturedRuntimePolicy {
 
 pub(super) struct AcquiredRuntimeBlock<'state> {
     pub(super) world: WorldBlock<'state>,
-    pub(super) block_hashes: BlockHashesBlock<'state>,
     pub(super) transactions: TransactionsBlock<'state>,
     pub(super) commit_topology: CellBlock<'state, Vec<PeerId>>,
     pub(super) prev_commit_topology: CellBlock<'state, Vec<PeerId>>,
@@ -64,6 +63,7 @@ pub(super) struct AcquiredRuntimeBlock<'state> {
     pub(super) canonical_runtime: CellBlock<'state, SnapshotNexusRuntime>,
     pub(super) projection: CanonicalRuntimeProjection,
     pub(super) sccp_registry: Arc<ValidatedSccpRegistryV1>,
+    pub(super) block_hashes: BlockHashesBlock<'state>,
 }
 
 impl SnapshotNexusRuntime {
@@ -426,7 +426,7 @@ impl State {
     pub(super) fn acquire_canonical_runtime_block(
         &self,
         replacement: bool,
-    ) -> AcquiredRuntimeBlock<'_> {
+    ) -> Result<AcquiredRuntimeBlock<'_>, BlockHashAdmissionError> {
         loop {
             let generation = self.state_view_generation();
             if generation % 2 != 0 {
@@ -435,11 +435,8 @@ impl State {
             }
             // All constructors use the same order. Every guard is dropped before
             // retry; a World-only generation check cannot bind the predecessor.
-            let block_hashes = if replacement {
-                self.block_hashes.block_and_revert()
-            } else {
-                self.block_hashes.block()
-            };
+            // Hash construction detaches its private tree before waiting for World.
+            let block_hashes = self.block_hashes.try_next_block(replacement)?;
             let mut world = if replacement {
                 self.world.block_and_revert()
             } else {
@@ -486,7 +483,7 @@ impl State {
             let projection =
                 projection.expect("persisted canonical runtime projection must be valid");
             world.dataspace_catalog = projection.nexus.dataspace_catalog.clone();
-            return AcquiredRuntimeBlock {
+            return Ok(AcquiredRuntimeBlock {
                 world,
                 block_hashes,
                 transactions,
@@ -496,7 +493,7 @@ impl State {
                 canonical_runtime,
                 projection,
                 sccp_registry,
-            };
+            });
         }
     }
 }

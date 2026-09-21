@@ -64,13 +64,17 @@ fn genesis(
     for instruction in instructions {
         builder = builder.append_instruction(instruction.clone());
     }
+    let mut nexus = nexus.clone();
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    let proof_policies = crate::da::active_proof_policy_bundle_at_height(&nexus, 1);
     let genesis = builder
         .build_raw()
         .unwrap()
         .with_consensus_meta()
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
             &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-            Some(crate::da::active_proof_policy_bundle_at_height(nexus, 1)),
+            Some(proof_policies),
             None,
             1_000,
         )

@@ -557,7 +557,7 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
     )
     support.replace_once_after(
         path,
-        "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
+        "fn run_autonomous_merge_frontier_fixture(",
         "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle()",
         "ApplyFixture::new_for_production_recovered_decision_apply_with_lane_lifecycle()",
     )
@@ -595,6 +595,11 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
         in error
         for error in errors
     ), errors
+    support.shutil.copy2(
+        support.ROOT_DIR
+        / "crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs",
+        fixture_path,
+    )
 
     support.shutil.copy2(
         support.ROOT_DIR
@@ -604,7 +609,7 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
     )
     support.replace_once_after(
         path,
-        "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
+        "fn run_autonomous_merge_frontier_fixture(",
         "for _ in 0..4 {",
         "for _ in 0..3 {",
     )
@@ -625,16 +630,16 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
     )
     support.replace_once_after(
         path,
-        "historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application",
-        '"planned merge association authorizes exact Native startup repair"',
-        '"startup repair no longer checks its planned merge association"',
+        "fn run_autonomous_merge_frontier_fixture(",
+        "assert_retired_merge_candidate_rejected(",
+        "skip_retired_merge_candidate_rejection(",
     )
     errors = support.validate_native_prepublication_fixture(
         tmp_path, module, models
     )
     assert any(
         "Native corridor macro test" in error
-        and "planned merge association" in error
+        and "assert_retired_merge_candidate_rejected" in error
         for error in errors
     ), errors
 
@@ -712,11 +717,11 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
             "canonical_native_amx_application_sources",
         ),
         (
-            "crates/iroha_core/src/state/carrier_preparation.rs",
-            "pub(crate) fn prepare(",
-            "                    state.staged_merge_entry(),\n",
-            "                    None,\n",
-            "PreparedCarrier::prepare",
+            "crates/iroha_core/src/state/carrier_preparation/execution_prefix.rs",
+            "fn capture(",
+            "                block, None,\n",
+            "                block, state.staged_merge_entry(),\n",
+            "PrefixPreparation::capture",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_apply.rs",
@@ -792,7 +797,7 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
     ),
     ids=(
         "selector-drops-merge-entry",
-        "proposal-commitment-drops-staged-entry",
+        "proposal-prefix-reintroduces-retired-merge-entry",
         "apply-commitment-drops-staged-entry",
         "prepublication-drops-staged-entry",
         "frontier-projector-drops-merge-entry",

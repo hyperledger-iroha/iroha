@@ -1332,7 +1332,7 @@ fn unpersisted_autonomous_merge_commit_fixture(
         0,
     );
     let batch = state
-        .build_merge_execution_batch_from_source_prefix(1, application_header, vec![source])
+        .build_merge_execution_batch_from_source_prefix(1, application_header, vec![source]).expect("fixture hash admission")
         .expect("fixture source produces a canonical autonomous execution batch");
     if runtime_effect.is_some() {
         for lane in &batch.lanes {

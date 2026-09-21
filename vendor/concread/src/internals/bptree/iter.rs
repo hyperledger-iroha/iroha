@@ -3,17 +3,67 @@
 // Iterators for the bptree
 use super::node::{Branch, Leaf, Meta, Node, Untracked};
 use std::borrow::Borrow;
-use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{Bound, RangeBounds};
+
+// A balanced tree with at least two children per branch and a nonempty leaf
+// below each child has at most usize::BITS branch levels for its usize entry
+// count. The extra slot holds the leaf, including an empty root leaf. This is
+// the same bound used by Node::visit_tree; private checkpoints expose only
+// completed tree edits, so they satisfy the same invariant.
+const PATH_CAPACITY: usize = usize::BITS as usize + 1;
+
+/// Borrowed traversal positions. The initialized array owns no nodes or charges.
+struct LeafPath<K, V, C> {
+    entries: [(*mut Node<K, V, C>, usize); PATH_CAPACITY],
+    len: usize,
+}
+
+impl<K, V, C> LeafPath<K, V, C> {
+    fn new() -> Self {
+        Self {
+            entries: [(std::ptr::null_mut(), 0); PATH_CAPACITY],
+            len: 0,
+        }
+    }
+
+    fn push_back(&mut self, entry: (*mut Node<K, V, C>, usize)) {
+        assert!(self.len < PATH_CAPACITY, "B+tree exceeds its height bound");
+        self.entries[self.len] = entry;
+        self.len += 1;
+    }
+
+    fn pop_back(&mut self) -> Option<(*mut Node<K, V, C>, usize)> {
+        self.len = self.len.checked_sub(1)?;
+        Some(self.entries[self.len])
+    }
+
+    fn back(&self) -> Option<&(*mut Node<K, V, C>, usize)> {
+        self.len.checked_sub(1).map(|index| &self.entries[index])
+    }
+
+    fn back_mut(&mut self) -> Option<&mut (*mut Node<K, V, C>, usize)> {
+        self.len
+            .checked_sub(1)
+            .map(|index| &mut self.entries[index])
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
 
 pub(crate) struct LeafIter<'a, K, V, C = Untracked>
 where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    stack: VecDeque<(*mut Node<K, V, C>, usize)>,
+    stack: LeafPath<K, V, C>,
     phantom_k: PhantomData<&'a K>,
     phantom_v: PhantomData<&'a V>,
     phantom_charge: PhantomData<&'a C>,
@@ -29,8 +79,8 @@ where
         T: Ord + ?Sized,
         K: Borrow<T>,
     {
-        // We need to position the VecDeque here.
-        let mut stack = VecDeque::new();
+        // Position the original borrowed path.
+        let mut stack = LeafPath::new();
 
         let mut work_node = root;
         loop {
@@ -68,7 +118,7 @@ where
     #[cfg(test)]
     pub(crate) fn new_base() -> Self {
         LeafIter {
-            stack: VecDeque::new(),
+            stack: LeafPath::new(),
             phantom_k: PhantomData,
             phantom_v: PhantomData,
             phantom_charge: PhantomData,
@@ -132,10 +182,10 @@ impl<'a, K: Clone + Ord + Debug, V: Clone, C: 'a> Iterator for LeafIter<'a, K, V
     type Item = &'a Leaf<K, V, C>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // base case is the vecdeque is empty
+        // The empty path is exhausted.
         let (leafref, _) = self.stack.pop_back()?;
 
-        // Setup the veqdeque for the next iteration.
+        // Position the path for the next iteration.
         self.stack_position();
 
         // Return the leaf as we found at the start, regardless of the
@@ -153,7 +203,7 @@ where
     K: Ord + Clone + Debug,
     V: Clone,
 {
-    stack: VecDeque<(*mut Node<K, V, C>, usize)>,
+    stack: LeafPath<K, V, C>,
     phantom_k: PhantomData<&'a K>,
     phantom_v: PhantomData<&'a V>,
     phantom_charge: PhantomData<&'a C>,
@@ -169,8 +219,8 @@ where
         T: Ord + ?Sized,
         K: Borrow<T>,
     {
-        // We need to position the VecDeque here.
-        let mut stack = VecDeque::new();
+        // Position the original borrowed path.
+        let mut stack = LeafPath::new();
 
         let mut work_node = root;
         loop {
@@ -215,7 +265,7 @@ where
     #[cfg(test)]
     pub(crate) fn new_base() -> Self {
         RevLeafIter {
-            stack: VecDeque::new(),
+            stack: LeafPath::new(),
             phantom_k: PhantomData,
             phantom_v: PhantomData,
             phantom_charge: PhantomData,
@@ -291,10 +341,10 @@ impl<'a, K: Clone + Ord + Debug, V: Clone, C: 'a> Iterator for RevLeafIter<'a, K
     type Item = &'a Leaf<K, V, C>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // base case is the vecdeque is empty
+        // The empty path is exhausted.
         let (leafref, _) = self.stack.pop_back()?;
 
-        // Setup the veqdeque for the next iteration.
+        // Position the path for the next iteration.
         self.stack_position();
 
         // Return the leaf as we found at the start, regardless of the
@@ -463,7 +513,7 @@ where
         R: RangeBounds<T>,
     {
         let length = Some(length);
-        // We need to position the VecDeque here. This requires us
+        // Position the original borrowed path. This requires us
         // to know the bounds that we have. We do this similar to the main
         // rust library tree by locating our "edges", and maintaining stacks to their paths.
 
@@ -723,6 +773,141 @@ mod tests {
     use crate::internals::lincowcell::Untracked;
     use std::ops::Bound;
     use std::ops::Bound::*;
+
+    fn assert_mixed_entries<'a>(
+        mut iter: impl DoubleEndedIterator<Item = (&'a usize, &'a usize)>,
+        expected: &[usize],
+    ) {
+        let mut front = 0;
+        let mut back = expected.len();
+        for step in 0..expected.len() {
+            let (entry, key) = if step % 3 == 1 {
+                back -= 1;
+                (iter.next_back(), expected[back])
+            } else {
+                let key = expected[front];
+                front += 1;
+                (iter.next(), key)
+            };
+            assert_eq!(entry, Some((&key, &(key * 3))));
+        }
+        for _ in 0..3 {
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next_back(), None);
+        }
+    }
+
+    #[test]
+    fn inline_paths_scan_empty_multilevel_and_retained_removed_trees_without_allocating() {
+        use super::super::node::allocation_tests::without_allocations;
+
+        for size in [
+            0,
+            1,
+            L_CAPACITY,
+            L_CAPACITY + 1,
+            L_CAPACITY * L_CAPACITY * 4 + 7,
+        ] {
+            let map: crate::bptree::BptreeMap<usize, usize> =
+                (0..size).map(|key| (key, key * 3)).collect();
+            let retained = map.read();
+            let all: Vec<_> = (0..size).collect();
+            let reversed: Vec<_> = all.iter().rev().copied().collect();
+            let mut writer = map.write();
+            for key in (0..size).filter(|key| key % 3 != 1) {
+                assert_eq!(writer.remove(&key), Some(key * 3));
+            }
+            writer.commit();
+            let current = map.read();
+            let kept: Vec<_> = all.iter().copied().filter(|key| key % 3 == 1).collect();
+            let bounded: Vec<_> = kept
+                .iter()
+                .copied()
+                .filter(|key| *key > 2 && *key <= size / 2)
+                .collect();
+            without_allocations(|| {
+                assert_mixed_entries(retained.iter(), &all);
+                assert_mixed_entries(retained.iter().rev(), &reversed);
+                assert_mixed_entries(current.iter(), &kept);
+                assert_mixed_entries(current.range((Excluded(2), Included(size / 2))), &bounded);
+            });
+        }
+    }
+
+    #[test]
+    fn inline_paths_scan_nested_checkpoint_edits_and_original_after_abort_without_allocating() {
+        use super::super::node::allocation_tests::without_allocations;
+
+        let size = L_CAPACITY * L_CAPACITY * 4 + 7;
+        let map: crate::bptree::BptreeMap<usize, usize> =
+            (0..size).map(|key| (key, key * 3)).collect();
+        let mut writer = map.write();
+        let all: Vec<_> = (0..size).collect();
+        {
+            let mut outer = writer.checkpoint().unwrap();
+            for key in (0..size).step_by(2) {
+                assert_eq!(outer.remove(&key), Some(key * 3));
+            }
+            {
+                let mut inner = outer.checkpoint().unwrap();
+                for key in size..size * 2 {
+                    assert_eq!(inner.insert(key, key * 3), None);
+                }
+                inner.apply();
+            }
+            let expected: Vec<_> = (0..size)
+                .filter(|key| key % 2 == 1)
+                .chain(size..size * 2)
+                .collect();
+            let bounded: Vec<_> = expected
+                .iter()
+                .copied()
+                .filter(|key| *key >= size / 2 && *key < size + 5)
+                .collect();
+            without_allocations(|| {
+                assert_mixed_entries(outer.iter(), &expected);
+                assert_mixed_entries(outer.range(size / 2..size + 5), &bounded);
+                let snapshot = outer.to_snapshot();
+                assert_mixed_entries(snapshot.iter(), &expected);
+            });
+        }
+        without_allocations(|| assert_mixed_entries(writer.iter(), &all));
+        writer.commit();
+        let read = map.read();
+        without_allocations(|| assert_mixed_entries(read.iter(), &all));
+    }
+
+    #[test]
+    fn inline_paths_keep_unsized_borrowed_range_bounds_without_cloning_or_allocating() {
+        use super::super::node::allocation_tests::without_allocations;
+
+        // Cloning any nonempty String here would also be observed as allocation.
+        let map: crate::bptree::BptreeMap<String, String> = (0..128)
+            .map(|key| (format!("key{key:04}"), format!("value{key:04}")))
+            .collect();
+        let read = map.read();
+        let expected: Vec<_> = (11..97)
+            .map(|key| (format!("key{key:04}"), format!("value{key:04}")))
+            .collect();
+        without_allocations(|| {
+            let mut iter = read.range::<_, str>((Excluded("key0010"), Excluded("key0097")));
+            let mut front = 0;
+            let mut back = expected.len();
+            for step in 0..expected.len() {
+                let (entry, index) = if step % 2 == 0 {
+                    let index = front;
+                    front += 1;
+                    (iter.next(), index)
+                } else {
+                    back -= 1;
+                    (iter.next_back(), back)
+                };
+                assert_eq!(entry, Some((&expected[index].0, &expected[index].1)));
+            }
+            assert_eq!(iter.next(), None);
+            assert_eq!(iter.next_back(), None);
+        });
+    }
 
     #[test]
     fn full_iterator_retains_exact_remaining_length_when_both_ends_are_consumed() {

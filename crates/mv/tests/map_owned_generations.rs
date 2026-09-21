@@ -172,6 +172,143 @@ fn without_allocations<T>(phase: &'static str, operation: impl FnOnce() -> T) ->
     result
 }
 
+fn assert_storage_reads_without_allocation(
+    storage: &impl mv::storage::StorageReadOnly<u64, u64>,
+    expected: &BTreeMap<u64, u64>,
+) {
+    use std::ops::Bound::{Excluded, Included, Unbounded};
+    without_allocations("borrowed State storage traversal", || {
+        let mut actual = storage.iter();
+        let mut reference = expected.iter();
+        let mut reverse = false;
+        loop {
+            assert_eq!(actual.len(), reference.len());
+            assert_eq!(actual.size_hint(), reference.size_hint());
+            let (next, wanted) = if reverse {
+                (actual.next_back(), reference.next_back())
+            } else {
+                (actual.next(), reference.next())
+            };
+            assert_eq!(next, wanted);
+            if wanted.is_none() {
+                break;
+            }
+            reverse = !reverse;
+        }
+        assert_eq!(actual.next_back(), None);
+        assert_eq!(actual.next(), None);
+        assert_eq!(storage.first_key_value(), expected.first_key_value());
+        assert_eq!(storage.last_key_value(), expected.last_key_value());
+        for bounds in [
+            (Unbounded, Unbounded),
+            (Included(0), Included(0)),
+            (Excluded(2), Included(4099)),
+            (Unbounded, Excluded(5)),
+            (Included(7), Unbounded),
+        ] {
+            let mut actual = storage.range(bounds);
+            let mut reference = expected.range(bounds);
+            let mut reverse = true;
+            loop {
+                let (next, wanted) = if reverse {
+                    (actual.next_back(), reference.next_back())
+                } else {
+                    (actual.next(), reference.next())
+                };
+                assert_eq!(next, wanted);
+                if wanted.is_none() {
+                    break;
+                }
+                reverse = !reverse;
+            }
+            assert_eq!(actual.next(), None);
+            assert_eq!(actual.next_back(), None);
+        }
+    });
+}
+
+#[test]
+fn storage_reads_allocate_nothing_across_retained_views_edits_and_rollback() {
+    use mv::storage::Storage;
+    for size in [0, 1, 7, 65, 257] {
+        let expected: BTreeMap<u64, u64> = (0..size).map(|key| (key, key * 10)).collect();
+        let storage: Storage<_, _> = expected.iter().map(|(&key, &value)| (key, value)).collect();
+        let old = storage.view();
+        assert_storage_reads_without_allocation(&old, &expected);
+        let mut block = storage.block();
+        let mut edited = expected.clone();
+        for key in (0..size).step_by(3) {
+            block.remove(key);
+            edited.remove(&key);
+        }
+        block.insert(4099, 90);
+        edited.insert(4099, 90);
+        assert_storage_reads_without_allocation(&block, &edited);
+        {
+            let mut transaction = block.transaction();
+            transaction.insert(5, 555);
+            transaction.remove(4099);
+            let mut changed = edited.clone();
+            changed.insert(5, 555);
+            changed.remove(&4099);
+            assert_storage_reads_without_allocation(&transaction, &changed);
+            assert_storage_reads_without_allocation(&transaction.view(), &changed);
+        }
+        assert_storage_reads_without_allocation(&block, &edited);
+        block.commit();
+        assert_storage_reads_without_allocation(&old, &expected);
+        assert_storage_reads_without_allocation(&storage.view(), &edited);
+        let snapshot = storage.snapshot();
+        assert_storage_reads_without_allocation(snapshot.current(), &edited);
+    }
+}
+
+#[test]
+fn storage_history_and_borrowed_string_ranges_allocate_nothing() {
+    use mv::storage::{Storage, StorageReadOnly};
+    use std::ops::Bound::{Excluded, Included};
+    let mut storage: Storage<u64, u64> = (0..257).map(|key| (key, key * 10)).collect();
+    let mut block = storage.block();
+    for key in (0..257).step_by(2) {
+        block.remove(key);
+    }
+    block.insert(999, 1);
+    block.commit();
+    let history = storage.history();
+    without_allocations("retained predecessor traversal", || {
+        let mut before = history.iter_before_block();
+        for key in 0..257 {
+            assert_eq!(before.next(), Some((&key, &(key * 10))));
+        }
+        assert_eq!(before.next(), None);
+    });
+    let expected: BTreeMap<String, u64> =
+        (0..257).map(|key| (format!("key-{key:04}"), key)).collect();
+    let storage: Storage<_, _> = expected.clone().into_iter().collect();
+    let view = storage.view();
+    without_allocations("borrowed str range traversal", || {
+        let bounds = (Included("key-0007"), Excluded("key-0210"));
+        let mut actual = view.range::<str>(bounds);
+        let mut reference = expected.range::<str, _>(bounds);
+        for step in 0..203 {
+            assert_eq!(
+                if step % 2 == 0 {
+                    actual.next()
+                } else {
+                    actual.next_back()
+                },
+                if step % 2 == 0 {
+                    reference.next()
+                } else {
+                    reference.next_back()
+                }
+            );
+        }
+        assert_eq!(actual.next(), None);
+        assert_eq!(actual.next_back(), None);
+    });
+}
+
 #[derive(Default)]
 struct Observations {
     next: AtomicUsize,

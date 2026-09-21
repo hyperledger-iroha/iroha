@@ -30,12 +30,24 @@ pub(crate) struct TelemetryJournalChunk {
 pub(crate) enum TelemetryStatusSourceError {
     #[error("State publication is busy")]
     Busy,
+    #[error("State journal publication is poisoned")]
+    Poisoned,
     #[error("captured State journal target changed")]
     TargetChanged,
     #[error("classified journal position is invalid")]
     InvalidPosition,
     #[error("journal witness encoding failed")]
     Encoding,
+}
+
+impl From<concread::bptree::OwnedWriteError> for TelemetryStatusSourceError {
+    fn from(error: concread::bptree::OwnedWriteError) -> Self {
+        match error {
+            concread::bptree::OwnedWriteError::Busy => Self::Busy,
+            concread::bptree::OwnedWriteError::Poisoned => Self::Poisoned,
+            concread::bptree::OwnedWriteError::Changed => Self::TargetChanged,
+        }
+    }
 }
 
 /// Stream an unambiguous domain, half-open zero-based range and ordered rows.
@@ -73,14 +85,14 @@ impl State {
             if before % 2 != 0 {
                 continue;
             }
-            let Some(journal) = self.block_hashes.inner.try_read() else {
-                return Err(TelemetryStatusSourceError::Busy);
-            };
-            let journal = self.block_hashes.released.guard(journal);
+            let journal = self
+                .block_hashes
+                .try_view()
+                .map_err(TelemetryStatusSourceError::from)?;
             let Some(nexus) = self.nexus.try_read() else {
                 return Err(TelemetryStatusSourceError::Busy);
             };
-            let hashes = journal.as_slice();
+            let hashes = &journal;
             let target = TelemetryStatusTarget {
                 height: hashes.len(),
                 tip: hashes.last().copied(),
@@ -114,11 +126,11 @@ impl State {
             if before % 2 != 0 {
                 continue;
             }
-            let Some(journal) = self.block_hashes.inner.try_read() else {
-                return Err(TelemetryStatusSourceError::Busy);
-            };
-            let journal = self.block_hashes.released.guard(journal);
-            let hashes = journal.as_slice();
+            let journal = self
+                .block_hashes
+                .try_view()
+                .map_err(TelemetryStatusSourceError::from)?;
+            let hashes = &journal;
             if hashes.len() < target.height
                 || target
                     .height
@@ -131,7 +143,10 @@ impl State {
             }
             let digest = Hash::new_from_writer(|writer| {
                 write_telemetry_journal_prefix(writer, start, end)?;
-                for (offset, hash) in hashes[start..end].iter().copied().enumerate() {
+                for (offset, hash) in super::BlockHashRead::hash_range(hashes, start, end)
+                    .copied()
+                    .enumerate()
+                {
                     write_telemetry_journal_row(writer, start + offset + 1, hash)?;
                 }
                 Ok(())
@@ -205,7 +220,12 @@ mod tests {
             (target.height, target.tip)
         );
         assert!(state.telemetry_journal_chunk(&target, 0).is_ok());
-        let journal_write = state.block_hashes.inner.write();
+        let journal_write = state
+            .block_hashes
+            .block()
+            .detach()
+            .try_prepare_publication(&state.block_hashes, |_, _| Ok::<_, ()>(()))
+            .unwrap_or_else(|_| panic!("prepare hash writer"));
         assert!(matches!(
             state
                 .telemetry_status_target()
@@ -271,7 +291,7 @@ mod tests {
         assert!(old.routing_policy.rules.is_empty());
         assert_eq!((new.height, new.tip), (2, Some(hash(2))));
         assert_eq!(new.routing_policy.rules.len(), 1);
-        assert!(state.block_hashes.inner.try_write().is_some());
+        assert!(state.block_hashes.writer_available());
         assert!(state.nexus.try_write().is_some());
     }
     #[tokio::test]
@@ -291,7 +311,7 @@ mod tests {
             (64, 70, Some(hash(64)), Some(hash(70)))
         );
         assert_ne!(first.digest, second.digest);
-        assert!(state.block_hashes.inner.try_write().is_some());
+        assert!(state.block_hashes.writer_available());
         assert!(matches!(
             state.telemetry_journal_chunk(&target, 71),
             Err(TelemetryStatusSourceError::InvalidPosition)
@@ -302,21 +322,51 @@ mod tests {
             state.telemetry_journal_chunk(&wrong, 64),
             Err(TelemetryStatusSourceError::TargetChanged)
         ));
-        let next_publication = std::sync::Arc::new(super::super::BlockHashPublication);
-        let mut journal = state.block_hashes.inner.write();
-        let super::super::BlockHashStorage::Owned {
-            hashes,
-            publication,
-        } = &mut *journal
-        else {
-            panic!("owned fixture journal")
-        };
-        hashes[63] = hash(73);
-        *publication = next_publication;
-        drop(journal);
+        state
+            .block_hashes
+            .budget
+            .with_deferred_refund_notifications(|| {
+                let map = state.block_hashes.map().unwrap();
+                let (work, _) = map
+                    .try_insert_admitted(63, hash(73), |d| state.block_hashes.admit(d))
+                    .unwrap();
+                let writer = map
+                    .try_write_owned(work)
+                    .unwrap_or_else(|_| panic!("exclusive fixture writer"));
+                drop(writer.prepare_commit().publish().release());
+            });
         let changed = state.telemetry_journal_chunk(&target, 64).unwrap();
         assert_ne!(changed.checkpoint, second.checkpoint);
     }
+    #[test]
+    fn poisoned_hash_publication_is_unavailable_instead_of_busy() {
+        use crate::telemetry::StatusSnapshotError;
+        let state = state();
+        append(&state, [hash(1)]);
+        let target = state.telemetry_status_target().unwrap();
+        let journal = state.block_hashes.block().detach();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _prepared = journal
+                    .try_prepare_publication(&state.block_hashes, |_, _| Ok::<_, ()>(()))
+                    .unwrap_or_else(|_| panic!("prepare fixture"));
+                panic!("abort caller while publication locks are held");
+            }))
+            .is_err()
+        );
+        assert!(matches!(
+            state.telemetry_status_target(),
+            Err(TelemetryStatusSourceError::Poisoned)
+        ));
+        assert!(matches!(
+            state
+                .telemetry_journal_chunk(&target, 0)
+                .map_err(StatusSnapshotError::from),
+            Err(StatusSnapshotError::StateUnavailable)
+        ));
+        assert_eq!(state.block_hashes.committed_height(), 1);
+    }
+
     #[test]
     fn journal_encoding_domain_range_height_order_and_hash_are_unambiguous() {
         let encode = |rows: &[(usize, HashOf<BlockHeader>)]| {

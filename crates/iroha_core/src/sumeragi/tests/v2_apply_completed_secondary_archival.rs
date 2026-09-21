@@ -50,6 +50,7 @@ fn completed_secondary_kura_config(
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: defaults::FSYNC_INTERVAL,
         lane_history_retention: defaults::LANE_HISTORY_RETENTION,
+        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: defaults::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::REPLICA_ADVERT_POLICY,
     }
@@ -417,6 +418,7 @@ v2_apply_test!(
                 application_header.clone(),
                 apply_context.context().mode,
             )
+            .expect("local fixture history admission")
             .expect("execute real secondary candidate against WSV");
         let batch = candidate
             .execution_batch

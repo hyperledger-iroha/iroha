@@ -221,8 +221,8 @@ use mv::{
     Key as MvKey, Value as MvValue,
     cell::{Block as CellBlock, Cell, Transaction as CellTransaction, View as CellView},
     storage::{
-        Block as StorageBlock, RangeIter, Storage, StorageReadOnly,
-        Transaction as StorageTransaction, View as StorageView,
+        Block as StorageBlock, Storage, StorageReadOnly, Transaction as StorageTransaction,
+        View as StorageView,
     },
 };
 use nonzero_ext::nonzero;
@@ -1649,61 +1649,230 @@ macro_rules! build_world_view {
         with_world_overlay_fields!(build_world_view_from_fields, $state)
     };
 }
-/// Lightweight multi-scope container for tracking committed block hashes.
-///
-/// Unlike the full MVCC cells used throughout the world state, block hashes only ever grow
-/// monotonically and can be rolled back deterministically by truncating the tail. To avoid
-/// blocking read-only state views during block execution, block-scoped access buffers appended
-/// hashes and only applies them under a short write lock at commit time.
+/// Shared immutable generations of the canonical block-hash journal.
+/// Opening a view retains its original tree; appending or replacing a tip copies
+/// only the edited tree path. Private execution never retains a physical writer.
+/// Every concrete tree allocation retains credits from its original finite pool.
 pub struct BlockHashes {
-    owner: Arc<BlockHashOwner>,
-    inner: parking_lot::RwLock<BlockHashStorage>,
+    inner: BlockHashStorage,
+    budget: mv::allocation::AllocationBudget,
     released: mv::ReleaseNotification,
     committed_height: AtomicUsize,
 }
 
-// Process-local identities are neither serializable nor caller-constructible.
-struct BlockHashOwner;
-struct BlockHashPublication;
+#[path = "state/block_hashes_admission.rs"]
+mod block_hashes_admission;
+use block_hashes_admission::BlockHashPolicy;
+pub use block_hashes_admission::{BlockHashAdmissionError, StateBlockStartError};
+type BlockHashMode = concread::bptree::Prepaid<BlockHashPolicy>;
+type BlockHashMap = concread::bptree::BptreeMap<usize, HashOf<BlockHeader>, BlockHashMode>;
+type BlockHashWork = concread::bptree::BptreeMapOwned<usize, HashOf<BlockHeader>, BlockHashMode>;
+type BlockHashFamily = concread::bptree::BptreeMapFamily<usize, HashOf<BlockHeader>, BlockHashMode>;
 
-/// Original process-local State family retained by a native lane's physical owner.
-/// This opaque identity is never reconstructed from wire or finalized context bytes.
+/// Original physical State family; never reconstructed from portable bytes.
 #[derive(Clone)]
-pub(crate) struct NativeLaneStateOwner(Arc<BlockHashOwner>);
-
+pub(crate) struct NativeLaneStateOwner(BlockHashFamily);
 impl NativeLaneStateOwner {
-    /// Check the actual State family without depending on its advancing generation.
     pub(crate) fn matches_state(&self, state: &State) -> bool {
-        Arc::ptr_eq(&self.0, &state.block_hashes.owner)
+        state
+            .block_hashes
+            .map()
+            .is_some_and(|map| self.0.matches(map))
+    }
+    fn same_family(&self, other: &Self) -> bool {
+        self.0.same_family(&other.0)
     }
 }
-
 impl State {
-    /// Retain this exact State family across native physical opening and closure.
-    pub(crate) fn native_lane_state_owner(&self) -> NativeLaneStateOwner {
-        NativeLaneStateOwner(Arc::clone(&self.block_hashes.owner))
+    /// Retain the actual mutable State family, refusing emergency read-only mode.
+    pub(crate) fn native_lane_state_owner(&self) -> Option<NativeLaneStateOwner> {
+        self.block_hashes
+            .map()
+            .map(|map| NativeLaneStateOwner(map.family()))
     }
 }
-
 enum BlockHashStorage {
-    Owned {
-        hashes: Vec<HashOf<BlockHeader>>,
-        publication: Arc<BlockHashPublication>,
-    },
+    Owned(BlockHashMap),
     EmergencyFastMapped(ReadOnlyMmap),
+    EmergencyFastEmpty,
 }
 
-impl BlockHashStorage {
-    fn as_slice(&self) -> &[HashOf<BlockHeader>] {
-        match self {
-            Self::Owned { hashes, .. } => hashes,
-            Self::EmergencyFastMapped(mapping) => mapped_block_hashes(mapping),
+/// Ordered read access to a captured canonical history, without a contiguous copy.
+pub trait BlockHashRead: Send + Sync {
+    /// Number of hashes in the original generation.
+    fn hash_count(&self) -> usize;
+    /// Borrow one zero-based committed hash.
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>>;
+    /// Iterate a valid half-open range without copying its history.
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_>;
+}
+impl dyn BlockHashRead + '_ {
+    /// Number of hashes in this captured history.
+    pub fn len(&self) -> usize {
+        self.hash_count()
+    }
+    /// Whether the captured history is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Borrow one zero-based hash.
+    pub fn get(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.hash_at(index)
+    }
+    /// Borrow the first committed hash.
+    pub fn first(&self) -> Option<&HashOf<BlockHeader>> {
+        self.get(0)
+    }
+    /// Borrow the captured tip.
+    pub fn last(&self) -> Option<&HashOf<BlockHeader>> {
+        self.len().checked_sub(1).and_then(|i| self.get(i))
+    }
+    /// Iterate this generation without allocation.
+    pub fn iter(&self) -> BlockHashIter<'_> {
+        self.hash_range(0, self.len())
+    }
+    /// Iterate one valid half-open range.
+    pub fn range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        self.hash_range(start, end)
+    }
+}
+pub(crate) fn serialize_block_hashes(hashes: &dyn BlockHashRead, out: &mut String) {
+    out.push('[');
+    for (index, hash) in hashes.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        norito::json::JsonSerialize::json_serialize(hash, out);
+    }
+    out.push(']');
+}
+impl<T: BlockHashRead + ?Sized> BlockHashRead for &T {
+    fn hash_count(&self) -> usize {
+        (**self).hash_count()
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        (**self).hash_at(index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        (**self).hash_range(start, end)
+    }
+}
+/// Allocation-free ordered iterator over shared tree or mapped history.
+pub struct BlockHashIter<'a> {
+    inner: BlockHashIterInner<'a>,
+    remaining: usize,
+}
+enum BlockHashIterInner<'a> {
+    Tree(
+        concread::bptree::RangeIter<
+            'a,
+            usize,
+            HashOf<BlockHeader>,
+            mv::allocation::AllocationCharge,
+        >,
+    ),
+    Slice(std::slice::Iter<'a, HashOf<BlockHeader>>),
+}
+impl<'a> Iterator for BlockHashIter<'a> {
+    type Item = &'a HashOf<BlockHeader>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = match &mut self.inner {
+            BlockHashIterInner::Tree(it) => it.next().map(|(_, v)| v),
+            BlockHashIterInner::Slice(it) => it.next(),
+        };
+        if value.is_some() {
+            self.remaining -= 1;
+        }
+        value
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+impl DoubleEndedIterator for BlockHashIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let value = match &mut self.inner {
+            BlockHashIterInner::Tree(it) => it.next_back().map(|(_, v)| v),
+            BlockHashIterInner::Slice(it) => it.next_back(),
+        };
+        if value.is_some() {
+            self.remaining -= 1;
+        }
+        value
+    }
+}
+impl ExactSizeIterator for BlockHashIter<'_> {}
+impl std::iter::FusedIterator for BlockHashIter<'_> {}
+impl BlockHashRead for [HashOf<BlockHeader>] {
+    fn hash_count(&self) -> usize {
+        <[HashOf<BlockHeader>]>::len(self)
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        <[HashOf<BlockHeader>]>::get(self, index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        BlockHashIter {
+            inner: BlockHashIterInner::Slice(self[start..end].iter()),
+            remaining: end - start,
         }
     }
 }
+impl BlockHashRead for Vec<HashOf<BlockHeader>> {
+    fn hash_count(&self) -> usize {
+        self.as_slice().len()
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.as_slice().get(index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        BlockHashRead::hash_range(self.as_slice(), start, end)
+    }
+}
+impl<const N: usize> BlockHashRead for [HashOf<BlockHeader>; N] {
+    fn hash_count(&self) -> usize {
+        N
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.as_slice().get(index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        BlockHashRead::hash_range(self.as_slice(), start, end)
+    }
+}
+/// Borrowed portion of one original hash generation.
+pub(crate) struct BlockHashRange<'a> {
+    source: &'a dyn BlockHashRead,
+    start: usize,
+    end: usize,
+}
+impl BlockHashRead for BlockHashRange<'_> {
+    fn hash_count(&self) -> usize {
+        self.end - self.start
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        if index < self.len() {
+            self.source.get(self.start + index)
+        } else {
+            None
+        }
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        assert!(start <= end && end <= self.len());
+        self.source.range(self.start + start, self.start + end)
+    }
+}
+impl std::fmt::Debug for BlockHashRange<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+impl<T: BlockHashRead + ?Sized> PartialEq<&T> for BlockHashRange<'_> {
+    fn eq(&self, other: &&T) -> bool {
+        self.iter().eq(other.hash_range(0, other.hash_count()))
+    }
+}
 
-/// Interpret the fixed-width Kura hash journal without faulting or copying all
-/// of its pages during emergency Fast startup.
+/// Interpret the validated fixed-width emergency journal without copying pages.
 #[allow(unsafe_code)]
 fn mapped_block_hashes(mapping: &ReadOnlyMmap) -> &[HashOf<BlockHeader>] {
     let bytes = mapping.as_slice();
@@ -1712,16 +1881,15 @@ fn mapped_block_hashes(mapping: &ReadOnlyMmap) -> &[HashOf<BlockHeader>] {
         0,
         "Kura hash mapping must contain complete fixed-width hashes"
     );
-    assert!(
+    assert_eq!(
         bytes
             .as_ptr()
-            .align_offset(std::mem::align_of::<HashOf<BlockHeader>>())
-            == 0,
+            .align_offset(std::mem::align_of::<HashOf<BlockHeader>>()),
+        0,
         "Kura hash mapping must satisfy HashOf alignment"
     );
-    // SAFETY: `Hash` and `HashOf<T>` are transparent wrappers around `[u8; 32]`
-    // and explicitly have no trap representation. The mapping is read-only,
-    // page-aligned, and retained for at least the returned slice lifetime.
+    // SAFETY: HashOf is a transparent fixed-width byte array without trap values.
+    // The read-only mapping outlives the returned, correctly aligned slice.
     unsafe {
         std::slice::from_raw_parts(
             bytes.as_ptr().cast::<HashOf<BlockHeader>>(),
@@ -1729,28 +1897,41 @@ fn mapped_block_hashes(mapping: &ReadOnlyMmap) -> &[HashOf<BlockHeader>] {
         )
     }
 }
-
+#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 impl Default for BlockHashes {
     fn default() -> Self {
         Self::new(Vec::new())
     }
 }
 impl BlockHashes {
-    /// Construct a new container from an explicit vector.
+    /// Restore an explicit cold-start hash sequence into one shared generation.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn new(initial: Vec<HashOf<BlockHeader>>) -> Self {
-        let committed_height = initial.len();
-        Self {
-            owner: Arc::new(BlockHashOwner),
-            released: mv::ReleaseNotification::default(),
-            inner: parking_lot::RwLock::new(BlockHashStorage::Owned {
-                hashes: initial,
-                publication: Arc::new(BlockHashPublication),
-            }),
-            committed_height: AtomicUsize::new(committed_height),
+        Self::try_new(
+            initial,
+            mv::allocation::AllocationBudget::new(
+                usize::try_from(
+                    iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES.get(),
+                )
+                .expect("default history budget fits supported platforms"),
+            ),
+        )
+        .expect("explicit fixture history fits its finite default budget")
+    }
+    fn map(&self) -> Option<&BlockHashMap> {
+        match &self.inner {
+            BlockHashStorage::Owned(map) => Some(map),
+            BlockHashStorage::EmergencyFastMapped(_) | BlockHashStorage::EmergencyFastEmpty => None,
         }
     }
-    /// Construct a zero-copy read-only view of the exact Kura hash prefix used
-    /// by emergency Fast mode.
+    fn new_emergency_fast_empty() -> Self {
+        Self {
+            inner: BlockHashStorage::EmergencyFastEmpty,
+            budget: mv::allocation::AllocationBudget::new(0),
+            released: mv::ReleaseNotification::default(),
+            committed_height: AtomicUsize::new(0),
+        }
+    }
     fn new_emergency_fast_mapped(mapping: ReadOnlyMmap, committed_height: usize) -> Self {
         assert_eq!(
             mapping.len(),
@@ -1758,290 +1939,363 @@ impl BlockHashes {
             "mapped Kura hash prefix must match its committed height"
         );
         Self {
-            owner: Arc::new(BlockHashOwner),
+            inner: BlockHashStorage::EmergencyFastMapped(mapping),
+            budget: mv::allocation::AllocationBudget::new(0),
             released: mv::ReleaseNotification::default(),
-            inner: parking_lot::RwLock::new(BlockHashStorage::EmergencyFastMapped(mapping)),
             committed_height: AtomicUsize::new(committed_height),
         }
     }
-    /// Obtain a block-scoped mutable view of the hashes.
-    ///
-    /// # Panics
-    ///
-    /// Panics when this container is the read-only mapped journal installed by
-    /// emergency Fast startup. Fast must be restarted in Strict mode before any
-    /// state mutation can begin.
+    /// Begin a private ordinary generation. Emergency Fast mode is read-only.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block(&self) -> BlockHashesBlock<'_> {
         BlockHashesBlock::new(self, false)
     }
-    /// Obtain a block-scoped mutable view after reverting the latest committed block, if any.
-    ///
-    /// # Panics
-    ///
-    /// Panics when this container is the read-only mapped journal installed by
-    /// emergency Fast startup.
+    /// Begin a private generation with its original tip removed.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block_and_revert(&self) -> BlockHashesBlock<'_> {
         BlockHashesBlock::new(self, true)
     }
-    /// Obtain a read-only snapshot of the committed hashes.
+    /// Capture the current immutable generation without copying history.
     pub fn view(&self) -> BlockHashesView<'_> {
-        BlockHashesView {
-            guard: self.released.guard(self.inner.read()),
-        }
+        let _release = self.released.guard(());
+        let inner = match &self.inner {
+            BlockHashStorage::Owned(map) => BlockHashesViewInner::Owned(map.read()),
+            BlockHashStorage::EmergencyFastMapped(mapping) => {
+                BlockHashesViewInner::Mapped(mapped_block_hashes(mapping))
+            }
+            BlockHashStorage::EmergencyFastEmpty => BlockHashesViewInner::Mapped(&[]),
+        };
+        BlockHashesView { inner }
     }
-    /// Return the latest committed height without taking the block-hash read lock.
+    fn try_view(&self) -> Result<BlockHashesView<'_>, concread::bptree::OwnedWriteError> {
+        let inner = match &self.inner {
+            BlockHashStorage::Owned(map) => {
+                let view = map.try_read()?;
+                drop(self.released.guard(()));
+                BlockHashesViewInner::Owned(view)
+            }
+            BlockHashStorage::EmergencyFastMapped(mapping) => {
+                BlockHashesViewInner::Mapped(mapped_block_hashes(mapping))
+            }
+            BlockHashStorage::EmergencyFastEmpty => BlockHashesViewInner::Mapped(&[]),
+        };
+        Ok(BlockHashesView { inner })
+    }
+    /// Return the published height without acquiring a history snapshot.
     pub fn committed_height(&self) -> usize {
         self.committed_height.load(Ordering::Acquire)
     }
+    #[cfg(test)]
+    fn writer_available(&self) -> bool {
+        self.budget.with_deferred_refund_notifications(|| {
+            self.map()
+                .is_none_or(|map| map.try_write_admitted(|d| self.admit(d)).is_ok())
+        })
+    }
 }
-/// Block-scoped access to the block hash log with staged updates.
+/// Original private hash generation. No physical lock survives construction.
 pub struct BlockHashesBlock<'a> {
     inner: &'a BlockHashes,
-    owner: Arc<BlockHashOwner>,
-    publication: Arc<BlockHashPublication>,
+    work: BlockHashWork,
     mode: mv::BlockMode,
-    guard: Option<mv::ReleaseGuard<'a, parking_lot::RwLockReadGuard<'a, BlockHashStorage>>>,
     visible_len: usize,
-    pending: Vec<HashOf<BlockHeader>>,
-    visible: Vec<HashOf<BlockHeader>>,
+    reserved_tip: Option<usize>,
+    fixture_edits: bool,
 }
+#[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
 impl<'a> BlockHashesBlock<'a> {
-    fn new(inner: &'a BlockHashes, revert_latest: bool) -> Self {
-        let guard = inner.released.guard(inner.inner.read());
-        let BlockHashStorage::Owned { publication, .. } = &**guard else {
-            panic!(
-                "emergency Fast block hashes are read-only; restart in Strict mode before mutation"
-            );
-        };
-        let publication = Arc::clone(publication);
-        let visible_len = if revert_latest {
-            guard.as_slice().len().saturating_sub(1)
-        } else {
-            guard.as_slice().len()
-        };
-        let visible = guard.as_slice()[..visible_len].to_vec();
+    fn new(inner: &'a BlockHashes, revert: bool) -> Self {
+        let map = inner.map().expect(
+            "emergency Fast block hashes are read-only; restart in Strict mode before mutation",
+        );
+        let release = inner.released.guard(());
+        let work = inner.budget.with_deferred_refund_notifications(|| {
+            let mut work = map
+                .try_write_admitted(|d| inner.admit(d))
+                .expect("fixture hash writer admission")
+                .detach();
+            if revert && !work.is_empty() {
+                work.try_remove_admitted(&(work.len() - 1), |d| inner.admit(d))
+                    .expect("fixture history removal admission");
+            }
+            work
+        });
+        drop(release);
+        let visible_len = work.len();
         Self {
             inner,
-            owner: Arc::clone(&inner.owner),
-            publication,
-            mode: if revert_latest {
+            work,
+            mode: if revert {
                 mv::BlockMode::Replace
             } else {
                 mv::BlockMode::Ordinary
             },
-            guard: Some(guard),
             visible_len,
-            pending: Vec::new(),
-            visible,
+            reserved_tip: None,
+            fixture_edits: true,
         }
     }
-    fn as_slice(&self) -> &[HashOf<BlockHeader>] {
-        &self.visible
-    }
+}
+impl BlockHashesBlock<'_> {
     fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
+        self.len() != self.visible_len
     }
-    /// Begin a transaction-scoped view nested under this block.
-    pub(crate) fn transaction(&mut self) -> BlockHashesTransaction<'_> {
-        let base = self.visible.as_slice();
-        let baseline_len = self.pending.len();
-        BlockHashesTransaction {
-            base,
-            pending: &mut self.pending,
-            baseline_len,
-            applied: false,
+    fn pending(&self) -> BlockHashRange<'_> {
+        BlockHashRange {
+            source: self,
+            start: self.visible_len,
+            end: self.len(),
         }
     }
-    /// Stage a new hash to be appended on commit.
-    pub(crate) fn push(&mut self, hash: HashOf<BlockHeader>) {
-        self.pending.push(hash);
-        self.visible.push(hash);
+    pub(crate) fn transaction(&mut self) -> BlockHashesTransaction<'_> {
+        BlockHashesTransaction { base: self }
     }
-    /// Stage a new hash in tests/benches without exposing internals broadly.
+    pub(crate) fn push(&mut self, hash: HashOf<BlockHeader>) {
+        if let Some(index) = self.reserved_tip.take() {
+            self.work
+                .try_update_private(&index, hash)
+                .expect("prepaid hash tip belongs to this exact private generation");
+        } else {
+            assert!(
+                self.fixture_edits,
+                "a canonical execution stages exactly one prepaid hash"
+            );
+            // Explicit fixture owners may build multiple hashes. Production
+            // acquisition always reserves exactly one successor before World.
+            self.inner.budget.with_deferred_refund_notifications(|| {
+                self.work
+                    .try_insert_admitted(self.work.len(), hash, |d| self.inner.admit(d))
+                    .expect("fixture history insertion admission");
+            });
+        }
+    }
+    /// Append a test hash to this private generation.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn push_for_tests(&mut self, hash: HashOf<BlockHeader>) {
         self.push(hash);
     }
-    /// Drop the long-lived snapshot guard before entering state commit.
-    ///
-    /// Keeping this guard through block execution preserves deterministic snapshot semantics,
-    /// but committing while still holding it can deadlock with state writer-lock contention. Call
-    /// this before acquiring the state writer lock in commit paths.
-    pub(crate) fn prepare_commit(&mut self) {
-        self.guard.take();
-    }
-    /// Consume the exact staged hash journal and release its snapshot guard.
-    ///
-    /// Both vectors already belong to this block and are moved without a second
-    /// chain copy. Identity was captured with the original read guard, including
-    /// when `prepare_commit` has since released it. No lock or owner reference
-    /// escapes. Capture grants no authority to publish or reject a decided block.
     pub(crate) fn detach(self) -> DetachedBlockHashes {
-        let Self {
-            inner: _,
-            owner,
-            publication,
-            mode,
-            guard,
-            visible_len,
-            pending,
-            visible,
-        } = self;
-        drop(guard);
         DetachedBlockHashes {
-            owner,
-            publication,
-            mode,
-            visible_len,
-            pending,
-            visible,
+            work: self.work,
+            mode: self.mode,
+            visible_len: self.visible_len,
+            reserved_tip: self.reserved_tip,
         }
     }
-    /// Commit all mutations performed in this block scope.
-    pub(crate) fn commit(mut self) {
-        let pending = std::mem::take(&mut self.pending);
-        let visible_len = self.visible_len;
-        self.guard.take();
-        // The raw writer allocates its next opaque identity before taking the
-        // hash write lock. A future aggregate publisher must admit/preallocate
-        // this token and its installation storage before the publication cut.
-        let publication = Arc::new(BlockHashPublication);
-        let mut guard = self.inner.released.guard(self.inner.inner.write());
-        let mut hashes = guard.as_slice().to_vec();
-        hashes.truncate(visible_len);
-        hashes.extend(pending);
-        **guard = BlockHashStorage::Owned {
-            hashes,
-            publication,
-        };
-        self.inner
-            .committed_height
-            .store(guard.as_slice().len(), Ordering::Release);
+    #[cfg(test)]
+    fn commit(self) {
+        self.commit_for_tests();
     }
-    /// Commit mutations in tests without exposing the block hash log publicly.
+    /// Publish a fixture under its exact original predecessor.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn commit_for_tests(self) {
-        self.commit();
+        let target = self.inner;
+        let prepared = self
+            .detach()
+            .try_prepare_publication(target, |_, _| Ok::<_, std::convert::Infallible>(()))
+            .unwrap_or_else(|(_, error)| panic!("test hash publication refused: {error:?}"));
+        drop(prepared.publish());
     }
 }
-impl std::ops::Deref for BlockHashesBlock<'_> {
-    type Target = [HashOf<BlockHeader>];
-    #[allow(clippy::explicit_auto_deref)]
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
-    }
-}
-/// Owned original hash journal, with neither a read guard nor an owner borrow.
-///
-/// The exact owner/publication identity covers untouched hashes as well as the
-/// discarded tip in replacement mode. The original visible prefix and pending
-/// appends are retained without another chain copy. This move-only owner keeps
-/// no State or BlockHashes reference alive. Publication preparation reacquires
-/// its exact predecessor and retains the writer for the aggregate publisher.
-///
-/// TODO: join aggregate predecessor/resource/finality ownership and preallocate
-/// installation before adding a single consuming State publication operation.
+/// Move-only original successor, including its real tree family and predecessor.
 pub(crate) struct DetachedBlockHashes {
-    owner: Arc<BlockHashOwner>,
-    publication: Arc<BlockHashPublication>,
+    work: BlockHashWork,
     mode: mv::BlockMode,
     visible_len: usize,
-    pending: Vec<HashOf<BlockHeader>>,
-    visible: Vec<HashOf<BlockHeader>>,
+    reserved_tip: Option<usize>,
 }
-
-#[path = "state/block_hashes_publication.rs"]
-mod block_hashes_publication;
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "TODO: connect retained journals to the consuming State publisher"
-    )
-)]
 impl DetachedBlockHashes {
-    /// Original ordinary or replacement acquisition mode.
     pub(crate) fn mode(&self) -> mv::BlockMode {
         self.mode
     }
-
-    /// Original visible predecessor, before the staged appends.
-    pub(crate) fn prefix(&self) -> &[HashOf<BlockHeader>] {
-        &self.visible[..self.visible_len]
-    }
-
-    /// Exact appends owned by the original block.
-    pub(crate) fn pending(&self) -> &[HashOf<BlockHeader>] {
-        &self.pending
-    }
-
-    /// Complete visible sequence retained from the original block.
-    pub(crate) fn as_slice(&self) -> &[HashOf<BlockHeader>] {
-        &self.visible
-    }
-
-    /// Advisory equality with an explicit target's current opaque identity.
-    ///
-    /// This acquires only the existing hash read lock. It is not a publication
-    /// lease or consensus verdict; the aggregate publisher must reacquire and
-    /// jointly authenticate every original component before publishing any one.
-    pub(crate) fn matches_current(&self, target: &BlockHashes) -> bool {
-        if !Arc::ptr_eq(&self.owner, &target.owner) {
-            return false;
+    pub(crate) fn prefix(&self) -> BlockHashRange<'_> {
+        BlockHashRange {
+            source: self,
+            start: 0,
+            end: self.visible_len,
         }
-        let guard = target.released.guard(target.inner.read());
-        matches!(
-            &**guard,
-            BlockHashStorage::Owned { publication, .. }
-                if Arc::ptr_eq(&self.publication, publication)
-        )
     }
-
-    /// Compare the exact predecessor and mode of another acquired block.
-    /// Candidate mutations in that block do not change its captured identity.
+    pub(crate) fn pending(&self) -> BlockHashRange<'_> {
+        BlockHashRange {
+            source: self,
+            start: self.visible_len,
+            end: self.len(),
+        }
+    }
+    pub(crate) fn matches_current(&self, target: &BlockHashes) -> bool {
+        self.observe_current(target) == Ok(true)
+    }
+    fn observe_current(
+        &self,
+        target: &BlockHashes,
+    ) -> Result<bool, concread::bptree::OwnedWriteError> {
+        let Some(map) = target.map() else {
+            return Ok(false);
+        };
+        let result = self.work.try_matches_current(map);
+        if result.is_ok() {
+            drop(target.released.guard(()));
+        }
+        result
+    }
     pub(crate) fn matches_block_predecessor(&self, block: &BlockHashesBlock<'_>) -> bool {
         self.mode == block.mode
-            && Arc::ptr_eq(&self.owner, &block.owner)
-            && Arc::ptr_eq(&self.publication, &block.publication)
+            && self
+                .work
+                .predecessor()
+                .same_predecessor(&block.work.predecessor())
     }
 }
-
-/// Transaction-scoped mutable view of the block hash log.
-pub struct BlockHashesTransaction<'block> {
-    base: &'block [HashOf<BlockHeader>],
-    pending: &'block mut Vec<HashOf<BlockHeader>>,
-    baseline_len: usize,
-    applied: bool,
+#[path = "state/block_hashes_publication.rs"]
+mod block_hashes_publication;
+/// Read-only transaction projection of its enclosing private generation.
+pub struct BlockHashesTransaction<'a> {
+    base: &'a dyn BlockHashRead,
 }
 impl BlockHashesTransaction<'_> {
-    /// Apply the accumulated mutations so they persist at the parent block scope.
-    pub(crate) fn apply(mut self) {
-        self.applied = true;
+    pub(crate) fn apply(self) {}
+}
+/// A retained immutable committed generation or read-only mapped journal.
+pub struct BlockHashesView<'a> {
+    inner: BlockHashesViewInner<'a>,
+}
+enum BlockHashesViewInner<'a> {
+    /// Original tree generation retained independently of later publication.
+    Owned(concread::bptree::BptreeMapReadTxn<'a, usize, HashOf<BlockHeader>, BlockHashMode>),
+    /// Validated emergency journal retained by its enclosing State.
+    Mapped(&'a [HashOf<BlockHeader>]),
+}
+macro_rules! hash_read_methods {
+    () => {
+        /// Number of hashes in this generation.
+        pub fn len(&self) -> usize {
+            BlockHashRead::hash_count(self)
+        }
+        /// Whether this generation is empty.
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+        /// Borrow a zero-based hash.
+        pub fn get(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+            BlockHashRead::hash_at(self, index)
+        }
+        /// Borrow the first hash of this generation.
+        pub fn first(&self) -> Option<&HashOf<BlockHeader>> {
+            self.get(0)
+        }
+        /// Borrow the tip of this generation.
+        pub fn last(&self) -> Option<&HashOf<BlockHeader>> {
+            self.len().checked_sub(1).and_then(|i| self.get(i))
+        }
+        /// Iterate this generation in height order without allocation.
+        pub fn iter(&self) -> BlockHashIter<'_> {
+            self.hash_range(0, self.len())
+        }
+    };
+}
+macro_rules! work_hash_read {
+    ($type:ty) => {
+        impl BlockHashRead for $type {
+            fn hash_count(&self) -> usize {
+                self.work.len() - usize::from(self.reserved_tip.is_some())
+            }
+            fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+                (index < self.hash_count())
+                    .then(|| self.work.get(&index))
+                    .flatten()
+            }
+            fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+                assert!(start <= end && end <= self.len());
+                BlockHashIter {
+                    inner: BlockHashIterInner::Tree(self.work.range(start..end)),
+                    remaining: end - start,
+                }
+            }
+        }
+    };
+}
+work_hash_read!(BlockHashesBlock<'_>);
+impl BlockHashesBlock<'_> {
+    hash_read_methods!();
+}
+work_hash_read!(DetachedBlockHashes);
+impl DetachedBlockHashes {
+    fn len(&self) -> usize {
+        self.hash_count()
+    }
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    #[cfg(test)]
+    fn get(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.hash_at(index)
+    }
+    #[cfg(test)]
+    fn last(&self) -> Option<&HashOf<BlockHeader>> {
+        self.len().checked_sub(1).and_then(|i| self.get(i))
     }
 }
-impl Drop for BlockHashesTransaction<'_> {
-    fn drop(&mut self) {
-        if !self.applied {
-            self.pending.truncate(self.baseline_len);
+impl BlockHashRead for BlockHashesTransaction<'_> {
+    fn hash_count(&self) -> usize {
+        self.base.len()
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.base.get(index)
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        self.base.range(start, end)
+    }
+}
+impl BlockHashRange<'_> {
+    fn len(&self) -> usize {
+        self.hash_count()
+    }
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    #[cfg(test)]
+    fn get(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        self.hash_at(index)
+    }
+    fn iter(&self) -> BlockHashIter<'_> {
+        self.hash_range(0, self.len())
+    }
+}
+impl BlockHashesTransaction<'_> {
+    hash_read_methods!();
+}
+impl BlockHashRead for BlockHashesView<'_> {
+    fn hash_count(&self) -> usize {
+        match &self.inner {
+            BlockHashesViewInner::Owned(view) => view.len(),
+            BlockHashesViewInner::Mapped(view) => view.len(),
+        }
+    }
+    fn hash_at(&self, index: usize) -> Option<&HashOf<BlockHeader>> {
+        match &self.inner {
+            BlockHashesViewInner::Owned(view) => view.get(&index),
+            BlockHashesViewInner::Mapped(view) => view.get(index),
+        }
+    }
+    fn hash_range(&self, start: usize, end: usize) -> BlockHashIter<'_> {
+        assert!(start <= end && end <= self.len());
+        BlockHashIter {
+            inner: match &self.inner {
+                BlockHashesViewInner::Owned(view) => {
+                    BlockHashIterInner::Tree(view.range(start..end))
+                }
+                BlockHashesViewInner::Mapped(view) => {
+                    BlockHashIterInner::Slice(view[start..end].iter())
+                }
+            },
+            remaining: end - start,
         }
     }
 }
-impl std::ops::Deref for BlockHashesTransaction<'_> {
-    type Target = [HashOf<BlockHeader>];
-    #[allow(clippy::explicit_auto_deref)]
-    fn deref(&self) -> &Self::Target {
-        self.base
-    }
-}
-/// Read-only view of the committed block hashes.
-pub struct BlockHashesView<'a> {
-    guard: mv::ReleaseGuard<'a, parking_lot::RwLockReadGuard<'a, BlockHashStorage>>,
-}
-impl std::ops::Deref for BlockHashesView<'_> {
-    type Target = [HashOf<BlockHeader>];
-    #[allow(clippy::explicit_auto_deref)]
-    fn deref(&self) -> &Self::Target {
-        self.guard.as_slice()
-    }
+impl BlockHashesView<'_> {
+    hash_read_methods!();
 }
 #[cfg(test)]
 mod emergency_fast_block_hash_mapping_tests {
@@ -2063,9 +2317,9 @@ mod emergency_fast_block_hash_mapping_tests {
         let journal = BlockHashes::new_emergency_fast_mapped(mapping, hashes.len());
 
         assert_eq!(journal.committed_height(), hashes.len());
-        assert_eq!(&*journal.view(), hashes.as_slice());
+        assert!(journal.view().iter().copied().eq(hashes));
         assert!(matches!(
-            &*journal.inner.read(),
+            &journal.inner,
             BlockHashStorage::EmergencyFastMapped(_)
         ));
     }
@@ -3280,6 +3534,9 @@ pub(crate) fn certified_merge_queue_reservations(
 /// Errors surfaced when committing merge-ledger entries into state.
 #[derive(Debug, ThisError)]
 pub enum MergeLedgerCommitError {
+    /// Local original hash-history admission refused before executing State effects.
+    #[error(transparent)]
+    BlockHashAdmission(#[from] BlockHashAdmissionError),
     /// Local lane-drain evidence could not be observed or authenticated.
     /// This provenance never authorizes a deterministic proposal rejection.
     #[error("local lane drain observation requires recovery: {0}")]
@@ -13477,8 +13734,6 @@ pub struct StateBlock<'state> {
     state_ref: &'state State,
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldBlock<'state>,
-    /// Blockchain.
-    pub block_hashes: BlockHashesBlock<'state>,
     /// Merge-ledger cache retaining recent entries for this block scope.
     pub merge_ledger: &'state MergeLedgerStore,
     /// Hashes of transactions mapped onto block height where they stored
@@ -13687,6 +13942,8 @@ pub struct StateBlock<'state> {
     pub(crate) authenticated_replay_commit: bool,
     /// True for the disposable full-range replay pass that must not publish external effects.
     replay_prevalidation: bool,
+    /// Original history custody drops only after all physical State writers.
+    pub block_hashes: BlockHashesBlock<'state>,
 }
 impl<'state> StateBlock<'state> {
     /// Returns the world view associated with this block scope.
@@ -15360,7 +15617,7 @@ pub struct StateView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldView<'state>,
     /// Snapshot of committed block hashes.
-    pub block_hashes: Vec<HashOf<BlockHeader>>,
+    pub block_hashes: BlockHashesView<'state>,
     /// Merge-ledger cache retaining recent entries for this consistent view.
     pub merge_ledger: &'state MergeLedgerStore,
     /// Hashes of transactions mapped onto block height where they stored
@@ -15440,7 +15697,7 @@ pub struct StateQueryView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldView<'state>,
     /// Snapshot of committed block hashes.
-    pub block_hashes: Vec<HashOf<BlockHeader>>,
+    pub block_hashes: BlockHashesView<'state>,
     /// Topology used to commit latest block.
     pub commit_topology: CellView<'state, Vec<PeerId>>,
     /// Topology used to commit previous block.
@@ -15513,7 +15770,7 @@ impl<'state> StateView<'state> {
     }
     /// Exposes the cached block hashes captured by this snapshot.
     #[inline]
-    pub fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
+    pub fn block_hashes(&self) -> &dyn BlockHashRead {
         &self.block_hashes
     }
     /// Provides read-only access to the commit topology for this snapshot.
@@ -22924,15 +23181,12 @@ pub trait WorldReadOnly {
             .and_then(|bindings| bindings.dataspace_for_account(account_id))
     }
     /// Get [`Account`]'s [`RoleId`]s
-    // NOTE: have to use concreate type because don't want to capture lifetme of `id`
-    #[allow(clippy::type_complexity)]
+    ///
+    /// The range borrows State entries, independently of the lookup account's lifetime.
     fn account_roles_iter<'slf>(
         &'slf self,
         id: &AccountId,
-    ) -> core::iter::Map<
-        RangeIter<'slf, RoleIdWithOwner, ()>,
-        fn((&'slf RoleIdWithOwner, &'slf ())) -> &'slf RoleId,
-    > {
+    ) -> impl DoubleEndedIterator<Item = &'slf RoleId> + use<'slf, Self> {
         self.account_roles()
             .range(RoleIdByAccountBounds::new(id))
             .map(|(role, ())| &role.id)
@@ -29023,7 +29277,7 @@ impl State {
             .saturating_add(1);
         let mut block = self.block_hashes.block();
         block.push(block_hash);
-        block.commit();
+        block.commit_for_tests();
         let history_cap = autoscale_sample_history_cap(&self.nexus_snapshot().autoscale);
         let mut runtime = self.canonical_runtime.block();
         let mut history: VecDeque<_> = runtime.autoscale_sample_history.iter().copied().collect();
@@ -29490,7 +29744,8 @@ impl State {
         );
         let mut s = Self {
             world,
-            block_hashes: BlockHashes::default(),
+            block_hashes: BlockHashes::try_new(std::iter::empty(), kura.block_hash_history_budget())
+                .map_err(MergeLedgerCommitError::BlockHashAdmission)?,
             latest_block_header: parking_lot::RwLock::new(latest_block_header),
             transactions: TransactionsStorage::new(),
             commit_topology: Cell::new(Vec::new()),
@@ -30378,6 +30633,8 @@ impl State {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
@@ -30559,19 +30816,23 @@ impl State {
     /// protocol-limit tightening. The same predicate excludes that work from a pristine merge
     /// execution carrier and admits the ordinary carrier which must apply it.
     /// A stale parent or concurrent state publication returns `None`.
-    pub(crate) fn deterministic_start_work_pending(&self, header: &BlockHeader) -> Option<bool> {
+    pub(crate) fn deterministic_start_work_pending(
+        &self,
+        header: &BlockHeader,
+    ) -> Result<Option<bool>, StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>>
+    {
         let generation = self.state_view_generation();
+        let next_height = u64::try_from(self.committed_height())
+            .ok()
+            .and_then(|h| h.checked_add(1));
         if generation % 2 != 0
-            || u64::try_from(self.committed_height())
-                .ok()?
-                .checked_add(1)?
-                != header.height().get()
+            || next_height != Some(header.height().get())
             || header.is_genesis()
             || header.prev_block_hash() != self.latest_block_hash_fast()
         {
-            return None;
+            return Ok(None);
         }
-        let probe = self.block(header.clone());
+        let probe = self.try_block(header.clone())?;
         let pending = !probe.world.merge_execution_write_set_bytes().is_empty()
             || !probe.world.external_event_buf.is_empty()
             || !probe.merge_carrier_entrypoints.is_empty()
@@ -30579,10 +30840,14 @@ impl State {
                 .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
                 .is_err();
         drop(probe);
-        is_stable_state_view_generation(generation, self.state_view_generation()).then_some(pending)
+        Ok(
+            is_stable_state_view_generation(generation, self.state_view_generation())
+                .then_some(pending),
+        )
     }
     /// Create structure to execute a block
     #[allow(clippy::too_many_lines)]
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.try_block(curr_block).unwrap_or_else(|error| {
             panic!("persisted active runtime ABI is incompatible with this node: {error:?}")
@@ -30596,7 +30861,8 @@ impl State {
     pub fn try_block(
         &self,
         curr_block: BlockHeader,
-    ) -> Result<StateBlock<'_>, iroha_data_model::executor::IvmAdmissionError> {
+    ) -> Result<StateBlock<'_>, StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>>
+    {
         self.block_with_pristine_stage(curr_block, |block| {
             // Validate the acquired predecessor, before any start effects. A
             // separate World view can belong to a different publication.
@@ -30607,11 +30873,11 @@ impl State {
             .map(|_| ())
         })
     }
-    pub(crate) fn block_with_pristine_stage<E>(
+    pub(crate) fn block_with_pristine_stage<E: std::fmt::Debug>(
         &self,
         curr_block: BlockHeader,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
-    ) -> Result<StateBlock<'_>, E> {
+    ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
         self.block_with_owned_start_stages(curr_block, stage, |_, ()| Ok(()))
             .map(|(block, ())| *block)
     }
@@ -30621,12 +30887,12 @@ impl State {
     /// come from the before-start closure on this SAME overlay. Native callers
     /// retain the heap owner; old callers keep their existing return convention.
     #[allow(clippy::too_many_lines)]
-    fn block_with_owned_start_stages<'state, E, T, R>(
+    fn block_with_owned_start_stages<'state, E: std::fmt::Debug, T, R>(
         &'state self,
         curr_block: BlockHeader,
         before_start: impl FnOnce(&mut StateBlock<'state>) -> Result<T, E>,
         after_start: impl FnOnce(&mut StateBlock<'state>, T) -> Result<R, E>,
-    ) -> Result<(Box<StateBlock<'state>>, R), E> {
+    ) -> Result<(Box<StateBlock<'state>>, R), StateBlockStartError<E>> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
         #[cfg(feature = "telemetry")]
@@ -30644,7 +30910,7 @@ impl State {
             canonical_runtime,
             projection,
             sccp_registry,
-        } = self.acquire_canonical_runtime_block(false);
+        } = self.acquire_canonical_runtime_block(false)?;
         let gas_limit_per_block = gas_limit_from_parameters(world.parameters());
         let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
             world.privacy_consensus_policy.get().current_limits,
@@ -30760,7 +31026,7 @@ impl State {
         });
         sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
-        let continuation = before_start(&mut sb)?;
+        let continuation = before_start(&mut sb).map_err(StateBlockStartError::Stage)?;
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(&mut sb)
                 .unwrap_or_else(|error| {
@@ -30822,7 +31088,7 @@ impl State {
         Self::apply_block_start_confidential_policies(&mut sb, now_h);
         sb.start_of_block_effects_applied = true;
         sb.capture_execution_output_capacity();
-        let result = after_start(&mut sb, continuation)?;
+        let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?;
         Ok((sb, result))
     }
     /// Release expired private locks inside their original block transaction.
@@ -31361,7 +31627,10 @@ impl State {
     /// The returned scope is scratch state: callers must either fold its deterministic
     /// result into a canonical carrier or drop it. [`StateBlock::commit`] rejects scopes
     /// without canonical transaction membership.
-    fn merge_preexecution_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
+    fn try_merge_preexecution_block(
+        &self,
+        curr_block: BlockHeader,
+    ) -> Result<StateBlock<'_>, BlockHashAdmissionError> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
         let canonical_runtime::AcquiredRuntimeBlock {
@@ -31374,7 +31643,7 @@ impl State {
             canonical_runtime,
             projection,
             sccp_registry,
-        } = self.acquire_canonical_runtime_block(false);
+        } = self.acquire_canonical_runtime_block(false)?;
         let gas_limit_per_block = gas_limit_from_parameters(world.parameters());
         let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
             world.privacy_consensus_policy.get().current_limits,
@@ -31490,16 +31759,25 @@ impl State {
         };
         state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
-        state_block
+        Ok(state_block)
+    }
+    #[cfg(test)]
+    fn merge_preexecution_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
+        self.try_merge_preexecution_block(curr_block)
+            .expect("fixture scratch hash admission")
     }
     /// Create a side-effect-free scratch block for exact consensus-effect preflight.
     ///
     /// The scope contains one generation-coherent parent world/Nexus snapshot,
     /// runs no start-of-block lifecycle effects, and must never be committed.
-    pub(crate) fn consensus_effects_probe_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
-        self.merge_preexecution_block(curr_block)
+    pub(crate) fn consensus_effects_probe_block(
+        &self,
+        curr_block: BlockHeader,
+    ) -> Result<StateBlock<'_>, BlockHashAdmissionError> {
+        self.try_merge_preexecution_block(curr_block)
     }
     /// Create structure to execute a block while reverting changes made in the latest block
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub fn block_and_revert(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.block_and_revert_with_pristine_stage(curr_block, |_| {
             Ok::<(), core::convert::Infallible>(())
@@ -31507,17 +31785,11 @@ impl State {
         .expect("infallible replacement-block pristine stage")
     }
     /// Create a replacement block with one pre-lifecycle deterministic stage.
-    pub(crate) fn block_and_revert_with_pristine_stage<E>(
+    pub(crate) fn block_and_revert_with_pristine_stage<E: std::fmt::Debug>(
         &self,
         curr_block: BlockHeader,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
-    ) -> Result<StateBlock<'_>, E> {
-        let current_height = self.block_hashes.view().len() as u64;
-        let target_height = curr_block.height().get().saturating_sub(1);
-        if target_height < current_height {
-            self.rewind_da_indexes_to_height(target_height)
-                .expect("failed to rewind DA indexes from Kura");
-        }
+    ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
         let canonical_runtime::AcquiredRuntimeBlock {
             world,
             block_hashes,
@@ -31528,7 +31800,15 @@ impl State {
             canonical_runtime,
             projection,
             sccp_registry,
-        } = self.acquire_canonical_runtime_block(true);
+        } = self.acquire_canonical_runtime_block(true)?;
+        // Keep the prepaid original successor through the rewind. A local
+        // capacity refusal must happen before changing any live DA projection.
+        let current_height = self.block_hashes.committed_height() as u64;
+        let target_height = curr_block.height().get().saturating_sub(1);
+        if target_height < current_height {
+            self.rewind_da_indexes_to_height(target_height)
+                .expect("failed to rewind DA indexes from Kura");
+        }
         let gas_limit_per_block = gas_limit_from_parameters(world.parameters());
         let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
             world.privacy_consensus_policy.get().current_limits,
@@ -31645,7 +31925,7 @@ impl State {
         };
         state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
-        stage(&mut state_block)?;
+        stage(&mut state_block).map_err(StateBlockStartError::Stage)?;
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(
                 &mut state_block,
@@ -31793,8 +32073,7 @@ impl State {
                 continue;
             }
             let block_hashes_start = Instant::now();
-            let block_hashes: Vec<HashOf<BlockHeader>> =
-                self.block_hashes.view().iter().copied().collect();
+            let block_hashes = self.block_hashes.view();
             let block_hashes_wait = block_hashes_start.elapsed();
             let query_ledger_time_ms = self.latest_block_creation_time_ms_fast();
             let world_start = Instant::now();
@@ -32662,8 +32941,7 @@ impl State {
                 return Ok(None);
             }
             let block_hashes_start = Instant::now();
-            let block_hashes: Vec<HashOf<BlockHeader>> =
-                self.block_hashes.view().iter().copied().collect();
+            let block_hashes = self.block_hashes.view();
             let block_hashes_wait = block_hashes_start.elapsed();
             let query_ledger_time_ms = self.latest_block_creation_time_ms_fast();
             let nexus_start = Instant::now();
@@ -34822,7 +35100,7 @@ impl State {
         application_block_header: BlockHeader,
         sources: Vec<MergeExecutionSource>,
     ) -> Result<(StateBlock<'state>, Vec<MergeLaneExecution>), MergeLedgerCommitError> {
-        let mut state_block = self.merge_preexecution_block(application_block_header);
+        let mut state_block = self.try_merge_preexecution_block(application_block_header)?;
         let executions = Self::preexecute_merge_execution_sources_into(&mut state_block, sources)?;
         Ok((state_block, executions))
     }
@@ -35452,6 +35730,7 @@ impl State {
             &consensus,
             frozen_mode,
         )
+        .expect("fixture merge admission")
         .and_then(|candidate| candidate.execution_batch)
     }
     /// Snapshot merge bindings and their exact lane committees from one immutable
@@ -35636,28 +35915,42 @@ impl State {
         &self,
         application_block_header: BlockHeader,
         frozen_mode: ConsensusMode,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
+    ) -> Result<
+        Option<crate::merge::MergeLedgerCandidate>,
+        StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
+    > {
         if self.ensure_merge_history_available().is_err() {
-            return None;
+            return Ok(None);
         }
         let consensus = self.merge_consensus_snapshot();
         let epoch_id = consensus.admission.expected_epoch();
         let global_view = application_block_header.view_change_index();
-        let parent_header = self.latest_block_header_fast()?;
-        let candidate = self.build_merge_execution_candidate_for_consensus(
+        let Some(parent_header) = self.latest_block_header_fast() else {
+            return Ok(None);
+        };
+        let Some(candidate) = self.build_merge_execution_candidate_for_consensus(
             epoch_id,
             application_block_header,
             &consensus,
             frozen_mode,
-        )?;
-        self.validate_merge_candidate_for_global_round(
+        )?
+        else {
+            return Ok(None);
+        };
+        if let Err(error) = self.validate_merge_candidate_for_global_round(
             &candidate,
             &parent_header,
             global_view,
             frozen_mode,
-        )
-        .ok()?;
-        consensus.is_current(self).then_some(candidate)
+        ) {
+            return match error {
+                MergeLedgerCommitError::BlockHashAdmission(error) => {
+                    Err(StateBlockStartError::History(error))
+                }
+                _ => Ok(None),
+            };
+        }
+        Ok(consensus.is_current(self).then_some(candidate))
     }
     fn build_merge_execution_candidate_for_consensus(
         &self,
@@ -35665,163 +35958,182 @@ impl State {
         application_block_header: BlockHeader,
         consensus: &MergeConsensusSnapshot,
         frozen_mode: ConsensusMode,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
-        let lifecycle = &consensus.lifecycle;
-        let admission = &consensus.admission;
-        let nexus = &lifecycle.nexus;
-        if !consensus.is_current(self)
-            || epoch_id != admission.expected_epoch()
-            || application_block_header.height().get()
-                != consensus.committed_height.checked_add(1)?
-            || application_block_header.prev_block_hash() != consensus.latest_block_hash
-            || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
-        {
-            return None;
+    ) -> Result<
+        Option<crate::merge::MergeLedgerCandidate>,
+        StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
+    > {
+        if self.deterministic_start_work_pending(&application_block_header)? != Some(false) {
+            return Ok(None);
         }
-        if self.deterministic_start_work_pending(&application_block_header)? {
-            debug!(
-                carrier_height = application_block_header.height().get(),
-                "deferring autonomous execution because its carrier has due deterministic start effects"
-            );
-            return None;
-        }
-        let world = self.world.view();
-        let mut sources = Vec::new();
-        for lane in nexus.lane_catalog.lanes() {
-            let incarnation = *lifecycle.incarnations.get(&lane.id)?;
-            let frontier = match Self::canonical_merged_lane_frontier_from_world(
-                &world,
-                lane.id,
-                lane.dataspace_id,
-                incarnation,
-            ) {
-                Ok(frontier) => frontier,
-                Err(err) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        ?err,
-                        "deferring merge batch construction because the replicated lane frontier is invalid"
-                    );
-                    return None;
-                }
-            };
-            let expected_height = frontier.0.checked_add(1)?;
-            let durable_source = match self.durable_autonomous_merge_source_for_lane_slot(
-                &world,
-                lane.id,
-                expected_height,
-                frozen_mode,
-            ) {
-                Ok(Some(source)) => source,
-                Ok(None) => continue,
-                Err(message) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        message,
-                        "certified lane block is missing its complete durable merge source"
-                    );
-                    return None;
-                }
-            };
-            let certified = &durable_source.bundle.certified;
-            let descriptor = &certified.proposal.descriptor;
-            if descriptor.lane_id != lane.id
-                || descriptor.dataspace_id != lane.dataspace_id
-                || descriptor.lane_incarnation != incarnation
-                || !lifecycle.lane_route_and_incarnation_matches(
+        self.select_merge_execution_candidate_for_consensus(
+            epoch_id,
+            application_block_header,
+            consensus,
+            frozen_mode,
+        )
+        .map_err(StateBlockStartError::History)
+    }
+    fn select_merge_execution_candidate_for_consensus(
+        &self,
+        epoch_id: u64,
+        application_block_header: BlockHeader,
+        consensus: &MergeConsensusSnapshot,
+        frozen_mode: ConsensusMode,
+    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, BlockHashAdmissionError> {
+        let Some((candidate_template, sources)) = (|| {
+            let lifecycle = &consensus.lifecycle;
+            let admission = &consensus.admission;
+            let nexus = &lifecycle.nexus;
+            if !consensus.is_current(self)
+                || epoch_id != admission.expected_epoch()
+                || application_block_header.height().get()
+                    != consensus.committed_height.checked_add(1)?
+                || application_block_header.prev_block_hash() != consensus.latest_block_hash
+                || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
+            {
+                return None;
+            }
+            let world = self.world.view();
+            let mut sources = Vec::new();
+            for lane in nexus.lane_catalog.lanes() {
+                let incarnation = *lifecycle.incarnations.get(&lane.id)?;
+                let frontier = match Self::canonical_merged_lane_frontier_from_world(
+                    &world,
                     lane.id,
                     lane.dataspace_id,
-                    descriptor.proposal_height,
-                    descriptor.lane_incarnation,
-                )
-            {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    "durable autonomous source differs from the active lane generation"
-                );
-                return None;
-            }
-            if let Err(err) =
-                Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
-            {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    ?err,
-                    "deferring merge batch construction because its predecessor is not the replicated lane frontier"
-                );
-                return None;
-            }
-            let authoritative = match lane_authority::authenticated_committee_for_descriptor(
-                self, descriptor,
-            ) {
-                Ok(authoritative) => authoritative,
-                Err(reason) => {
+                    incarnation,
+                ) {
+                    Ok(frontier) => frontier,
+                    Err(err) => {
+                        warn!(
+                            lane = %lane.id.as_u32(),
+                            ?err,
+                            "deferring merge batch construction because the replicated lane frontier is invalid"
+                        );
+                        return None;
+                    }
+                };
+                let expected_height = frontier.0.checked_add(1)?;
+                let durable_source = match self.durable_autonomous_merge_source_for_lane_slot(
+                    &world,
+                    lane.id,
+                    expected_height,
+                    frozen_mode,
+                ) {
+                    Ok(Some(source)) => source,
+                    Ok(None) => continue,
+                    Err(message) => {
+                        warn!(
+                            lane = %lane.id.as_u32(),
+                            lane_block_height = expected_height,
+                            message,
+                            "certified lane block is missing its complete durable merge source"
+                        );
+                        return None;
+                    }
+                };
+                let certified = &durable_source.bundle.certified;
+                let descriptor = &certified.proposal.descriptor;
+                if descriptor.lane_id != lane.id
+                    || descriptor.dataspace_id != lane.dataspace_id
+                    || descriptor.lane_incarnation != incarnation
+                    || !lifecycle.lane_route_and_incarnation_matches(
+                        lane.id,
+                        lane.dataspace_id,
+                        descriptor.proposal_height,
+                        descriptor.lane_incarnation,
+                    )
+                {
                     warn!(
                         lane = %lane.id.as_u32(),
                         lane_block_height = expected_height,
-                        reason,
-                        "deferring merge batch construction because historical lane authority is unavailable"
+                        "durable autonomous source differs from the active lane generation"
                     );
                     return None;
                 }
+                if let Err(err) =
+                    Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
+                {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        ?err,
+                        "deferring merge batch construction because its predecessor is not the replicated lane frontier"
+                    );
+                    return None;
+                }
+                let authoritative = match lane_authority::authenticated_committee_for_descriptor(
+                    self, descriptor,
+                ) {
+                    Ok(authoritative) => authoritative,
+                    Err(reason) => {
+                        warn!(
+                            lane = %lane.id.as_u32(),
+                            lane_block_height = expected_height,
+                            reason,
+                            "deferring merge batch construction because historical lane authority is unavailable"
+                        );
+                        return None;
+                    }
+                };
+                if descriptor.validator_set != authoritative {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        "certified lane block differs from its finalized proposal-height committee"
+                    );
+                    return None;
+                }
+                sources.push(MergeExecutionSource::from_durable(durable_source));
+            }
+            if sources.is_empty() {
+                return None;
+            }
+            let sources = match select_merge_execution_source_budget(
+                sources,
+                gas_limit_from_parameters(world.parameters()),
+            ) {
+                Ok(sources) => sources,
+                Err(error) => {
+                    warn!(?error, "autonomous merge source gas accounting failed");
+                    return None;
+                }
             };
-            if descriptor.validator_set != authoritative {
-                warn!(
-                    lane = %lane.id.as_u32(),
-                    lane_block_height = expected_height,
-                    "certified lane block differs from its finalized proposal-height committee"
-                );
+            if sources.is_empty() {
+                warn!("oldest autonomous merge source exceeds the entrypoint or block gas limit");
                 return None;
             }
-            sources.push(MergeExecutionSource::from_durable(durable_source));
-        }
-        if sources.is_empty() {
-            return None;
-        }
-        let sources = match select_merge_execution_source_budget(
-            sources,
-            gas_limit_from_parameters(world.parameters()),
-        ) {
-            Ok(sources) => sources,
-            Err(error) => {
-                warn!(?error, "autonomous merge source gas accounting failed");
-                return None;
-            }
-        };
-        if sources.is_empty() {
-            warn!("oldest autonomous merge source exceeds the entrypoint or block gas limit");
-            return None;
-        }
-        let (lane_catalog_hash, active_lanes, lane_authority_catalog) = self
-            .merge_active_lane_authority_snapshot(application_block_header.height().get())
-            .ok()?;
-        let incarnation_entries = active_lanes
-            .iter()
-            .map(
-                |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
-                    lane_id: binding.lane_id,
-                    incarnation: binding.incarnation,
-                },
-            )
-            .collect::<Vec<_>>();
-        let candidate_template = crate::merge::MergeLedgerCandidate {
-            version: crate::merge::MergeLedgerCandidate::VERSION,
-            epoch_id,
-            view: application_block_header.view_change_index(),
-            carrier_height: application_block_header.height().get(),
-            carrier_parent_hash: application_block_header.prev_block_hash()?,
-            lane_catalog_hash,
-            active_lanes: active_lanes.clone(),
-            lane_authority_catalog,
-            incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
-            activation_root: crate::merge::merge_activation_root(&active_lanes),
-            lane_snapshots: Vec::new(),
-            execution_batch: None,
-            lane_drain_certificates: Vec::new(),
-            global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
+            let (lane_catalog_hash, active_lanes, lane_authority_catalog) = self
+                .merge_active_lane_authority_snapshot(application_block_header.height().get())
+                .ok()?;
+            let incarnation_entries = active_lanes
+                .iter()
+                .map(
+                    |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
+                        lane_id: binding.lane_id,
+                        incarnation: binding.incarnation,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let candidate_template = crate::merge::MergeLedgerCandidate {
+                version: crate::merge::MergeLedgerCandidate::VERSION,
+                epoch_id,
+                view: application_block_header.view_change_index(),
+                carrier_height: application_block_header.height().get(),
+                carrier_parent_hash: application_block_header.prev_block_hash()?,
+                lane_catalog_hash,
+                active_lanes: active_lanes.clone(),
+                lane_authority_catalog,
+                incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
+                activation_root: crate::merge::merge_activation_root(&active_lanes),
+                lane_snapshots: Vec::new(),
+                execution_batch: None,
+                lane_drain_certificates: Vec::new(),
+                global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
+            };
+            Some((candidate_template, sources))
+        })() else {
+            return Ok(None);
         };
         let selected = Self::select_merge_execution_candidate_prefix(
             &candidate_template,
@@ -35829,7 +36141,7 @@ impl State {
             MAX_MERGE_LEDGER_ENTRY_BYTES.saturating_sub(MAX_MERGE_QC_BYTES),
             |prefix_len| {
                 if !consensus.is_current(self) {
-                    return None;
+                    return Ok(None);
                 }
                 self.build_merge_execution_batch_from_source_prefix(
                     epoch_id,
@@ -35837,11 +36149,11 @@ impl State {
                     sources[..prefix_len].to_vec(),
                 )
             },
-        );
+        )?;
         // Every live read and scratch execution must belong to the generation
         // which supplied the parent/lifecycle/admission snapshot. A concurrent
         // publication invalidates even a previously fitting prefix.
-        consensus.is_current(self).then_some(selected).flatten()
+        Ok(consensus.is_current(self).then_some(selected).flatten())
     }
     /// Select a fitting priority source prefix whose complete unsigned
     /// carrier fits, including the immutable historical authority catalog.
@@ -35853,8 +36165,11 @@ impl State {
         candidate_template: &crate::merge::MergeLedgerCandidate,
         source_count: usize,
         unsigned_limit: usize,
-        mut build_batch: impl FnMut(usize) -> Option<MergeExecutionBatch>,
-    ) -> Option<crate::merge::MergeLedgerCandidate> {
+        mut build_batch: impl FnMut(
+            usize,
+        )
+            -> Result<Option<MergeExecutionBatch>, BlockHashAdmissionError>,
+    ) -> Result<Option<crate::merge::MergeLedgerCandidate>, BlockHashAdmissionError> {
         // Binary refinement bounds repeated deterministic pre-execution work. Each
         // trial restores canonical execution order, which can change result sizes;
         // therefore this finds a fitting prefix, not necessarily the largest one.
@@ -35865,7 +36180,7 @@ impl State {
         let mut best = None;
         while lower <= upper {
             let midpoint = lower + (upper - lower) / 2;
-            let candidate = build_batch(midpoint).and_then(|batch| {
+            let candidate = build_batch(midpoint)?.and_then(|batch| {
                 let mut candidate = candidate_template.clone();
                 candidate.execution_batch = Some(batch);
                 (candidate.canonical_bytes().len() <= unsigned_limit).then_some(candidate)
@@ -35878,93 +36193,109 @@ impl State {
                 None => upper = midpoint.saturating_sub(1),
             }
         }
-        best
+        Ok(best)
     }
     fn build_merge_execution_batch_from_source_prefix(
         &self,
         epoch_id: u64,
         application_block_header: BlockHeader,
         mut sources: Vec<MergeExecutionSource>,
-    ) -> Option<MergeExecutionBatch> {
-        let total_entrypoints = sources
-            .iter()
-            .map(|source| source.input.entrypoints.len())
-            .sum::<usize>();
-        if sources.is_empty() || total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
-            return None;
-        }
-        // Selection uses age for fairness; execution and its certified wire representation
-        // retain the protocol's canonical lane order for the chosen set.
-        sources
-            .sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal));
-        let base_state_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
-        let base_state_hash = self.lane_execution_state_hash().ok()?;
-        if application_block_header.height().get() != base_state_height.saturating_add(1)
-            || application_block_header.prev_block_hash() != self.latest_block_hash_fast()
-            || application_block_header.merkle_root().is_some()
-            || application_block_header.creation_time().is_zero()
-        {
-            warn!(
-                "deferring merge execution batch because the application context is not a canonical stripped carrier header"
-            );
-            return None;
-        }
+    ) -> Result<Option<MergeExecutionBatch>, BlockHashAdmissionError> {
+        let Some((sources, total_entrypoints, base_state_height, base_state_hash)) = (|| {
+            let total_entrypoints = sources
+                .iter()
+                .map(|source| source.input.entrypoints.len())
+                .sum::<usize>();
+            if sources.is_empty() || total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
+                return None;
+            }
+            // Selection uses age for fairness; execution and its certified wire representation
+            // retain the protocol's canonical lane order for the chosen set.
+            sources.sort_by_key(|source| {
+                merge_execution_canonical_order_key(&source.certified.proposal)
+            });
+            let base_state_height = u64::try_from(self.committed_height()).unwrap_or(u64::MAX);
+            let base_state_hash = self.lane_execution_state_hash().ok()?;
+            if application_block_header.height().get() != base_state_height.saturating_add(1)
+                || application_block_header.prev_block_hash() != self.latest_block_hash_fast()
+                || application_block_header.merkle_root().is_some()
+                || application_block_header.creation_time().is_zero()
+            {
+                warn!(
+                    "deferring merge execution batch because the application context is not a canonical stripped carrier header"
+                );
+                return None;
+            }
+            Some((
+                sources,
+                total_entrypoints,
+                base_state_height,
+                base_state_hash,
+            ))
+        })() else {
+            return Ok(None);
+        };
         let (state_block, lanes) = match self
             .preexecute_merge_execution_sources(application_block_header.clone(), sources)
         {
             Ok(prepared) => prepared,
+            Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),
             Err(err) => {
                 warn!(?err, "merge execution pre-execution failed");
-                return None;
+                return Ok(None);
             }
         };
-        let mut state_block = state_block;
-        state_block.stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
-        if let Err(err) = state_block
-            .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
-        {
-            warn!(
-                ?err,
-                "merge execution staged an unsupported commit side effect"
+        Ok((|| {
+            let mut state_block = state_block;
+            state_block
+                .stage_merge_metadata_values(&[], crate::merge::reduce_merge_hint_roots(&[]));
+            if let Err(err) = state_block
+                .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
+            {
+                warn!(
+                    ?err,
+                    "merge execution staged an unsupported commit side effect"
+                );
+                return None;
+            }
+            let application_write_set_root = state_block.merge_execution_write_set_root();
+            let execution_root = crate::merge::merge_execution_root(&lanes);
+            let entrypoint_count = u64::try_from(total_entrypoints).ok()?;
+            let entrypoint_merkle_root =
+                crate::merge::merge_execution_entrypoint_merkle_root(&lanes)?;
+            let result_merkle_root = crate::merge::merge_execution_result_merkle_root(&lanes)?;
+            let mut batch = MergeExecutionBatch {
+                version: 1,
+                base_state_height,
+                base_state_hash,
+                application_block_header,
+                lanes,
+                entrypoint_count,
+                entrypoint_merkle_root,
+                result_merkle_root,
+                execution_root,
+                application_write_set_root,
+                write_set_root: Hash::prehashed([0; Hash::LENGTH]),
+                expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+                    [0; Hash::LENGTH],
+                )),
+                batch_hash: Hash::prehashed([0; Hash::LENGTH]),
+            };
+            if let Err(err) = state_block.stage_merge_execution_markers(epoch_id, &batch) {
+                warn!(?err, "merge execution replay markers could not be staged");
+                return None;
+            }
+            batch.write_set_root = state_block.merge_execution_write_set_root();
+            batch.expected_post_state_hash = crate::merge::merge_expected_post_state_hash(
+                base_state_height,
+                base_state_hash,
+                batch.write_set_root,
             );
-            return None;
-        }
-        let application_write_set_root = state_block.merge_execution_write_set_root();
-        let execution_root = crate::merge::merge_execution_root(&lanes);
-        let entrypoint_count = u64::try_from(total_entrypoints).ok()?;
-        let entrypoint_merkle_root = crate::merge::merge_execution_entrypoint_merkle_root(&lanes)?;
-        let result_merkle_root = crate::merge::merge_execution_result_merkle_root(&lanes)?;
-        let mut batch = MergeExecutionBatch {
-            version: 1,
-            base_state_height,
-            base_state_hash,
-            application_block_header,
-            lanes,
-            entrypoint_count,
-            entrypoint_merkle_root,
-            result_merkle_root,
-            execution_root,
-            application_write_set_root,
-            write_set_root: Hash::prehashed([0; Hash::LENGTH]),
-            expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
-                [0; Hash::LENGTH],
-            )),
-            batch_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        if let Err(err) = state_block.stage_merge_execution_markers(epoch_id, &batch) {
-            warn!(?err, "merge execution replay markers could not be staged");
-            return None;
-        }
-        batch.write_set_root = state_block.merge_execution_write_set_root();
-        batch.expected_post_state_hash = crate::merge::merge_expected_post_state_hash(
-            base_state_height,
-            base_state_hash,
-            batch.write_set_root,
-        );
-        batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-        let encoded_len = norito::to_bytes(&batch).ok()?.len();
-        iroha_data_model::merge::merge_execution_batch_size_within_limit(encoded_len)
-            .then_some(batch)
+            batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
+            let encoded_len = norito::to_bytes(&batch).ok()?.len();
+            iroha_data_model::merge::merge_execution_batch_size_within_limit(encoded_len)
+                .then_some(batch)
+        })())
     }
     /// Return the only committed, uncertified autoscale drain body and its exact
     /// close-boundary committee.
@@ -36332,9 +36663,8 @@ impl State {
         MergeLedgerCommitError,
     > {
         // One immutable view owns both predecessor history and route authority.
-        // Holding a raw block-hash read guard and then opening `State::view()`
-        // can deadlock a State commit that has already raised the write
-        // generation and is waiting to publish that same block-hash journal.
+        // Capture them together so route membership and immutable history
+        // describe the same published State generation.
         let state_view = self.view();
         let active_lanes = Self::queue_plan_active_lane_bindings_from_snapshot(
             state_view.nexus(),
@@ -45162,6 +45492,7 @@ impl State {
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_entry(entry, frozen_mode)
         })
+        .map_err(MergeLedgerCommitError::from)
     }
     /// Resolve and stage a compact certified merge reference before running
     /// deterministic start-of-block effects.
@@ -45184,6 +45515,7 @@ impl State {
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_reference(reference, frozen_mode)
         })
+        .map_err(MergeLedgerCommitError::from)
     }
     /// Stage proposal-native QueuePlan certificates on the pristine carrier
     /// overlay before running deterministic start-of-block effects.
@@ -45206,6 +45538,7 @@ impl State {
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_queue_plan_admissions_for_carrier(admission_bytes)
         })
+        .map_err(MergeLedgerCommitError::from)
     }
     /// Stage a complete-input admission carrier for a component test fixture.
     ///
@@ -49850,7 +50183,7 @@ pub trait WorldStateSnapshot {
     /// Read-only access to the world state.
     fn world(&self) -> &impl WorldReadOnly;
     /// Recent block hashes for consistency checks.
-    fn block_hashes(&self) -> &[HashOf<BlockHeader>];
+    fn block_hashes(&self) -> &dyn BlockHashRead;
     /// Current commit topology (ordering of peers).
     fn commit_topology(&self) -> &[PeerId];
     /// Previous commit topology (before the latest block).
@@ -50113,7 +50446,7 @@ macro_rules! impl_state_ro {
             fn world(&self) -> &impl WorldReadOnly {
                 &self.world
             }
-            fn block_hashes(&self) -> &[HashOf<BlockHeader>] {
+            fn block_hashes(&self) -> &dyn BlockHashRead {
                 &self.block_hashes
             }
             fn commit_topology(&self) -> &[PeerId] {
@@ -54172,7 +54505,12 @@ impl<'state> StateBlock<'state> {
                 carrier_hash,
             } => {
                 let height = carrier_storage_height(carrier_height)?;
-                self.block_hashes.pending.as_slice() != core::slice::from_ref(carrier_hash)
+                !self
+                    .block_hashes
+                    .pending()
+                    .iter()
+                    .copied()
+                    .eq([*carrier_hash])
                     || !self
                         .transactions
                         .has_exact_staged_block(height, &self.merge_carrier_entrypoints)
@@ -55347,6 +55685,8 @@ impl<'state> StateBlock<'state> {
             &mut (dyn FnMut(LaneId, DataSpaceId, Hash) -> Result<(), String> + '_),
         >,
     ) -> Result<(), TransactionsBlockError> {
+        let hash_budget = self.block_hashes.inner.budget.clone();
+        hash_budget.with_deferred_refund_notifications(|| {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         if let Err(error) = self.verify_execution_output_publication() {
             error!(
@@ -55441,7 +55781,7 @@ impl<'state> StateBlock<'state> {
             runtime_policy,
             canonical_runtime,
             world,
-            mut block_hashes,
+            block_hashes,
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
@@ -55497,6 +55837,7 @@ impl<'state> StateBlock<'state> {
                 return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
             }
         };
+        let hash_retirement;
         let _state_commit_lock = state_ref.state_commit_lock.lock();
         if let Err(err) = merge_execution_commit_surface_result {
             error!(
@@ -55865,12 +56206,17 @@ impl<'state> StateBlock<'state> {
         };
         let mut da_post_publication = None;
         let mut lifecycle_post_publication = None;
-        block_hashes.prepare_commit();
         {
             let state_write_lock_wait_start = Instant::now();
             let _state_write_lock = state_write_lock.lock();
             let state_write_lock_wait =
                 preflight_state_write_lock_wait + state_write_lock_wait_start.elapsed();
+            let block_hashes = block_hashes
+                .detach()
+                .try_prepare_publication(&state_ref.block_hashes, |_, _| {
+                    Ok::<_, std::convert::Infallible>(())
+                })
+                .map_err(|(_, _)| TransactionsBlockError::SnapshotObservationChanged)?;
             let _view_generation = state_ref.begin_state_view_write();
             let state_write_lock_hold_start = Instant::now();
             let tx_commit_start = Instant::now();
@@ -55903,8 +56249,8 @@ impl<'state> StateBlock<'state> {
             committed_topology.commit();
             let commit_topology_hold = commit_topology_start.elapsed();
             let world_start = Instant::now();
-            // Validation acquires hash snapshots before World writers. Publish
-            // World before reacquiring the hash writer to preserve lock order.
+            // Hash predecessor acquisition completed before this visibility interval.
+            // All original World writes publish under the same State generation.
             world.commit();
             #[cfg(feature = "telemetry")]
             state_ref
@@ -55919,7 +56265,7 @@ impl<'state> StateBlock<'state> {
             state_ref.install_sccp_registry_cache(Arc::clone(&sccp_registry));
             let world_hold = world_start.elapsed();
             let block_hashes_start = Instant::now();
-            block_hashes.commit();
+            hash_retirement = block_hashes.publish();
             let block_hashes_hold = block_hashes_start.elapsed();
             let merge_admission_hold = if let Some(entry) = staged_merge_entry.as_ref() {
                 let merge_start = Instant::now();
@@ -56083,7 +56429,10 @@ impl<'state> StateBlock<'state> {
                     .persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
             }
         }
+        drop(_state_commit_lock);
+        drop(hash_retirement);
         Ok(())
+        })
     }
     fn mint_canonical_carrier_commit_metadata_authorization(
         &mut self,
@@ -56197,7 +56546,12 @@ impl<'state> StateBlock<'state> {
                     "finalized autonomous carrier height exceeds local storage bounds".to_owned(),
                 )
             })?;
-        if self.block_hashes.pending.as_slice() != [carrier_hash]
+        if !self
+            .block_hashes
+            .pending()
+            .iter()
+            .copied()
+            .eq([carrier_hash])
             || !self
                 .transactions
                 .has_exact_staged_block(carrier_storage_height, &self.merge_carrier_entrypoints)
@@ -58183,7 +58537,7 @@ mod public_lane_slash_observability_staging_tests {
                 .add_block_fee_amount(&Quantity::from(11_u64));
         }
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.consensus_effects_probe_block(header);
+        let mut block = state.consensus_effects_probe_block(header).unwrap();
         let lane_id = LaneId::new(73);
         let status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
 
@@ -58647,6 +59001,8 @@ mod tiered_snapshot_diff_tests {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            block_hash_history_bytes:
+                iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
             fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
@@ -59745,7 +60101,7 @@ mod tiered_snapshot_diff_tests {
         assert!(futures::poll!(wait.as_mut()).is_pending());
         // Finish the read statement before the append takes the write lock.
         let previous_hash = state.block_hashes.view().last().copied();
-        assert!(state.block_hashes.inner.try_write().is_some());
+        assert!(state.block_hashes.writer_available());
         state.append_committed_block_header_for_tests(BlockHeader::new(
             NonZeroU64::new(required_height).unwrap(),
             previous_hash,

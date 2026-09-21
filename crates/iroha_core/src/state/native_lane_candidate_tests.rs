@@ -153,7 +153,7 @@ state_test! { sync native_candidate_uses_exact_decisions_and_canonical_recorded_
         assert_eq!(block.execution_context().unwrap().native_lane_decisions.as_deref(), Some(fixture.work.batch()));
         assert_eq!(candidate.scan_report().native_selected, 1);
         assert_eq!(candidate.scan_report().native_deferred, 0);
-        assert!(candidate_block_has_proposal_work(block, &fixture.state, false));
+        assert!(candidate_block_has_proposal_work(block, &fixture.state, false).unwrap());
         block.validate_proposal_commitments().unwrap();
         let (block, bytes, encoded, _, _, _lease) = candidate.into_parts();
         assert_eq!(block.encode_wire().unwrap(), bytes);

@@ -3878,12 +3878,14 @@ fn autonomous_execution_requires_exact_pre_carrier_queue_plan_admission() {
                 application_header.clone(),
                 vec![source.clone()],
             )
+            .expect("fixture hash admission")
             .is_none(),
         "an availability-certified source remains ineligible while its binding is absent from pre-carrier WSV"
     );
     seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
     let batch = state
         .build_merge_execution_batch_from_source_prefix(1, application_header.clone(), vec![source])
+        .expect("fixture hash admission")
         .expect("the otherwise-identical source is eligible with exact pre-carrier authority");
     let lifecycle = state.lane_consensus_lifecycle_snapshot();
     let active_lanes = lifecycle
@@ -4139,7 +4141,7 @@ fn queue_plan_validation_waiting_for_state_generation_does_not_pin_block_hashes(
     let observation_deadline = std::time::Instant::now() + Duration::from_millis(250);
     let mut block_hashes_pinned = false;
     while std::time::Instant::now() < observation_deadline {
-        if state.block_hashes.inner.try_write().is_none() {
+        if !state.block_hashes.writer_available() {
             block_hashes_pinned = true;
             break;
         }
@@ -4965,13 +4967,14 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
         let mut prefix_batch = batch.clone();
         prefix_batch.lanes = vec![batch.lanes[0].clone(); prefix];
         prefix_batch.entrypoint_count *= u64::try_from(prefix).unwrap();
-        Some(prefix_batch)
+        Ok(Some(prefix_batch))
     };
     let mut two_source_candidate = template.clone();
-    two_source_candidate.execution_batch = build_batch(2);
+    two_source_candidate.execution_batch = build_batch(2).unwrap();
     let unsigned_limit = two_source_candidate.canonical_bytes().len();
     let selected =
         State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, build_batch)
+            .expect("fixture hash admission")
             .expect("exactly fitting two-source prefix");
     assert_eq!(selected.execution_batch.unwrap().lanes.len(), 2);
 
@@ -5000,6 +5003,7 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
         unsigned_limit,
         build_batch,
     )
+    .expect("fixture hash admission")
     .expect("smaller prefix still fits with a larger authority catalog");
     assert_eq!(
         selected.lane_authority_catalog,
@@ -5008,17 +5012,37 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
     assert_eq!(selected.execution_batch.unwrap().lanes.len(), 1);
     assert!(
         State::select_merge_execution_candidate_prefix(&expanded_catalog, 3, 0, build_batch,)
+            .expect("fixture hash admission")
             .is_none(),
         "an uncarryable first source must never produce a candidate"
     );
     assert!(
         State::select_merge_execution_candidate_prefix(&template, 0, unsigned_limit, build_batch,)
+            .expect("fixture hash admission")
             .is_none()
     );
     assert!(
-        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| None,)
+        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| Ok(None),)
+            .expect("fixture hash admission")
             .is_none(),
         "failed source construction remains fail-closed"
+    );
+    let notification = mv::ReleaseNotification::default();
+    let original = notification.observe();
+    let mut attempts = 0;
+    let refused =
+        State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| {
+            attempts += 1;
+            Err(crate::state::BlockHashAdmissionError::Busy(
+                original.clone(),
+            ))
+        });
+    assert_eq!(
+        attempts, 1,
+        "local pressure cannot trigger smaller source retries"
+    );
+    assert!(
+        matches!(refused, Err(crate::state::BlockHashAdmissionError::Busy(wait)) if wait == original)
     );
 }
 

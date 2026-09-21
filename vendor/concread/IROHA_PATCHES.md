@@ -73,6 +73,15 @@ branch fanout and representable entry count bound its depth. Consumer controls
 cover empty, leaf and multilevel trees, old-reader chains, source-map destruction
 with detached work, and a detached base older than the final committed root.
 
+Read iterators use that same valid-tree height bound for their two inline
+traversal paths, replacing both `VecDeque` allocations. Paths retain original
+node pointers and indices, never payload copies or mutable aliases. Iterator
+construction, traversal and destruction need no heap credit; forward, reverse,
+mixed-direction and borrowed-bound semantics stay on the same iterator engine.
+The concrete read iterator types are exported by `bptree` for allocation-free
+consumer wrappers. Allocator regressions cover empty and multilevel trees,
+retained readers, removals, nested checkpoints and unsized `str` bounds.
+
 
 Writer construction consumes an explicit associated input from the original
 locked admission, joined with both shell charges in `WriterAdmission`. Unit-input
@@ -123,6 +132,32 @@ private successor. The constructor admits exact initial node/root/reader storage
 native mutex/runtime storage, actual model payload policies and MV undo/global
 State admission remain required before production cutover.
 
+A prepaid detached successor with `Copy` keys and values can replace an existing
+value through `try_update_private` only when its leaf already belongs to that
+exact private cursor generation. The update copies into the original slot and
+returns its previous scalar; absent/shared entries return the unchanged supplied
+value. It never clones a path, acquires funding or a physical map lock, grows
+bookkeeping, or exposes a mutable payload reference/callback. Borrowed snapshots
+exclude the update, and a caught comparison panic leaves the original cursor
+fail-closed. This permits one admitted append or tip overwrite before execution,
+followed by filling the final hash without another allocation. Final publication
+still authenticates the original root and predecessor. Physical allocation,
+stale-refusal and abort controls retain original charges through actual free.
+This does not provision native mutex/runtime storage or supply complete State
+resource admission.
+
+For fixed-size Copy payloads, `try_insert_admitted_with_footprint` exposes both
+that additional reservation and the original published tree's requested-layout
+footprint while holding the same writer. Exact leaf/branch counts move with the
+published root, derived from its original created/retired pointer lists; nodes
+created and then retired privately cancel. Checkpoint abort restores those lists.
+Admission adds the actual permanent-root/current-reader and padded-node layouts
+without a whole-tree scan. A configured pool below this resident footprint plus
+required reservation cannot make progress merely by freeing old readers; callers
+must distinguish that bound from refundable old-generation/private-owner credit.
+All sums are checked. The API neither counts unprovisioned runtime/native locks
+nor grants authority from an earlier observation.
+
 Attached writers in both sealed modes lend exclusive nested checkpoints. Fresh
 private generation tags preserve parent nodes, and `get_before` borrows that
 saved root directly. Prepaid buffer growth retains each original ancestor
@@ -138,7 +173,7 @@ mutation while borrowed or reference escape while a child is live. The logical
 failed-edit flag covers both admitted and ordinary mutation, preventing use after
 a caught mutation or cleanup panic even before the physical mutex unwinds.
 Public commit and detach check this flag before consuming their original shells.
-Prepaid checkpoints still expose only admitted insertion; unrestricted mutation
+Prepaid checkpoints expose admitted insertion and whole-tree clear; unrestricted mutation
 belongs to Untracked mode. The original funded writer and all checkpoint lifetimes
 must remain inside the original refund-deferral scope.
 
@@ -148,3 +183,46 @@ and reverse consumption and implements `ExactSizeIterator`; its old size hint
 incorrectly kept the original length after consumption. Range iteration retains
 its separate conservative upper-bound contract. These operations support native
 Storage undo ownership without cloning a separate standard-map read image.
+
+The closed writer now exposes read-only checked insertion/clear demand and real
+nonblocking admitted acquisition. Map-level clear combines original shells and
+actual whole-tree retirement under one callback, permitting joint MV admission
+while both original locks are held. Shared allocation-free postorder traversal
+counts retirement nodes and destroys the final tree without mutable aliasing.
+
+Checkpoint `apply_retaining` transfers saved bookkeeping into an opaque cleanup
+owner without invoking its destructor. Aggregate MV apply can therefore finish
+both transfers while parent failure is armed before releasing either allocation.
+Synchronous map publication has explicit prepared/published/retirement owners:
+all lock and original-base checks precede node transfer; both physical guards and
+all cursor/base/charge cleanup remain retained through publication. Release only
+unlocks and returns cleanup. MV rotates its pair identity before unlocking and
+runs all retirement and notifications afterwards. Existing synchronous map commit
+uses this same engine; the retained-commit trait is sealed to the B+tree owner.
+See [joint Storage admission](../../docs/history/2026-09-20/joint-storage-admission.md).
+
+EBR cells use the same prepare/publish/release separation for ordinary and MV
+publication. Exclusive writer custody protects the current load and atomic swap
+without entering the epoch collector. The old allocation remains solely owned by
+an opaque unscheduled retirement until all enclosing writers and visibility locks
+release. Only then does retirement pin and defer reclamation through the original
+reader grace period. Preparation and transfer invoke no user cleanup; existing
+readers retain their exact values and charges until physical reclamation.
+
+
+## Closed admitted removal
+
+Held prepaid writers and borrowed checkpoints expose `removal_demand` and
+`try_remove_admitted`. The planner borrows the original path and possible
+rebalance sibling at each level, including nested copy and separator demands.
+With `b` branch levels, capacity preflight requires at most `2b + 1` new-node
+and `3b + 2` retirement slots. Checked admission precedes any clone or allocation;
+an absent key skips admission entirely. The generic recursive removal engine
+passes the same original funding provider through node clones, rebalancing and
+separator updates. Ordinary removal delegates to this engine. Checkpoint abort
+restores original roots and buffers without allocation or inverse edits.
+`MapAdmissionError` replaces the insertion-specific name across closed operations.
+Actual allocator and MV-credit regressions cover both edge directions, interior
+removals, root demotion, retained readers, nested rollback at full capacity,
+preflight refusal and clone unwind. This does not activate funded State or
+complete joint Storage undo/touched-key admission for removal.

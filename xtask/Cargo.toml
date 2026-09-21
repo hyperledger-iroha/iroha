@@ -37,7 +37,7 @@ path = "tests/integration.rs"
 
 [features]
 default = []
-dev-tools = []
+dev-tools = ["iroha_torii/test-fixtures"]
 vote-tally = ["dep:halo2_proofs"]
 
 [dependencies]

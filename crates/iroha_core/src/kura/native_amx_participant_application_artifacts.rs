@@ -275,9 +275,12 @@ struct NativeAmxParticipantReceiptLatestIndexV2 {
 ///
 /// This token is deliberately not a wire or persistence layout. It can only be
 /// constructed after Kura has read back the exact manifest, receipt, and
-/// latest-index bytes under the publication guards.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// latest-index bytes under the publication guards. The move-only token retains
+/// the original Kura identity; it must be reauthenticated under that instance's
+/// publication fences before use, since its durable files can change after capture.
+#[derive(Debug)]
 pub(crate) struct NativeAmxParticipantApplicationPrepublicationToken {
+    original_kura: KuraInstanceIdentity,
     application_block_height: u64,
     application_block_hash: HashOf<BlockHeader>,
     executed_block_wire_hash: Hash,
@@ -551,6 +554,7 @@ impl NativeAmxParticipantApplicationPrepublicationIdentity {
 }
 impl NativeAmxParticipantApplicationPrepublicationToken {
     fn from_plan(
+        original_kura: KuraInstanceIdentity,
         plan: &NativeAmxParticipantApplicationEvidencePlan,
         identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>,
     ) -> Option<Self> {
@@ -558,6 +562,7 @@ impl NativeAmxParticipantApplicationPrepublicationToken {
             return None;
         }
         Some(Self {
+            original_kura,
             application_block_height: plan.application_block_height,
             application_block_hash: plan.application_block_hash,
             executed_block_wire_hash: plan.executed_block_wire_hash,
@@ -620,8 +625,9 @@ impl NativeAmxParticipantApplicationPrepublicationToken {
         }
         self.identities == expected
     }
-    /// Verify the exact ordered State frontier projection authenticated by
-    /// this durable prepublication token.
+    /// Compare the exact ordered State frontier projection to this captured token.
+    /// This does not reread storage or join a Kura instance; callers must also
+    /// reauthenticate the token under the original publication fences before use.
     #[must_use]
     pub(crate) fn authenticates_state_frontiers(
         &self,

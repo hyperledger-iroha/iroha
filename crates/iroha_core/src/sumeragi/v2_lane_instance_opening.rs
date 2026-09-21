@@ -491,11 +491,13 @@ impl LaneInstance {
         if Self::gate_for(verified, state, observed) != LaneCurrentGate::Current {
             return Err(bad("opening observation is no longer current"));
         }
+        let state_owner = state
+            .native_lane_state_owner()
+            .ok_or_else(|| bad("read-only State cannot open native execution"))?;
         let guard = Arc::clone(&output_guard);
         let Some(operation) = guard.begin_fail_stop_operation() else {
             return Err(bad("consensus output is closed"));
         };
-        let state_owner = state.native_lane_state_owner();
         let issued = Arc::new(IssuedOpening {
             state_owner: state_owner.clone(),
             instance: verified.instance_id(),

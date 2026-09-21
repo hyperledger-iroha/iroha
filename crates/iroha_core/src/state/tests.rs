@@ -210,6 +210,58 @@ fn blank_state() -> State {
         LiveQueryStore::start_test(),
     )
 }
+#[test]
+fn account_role_ranges_borrow_state_without_retaining_lookup_accounts() {
+    fn verify(world: &impl WorldReadOnly) {
+        let mut roles = {
+            let lookup = ALICE_ID.clone();
+            world.account_roles_iter(&lookup)
+        };
+        assert_eq!(roles.next().unwrap().to_string(), "first");
+        assert_eq!(roles.next_back().unwrap().to_string(), "third");
+        assert_eq!(roles.next().unwrap().to_string(), "second");
+        assert!(roles.next_back().is_none());
+        assert!(roles.next().is_none());
+        assert_eq!(world.account_roles_iter(&BOB_ID).count(), 1);
+    }
+
+    let mut world = World::with_assets_and_roles(
+        [],
+        [
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+            Account::new(BOB_ID.clone()).build(&BOB_ID),
+        ],
+        [],
+        [],
+        [],
+        [],
+    );
+    for (account, name) in [
+        (&*ALICE_ID, "first"),
+        (&*ALICE_ID, "second"),
+        (&*ALICE_ID, "third"),
+        (&*BOB_ID, "other"),
+    ] {
+        world.account_roles.insert(
+            RoleIdWithOwner {
+                account: account.clone(),
+                id: name.parse().expect("role id"),
+            },
+            (),
+        );
+    }
+    verify(&world.view());
+    let mut block = world.block();
+    verify(&block);
+    {
+        let transaction = block.transaction_without_telemetry(RuntimeLaneConfig::default(), 0);
+        verify(&transaction);
+    }
+    verify(&block);
+    block.commit();
+    verify(&world.view());
+}
+
 state_test! { sync internal_event_publication_preserves_internal_order_without_external_retention
     let state = blank_test_state();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
@@ -930,7 +982,7 @@ state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overla
         Ok(_) => panic!("a rejected pristine stage must not construct a block"),
         Err(error) => error,
     };
-    assert_eq!(error, "rejected pristine stage");
+    assert_eq!(error, StateBlockStartError::Stage("rejected pristine stage"));
     assert_eq!(state.world.privacy_consensus_policy.view().get(), &original_policy);
     assert_eq!(
         state.world.privacy_activations.view().get(&activation_key),
@@ -5778,6 +5830,8 @@ fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig 
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        block_hash_history_bytes:
+            iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
@@ -31805,7 +31859,7 @@ state_test! { sync missing_insert_block_does_not_hydrate_staged_verified_lane_re
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0

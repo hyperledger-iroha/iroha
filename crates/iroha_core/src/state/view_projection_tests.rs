@@ -82,22 +82,17 @@ fn block_hashes_block_and_revert_replaces_tail_on_commit() {
     assert_eq!(view.iter().last().copied(), Some(replacement_hash));
 }
 #[test]
-fn block_hashes_prepare_commit_releases_read_lock() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new(World::default(), kura, query_handle);
-    let mut block_hashes = state.block_hashes.block();
-    assert_eq!(block_hashes.len(), 0);
-    assert!(
-        state.block_hashes.inner.try_write().is_none(),
-        "block-scoped snapshot should pin reads until commit preparation"
-    );
-    block_hashes.prepare_commit();
-    assert!(
-        state.block_hashes.inner.try_write().is_some(),
-        "prepare_commit should release the snapshot read guard before commit"
-    );
+fn block_hashes_execution_keeps_no_physical_hash_writer() {
+    let state = State::new(World::default(), Kura::blank_kura_for_testing(), LiveQueryStore::start_test());
+    let reader = state.block_hashes.view();
+    let block = state.block_hashes.block();
+    assert_eq!(block.len(), 0);
+    assert!(state.block_hashes.writer_available());
+    block.commit_for_tests();
+    assert_eq!(reader.len(), 0);
+    assert!(state.block_hashes.writer_available());
 }
+
 #[test]
 fn block_hashes_committed_height_cache_tracks_commits() {
     let kura = Kura::blank_kura_for_testing();
@@ -1077,4 +1072,23 @@ async fn new_for_testing_uses_config_chain_id() {
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), kura, query_handle);
     assert_eq!(state.chain_id, *super::DEFAULT_TEST_CHAIN_ID);
+}
+
+#[test]
+fn state_and_query_views_retain_original_hash_nodes_across_tip_publication() {
+    let state=State::new_for_testing(World::default(),Kura::blank_kura_for_testing(),LiveQueryStore::start_test());
+    let first=HashOf::from_untyped_unchecked(Hash::new(b"first shared history"));
+    let second=HashOf::from_untyped_unchecked(Hash::new(b"second shared history"));
+    let mut block=state.block_hashes.block();block.push(first);block.commit_for_tests();
+    let original=state.block_hashes.view();
+    let view=state.view();
+    let query=state.query_view();
+    let ptr=std::ptr::from_ref(original.get(0).unwrap());
+    assert_eq!(std::ptr::from_ref(view.block_hashes.get(0).unwrap()),ptr);
+    assert_eq!(std::ptr::from_ref(query.block_hashes.get(0).unwrap()),ptr);
+    let mut block=state.block_hashes.block_and_revert();block.push(second);block.commit_for_tests();
+    assert_eq!(view.block_hashes.last(),Some(&first));
+    assert_eq!(query.block_hashes.last(),Some(&first));
+    assert_eq!(state.block_hashes.view().last(),Some(&second));
+    assert!(state.block_hashes.writer_available());
 }

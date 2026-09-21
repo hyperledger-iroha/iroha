@@ -29,6 +29,7 @@ fn owned_lane_reservation_test_state() -> (Arc<State>, TempDir) {
         max_disk_usage_bytes: kura_defaults::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: kura_defaults::BLOCKS_IN_MEMORY,
         lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
         fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         debug_output_new_blocks: false,

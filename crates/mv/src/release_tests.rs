@@ -652,3 +652,85 @@ fn cell_prepared_and_storage_original_guards_notify_every_release_path() {
         assert!(target.blocks.try_write().is_some());
     }
 }
+
+#[test]
+fn ownership_phase_transfer_defers_original_release_until_final_owner_drops() {
+    let source = ReleaseNotification::default();
+    let lock = Mutex::new(());
+    let guard = source.poisoning_guard(lock.lock().unwrap());
+    let mut wait = source.observe().wait_for_release();
+    let wake = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wake).is_pending());
+    let guard = guard.map_preserving_release(|guard| (guard, 7));
+    assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+    assert!(lock.try_lock().is_err());
+    let guard = guard.map_preserving_release(|(guard, value)| {
+        drop(guard);
+        value
+    });
+    assert!(lock.try_lock().is_ok());
+    assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+    drop(guard);
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+    assert!(poll(&mut wait, &wake).is_ready());
+}
+
+#[test]
+fn ownership_phase_transfer_unwind_releases_and_poisons_original_observation() {
+    let source = ReleaseNotification::default();
+    let lock = Mutex::new(());
+    let guard = source.poisoning_guard(lock.lock().unwrap());
+    let observation = source.observe();
+    let mut wait = observation.clone().wait_for_release();
+    let wake = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wake).is_pending());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard.map_preserving_release::<()>(|guard| {
+                drop(guard);
+                panic!("phase transfer refused");
+            });
+        }))
+        .is_err()
+    );
+    assert!(lock.try_lock().is_ok());
+    assert!(observation.is_poisoned());
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+    assert!(poll(&mut wait, &wake).is_ready());
+}
+
+#[test]
+fn physical_release_disarms_only_later_retirement_poisoning() {
+    struct PanickingRetirement;
+    impl Drop for PanickingRetirement {
+        fn drop(&mut self) {
+            panic!("cleanup after physical release");
+        }
+    }
+
+    for released in [false, true] {
+        let source = ReleaseNotification::default();
+        let lock = Mutex::new(());
+        let guard = source.poisoning_guard(lock.lock().unwrap());
+        let observation = source.observe();
+        let mut wait = observation.clone().wait_for_release();
+        let wake = Arc::new(WakeCount::default());
+        assert!(poll(&mut wait, &wake).is_pending());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let retirement = guard.release_retaining(|guard| {
+                    assert!(released, "failure with physical owner still held");
+                    drop(guard);
+                    PanickingRetirement
+                });
+                assert_eq!(wake.0.load(Ordering::SeqCst), 0);
+                drop(retirement);
+            }))
+            .is_err()
+        );
+        assert_eq!(lock.is_poisoned(), !released);
+        assert_eq!(observation.is_poisoned(), !released);
+        assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+        assert!(poll(&mut wait, &wake).is_ready());
+    }
+}

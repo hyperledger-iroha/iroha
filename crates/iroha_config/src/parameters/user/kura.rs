@@ -22,6 +22,10 @@ pub struct Kura {
         default = "defaults::kura::BLOCKS_IN_MEMORY"
     )]
     pub blocks_in_memory: NonZeroUsize,
+    /// Finite requested-allocation limit for State's shared hash-history generations.
+    /// Zero is invalid; this policy has no environment override.
+    #[config(default = "defaults::kura::BLOCK_HASH_HISTORY_BYTES")]
+    pub block_hash_history_bytes: Bytes,
     /// Number of recent lane-history entries retained alongside the block store.
     #[config(
         env = "KURA_LANE_HISTORY_RETENTION",
@@ -82,6 +86,7 @@ impl Kura {
             store_dir,
             max_disk_usage_bytes,
             blocks_in_memory,
+            block_hash_history_bytes,
             lane_history_retention,
             fastpq_artifacts,
             eviction_required_replicas,
@@ -96,6 +101,13 @@ impl Kura {
                     output_new_blocks: debug_output_new_blocks,
                 },
         } = self;
+        if block_hash_history_bytes.get() == 0
+            || usize::try_from(block_hash_history_bytes.get()).is_err()
+        {
+            emitter.emit(Report::new(ParseError::InvalidKuraConfig).attach(
+                "kura.block_hash_history_bytes must be nonzero and representable as usize",
+            ));
+        }
         let fastpq_artifacts = actual::KuraFastpqArtifactPolicy {
             max_artifact_bytes: fastpq_artifacts.max_artifact_bytes,
             max_artifacts: fastpq_artifacts.max_artifacts,
@@ -118,6 +130,7 @@ impl Kura {
             store_dir,
             max_disk_usage_bytes,
             blocks_in_memory,
+            block_hash_history_bytes,
             lane_history_retention,
             fastpq_artifacts,
             replica_advert,
