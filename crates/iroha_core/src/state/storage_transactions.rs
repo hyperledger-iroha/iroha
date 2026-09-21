@@ -69,6 +69,7 @@ impl TransactionsStorage {
         }
     }
     /// Return the latest committed block height recorded by entrypoint storage.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn latest_height(&self) -> usize {
         self.latest_block
             .load()

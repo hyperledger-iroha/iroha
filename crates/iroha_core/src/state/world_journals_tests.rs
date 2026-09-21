@@ -232,8 +232,10 @@ fn typed_wrappers_retain_actual_named_storage_cell_and_trigger_values() {
         original.smart_contract_state.remove(path("capture/noop"));
         *original.soradns_last_publish_ms.get_mut() = Some(22);
         register_trigger(&mut original, "typed_trigger");
-        // These are the same generic typed captures used by the generated
-        // aggregate. The rest of the real original block drops in this scope.
+        // Transfer ownership through the same consuming path as the generated
+        // aggregate before capturing individual fields. The remaining fields
+        // drop in this scope.
+        let original = original.into_fields();
         (
             CaptureWorldField::capture(
                 original.smart_contract_state,
