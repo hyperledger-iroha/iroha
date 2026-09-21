@@ -1918,6 +1918,17 @@ CORE_ADMISSION_STARTUP_STAGES += CORE_EXECUTION_PUBLICATION_STAGES
 MV_OWNERSHIP_HARNESSES = ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread")
 
 MV_OWNERSHIP_STAGES = (
+    ('original Cell pair acquisition and abandonment', (
+        'cell::fresh_pair_acquisition_tests::cell_second_clone_panic_releases_both_before_native_notifications',
+        'cell::fresh_pair_acquisition_tests::cell_second_clone_panic_reclaims_completed_undo_only_after_pair_unlock',
+        'cell::fresh_pair_acquisition_tests::cell_known_undo_poison_rejects_before_waiting_for_current',
+        'cell::fresh_pair_acquisition_tests::cell_first_clone_panic_releases_pair_before_unused_current_charge',
+        'cell::fresh_pair_acquisition_tests::cell_known_current_poison_precedes_both_clones_and_charge_cleanup',
+        'cell::fresh_pair_acquisition_tests::cell_successful_pair_acquisition_keeps_clones_locked_and_notifications_pending',
+        'cell::fresh_pair_acquisition_tests::cell_complete_block_and_current_replacement_abandonment_unlocks_before_cleanup',
+        'cell::fresh_pair_acquisition_tests::cell_explicit_detach_keeps_original_generations_and_defers_both_notifications',
+        'cell::fresh_pair_acquisition_tests::cell_publication_poison_preserves_pair_through_commit_refusal_cleanup',
+    )),
     ('funded publication identity release', (
         'publication::nonblocking_tests::funded_identity_refund_observes_unlocked_publication_even_on_release_unwind',
     )),
@@ -2275,6 +2286,12 @@ MV_ADMITTED_MAP_STAGES = (
 )
 
 CONCREAD_STAGES = (
+    ('original EBR acquisition and unlocked reclamation', (
+        'ebrcell::acquisition_tests::raw_acquisition_and_refusal_retain_the_exact_writer_without_cloning',
+        'ebrcell::acquisition_tests::acquired_clone_and_attachment_keep_the_original_allocation',
+        'ebrcell::acquisition_tests::consumed_clone_panic_releases_and_poisons_before_caller_recovery',
+        'ebrcell::acquisition_tests::poisoned_attachment_returns_both_original_owners',
+    )),
     ('original map acquisition custody', (
         'bptree::acquisition_tests::acquired_map_validation_retains_stale_and_poisoned_physical_writers',
         'bptree::acquisition_tests::acquired_map_foreign_busy_success_and_unwind_preserve_original_custody',
@@ -3793,7 +3810,7 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 def validate_mv_test_registration(root: Path) -> None:
     """Reject stale registered MV names before Cargo; native listing stays authoritative.
 
-    This is a bounded lexical guard for ten explicit, flat test modules, not a
+    This is a bounded lexical guard for eleven explicit, flat test modules, not a
     Rust parser or a claim that the selected subset exhausts each module.
     The existing pure lexer runs from the same captured source as this gate.
     """
@@ -3803,6 +3820,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("release_tests::", "lib.rs", "release_tests.rs", "release_tests"),
         ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
         ("cell::publication_tests::", "cell.rs", "cell/publication_tests.rs", "publication_tests"),
+        ("cell::fresh_pair_acquisition_tests::", "cell.rs", "cell/fresh_pair_acquisition_tests.rs", "fresh_pair_acquisition_tests"),
         ("storage::publication_tests::", "storage.rs", "storage/publication_tests.rs", "publication_tests"),
         ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
         ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),

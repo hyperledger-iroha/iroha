@@ -238,3 +238,11 @@ notifications through refusal and callee unwind; success transfers both guards
 without a wake. Admitted opening reserves the whole pair and identity first,
 checks both poison verdicts before policy callbacks, and remains inside the
 original pool refund scope. See [fresh pair acquisition](../../docs/history/2026-09-21/fresh-pair-acquisition.md).
+
+Cell opening acquires both original EBR writers before cloning either value. A
+partial pair retains completed generations and unused charges until both guards
+release; the complete pair keeps joint ownership through Block and
+CurrentReplacement abandonment, detachment and publication-lock acquisition.
+Known undo poison rejects before waiting for current. Canonical current/undo
+JSON fields are unchanged. See the [Cell custody record](../../docs/history/2026-09-21/cell-pair-custody.md)
+for measured scope and remaining aggregate boundaries.

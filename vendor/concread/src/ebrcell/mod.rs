@@ -23,7 +23,7 @@ use std::sync::atomic::Ordering::{AcqRel, Acquire};
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 /// Explicitly unaccounted mode for callers that do not attach allocation custody.
 ///
@@ -66,6 +66,95 @@ unsafe fn defer_reclaim<T: Send + 'static, Charge: Send + 'static>(
     }
 }
 
+/// Original physical writer acquired before admission, cloning or allocation.
+///
+/// A poisoned guard remains owned so enclosing aggregates can unlock all of
+/// their original guards before cleanup and report the actual physical poison.
+#[must_use = "retain this original acquisition until construction or release"]
+pub struct EbrCellWriterAcquisition<
+    'a,
+    T: Clone + Send + Sync + 'static,
+    Charge: Send + Sync + 'static = Untracked,
+> {
+    caller: &'a EbrCell<T, Charge>,
+    guard: MutexGuard<'a, ()>,
+}
+
+impl<'a, T: Clone + Send + Sync + 'static, Charge: Send + Sync + 'static>
+    EbrCellWriterAcquisition<'a, T, Charge>
+{
+    /// Whether the original lock is poisoned, including before acquisition.
+    pub fn is_poisoned(&self) -> bool {
+        self.caller.is_poisoned()
+    }
+
+    /// Admit and clone under this original physical owner, without releasing it.
+    /// Refusal returns the same acquisition; success returns its exact private
+    /// generation separately. Consuming the acquisition ensures a callee panic
+    /// releases and poisons the actual mutex, even if its caller catches unwind.
+    /// A Clone panic retains the charge conservatively, as it may leak payloads.
+    pub fn try_clone_charged<E>(
+        self,
+        admit: impl FnOnce(&T, Layout) -> Result<Charge, E>,
+    ) -> Result<(Self, EbrCellOwned<T, Charge>), (Self, EbrCellWriterAdmissionError<E>)> {
+        if self.is_poisoned() {
+            return Err((self, EbrCellWriterAdmissionError::Poisoned));
+        }
+        // SAFETY: this original writer excludes replacement, and its borrowed
+        // cell excludes destruction. The active allocation therefore cannot be
+        // unlinked while admission and cloning run; no collector pin is needed.
+        let current = self
+            .caller
+            .active
+            .load(Acquire, unsafe { epoch::unprotected() });
+        let current = unsafe { current.deref() };
+        let charge = match admit(&current.value, EbrCell::<T, Charge>::allocation_layout()) {
+            Ok(charge) => ManuallyDrop::new(charge),
+            Err(error) => return Err((self, EbrCellWriterAdmissionError::Refused(error))),
+        };
+        let allocation = Owned::new(Allocation {
+            value: current.value.clone(),
+            charge,
+        });
+        Ok((
+            self,
+            EbrCellOwned {
+                data: Some(allocation),
+            },
+        ))
+    }
+
+    /// Attach an original private generation without cloning or allocating.
+    /// Poison returns both exact owners. This grants no predecessor or aggregate
+    /// publication authority; the enclosing MV owner must authenticate those.
+    pub fn try_write_owned(
+        self,
+        owned: EbrCellOwned<T, Charge>,
+    ) -> Result<EbrCellWriteTxn<'a, T, Charge>, (Self, EbrCellOwned<T, Charge>)> {
+        if self.is_poisoned() {
+            return Err((self, owned));
+        }
+        Ok(self.install_owned(owned))
+    }
+
+    fn install_owned(self, mut owned: EbrCellOwned<T, Charge>) -> EbrCellWriteTxn<'a, T, Charge> {
+        EbrCellWriteTxn {
+            data: owned.data.take(),
+            caller: self.caller,
+            _guard: Some(self.guard),
+        }
+    }
+}
+
+/// Why an acquired EBR writer refused construction before cloning.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EbrCellWriterAdmissionError<E> {
+    /// The original physical writer was already poisoned.
+    Poisoned,
+    /// The allocation admission policy refused the original generation.
+    Refused(E),
+}
+
 /// An `EbrCell` Write Transaction handle.
 ///
 /// This allows mutation of the content of the `EbrCell` without blocking or
@@ -83,7 +172,7 @@ pub struct EbrCellWriteTxn<
     data: Option<Owned<Allocation<T, Charge>>>,
     // This way we know who to contact for updating our data ....
     caller: &'a EbrCell<T, Charge>,
-    _guard: MutexGuard<'a, ()>,
+    _guard: Option<MutexGuard<'a, ()>>,
 }
 
 /// An unpublished generation detached from its writer without cloning payloads.
@@ -280,6 +369,10 @@ where
     Charge: Send + Sync + 'static,
 {
     fn drop(&mut self) {
+        // No payload destructor or capacity refund may run under this writer.
+        // Aggregates additionally retain the private allocation until every
+        // sibling guard releases, using detach rather than sequential Drop.
+        drop(self._guard.take());
         if let Some(allocation) = self.data.take() {
             reclaim(allocation);
         }
@@ -418,6 +511,32 @@ where
     T: Clone + Sync + Send + 'static,
     Charge: Send + Sync + 'static,
 {
+    /// Acquire only the physical writer, retaining poison without cloning.
+    /// No epoch pin, admission callback or successor allocation occurs.
+    pub fn acquire_writer(&self) -> EbrCellWriterAcquisition<'_, T, Charge> {
+        EbrCellWriterAcquisition {
+            caller: self,
+            guard: self
+                .write
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        }
+    }
+
+    /// Try to acquire only the original physical writer.
+    /// `None` means contention exclusively; a poisoned lock remains owned.
+    pub fn try_acquire_writer(&self) -> Option<EbrCellWriterAcquisition<'_, T, Charge>> {
+        let guard = match self.write.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(poison)) => poison.into_inner(),
+            Err(TryLockError::WouldBlock) => return None,
+        };
+        Some(EbrCellWriterAcquisition {
+            caller: self,
+            guard,
+        })
+    }
+
     /// Whether an earlier writer or clone unwound while holding this cell's lock.
     /// A failed nonblocking acquisition on a poisoned cell requires recovery;
     /// waiting for a future release alone cannot make that lock usable.
@@ -488,16 +607,17 @@ where
     /// permission to publish the supplied value.
     pub fn try_write_owned(
         &self,
-        mut owner: EbrCellOwned<T, Charge>,
+        owner: EbrCellOwned<T, Charge>,
     ) -> Result<EbrCellWriteTxn<'_, T, Charge>, EbrCellOwned<T, Charge>> {
-        let Ok(mguard) = self.write.try_lock() else {
+        let Some(acquired) = self.try_acquire_writer() else {
             return Err(owner);
         };
-        Ok(EbrCellWriteTxn {
-            data: owner.data.take(),
-            caller: self,
-            _guard: mguard,
-        })
+        acquired
+            .try_write_owned(owner)
+            .map_err(|(acquired, owner)| {
+                drop(acquired);
+                owner
+            })
     }
 
     fn write_from_guard<'a, E>(
@@ -505,23 +625,17 @@ where
         mguard: MutexGuard<'a, ()>,
         admit: impl FnOnce(&T, Layout) -> Result<Charge, E>,
     ) -> Result<EbrCellWriteTxn<'a, T, Charge>, E> {
-        // SAFETY: mguard excludes every active replacement, while the borrowed
-        // cell excludes destruction. Thus the current allocation cannot be
-        // unlinked or collected during admission/clone. A fresh epoch pin here
-        // could collect unrelated garbage and run callbacks under this lock.
-        let current = self.active.load(Acquire, unsafe { epoch::unprotected() });
-        let current = unsafe { current.deref() };
-        // Do not refund if Clone panics: it may have leaked partially built data.
-        let charge = ManuallyDrop::new(admit(&current.value, Self::allocation_layout())?);
-        let allocation = Owned::new(Allocation {
-            value: current.value.clone(),
-            charge,
-        });
-        Ok(EbrCellWriteTxn {
-            data: Some(allocation),
+        let acquired = EbrCellWriterAcquisition {
             caller: self,
-            _guard: mguard,
-        })
+            guard: mguard,
+        };
+        match acquired.try_clone_charged(admit) {
+            Ok((acquired, owned)) => Ok(acquired.install_owned(owned)),
+            Err((_acquired, EbrCellWriterAdmissionError::Poisoned)) => {
+                panic!("original writer is poisoned")
+            }
+            Err((_acquired, EbrCellWriterAdmissionError::Refused(error))) => Err(error),
+        }
     }
 
     /// Begin a read transaction. The returned [`EbrCellReadTxn`] guarantees
@@ -1067,3 +1181,7 @@ mod staged_commit_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "acquisition_tests.rs"]
+mod acquisition_tests;

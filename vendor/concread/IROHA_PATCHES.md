@@ -332,3 +332,12 @@ physical owners through one fallible conversion; callee failure releases both
 before either original notification, while success transfers without signaling.
 The shared pair release engine freezes actual poison before arbitrary wakes.
 See [fresh MV pair acquisition](../../docs/history/2026-09-21/fresh-pair-acquisition.md).
+
+The EBR acquired phase now retains the original physical writer before any
+admission or clone. Consuming charged cloning returns that same guard and exact
+private allocation separately; refusal retains the guard, and callee unwind
+still poisons the actual mutex. Owned attachment refuses poison without losing
+either owner. Direct native construction delegates to the same clone kernel.
+Writer Drop unlocks before private payload reclamation; aggregates must also
+retain payloads until all sibling guards release. The [Cell custody record](../../docs/history/2026-09-21/cell-pair-custody.md)
+describes the MV joint owner and scoped evidence.
