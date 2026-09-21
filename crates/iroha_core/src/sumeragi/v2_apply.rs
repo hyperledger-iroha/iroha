@@ -5494,6 +5494,27 @@ impl V2ApplyService {
                 &"read-back token differs from the exact State frontier projection",
             ));
         }
+        if let Some(token) = native_amx_prepublication.as_ref() {
+            // Rejoin the exact original Kura token under all publication fences.
+            // This blocking live boundary releases every Kura fence before any
+            // State method below; retaining them across geometry commit would
+            // recursively acquire Kura. The consuming retained publisher remains
+            // gated on its independent source and staged-frontier custody.
+            self.kura
+                .reauthenticate_native_amx_prepublication(
+                    token,
+                    committed_block.as_ref(),
+                    &native_amx_manifest,
+                    artifact,
+                    &native_amx_frontiers,
+                )
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "pre-WSV Native AMX participant custody reauthentication",
+                        &error,
+                    )
+                })?;
+        }
         // `apply_without_execution_with_verified_v2_finality` stages the
         // Native participant frontiers in the State overlay. Do not construct
         // that overlay until every canonical manifest leaf has a durable,

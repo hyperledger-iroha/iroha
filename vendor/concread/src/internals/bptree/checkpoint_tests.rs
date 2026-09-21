@@ -4,8 +4,9 @@ use super::*;
 use crate::bptree::{NodeCloning, NodeFunding, Prepaid};
 use crate::internals::bptree::cursor::{CursorReadOps, SuperBlock};
 use crate::internals::bptree::node::allocation_tests::{
-    all_refunded, prepaid, record, without_allocations, Charge, Prepaid as ObservedPrepaid,
+    Charge, Prepaid as ObservedPrepaid, all_refunded, prepaid, record, without_allocations,
 };
+use crate::internals::bptree::node::{TXID_MASK, TXID_SHF};
 use crate::internals::lincowcell::LinCowCellCapable;
 use std::{alloc::Layout, cell::RefCell, rc::Rc};
 
@@ -275,6 +276,56 @@ fn exhausted_private_tag_refuses_without_allocating_or_changing_any_owner() {
     }
     fixture.cursor.txid = original_tag;
     finish(fixture);
+}
+
+#[test]
+fn untracked_final_generation_refuses_nested_checkpoint_and_restores_parent() {
+    let source = unsafe { SuperBlock::<usize, usize>::new() };
+    let mut cursor = source.create_writer(());
+    cursor.insert(0, 100);
+    let original_tag = cursor.txid;
+    cursor.txid = (TXID_MASK >> TXID_SHF) - 2;
+    let root = cursor.root;
+    let parent_tag = cursor.txid;
+    let length = cursor.length;
+    let first = cursor.first_seen.clone();
+    let last = cursor.last_seen.as_ref().unwrap().clone();
+    let buffers = (
+        cursor.first_seen.as_ptr(),
+        cursor.first_seen.capacity(),
+        cursor.last_seen.as_ref().unwrap().as_ptr(),
+        cursor.last_seen.as_ref().unwrap().capacity(),
+    );
+
+    let mut checkpoint = without_allocations(|| cursor.checkpoint().unwrap());
+    assert_eq!(checkpoint.as_ref().txid, parent_tag + 1);
+    without_allocations(|| assert!(checkpoint.checkpoint().is_none()));
+    assert_eq!(checkpoint.as_ref().txid, parent_tag + 1);
+    assert_eq!(checkpoint.get_before(&0), Some(&100));
+    assert_eq!(checkpoint.as_ref().search(&0), Some(&100));
+    without_allocations(|| drop(checkpoint));
+
+    assert_eq!(
+        (cursor.root, cursor.txid, cursor.length),
+        (root, parent_tag, length)
+    );
+    assert_eq!(cursor.first_seen, first);
+    assert_eq!(*cursor.last_seen.as_ref().unwrap(), last);
+    assert_eq!(
+        (
+            cursor.first_seen.as_ptr(),
+            cursor.first_seen.capacity(),
+            cursor.last_seen.as_ref().unwrap().as_ptr(),
+            cursor.last_seen.as_ref().unwrap().capacity(),
+        ),
+        buffers
+    );
+    cursor.txid = original_tag;
+    assert!(cursor.verify());
+    without_allocations(|| {
+        drop(cursor);
+        drop(source);
+    });
 }
 
 #[test]

@@ -5,9 +5,10 @@
 //! Block hashes move their original private tree without a chain copy or physical lock.
 //! World/runtime journals and tiered snapshots follow one resource admission.
 //! Archive plans retain original logical reservations and filesystem owners.
-//! The private terminal consumer joins exact QC/Kura/Native custody and refuses
-//! outstanding namespace/participant obligations. TODO: complete those geometry
-//! and durability owners plus aggregate resource admission before live cutover.
+//! The private terminal consumer joins exact QC/Kura/Native custody, retains the
+//! original Queue for namespace retirement, and refuses retired participant
+//! manifests. TODO: complete aggregate resource admission and carry these original
+//! owners through live Validate/cache/Apply before retiring the old writer.
 
 use super::super::*;
 use super::{PreparedCarrier, execution_prefix::ValidatedExecutionPrefix};

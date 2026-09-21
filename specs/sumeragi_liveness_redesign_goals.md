@@ -1,5 +1,7 @@
 # Sumeragi liveness redesign goals
 
+Current participant custody work: the [source-coupled record](../docs/history/2026-09-21/participant-publication-custody.md) describes the original-Kura readback boundary and distinguishes remaining scalar AMX consumers from the new Native Decision path. The latter owns its sealed application markers and does not require the old participant representation. Retire that representation with its remaining consumers; do not reopen rejected MergeQC execution. Scoped checkpoint133 validation does not close L1–L6.
+
 Work location: `/Users/takemiyamakoto/dev/iroha`, branch `optimizations`. All ongoing source edits and validation use this checkout; temporary source checkouts are retired from this workflow.
 
 Set: 2026-09-16. Overall goal: **Active**. Implementation and qualification are

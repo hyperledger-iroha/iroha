@@ -157,10 +157,17 @@ fn malformed_captured_retirement_route_releases_original_queue_cut() {
         &source,
         source.try_observe().unwrap().try_into_cut().unwrap(),
     );
-    assert!(matches!(
-        result,
-        Err(CarrierQueueRetirementError::Geometry(_))
-    ));
+    let error = result
+        .err()
+        .expect("missing predecessor incarnation must refuse");
+    let CarrierQueueRetirementError::Geometry(LaneLifecycleError::RuntimeCatalog(reason)) = error
+    else {
+        panic!("expected captured-route geometry error: {error:?}");
+    };
+    assert_eq!(
+        reason,
+        "retiring Queue route has no captured nonzero incarnation"
+    );
     drop(queue.try_lock_lane_retirement_observer().unwrap());
 }
 

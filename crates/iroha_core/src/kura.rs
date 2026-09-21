@@ -38129,14 +38129,17 @@ impl Kura {
             for (manifest, receipt) in &plan.artifacts {
                 identities.push(self.authenticate_native_amx_participant_application_prepublication_under_publication_guard(manifest, receipt, mode.requires_post_apply_metadata())?);
             }
-            let token =
-                NativeAmxParticipantApplicationPrepublicationToken::from_plan(plan, identities)
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            "Native AMX completed token does not cover the exact manifest",
-                        )
-                    })?;
+            let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(
+                self.instance_identity(),
+                plan,
+                identities,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "Native AMX completed token does not cover the exact manifest",
+                )
+            })?;
             if permit_cleanup {
                 for (_, receipt) in &plan.artifacts {
                     self.cleanup_native_amx_participant_application_evidence_under_publication_guard(receipt)?;
@@ -38207,13 +38210,17 @@ impl Kura {
                 )?,
             );
         }
-        let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(plan, identities)
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "Native AMX prepublication token does not cover the exact manifest",
-                )
-            })?;
+        let token = NativeAmxParticipantApplicationPrepublicationToken::from_plan(
+            self.instance_identity(),
+            plan,
+            identities,
+        )
+        .ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "Native AMX prepublication token does not cover the exact manifest",
+            )
+        })?;
         if permit_cleanup {
             for (_, receipt) in &plan.artifacts {
                 self.cleanup_native_amx_participant_application_evidence_under_publication_guard(
@@ -38861,12 +38868,26 @@ impl Kura {
         expected_receipt: &NativeAmxParticipantApplicationReceiptArtifact,
         require_post_apply_metadata: bool,
     ) -> Result<NativeAmxParticipantApplicationPrepublicationIdentity> {
-        let descriptor = &expected_receipt.participant_proposal.descriptor;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        self.authenticate_native_amx_participant_application_prepublication_under_publication_guards(
+            expected_manifest,
+            expected_receipt,
+            require_post_apply_metadata,
+        )
+    }
+    /// Read the exact original frontier under the caller's prune, canonical,
+    /// geometry and sidecar fences. Never reacquire a publication lock here.
+    fn authenticate_native_amx_participant_application_prepublication_under_publication_guards(
+        &self,
+        expected_manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
+        expected_receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+        require_post_apply_metadata: bool,
+    ) -> Result<NativeAmxParticipantApplicationPrepublicationIdentity> {
+        let descriptor = &expected_receipt.participant_proposal.descriptor;
         let entry = self.lane_storage_entry(descriptor.lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
-        let _sidecar_guard = self.sidecar_lock.lock();
         let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
         let participant_height = descriptor.lane_block_height;
         let manifest_path = Self::native_amx_application_manifest_path_for_entry(

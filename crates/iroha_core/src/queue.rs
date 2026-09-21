@@ -26084,11 +26084,80 @@ pub mod tests {
     pub(crate) fn carrier_retirement_queue_fixture(
         state: &mut State,
     ) -> (Queue, iroha_primitives::time::MockTimeHandle) {
+        use iroha_data_model::IntoKeyValue;
+
         let (clock, time) = TimeSource::new_mock(Duration::from_secs(1));
         let queue = queue_with_state_free_future_created_router(state, &time);
         queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
-        let transaction = accepted_tx_by_someone(&time);
-        register_accepted_tx_authority_for_queue_test(state, &transaction);
+        let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        register_test_authority(state, &authority);
+        let nexus = state.nexus_snapshot();
+        let fee_asset: AssetDefinitionId = nexus
+            .fees
+            .fee_asset_id
+            .parse()
+            .expect("configured retirement fixture fee asset");
+        {
+            let mut block = state.world.block();
+            let mut world = block.transaction_without_telemetry(nexus.lane_config.clone(), 0);
+            world.insert_asset_definition_entry(
+                fee_asset.clone(),
+                AssetDefinition::numeric(
+                    fee_asset.clone(),
+                    "retirement fixture XOR".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&authority),
+            );
+            let (asset_id, value) = Asset::new(
+                AssetId::new(fee_asset.clone(), authority.clone()),
+                Quantity::from(10_u32),
+            )
+            .into_key_value();
+            world.assets.insert(asset_id.clone(), value);
+            world.track_asset_holder(&asset_id);
+            world.track_nonzero_asset_holder(&asset_id);
+            world
+                .increase_asset_total_amount(&fee_asset, &Quantity::from(10_u32))
+                .expect("fund configured fee asset with matching total");
+            world.apply();
+            block.commit();
+        }
+        let draft = TransactionBuilder::new_with_time_source(
+            state.network_id,
+            authority,
+            &time,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([sample_unregister_instruction()]);
+        let fee_intent = {
+            let view = state.view();
+            let quote = crate::executor::quote_nexus_fee_admission_draft(
+                view.world(),
+                &nexus,
+                &view.pipeline,
+                draft.payload(),
+                1_000,
+                1,
+                Some(DataSpaceId::UNIVERSAL),
+            )
+            .expect("quote actual retirement fixture fee policy");
+            assert!(!quote.quote.charges.is_empty(), "fixture pays its real fee");
+            quote.recommended_intent
+        };
+        let signed = draft
+            .with_fee_payment_intent(fee_intent)
+            .sign(ALICE_KEYPAIR.private_key());
+        let transaction = AcceptedTransaction::accept_with_time_source(
+            signed,
+            state.network_id_ref(),
+            Duration::from_millis(10),
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+            &time,
+        )
+        .expect("accept funded retirement fixture transaction");
         let route = queue
             .route_plan_with_state(&transaction, state)
             .expect("fixture route");

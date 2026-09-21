@@ -24,6 +24,12 @@ use std::sync::OnceLock;
 mod checkpoint;
 pub(crate) use checkpoint::{CheckpointBuffers, CursorCheckpoint};
 
+/// One shared bound for planning, cursor construction and private checkpoints.
+pub(crate) fn checked_next_generation(txid: u64) -> Option<u64> {
+    txid.checked_add(1)
+        .filter(|next| *next < (TXID_MASK >> TXID_SHF))
+}
+
 /// Original node funding and bookkeeping selected before cursor construction.
 /// Implementations must consume already admitted input, never obtain more pool
 /// capacity midway through an edit. Only Untracked exposes unrestricted mutation.
@@ -60,19 +66,19 @@ where
 }
 
 unsafe impl<
-        K: Clone + Ord + Debug + Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        M: CursorMode<K, V>,
-    > Send for SuperBlock<K, V, M>
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: CursorMode<K, V>,
+> Send for SuperBlock<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-        K: Clone + Ord + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-        M: CursorMode<K, V>,
-    > Sync for SuperBlock<K, V, M>
+    K: Clone + Ord + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: CursorMode<K, V>,
+> Sync for SuperBlock<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -263,19 +269,19 @@ where
 }
 
 unsafe impl<
-        K: Clone + Ord + Debug + Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        M: CursorMode<K, V>,
-    > Send for CursorRead<K, V, M>
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: CursorMode<K, V>,
+> Send for CursorRead<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-        K: Clone + Ord + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-        M: CursorMode<K, V>,
-    > Sync for CursorRead<K, V, M>
+    K: Clone + Ord + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: CursorMode<K, V>,
+> Sync for CursorRead<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -298,19 +304,19 @@ where
 }
 
 unsafe impl<
-        K: Clone + Ord + Debug + Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        M: CursorMode<K, V> + Send,
-    > Send for CursorWrite<K, V, M>
+    K: Clone + Ord + Debug + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    M: CursorMode<K, V> + Send,
+> Send for CursorWrite<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-        K: Clone + Ord + Debug + Sync + Send + 'static,
-        V: Clone + Sync + Send + 'static,
-        M: CursorMode<K, V> + Send + Sync,
-    > Sync for CursorWrite<K, V, M>
+    K: Clone + Ord + Debug + Sync + Send + 'static,
+    V: Clone + Sync + Send + 'static,
+    M: CursorMode<K, V> + Send + Sync,
+> Sync for CursorWrite<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -433,8 +439,8 @@ pub(crate) trait CursorReadOps<K: Clone + Ord + Debug, V: Clone, C = Untracked> 
 
 impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M> {
     pub(crate) fn with_input(sblock: &SuperBlock<K, V, M>, input: M::Input) -> Self {
-        let txid = sblock.txid + 1;
-        assert!(txid < (TXID_MASK >> TXID_SHF));
+        let txid = checked_next_generation(sblock.txid)
+            .expect("B+tree writer generation exceeds its representable limit");
         // println!("starting wr txid -> {:?}", txid);
         let length = sblock.size;
         let root = sblock.root;

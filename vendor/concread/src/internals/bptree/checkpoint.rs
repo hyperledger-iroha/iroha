@@ -1,11 +1,8 @@
 //! Stack-owned rollback of an original private cursor and its tracking storage.
 
-use super::{CursorMode, CursorReadOps, CursorWrite};
+use super::{CursorMode, CursorReadOps, CursorWrite, checked_next_generation};
 use crate::bptree::{MapMode, NodeCloning};
-use crate::internals::bptree::{
-    node::{Node, TXID_MASK, TXID_SHF},
-    tracking::TrackingBuffer,
-};
+use crate::internals::bptree::{node::Node, tracking::TrackingBuffer};
 use std::{borrow::Borrow, fmt::Debug, mem, ptr::NonNull};
 
 type Buffer<K, V, M> = <M as CursorMode<K, V>>::Buffer;
@@ -88,10 +85,7 @@ impl<'a, K: Clone + Ord + Debug, V: Clone, M: MapMode + NodeCloning<K, V>>
     ) -> Option<Self> {
         cursor.assert_operable();
         cursor.funding.assert_funding_idle();
-        let next = cursor
-            .txid
-            .checked_add(1)
-            .filter(|n| *n < (TXID_MASK >> TXID_SHF))?;
+        let next = checked_next_generation(cursor.txid)?;
         let saved = Saved {
             root: NonNull::new(cursor.root).expect("original non-null cursor root"),
             txid: cursor.txid,

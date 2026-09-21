@@ -39,7 +39,7 @@ use crate::{
     state::{
         GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
         GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
-        GovernanceReferendumRecord, GovernanceReferendumStatus, State, StateReadOnly, World,
+        GovernanceReferendumRecord, GovernanceReferendumStatus, State, World,
     },
 };
 

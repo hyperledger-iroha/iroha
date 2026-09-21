@@ -295,6 +295,7 @@ def test_reviewed_rust_source_expands_exact_lane_work_closure(
     assert source.count("fn historical_request_detects_durable_body_corruption_with_warm_cache") == 1
     expanded_paths = module._expanded_source_manifest_paths({Path(relative)})
     assert module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE in expanded_paths
+    assert module.reviewed_source.REVIEWED_RUST_TEXT_HELPER_RELATIVE in expanded_paths
     assert module.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE in expanded_paths
     assert (
         Path(relative).parent
@@ -846,7 +847,11 @@ def copy_reviewed_source_fixture_with_includes(
     # its mapping alone does not establish the pinned canonical-manifest digest.
     manifest_errors = reviewed_source._CANONICAL_REVIEWED_RUST_INCLUDE_MANIFEST_ERRORS
     assert not manifest_errors, "\n".join(manifest_errors)
-    pending = list(relatives)
+    reviewed_source._validate_executed_rust_text_helper()
+    dependencies = set(relatives)
+    if module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE in dependencies:
+        dependencies.add(reviewed_source.REVIEWED_RUST_TEXT_HELPER_RELATIVE)
+    pending = list(dependencies)
     copied: set[Path] = set()
     while pending:
         relative = pending.pop()
@@ -878,7 +883,7 @@ def copy_reviewed_source_fixture_with_includes(
 
 
 def test_reviewed_fixture_rejects_raw_file_hash_as_manifest_pin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """The positive fixture must not hide a wrong production manifest pin."""
     module = load_checker()
@@ -892,10 +897,34 @@ def test_reviewed_fixture_rejects_raw_file_hash_as_manifest_pin(
     assert raw_digest != module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256
     assert source.count(module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256) == 1
     helper.write_text(source.replace(module.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256, raw_digest))
-    monkeypatch.setitem(globals(), "ROOT_DIR", isolated_root)
+    text_helper = module.reviewed_source.REVIEWED_RUST_TEXT_HELPER_RELATIVE
+    shutil.copy2(ROOT_DIR / text_helper, isolated_root / text_helper)
     destination = tmp_path / "fixture"
-    with pytest.raises(AssertionError, match="manifest digest must equal"):
-        copy_reviewed_source_fixture_with_includes(destination, module, set())
+    # The isolated checker is a distinct executable origin. Use a clean process
+    # so the wrong-manifest control cannot accidentally reuse another origin's
+    # preloaded pure helper, or fail first on a deliberately missing dependency.
+    code = """
+import importlib.util, sys, types
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("fixture_support", sys.argv[1])
+support = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(support)
+support.ROOT_DIR = Path(sys.argv[2])
+constants = types.SimpleNamespace(REVIEWED_RUST_SOURCE_HELPER_RELATIVE=Path(sys.argv[4]))
+try:
+    support.copy_reviewed_source_fixture_with_includes(Path(sys.argv[3]), constants, set())
+except AssertionError as error:
+    assert "manifest digest must equal" in str(error), str(error)
+else:
+    raise AssertionError("wrong manifest pin was accepted")
+assert not Path(sys.argv[3]).exists()
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", code, __file__, str(isolated_root),
+         str(destination), str(module.REVIEWED_RUST_SOURCE_HELPER_RELATIVE)],
+        check=False, text=True, capture_output=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     assert not destination.exists(), "unauthenticated inventory must fail before fixture creation"
 
 
@@ -3479,3 +3508,78 @@ def test_reviewed_rust_source_expands_immutable_instance_owners(tmp_path: Path) 
         assert source is not None
         for symbol in symbols:
             assert source.count(f"fn {symbol}(") == 1
+
+
+def test_reviewed_fixture_copies_and_tracks_exact_text_helper_dependency(tmp_path):
+    checker = load_checker()
+    helper = checker.reviewed_source
+    copy_reviewed_source_fixture_with_includes(tmp_path, checker, {
+        helper.REVIEWED_RUST_SOURCE_HELPER_RELATIVE,
+        helper.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE,
+    })
+    relative = helper.REVIEWED_RUST_TEXT_HELPER_RELATIVE
+    assert (tmp_path / relative).read_bytes() == (ROOT_DIR / relative).read_bytes()
+    tracked = subprocess.check_output(["git", "-C", str(tmp_path), "ls-files", "--stage", "--", str(relative)], text=True)
+    assert tracked.startswith("100644 ") and f" 0\t{relative}" in tracked
+    helper._validate_executed_rust_text_helper(tmp_path)
+
+
+def test_new_process_source_manifest_seals_exact_text_helper_bytes(tmp_path, monkeypatch):
+    checker = load_checker()
+    captured = set()
+    class CapturePaths(Exception):
+        pass
+    def capture(paths, root):
+        assert root == ROOT_DIR.resolve()
+        captured.update(paths)
+        raise CapturePaths
+    with monkeypatch.context() as patch:
+        patch.setattr(checker, "_expanded_source_manifest_paths", capture)
+        with pytest.raises(CapturePaths):
+            checker.source_manifest_sha256(ROOT_DIR)
+    helper = checker.reviewed_source
+    # This is the real complete manifest input set, not a monkeypatched hash
+    # function or dependency inventory. Only discovery above avoids an extra
+    # digest pass before copying all authenticated providers once.
+    assert helper.REVIEWED_RUST_SOURCE_HELPER_RELATIVE in captured
+    closed = checker._expanded_source_manifest_paths(captured, root=ROOT_DIR)
+    assert helper.REVIEWED_RUST_TEXT_HELPER_RELATIVE in closed
+    copy_reviewed_source_fixture_with_includes(tmp_path, checker, closed)
+    copied_checker = tmp_path / CHECKER.relative_to(ROOT_DIR)
+    code = """
+import importlib.util, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+path = root / "scripts/formal/check_sumeragi_v2_multilane_models.py"
+spec = importlib.util.spec_from_file_location("manifest_checker", path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+print(module.source_manifest_sha256(root))
+"""
+    assert copied_checker.is_file()
+    def digest():
+        result = subprocess.run([sys.executable, "-I", "-S", "-c", code, str(tmp_path)],
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 0, result.stdout + result.stderr
+        value = result.stdout.strip()
+        assert len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+        return value
+    original = digest()
+    executed_helpers = (
+        helper.REVIEWED_RUST_TEXT_HELPER_RELATIVE,
+        Path("scripts/formal/sumeragi_v2_multilane_kura_native_contract.py"),
+        Path("scripts/formal/sumeragi_v2_multilane_state_merge_contract.py"),
+        Path("scripts/formal/sumeragi_v2_multilane_inflight_contract.py"),
+    )
+    for relative in executed_helpers:
+        assert relative in closed, "an executed helper must be in the real source seal"
+        source = tmp_path / relative
+        before = source.read_bytes()
+        try:
+            source.write_bytes(before + b"\n# source seal regression\n")
+            if relative == helper.REVIEWED_RUST_TEXT_HELPER_RELATIVE:
+                with pytest.raises(RuntimeError, match="differs from executed source"):
+                    checker.source_manifest_sha256(tmp_path)
+            assert digest() != original, f"changed helper not bound: {relative}"
+        finally:
+            source.write_bytes(before)

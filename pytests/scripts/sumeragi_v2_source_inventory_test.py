@@ -133,6 +133,13 @@ def test_inventory_matches_live_reviewed_rust_closure(
             "block/post_execution_tail_tests.rs",
         )
         assert "block/output_event_tests.rs" in module._REVIEWED_RUST_INCLUDE_MANIFESTS[owner]
+        public_fees = Path("crates/iroha_core/src/block/public_contract_creation_fee_tests.rs")
+        assert closure.providers.count(public_fees) == 1
+        assert closure.source.count(
+            "fn public_contract_artifact_stages_pay_fees_without_management_grants("
+        ) == 1
+        assert any(edge.parent == Path(owner) and edge.provider == public_fees
+                   for edge in closure.provenance)
         tail = Path("crates/iroha_core/src/block/post_execution_tail.rs")
         assert module._REVIEWED_RUST_INCLUDE_MANIFESTS[tail.as_posix()] == ("native_execution_metadata.rs",)
         assert any(edge.parent == tail and edge.provider == tail.parent / "native_execution_metadata.rs"

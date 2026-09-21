@@ -9550,16 +9550,13 @@
           "kind": "fn",
           "symbol": "authenticate_native_amx_participant_application_prepublication_under_publication_guard",
           "required_tokens": [
-            "require_active_lane_artifact",
-            "read_native_amx_participant_application_manifest_from_paths_locked",
-            "read_native_amx_participant_application_receipt_from_paths_locked",
-            "decode_bound_native_amx_participant_receipt_latest_index_locked",
-            "require_post_apply_metadata",
-            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
-            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
-            "latest.matches_receipt",
-            "latest.matches_manifest",
-            "progress_mutation_namespace_unchanged"
+            "canonical_chain_lock.lock()",
+            "lane_geometry_lock.lock()",
+            "sidecar_lock.lock()",
+            "self.authenticate_native_amx_participant_application_prepublication_under_publication_guards(",
+            "expected_manifest,",
+            "expected_receipt,",
+            "require_post_apply_metadata,"
           ]
         },
         {
@@ -10282,6 +10279,7 @@
             "prepublish_native_amx_participant_application_evidence",
             "State::native_amx_participant_frontier_markers_and_merge_entry",
             "token.authenticates_state_frontiers",
+            "reauthenticate_native_amx_prepublication",
             "apply_without_execution_with_verified_v2_finality",
             "let staged_merge_queue_reservation_hashes = certified_merge_queue_reservation_hashes(",
             "state_block.staged_merge_entry(),",
@@ -12872,6 +12870,9 @@
             "journals.geometry.has_pending_lifecycle() != journals.effects.lifecycle.is_some()",
             "!journals.geometry.has_queue_custody(\n            self.target,\n            journals.effects.header,\n            journals.components._fences._queue.as_ref(),\n        )",
             "Some(CarrierPublicationError::QueueRetirementRequired)",
+            "journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())",
+            "self\n            .decision\n            .journals\n            .components\n            ._fences\n            ._queue\n            .as_ref()\n            .and_then(|queue| queue.ensure_available().err())",
+            "CarrierPublicationError::QueueRetirement(error)",
             "journals.native_amx_manifest.entries().is_empty()",
             "return Err((self.abort(), error))",
             "let update_da_mapping = match self.try_complete_geometry()",
@@ -13629,10 +13630,9 @@
           "symbol": "RetainedBodyValidationService::new",
           "required_tokens": [
             "budget: &AllocationBudget",
-            "Self::descriptor_layouts(limit)?",
-            "budget.try_reserve_layouts(layouts)?",
-            "reservation.try_split(layouts[0])?",
-            "reservation.try_split(layouts[1])?",
+            "let layouts = Self::descriptor_layouts(limit)?",
+            "let mut reservation = budget.try_reserve_layouts(layouts)?",
+            "let descriptor_admission = [\n            reservation.try_split(layouts[0])?,\n            reservation.try_split(layouts[1])?,\n        ]",
             "drop(reservation)",
             "candidates.try_reserve_exact(limit)?",
             "markers.try_reserve_exact(limit)?",
@@ -13700,9 +13700,8 @@
           "kind": "method",
           "symbol": "V2BodyStore::retained_validation_service",
           "required_tokens": [
-            "RetainedBodyValidationService::new(",
-            "self.instance_identity()",
-            "self.capacity.max_body_entries"
+            "budget: &mv::allocation::AllocationBudget",
+            "RetainedBodyValidationService::new(\n            validator,\n            self.instance_identity(),\n            self.capacity.max_body_entries,\n            budget,\n        )"
           ]
         },
         {
@@ -13836,7 +13835,8 @@
           "symbol": "OriginalCarrierQueue::new",
           "required_tokens": [
             "pub(super) fn new(state: &'service State, queue: &'service Queue)",
-            "Self { state, queue }"
+            "Self { state, queue }",
+            "pub(super) fn new(state: &'service State, queue: &'service Queue) -> Self"
           ]
         },
         {
@@ -13852,7 +13852,8 @@
           "kind": "method",
           "symbol": "OriginalCarrierQueue::try_observe",
           "required_tokens": [
-            "self.queue.try_lock_lane_retirement_observer()"
+            "self.queue.try_lock_lane_retirement_observer()",
+            "Result<QueueLaneRetirementObserver<'service>, mv::ReleaseWait>"
           ]
         },
         {
@@ -13888,7 +13889,8 @@
             "&self.reservations,",
             "lane_id,",
             "dataspace_id,",
-            "lane_incarnation"
+            "lane_incarnation",
+            "self.observer.queue.lane_pending_work_release_locked(\n            &self.reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )"
           ]
         },
         {
@@ -13919,7 +13921,13 @@
             "return Err(CarrierQueueRetirementError::Pending {",
             "Err(error) => return Err(CarrierQueueRetirementError::Unavailable(error))",
             "state_owner: target\n                .native_lane_state_owner()\n                .ok_or(CarrierQueueRetirementError::ForeignState)?",
-            "_cut: cut"
+            "_cut: cut",
+            "geometry\n            .for_each_retirement_route(|lane, dataspace, incarnation| {\n                routes.push((lane, dataspace, incarnation));\n                Ok(())\n            })",
+            ".map_err(CarrierQueueRetirementError::Geometry)?",
+            "for &(lane, dataspace, incarnation) in &routes",
+            "match cut.lane_pending_work_release(lane, dataspace, incarnation)",
+            "Ok(Some(wait)) => {\n                    return Err(CarrierQueueRetirementError::Pending {\n                        lane,\n                        dataspace,\n                        incarnation,\n                        wait,\n                    });\n                }",
+            "header,\n            routes,\n            _cut: cut"
           ]
         },
         {
@@ -13928,7 +13936,9 @@
           "symbol": "CarrierQueueRetirement::ensure_available",
           "required_tokens": [
             "if self._cut.durability_faulted()",
-            "QueueLaneRetirementUnavailable::DurabilityFault"
+            "QueueLaneRetirementUnavailable::DurabilityFault",
+            "Err(CarrierQueueRetirementError::Unavailable(\n                QueueLaneRetirementUnavailable::DurabilityFault,\n            ))",
+            "else {\n            Ok(())\n        }"
           ]
         },
         {
@@ -13944,7 +13954,15 @@
             "geometry.for_each_retirement_route(|lane, dataspace, incarnation|",
             "self.routes.get(index) != Some(&(lane, dataspace, incarnation))",
             "index += 1;",
-            "result.is_ok() && index == self.routes.len()"
+            "result.is_ok() && index == self.routes.len()",
+            "if self.ensure_available().is_err()\n            || !self.state_owner.matches_state(target)\n            || self.header != header\n            || !geometry.matches_publication_target(target, header)",
+            "return false",
+            "let mut index = 0",
+            "let result = geometry.for_each_retirement_route(|lane, dataspace, incarnation|",
+            "if self.routes.get(index) != Some(&(lane, dataspace, incarnation))",
+            "return Err(LaneLifecycleError::Storage(",
+            "index += 1",
+            "Ok(())"
           ]
         },
         {
@@ -13959,7 +13977,12 @@
             ".find(|entry| entry.id == *lane)",
             ".previous_lane_incarnations",
             ".filter(|incarnation| !lane_incarnation_is_zero(*incarnation))",
-            "visit(*lane, previous.dataspace_id, incarnation)?"
+            "visit(*lane, previous.dataspace_id, incarnation)?",
+            "let Some(pending) = &self._pending else {\n            return Ok(());\n        }",
+            "let update = &pending.catalog_update",
+            "pending.plan.retire.iter().chain(\n            update\n                .replaced_lane_ids\n                .iter()\n                .filter(|lane| !pending.plan.retire.contains(lane)),\n        )",
+            "update\n                .previous_catalog\n                .lanes()\n                .iter()\n                .find(|entry| entry.id == *lane)\n                .ok_or_else(||",
+            "update\n                .previous_lane_incarnations\n                .get(lane)\n                .copied()\n                .filter(|incarnation| !lane_incarnation_is_zero(*incarnation))\n                .ok_or_else(||"
           ]
         },
         {
@@ -13968,7 +13991,8 @@
           "symbol": "PreparedCarrierGeometry::has_queue_custody",
           "required_tokens": [
             "!self.requires_queue_custody()",
-            "queue.is_some_and(|queue| queue.authenticates(target, self, header))"
+            "queue.is_some_and(|queue| queue.authenticates(target, self, header))",
+            "!self.requires_queue_custody()\n            || queue.is_some_and(|queue| queue.authenticates(target, self, header))"
           ]
         },
         {
@@ -13976,9 +14000,8 @@
           "kind": "method",
           "symbol": "RetainedBodyValidationService::descriptor_layouts",
           "required_tokens": [
-            "Layout::array::<Candidate<P::Owner>>(limit)",
-            "Layout::array::<Marker>(limit)",
-            "AllocationRefusal::DemandOverflow"
+            "Layout::array::<Candidate<P::Owner>>(limit)\n                .map_err(|_| AllocationRefusal::DemandOverflow)?",
+            "Layout::array::<Marker>(limit).map_err(|_| AllocationRefusal::DemandOverflow)?"
           ]
         },
         {
@@ -14491,6 +14514,165 @@
             "return self.classify_merge_state_validation(active_view, validation)",
             "if self.classify_merge_state_validation(active_view, validation)?\n            == MergeCandidateValidation::Deferred\n        {\n            return Ok(MergeCandidateValidation::Deferred);\n        }",
             "self.validated_merge_execution_candidate = Some(validated)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
+          "symbol": "RetainedBodyValidationService::descriptor_bytes",
+          "required_tokens": [
+            "Self::descriptor_layouts(limit)?",
+            ".try_fold(0, |total: usize, layout|",
+            "total\n                    .checked_add(layout.size())\n                    .ok_or(AllocationRefusal::DemandOverflow)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_body_store/retained_validation.rs",
+          "kind": "method",
+          "symbol": "V2BodyStore::retained_validation_descriptor_bytes",
+          "required_tokens": [
+            "RetainedBodyValidationService::<P>::descriptor_bytes(self.capacity.max_body_entries)",
+            ".map_err(super::super::v2_apply::validation_custody::CarrierCustodyError::from)",
+            ".map_err(V2BodyStoreError::from)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementObserver::durability_faulted",
+          "required_tokens": [
+            "self.queue.transaction_selection_durability_faulted()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "QueueLaneRetirementObserver::lane_pending_work_release",
+          "required_tokens": [
+            "let _mutation = self.queue.push_remove_lock.lock()",
+            "let reservations = self.queue.lane_reservations.lock()",
+            "self.queue.lane_pending_work_release_locked(\n            &reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lane_pending_work_release_locked",
+          "required_tokens": [
+            "if hash_is_zero(lane_incarnation)",
+            "return Err(QueueLaneRetirementUnavailable::InvalidIncarnation)",
+            "let scope = (lane_id, dataspace_id, lane_incarnation)",
+            "self\n            .lane_retirement_releases\n            .lock()\n            .entry(scope)\n            .or_default()\n            .observe()",
+            "if self.transaction_selection_durability_faulted()",
+            "Err(QueueLaneRetirementUnavailable::DurabilityFault)",
+            "Self::lane_retirement_reservation_snapshot(\n            reservations,\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n        )",
+            ".is_none_or(|owned| self.lane_has_pending_route_work(&owned, lane_id, dataspace_id))",
+            "Ok(Some(wait))",
+            "Ok(None)",
+            "if !matches!(&result, Ok(Some(_)))",
+            "self.lane_retirement_releases.lock().remove(&scope)",
+            "drop(source.guard(scope))",
+            "result"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/queue_retirement.rs",
+          "kind": "enum",
+          "symbol": "CarrierQueueRetirementError",
+          "required_tokens": [
+            "Missing",
+            "ForeignState",
+            "ForeignQueue",
+            "Busy {\n        field: &'static str,\n        wait: mv::ReleaseWait,\n    }",
+            "Pending {\n        lane: LaneId,\n        dataspace: DataSpaceId,\n        incarnation: Hash,\n        wait: mv::ReleaseWait,\n    }",
+            "Unavailable(QueueLaneRetirementUnavailable)",
+            "Geometry(LaneLifecycleError)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "struct",
+          "symbol": "AcquiredCarrierComponents",
+          "required_tokens": [
+            "_fences: CarrierFences<'target>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/carrier_preparation/physical_publication.rs",
+          "kind": "method",
+          "symbol": "StateFences::try_acquire",
+          "required_tokens": [
+            "lock.try_lock_or_wait()",
+            "CarrierPhysicalPreparationError::Fence { field, wait }",
+            "let commit = acquire(\"state_commit_lock\", &target.state_commit_lock)?",
+            "let lifecycle = acquire(\"lane_lifecycle_lock\", &target.lane_lifecycle_lock)?",
+            "let write = acquire(\"state_write_lock\", &target.state_write_lock)?",
+            "_write: write,\n            _lifecycle: lifecycle,\n            _commit: commit"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "authenticate_native_amx_participant_application_prepublication_under_publication_guards",
+          "required_tokens": [
+            "require_active_lane_artifact",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "read_native_amx_participant_application_receipt_from_paths_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "require_post_apply_metadata",
+            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "latest.matches_receipt",
+            "latest.matches_manifest",
+            "progress_mutation_namespace_unchanged"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxParticipantApplicationPrepublicationToken",
+          "required_tokens": [
+            "original_kura: KuraInstanceIdentity",
+            "identities: Vec<NativeAmxParticipantApplicationPrepublicationIdentity>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantApplicationPrepublicationToken::from_plan",
+          "required_tokens": [
+            "original_kura: KuraInstanceIdentity",
+            "if usize::try_from(plan.manifest_leaf_count).ok() != Some(identities.len())",
+            "Some(Self {\n            original_kura,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "Kura::reauthenticate_native_amx_prepublication",
+          "required_tokens": [
+            "let prune = self.prune_lock.lock();",
+            "let canonical = self.canonical_chain_lock.lock();",
+            "let geometry = self.lane_geometry_lock.lock();",
+            "let sidecar = self.sidecar_lock.lock();",
+            "let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(\n            token, block, manifest, finality, frontiers,\n        );",
+            "drop(sidecar);\n        drop(geometry);\n        drop(canonical);\n        drop(prune);\n        result"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/publication_lease.rs",
+          "kind": "method",
+          "symbol": "Kura::reauthenticate_native_amx_prepublication_under_publication_guards",
+          "required_tokens": [
+            "if !token.original_kura.matches(self) {\n            return Err(",
+            "if !token.authenticates_state_frontiers(block, manifest, finality, frontiers) {\n            return Err(",
+            "v2_finality_artifact_with_archive_under_prune_and_canonical_guards(\n                token.application_block_height,\n            )?",
+            "if header != block.header()\n            || super::HashOf::new(&durable_finality) != token.finality_artifact_hash\n        {\n            return Err(",
+            "super::native_amx_participant_application_artifacts(\n            manifest,\n            token.finality_artifact_hash,\n        )",
+            "if artifacts.len() != token.identities.len() {\n            return Err(",
+            "for ((expected_manifest, expected_receipt), expected_identity) in\n            artifacts.iter().zip(&token.identities)",
+            "authenticate_native_amx_participant_application_prepublication_under_publication_guards(\n                    expected_manifest, expected_receipt, false,\n                )?",
+            "if actual != *expected_identity {\n                return Err("
           ]
         }
       ]

@@ -93,6 +93,105 @@ impl Kura {
         })
     }
 
+    /// Reauthenticate the original participant owner before live Apply stages State.
+    ///
+    /// Live Apply still owns a borrowed StateBlock and cannot retain decided work
+    /// across a local lock refusal. Preserve its blocking publication lock order.
+    /// The same check is available on a try-acquired lease for a retained consumer;
+    /// that consumer still requires its original staged-frontier/source custody.
+    /// Every Kura fence is released before this returns, so this is a durable join
+    /// before staging, not custody through State visibility.
+    pub(crate) fn reauthenticate_native_amx_prepublication(
+        &self,
+        token: &super::NativeAmxParticipantApplicationPrepublicationToken,
+        block: &super::SignedBlock,
+        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+        finality: &super::V2FinalityArtifact,
+        frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+    ) -> super::Result<()> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let prune = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let canonical = self.canonical_chain_lock.lock();
+        let geometry = self.lane_geometry_lock.lock();
+        let sidecar = self.sidecar_lock.lock();
+        let result = self.reauthenticate_native_amx_prepublication_under_publication_guards(
+            token, block, manifest, finality, frontiers,
+        );
+        drop(sidecar);
+        drop(geometry);
+        drop(canonical);
+        drop(prune);
+        result
+    }
+
+    /// Read-only participant reauthentication under this original Kura's four
+    /// publication fences. The live wrapper and retained lease share this oracle.
+    fn reauthenticate_native_amx_prepublication_under_publication_guards(
+        &self,
+        token: &super::NativeAmxParticipantApplicationPrepublicationToken,
+        block: &super::SignedBlock,
+        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+        finality: &super::V2FinalityArtifact,
+        frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+    ) -> super::Result<()> {
+        let invalid = |message| Kura::invalid_lane_artifact_error(self.store_root.clone(), message);
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        if !token.original_kura.matches(self) {
+            return Err(invalid(
+                "Native AMX prepublication token belongs to another Kura instance",
+            ));
+        }
+        if !token.authenticates_state_frontiers(block, manifest, finality, frontiers) {
+            return Err(invalid(
+                "Native AMX prepublication token differs from its exact State frontier projection",
+            ));
+        }
+        // Authenticate durable canonical/finality even for an empty manifest;
+        // an empty participant list is not authority for a foreign carrier.
+        let Some((header, durable_finality, _)) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                token.application_block_height,
+            )?
+        else {
+            return Err(invalid(
+                "Native AMX prepublication finality read-back is unavailable",
+            ));
+        };
+        if header != block.header()
+            || super::HashOf::new(&durable_finality) != token.finality_artifact_hash
+        {
+            return Err(invalid(
+                "Native AMX prepublication finality read-back differs from its original carrier",
+            ));
+        }
+        let artifacts = super::native_amx_participant_application_artifacts(
+            manifest,
+            token.finality_artifact_hash,
+        )
+        .ok_or_else(|| invalid("Native AMX prepublication artifact projection failed"))?;
+        if artifacts.len() != token.identities.len() {
+            return Err(invalid(
+                "Native AMX prepublication artifacts do not cover every original frontier",
+            ));
+        }
+        for ((expected_manifest, expected_receipt), expected_identity) in
+            artifacts.iter().zip(&token.identities)
+        {
+            let actual = self
+                .authenticate_native_amx_participant_application_prepublication_under_publication_guards(
+                    expected_manifest, expected_receipt, false,
+                )?;
+            if actual != *expected_identity {
+                return Err(invalid(
+                    "Native AMX durable participant differs from its original read-back identity",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Authenticate a retained archive capture without an enclosing Kura lease.
     ///
     /// Standalone and aggregate publication use the same guarded oracle. The
@@ -306,6 +405,29 @@ impl KuraPublicationLease<'_> {
                 block_hash,
                 finalized_at_unix_ms,
                 receipt,
+            )
+    }
+
+    /// Rejoin one move-only participant token to its original Kura and exact State projection.
+    ///
+    /// Every manifest, receipt and latest index is read again under this lease's
+    /// original prune/canonical/geometry/sidecar fences. This neither writes nor
+    /// reacquires a fence, and it grants no State or source authorization. The
+    /// caller must admit canonical decoding and proof work before acquisition.
+    // TODO: enable this production entry only when the retained publisher owns
+    // its original staged participant frontiers and complete source authority.
+    #[cfg(test)]
+    pub(crate) fn reauthenticate_native_amx_prepublication(
+        &self,
+        token: &super::NativeAmxParticipantApplicationPrepublicationToken,
+        block: &super::SignedBlock,
+        manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+        finality: &super::V2FinalityArtifact,
+        frontiers: &[crate::state::AppliedNativeAmxParticipantFrontierMarker],
+    ) -> super::Result<()> {
+        self.kura
+            .reauthenticate_native_amx_prepublication_under_publication_guards(
+                token, block, manifest, finality, frontiers,
             )
     }
 
