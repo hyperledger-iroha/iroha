@@ -49,9 +49,7 @@ fn seed_committee_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) 
             .unwrap_or_default();
         if !by_public_key.contains(&record.id) {
             by_public_key.push(record.id.clone());
-            world
-                .consensus_keys_by_pk
-                .insert(public_key, by_public_key);
+            world.consensus_keys_by_pk.insert(public_key, by_public_key);
         }
     }
     world.commit();
@@ -347,7 +345,8 @@ fn exact_lane_committee_accepts_four_and_stably_samples_larger_f1_pool() {
     let (larger_state, larger_keys) = exact_manifest_authority_fixture(1, 9);
     let height = seed_lane_committee_beacon_for_test(&larger_state);
     let first = resolve_universal_committee_at(&larger_state, height).expect("sample larger pool");
-    let second = resolve_universal_committee_at(&larger_state, height).expect("repeat larger-pool sample");
+    let second =
+        resolve_universal_committee_at(&larger_state, height).expect("repeat larger-pool sample");
     assert_eq!(first, second);
     assert_eq!(first.validators().len(), 4);
     assert!(first.validators().windows(2).all(|pair| pair[0] < pair[1]));
@@ -471,9 +470,22 @@ fn exact_lane_committee_rejects_manifest_dataspace_mismatch() {
         .iter()
         .map(|key| AccountId::new(key.public_key().clone()))
         .collect();
-    install_lane_manifest_registry(&state, &[(LaneId::SINGLE, other, validators)]);
+    let retained = resolve_universal_committee(&state).expect("valid canonical manifest authority");
+    install_stale_lane_manifest_registry_for_test(&state, &[(LaneId::SINGLE, other, validators)]);
+    assert_eq!(
+        resolve_universal_committee(&state)
+            .expect("a stale process cache cannot replace canonical manifest authority")
+            .validators(),
+        retained.validators(),
+    );
+    // Retain the deliberately malformed source in an isolated resolver view.
+    let mut view = state.view();
+    view.lane_manifests = Arc::clone(&state.lane_manifests.read());
     assert!(matches!(
-        resolve_universal_committee(&state),
+        view.resolve_lane_committee_at_height(
+            LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            1,
+        ),
         Err(LaneAuthorityError::InvalidAuthoritySource {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::UNIVERSAL,
@@ -505,7 +517,8 @@ fn exact_stake_committee_reselects_then_fails_closed_across_peer_churn() {
     let first = resolve_universal_committee_at(&state, height).expect("initial stake committee");
     assert_eq!(first.validators().len(), 4);
     remove_world_peer_for_test(&state, &first.validators()[0]);
-    let replacement = resolve_universal_committee_at(&state, height).expect("replacement stake committee");
+    let replacement =
+        resolve_universal_committee_at(&state, height).expect("replacement stake committee");
     assert_eq!(replacement.validators().len(), 4);
     assert_ne!(replacement.validators(), first.validators());
     remove_world_peer_for_test(&state, &replacement.validators()[0]);

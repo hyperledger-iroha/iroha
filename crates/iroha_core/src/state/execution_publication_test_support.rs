@@ -25,6 +25,138 @@ fn keys() -> Result<Vec<KeyPair>, String> {
 }
 
 impl State {
+    /// Publish the standard sample-key genesis for an in-crate component test.
+    ///
+    /// # Errors
+    /// Returns the execution and publication errors from the explicit-key fixture.
+    #[cfg(test)]
+    pub fn seed_genesis_for_testing(&self) -> Result<iroha_data_model::block::SignedBlock, String> {
+        self.seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+    }
+
+    /// Execute and publish a signed, fee-free genesis for a component fixture.
+    ///
+    /// The fixture's initial World is supplied by its constructor. Genesis
+    /// registers its signing account when absent, then establishes real execution
+    /// ownership, history and durable finality before ordinary height-two work.
+    ///
+    /// # Errors
+    /// Rejects a nonempty history or any genesis execution/publication failure.
+    #[doc(hidden)]
+    pub fn seed_signed_genesis_for_testing(
+        &self,
+        genesis_keypair: &KeyPair,
+    ) -> Result<iroha_data_model::block::SignedBlock, String> {
+        use super::{StateReadOnly, WorldReadOnly};
+        use crate::sumeragi::network_topology::Topology;
+        use iroha_data_model::block::{BlockHeader, builder::BlockBuilder};
+        use iroha_data_model::{
+            account::{Account, AccountId},
+            isi::{InstructionBox, Log, Register},
+            level::Level,
+            transaction::{FeePaymentIntent, TransactionBuilder},
+        };
+        use iroha_primitives::time::TimeSource;
+        use std::{num::NonZeroU64, time::Duration};
+
+        if self.committed_height() != 0 {
+            return Err("genesis fixture requires an empty history".into());
+        }
+        let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
+        let (_, time) = TimeSource::new_mock(Duration::ZERO);
+        let mut instructions = Vec::<InstructionBox>::new();
+        if self.query_view().world().account(&genesis_account).is_err() {
+            // Missing-authority admission requires exact self-registration first.
+            instructions.push(Register::account(Account::new(genesis_account.clone())).into());
+        }
+        instructions.push(Log::new(Level::DEBUG, "component fixture genesis".to_owned()).into());
+        let transaction = TransactionBuilder::new_genesis_with_time_source(
+            genesis_account.clone(),
+            &time,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(genesis_keypair.private_key());
+        // Static admission requires every transaction to strictly precede its block.
+        let block_time_ms = u64::try_from(transaction.creation_time().as_millis())
+            .map_err(|_| "genesis fixture timestamp exceeds u64")?
+            .checked_add(1)
+            .ok_or("genesis fixture block timestamp overflows")?;
+        let time = TimeSource::new_fixed(Duration::from_millis(block_time_ms));
+        let mut header = BlockHeader::new(
+            NonZeroU64::new(1).expect("positive genesis height"),
+            None,
+            None,
+            block_time_ms,
+            0,
+        );
+        {
+            let view = self.query_view();
+            let digest = super::compute_confidential_feature_digest(
+                view.world(),
+                view.zk(),
+                view.sccp_registry(),
+                1,
+            );
+            header.set_confidential_features((!digest.is_empty()).then_some(digest));
+        }
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_da_proof_policies(Some(crate::da::proof_policy_bundle(
+            &self.nexus_snapshot().lane_config,
+        )));
+        let source = builder.build_with_signature(0, genesis_keypair.private_key());
+        let topology = Topology::new(
+            keys()?
+                .into_iter()
+                .map(|key| PeerId::new(key.public_key().clone())),
+        );
+        let mut staged = self.block(source.header());
+        let valid = ValidBlock::validate_sumeragi_v2_fixture(
+            source,
+            &topology,
+            &genesis_account,
+            &time,
+            &mut staged,
+        )
+        .unpack(|_| {})
+        .map_err(|(_, error)| error.to_string())?;
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let signed = committed.as_ref().clone();
+        self.commit_executed_block_for_testing(staged, committed)?;
+        Ok(signed)
+    }
+
+    /// Replay complete fixture outputs and publish the actual execution under
+    /// the same four-validator authority as a freshly executed fixture.
+    ///
+    /// # Errors
+    /// Rejects unauthenticated genesis, changed results, mismatched predecessor,
+    /// and every durable-finality or publication failure.
+    #[doc(hidden)]
+    pub fn replay_and_commit_fixture_block_for_testing(
+        &self,
+        committed: CommittedBlock,
+        genesis_account: Option<&iroha_data_model::account::AccountId>,
+    ) -> Result<(), String> {
+        let mut replayed = committed.as_ref().clone();
+        let mut state_block = self.block(replayed.header());
+        ValidBlock::execute_block_outputs_for_test(
+            &mut replayed,
+            &mut state_block,
+            genesis_account,
+        )
+        .map_err(|error| error.to_string())?;
+        super::replay_outputs::ensure_replayed_results_match_committed(
+            committed.as_ref().header().height().get(),
+            committed.as_ref(),
+            &replayed,
+        )
+        .map_err(|error| error.to_string())?;
+        self.commit_executed_block_for_testing(state_block, committed)
+            .map(|_| ())
+    }
+
     /// Publish an actually executed fixture block through native output finality.
     ///
     /// This test-only authority signs the retained execution using four fixed BLS
@@ -42,9 +174,28 @@ impl State {
     #[doc(hidden)]
     pub fn commit_executed_block_for_testing(
         &self,
+        state_block: StateBlock<'_>,
+        committed: CommittedBlock,
+    ) -> Result<Vec<iroha_data_model::events::EventBox>, String> {
+        self.commit_executed_block_with_precommit_for_testing(state_block, committed, |_| {})
+    }
+
+    /// Publish an actually executed fixture while observing its authorized precommit state.
+    ///
+    /// The observer runs after exact output finality and deterministic Apply have
+    /// completed, immediately before the real State commit. It cannot mutate or
+    /// replace the execution or publication authority.
+    ///
+    /// # Errors
+    /// Returns the same execution, finality and publication errors as
+    /// [`Self::commit_executed_block_for_testing`].
+    #[doc(hidden)]
+    pub(crate) fn commit_executed_block_with_precommit_for_testing(
+        &self,
         mut state_block: StateBlock<'_>,
         committed: CommittedBlock,
-    ) -> Result<(), String> {
+        before_commit: impl FnOnce(&StateBlock<'_>),
+    ) -> Result<Vec<iroha_data_model::events::EventBox>, String> {
         if !std::ptr::eq(self, state_block.state_ref) {
             return Err("execution publication belongs to a different State".into());
         }
@@ -245,14 +396,15 @@ impl State {
             return Err("durable finality receipt differs from actual execution".into());
         }
         state_block.authorize_execution_output_publication(&committed, &witness)?;
-        let _events = state_block
+        let events = state_block
             .apply_without_execution_with_verified_v2_finality(&committed)
             .map_err(|error| error.to_string())?;
+        before_commit(&state_block);
         state_block.commit().map_err(|error| error.to_string())?;
         self.kura
             .promote_kagemusha_finality_sidecar(&artifact, &receipt)
             .map_err(|error| error.to_string())?;
-        Ok(())
+        Ok(events)
     }
 }
 

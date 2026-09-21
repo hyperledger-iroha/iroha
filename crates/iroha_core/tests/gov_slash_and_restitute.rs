@@ -173,13 +173,8 @@ fn double_vote_slashes_plain_lock() {
     {
         // The direct ballot fixture publishes native transfer transcripts.
         let fixture_witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
-        // This chain later applies signed blocks, so genesis must also produce
-        // their state side effects, including the Musubi resolver checkpoint.
-        let genesis = BlockBuilder::new(Vec::new())
-            .chain(0, None)
-            .sign(ALICE_KEYPAIR.private_key())
-            .unpack(|_| {});
-        let mut sblock1 = state.block(genesis.header());
+        // Seed the component World before establishing real signed history.
+        let mut sblock1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
         let mut stx1 = sblock1.transaction();
         stx1.world.governance_referenda_mut().insert(
             rid.clone(),
@@ -210,12 +205,12 @@ fn double_vote_slashes_plain_lock() {
         stx1.apply();
         // Signed-block validation acquires its own non-reentrant recorder guard.
         drop(fixture_witness_guard);
-        let valid = genesis
-            .validate_and_record_transactions(&mut sblock1)
-            .unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        let _ = sblock1.apply_without_execution(&committed, Vec::new());
-        sblock1.commit().expect("commit seeded governance genesis");
+        sblock1
+            .commit_world_overlay_for_testing()
+            .expect("seed governance World");
+        state
+            .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+            .expect("publish governance fixture genesis");
     }
     // Block 2: commit the sealed carrier for the conflicting ballot.
     let ballot_conflict = iroha_data_model::isi::governance::CastPlainBallot {
@@ -287,9 +282,8 @@ fn double_vote_slashes_plain_lock() {
         commitment_output.result
     );
     let committed = valid.commit_unchecked().unpack(|_| {});
-    let _ = state_block.apply_without_execution(&committed, Vec::new());
-    state_block
-        .commit()
+    state
+        .commit_executed_block_for_testing(state_block, committed)
         .expect("commit sealed ballot commitment");
 
     // Block 3: the sealed reveal enters the shared sequential corridor. The
@@ -337,9 +331,8 @@ fn double_vote_slashes_plain_lock() {
         "unexpected rejection: {rejection:?}"
     );
     let committed = valid.commit_unchecked().unpack(|_| {});
-    let _ = state_block.apply_without_execution(&committed, Vec::new());
-    state_block
-        .commit()
+    state
+        .commit_executed_block_for_testing(state_block, committed)
         .expect("commit rejected sealed-ballot penalty");
     assert!(
         state.has_committed_entrypoint(reveal_hash),

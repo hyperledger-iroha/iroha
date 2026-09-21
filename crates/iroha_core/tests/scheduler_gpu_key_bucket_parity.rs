@@ -61,6 +61,9 @@ fn run_with_gpu_bucket(
     let mut cfg = state.view().pipeline().clone();
     cfg.gpu_key_bucket = gpu_key_bucket;
     state.set_pipeline(cfg);
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish scheduler fixture genesis");
     // Build and execute block
     let block: SignedBlock = {
         let accepted: Vec<_> = txs
@@ -68,7 +71,7 @@ fn run_with_gpu_bucket(
             .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
             .collect();
         BlockBuilder::new(accepted)
-            .chain(0, state.view().latest_block().as_deref())
+            .chain(0, Some(&genesis))
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
             .unpack(|_| {})
             .into()
@@ -76,10 +79,10 @@ fn run_with_gpu_bucket(
     let mut sb = state.block(block.header());
     let vb = ValidBlock::validate_unchecked(block, &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = sb.apply_without_execution(&cb, Vec::new());
+    let events = state
+        .commit_executed_block_for_testing(sb, cb)
+        .expect("publish scheduler fixture effects");
     let json = snapshots::events_json_filtered(&events);
-    // Ensure StateBlock borrow ends before returning the state
-    drop(sb);
     (json, state)
 }
 #[test]

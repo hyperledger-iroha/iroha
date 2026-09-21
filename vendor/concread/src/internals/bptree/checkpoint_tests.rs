@@ -4,7 +4,7 @@ use super::*;
 use crate::bptree::{NodeCloning, NodeFunding, Prepaid};
 use crate::internals::bptree::cursor::{CursorReadOps, SuperBlock};
 use crate::internals::bptree::node::allocation_tests::{
-    Charge, Prepaid as ObservedPrepaid, all_refunded, prepaid, record, without_allocations,
+    all_refunded, prepaid, record, without_allocations, Charge, Prepaid as ObservedPrepaid,
 };
 use crate::internals::bptree::node::{TXID_MASK, TXID_SHF};
 use crate::internals::lincowcell::LinCowCellCapable;

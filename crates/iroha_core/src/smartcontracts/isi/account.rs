@@ -3342,8 +3342,8 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let state = State::new(world, kura, query_handle);
-            state.nexus.write().dataspace_catalog =
+            let mut state = State::new(world, kura, query_handle);
+            state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
@@ -3353,7 +3353,8 @@ pub mod query {
                         fault_tolerance: 1,
                     },
                 ])
-                .expect("catalog");
+                .expect("catalog"),
+            );
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3441,8 +3442,8 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let state = State::new(world, kura, query_handle);
-            state.nexus.write().dataspace_catalog =
+            let mut state = State::new(world, kura, query_handle);
+            state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
@@ -3452,7 +3453,8 @@ pub mod query {
                         fault_tolerance: 1,
                     },
                 ])
-                .expect("catalog");
+                .expect("catalog"),
+            );
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3506,8 +3508,8 @@ pub mod query {
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
-            let state = State::new(world, kura, query_handle);
-            state.nexus.write().dataspace_catalog =
+            let mut state = State::new(world, kura, query_handle);
+            state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
@@ -3517,7 +3519,8 @@ pub mod query {
                         fault_tolerance: 1,
                     },
                 ])
-                .expect("catalog");
+                .expect("catalog"),
+            );
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
@@ -3564,8 +3567,8 @@ pub mod query {
             let query_handle = LiveQueryStore::start_test();
             let mut world = World::default();
             seed_authority_account(&mut world, &ALICE_ID);
-            let state = State::new(world, kura, query_handle);
-            state.nexus.write().dataspace_catalog =
+            let mut state = State::new(world, kura, query_handle);
+            state.set_dataspace_catalog_for_testing(
                 iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
@@ -3575,7 +3578,8 @@ pub mod query {
                         fault_tolerance: 1,
                     },
                 ])
-                .expect("catalog");
+                .expect("catalog"),
+            );
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();

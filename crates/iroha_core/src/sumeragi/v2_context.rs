@@ -1775,8 +1775,7 @@ mod tests {
         let records = [(LaneId::SINGLE, peer, 9)];
         let baseline = lane_hash_world(&records);
         let mut changed_catalog = lane_hash_world(&records);
-        let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+        let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
                 id: DataSpaceId::new(7),
@@ -1786,9 +1785,7 @@ mod tests {
             },
         ])
         .expect("valid runtime catalog");
-        changed_catalog
-            .set_nexus(nexus)
-            .expect("install unrelated runtime catalog");
+        changed_catalog.set_dataspace_catalog_for_testing(catalog);
         assert_ne!(
             baseline.view().world().dataspace_catalog(),
             changed_catalog.view().world().dataspace_catalog(),

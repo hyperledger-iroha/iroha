@@ -18053,12 +18053,13 @@ mod stake_snapshot_tests {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
-        {
-            let nexus = state.nexus.get_mut();
-            nexus.staking.min_validator_stake = 1_u64.into();
-            nexus.staking.public_validator_mode = LaneValidatorMode::AdminManaged;
-            nexus.staking.restricted_validator_mode = LaneValidatorMode::AdminManaged;
-        }
+        let mut nexus = state.nexus_snapshot();
+        nexus.staking.min_validator_stake = 1_u64.into();
+        nexus.staking.public_validator_mode = LaneValidatorMode::AdminManaged;
+        nexus.staking.restricted_validator_mode = LaneValidatorMode::AdminManaged;
+        state
+            .set_nexus_from_config(nexus)
+            .expect("install configured validator ownership before genesis");
         let keypairs: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
         let mut wb = state.world.block();
         for keypair in &keypairs {
@@ -30160,6 +30161,30 @@ impl State {
         self.kura
             .bind_lane_storage_network(self.network_id)
             .expect("bind the exact State test network before lane storage");
+        if !self.kura.emergency_fast_startup_enabled() {
+            let configured_hash =
+                LaneLifecycleParameterV1::catalog_hash(&nexus.configured_lane_catalog);
+            if self
+                .kura
+                .configured_lane_catalog_baseline()
+                .expect("read the authenticated test storage baseline")
+                != Some(configured_hash)
+            {
+                // A constructor may precede installation of a nondefault
+                // configured catalog. Its provisional default State must not
+                // provision storage before that catalog is authenticated.
+                return;
+            }
+            let configured = configured_primary_replay_geometry(&nexus.configured_lane_catalog)
+                .expect("test configured catalog has an exact initial primary");
+            self.kura
+                .establish_or_verify_configured_primary_geometry_anchor(
+                    configured.lane_config.primary(),
+                    configured.primary_incarnation,
+                    configured_hash,
+                )
+                .expect("authenticate the initial primary before provisioning test lane storage");
+        }
         self.kura
             .replace_lane_storage_entries_for_test(
                 &nexus.lane_config,
@@ -47600,9 +47625,10 @@ impl State {
             || lane_incarnation_activation_heights
                 != update.previous_lane_incarnation_activation_heights
         {
-            return Err(LaneLifecycleError::Storage(
-                "staged autoscale lifecycle no longer matches committed nexus state".to_owned(),
-            ));
+            return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
+                transition: pending.transition.name(),
+                reason: "staged autoscale lifecycle no longer matches committed nexus state",
+            });
         }
         let allow_autoscale_managed_changes =
             pending.transition != PendingAutoscaleTransition::Manual;
@@ -47714,9 +47740,10 @@ impl State {
         if committed_lane_manifests.consensus_policy_digest()
             != pending.updated_lane_manifests.consensus_policy_digest()
         {
-            return Err(LaneLifecycleError::Storage(
-                "installed lane manifest policy changed after lifecycle staging".to_owned(),
-            ));
+            return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
+                transition: pending.transition.name(),
+                reason: "installed lane manifest policy changed after lifecycle staging",
+            });
         }
         pending
             .updated_lane_manifests
@@ -53654,6 +53681,25 @@ impl<'state> StateBlock<'state> {
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
         self.transaction_with_event_telemetry(true)
     }
+    /// Open an isolated callback component fixture with an explicit root owner.
+    ///
+    /// The root identifies this block's direct execution slot. This does not
+    /// authenticate a Network input or grant block publication authority; tests
+    /// exercising either must use the canonical execution output producer.
+    #[cfg(test)]
+    pub(crate) fn transaction_for_callback_testing(&mut self) -> StateTransaction<'_, 'state> {
+        assert!(
+            self.execution_output_plan.is_none(),
+            "component callback fixtures cannot replace an admitted block owner"
+        );
+        let mut transaction = self.transaction();
+        transaction.tx_call_hash = Some(
+            transaction
+                .direct_execution_identity()
+                .expect("component callback root has a bounded direct execution slot"),
+        );
+        transaction
+    }
     /// Create a finality-effects transaction that cannot publish speculative event telemetry.
     pub(crate) fn consensus_effects_transaction(&mut self) -> StateTransaction<'_, 'state> {
         self.transaction_with_event_telemetry(false)
@@ -55583,7 +55629,25 @@ impl<'state> StateBlock<'state> {
             .expect("test block height exceeds usize::MAX");
         self.stage_canonical_carrier_membership(core::iter::empty(), block_height)
             .map_err(|_| TransactionsBlockError::MergeAdmission)?;
+        append_autoscale_sample_record(
+            &mut self.autoscale_sample_history,
+            AutoscaleSampleRecord {
+                block_height: self._curr_block.height().get(),
+                block_hash: self._curr_block.hash(),
+                creation_time_ms: self._curr_block.creation_time_ms,
+                work_count: 0,
+            },
+            autoscale_sample_history_cap(&self.nexus.autoscale),
+        );
+        self.autoscale_sample_history_dirty = true;
+        self.autoscale_evaluated_committed_fragment_count = Some(0);
+        self.refresh_canonical_runtime();
         self.block_hashes.push(self._curr_block.hash());
+        self.stage_musubi_resolver_index_checkpoint(
+            self._curr_block.height().get(),
+            self._curr_block.hash(),
+        )
+        .map_err(|_| TransactionsBlockError::MergeAdmission)?;
         self.commit()
     }
     /// Commit with a move-only authorization consumed inside State's exact
@@ -58036,6 +58100,18 @@ impl<'state> StateBlock<'state> {
         }
         samples
     }
+    /// Exercise the post-admission AXT replay component with explicit test records.
+    ///
+    /// This does not authenticate a block or authorize consensus publication.
+    /// Component fixtures may persist only the resulting World overlay through
+    /// [`Self::commit_world_overlay_for_testing`]. Production callers enter the
+    /// same replay implementation only after carrier admission.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn replay_axt_envelopes_for_testing(&mut self, envelopes: &[AxtEnvelopeRecord]) {
+        let current_slot =
+            current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
+        self.apply_replayed_axt_envelopes(envelopes, current_slot);
+    }
     fn apply_replayed_axt_envelopes(&mut self, envelopes: &[AxtEnvelopeRecord], current_slot: u64) {
         if envelopes.is_empty() {
             return;
@@ -58143,20 +58219,19 @@ impl<'state> StateBlock<'state> {
         let interval = TimeInterval::new(since, length);
         TimeEvent { interval }
     }
-    /// Reexecute a committed fixture through the canonical output owner, then apply its metadata.
+    /// Replay and publish a fixture through actual output ownership and verified finality.
     /// Genesis fixtures must supply their independently configured account explicitly.
-    /// This test-only helper grants no production publication capability.
+    /// This consumes the overlay and uses the four-validator test publication authority.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn apply_fixture_block(
-        &mut self,
+        mut self,
         block: &CommittedBlock,
-        topology: Vec<PeerId>,
         genesis_account: Option<&AccountId>,
     ) -> Result<Vec<EventBox>, String> {
         let mut replayed = block.as_ref().clone();
         crate::block::ValidBlock::execute_block_outputs_for_test(
             &mut replayed,
-            self,
+            &mut self,
             genesis_account,
         )
         .map_err(|error| error.to_string())?;
@@ -58166,7 +58241,8 @@ impl<'state> StateBlock<'state> {
             &replayed,
         )
         .map_err(|error| error.to_string())?;
-        Ok(self.apply_without_execution(block, topology))
+        self.state_ref
+            .commit_executed_block_for_testing(self, block.clone())
     }
 }
 #[cfg(feature = "zk-preverify")]
@@ -58936,6 +59012,8 @@ mod tiered_snapshot_diff_tests {
         let baseline = LaneLifecycleParameterV1::catalog_hash(&catalog);
         let incarnations = derive_static_lane_incarnations(&catalog);
         let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        kura.bind_lane_storage_network(*DEFAULT_TEST_NETWORK_ID)
+            .expect("bind the SCCP fixture network before provisioning lane storage");
         kura.establish_or_verify_configured_primary_geometry_anchor(
             lane_config.primary(),
             incarnations[&LaneId::SINGLE],
@@ -61370,7 +61448,7 @@ mod tiered_snapshot_diff_tests {
     }
     #[test]
     fn sccp_snapshot_rejects_fabricated_wsv_message_at_rootless_height() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = authenticated_sccp_archive_kura();
         let rootless = rootless_retained_block(None);
         kura.persist_block_with_retained_archive_for_tests(&rootless)
             .expect("persist rootless committed block");
@@ -62043,6 +62121,9 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
+        state
+            .seed_genesis_for_testing()
+            .expect("publish genesis before ordinary FASTPQ sources");
         let mut builder = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -67435,9 +67516,20 @@ pub(crate) use telemetry_status::{
 /// Execute all canonical phases with no Network inputs for component tests.
 pub(crate) fn run_empty_network_owner_fixture(
     block: &mut crate::state::StateBlock<'_>,
+    source: Option<&SignedBlock>,
 ) -> Vec<iroha_data_model::block::execution_output::ExecutionOutputV1> {
-    let source = iroha_data_model::block::builder::BlockBuilder::new(block._curr_block)
-        .build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let source = source.map_or_else(
+        || {
+            iroha_data_model::block::builder::BlockBuilder::new(block._curr_block)
+                .build_with_signature(0, iroha_test_samples::ALICE_KEYPAIR.private_key())
+        },
+        SignedBlock::canonical_resultless_proposal,
+    );
+    assert_eq!(
+        source.network_entrypoint_count(),
+        0,
+        "empty Network fixture source"
+    );
     let _guard = crate::sumeragi::witness::exec_witness_guard();
     crate::sumeragi::witness::start_block();
     block.reserve_ordinary_execution_outputs(&source).unwrap();

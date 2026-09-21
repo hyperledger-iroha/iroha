@@ -240,7 +240,7 @@ mod tests {
             },
         ])
         .expect("dataspace catalog");
-        state.nexus.get_mut().dataspace_catalog = dataspace_catalog;
+        state.set_dataspace_catalog_for_testing(dataspace_catalog);
         seed_world(
             &mut state,
             &domain_id,
@@ -276,19 +276,21 @@ mod tests {
             "voucher".parse().expect("static asset name"),
         );
         let second_dataspace = DataSpaceId::new(11);
-        state.nexus.get_mut().dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata {
-                id: DataSpaceId::UNIVERSAL,
-                alias: "universal".to_string(),
-                ..DataSpaceMetadata::default()
-            },
-            DataSpaceMetadata {
-                id: second_dataspace,
-                alias: "cbdc".to_string(),
-                ..DataSpaceMetadata::default()
-            },
-        ])
-        .expect("dataspace catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: DataSpaceId::UNIVERSAL,
+                    alias: "universal".to_string(),
+                    ..DataSpaceMetadata::default()
+                },
+                DataSpaceMetadata {
+                    id: second_dataspace,
+                    alias: "cbdc".to_string(),
+                    ..DataSpaceMetadata::default()
+                },
+            ])
+            .expect("dataspace catalog"),
+        );
         seed_world_with_scoped_assets(
             &mut state,
             &domain_id,

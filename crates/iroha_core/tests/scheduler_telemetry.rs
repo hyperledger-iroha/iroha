@@ -1,6 +1,6 @@
 //! Scheduler telemetry smoke tests (telemetry feature only).
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Ensures layer metrics and utilization are populated after block application.
+//! Checks canonical execution and explicit lane telemetry projections.
 #![allow(unused_imports)]
 use iroha_config::parameters::actual::{
     LaneCompliance, LaneConfig as RuntimeLaneConfig, LaneRelayEmergency, NexusAxt,
@@ -38,7 +38,7 @@ use std::{
 #[test]
 #[cfg(feature = "telemetry")]
 #[allow(clippy::too_many_lines)]
-fn scheduler_layer_metrics_and_utilization_populated() {
+fn canonical_execution_does_not_populate_retired_dag_metrics() {
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (carol_id, carol_keypair) = iroha_test_samples::gen_account_in("wonderland");
@@ -69,6 +69,9 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish fixture genesis");
     let network_id = *state.network_id_ref();
     // Build 3 txs with trivial conflicts to force at least two layers:
     // 1) Mint to Alice (independent)
@@ -114,100 +117,27 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
         .collect();
     let new_block = BlockBuilder::new(acc)
-        .chain(0, None)
+        .chain(0, Some(&genesis))
         .sign(alice_keypair.private_key())
         .unpack(|_| {});
     let mut sb = state.block(new_block.header());
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
-    let _events = sb.apply_without_execution(&cb, Vec::new());
-    // Assert telemetry populated
-    let m = Arc::clone(&metrics);
     assert!(
-        m.pipeline_layer_count.get() >= 1,
-        "layer count should be set"
+        cb.as_ref()
+            .output_results()
+            .all(|result| result.as_ref().is_ok())
     );
-    // Utilization pct is 0..100
-    let util = m.pipeline_scheduler_utilization_pct.get();
-    assert!(util <= 100, "utilization pct must be <= 100");
-    // Peak width >= 1, and average width <= peak
-    let peak = m.pipeline_peak_layer_width.get();
-    let avg = m.pipeline_layer_avg_width.get();
-    if peak > 0 {
-        assert!(avg <= peak, "avg width must be <= peak width");
-    }
-    let lane_label = LaneId::SINGLE.as_u32().to_string();
-    let gauge_capacity = m
-        .nexus_scheduler_lane_teu_capacity
-        .with_label_values(&[lane_label.as_str()])
-        .get();
-    let gauge_starvation = m
-        .nexus_scheduler_starvation_bound_slots
-        .with_label_values(&[lane_label.as_str()])
-        .get();
-    let lane_snapshots = m
-        .nexus_scheduler_lane_teu_status
-        .read()
-        .expect("lane TEU cache poisoned");
-    let lane_snapshot = lane_snapshots
-        .get(&LaneId::SINGLE.as_u32())
-        .expect("lane snapshot missing");
-    assert_eq!(lane_snapshot.capacity, gauge_capacity);
-    assert_eq!(lane_snapshot.starvation_bound_slots, gauge_starvation);
-    assert!(
-        !lane_snapshot.manifest_required,
-        "default lane should not require a manifest"
-    );
-    assert!(
-        lane_snapshot.manifest_ready,
-        "default lane should report manifest ready"
-    );
-    assert!(lane_snapshot.manifest_path.is_none());
-    assert!(lane_snapshot.manifest_validators.is_empty());
-    assert!(lane_snapshot.manifest_validator_bindings.is_empty());
-    assert!(lane_snapshot.manifest_quorum.is_none());
-    assert!(lane_snapshot.manifest_protected_namespaces.is_empty());
-    assert!(lane_snapshot.manifest_runtime_upgrade.is_none());
-    assert!(
-        lane_snapshot.layer_count >= 1,
-        "lane layer count should be populated"
-    );
-    assert!(
-        lane_snapshot.peak_layer_width >= lane_snapshot.avg_layer_width,
-        "peak width must be >= avg width"
-    );
-    assert!(
-        lane_snapshot.scheduler_utilization_pct <= 100,
-        "lane utilization pct must be <= 100"
-    );
-    assert_eq!(
-        lane_snapshot.layer_width_buckets.as_slice()[7],
-        lane_snapshot.layer_count,
-        "histogram upper bucket should equal layer count"
-    );
-    let dataspace_label = lane_snapshot.dataspace_id.to_string();
-    let block_height_metric = m
-        .nexus_lane_block_height
-        .with_label_values(&[lane_label.as_str(), dataspace_label.as_str()])
-        .get();
-    assert_eq!(
-        block_height_metric, lane_snapshot.block_height,
-        "block height gauge should reflect lane snapshot height"
-    );
-    let finality_lag_metric = m
-        .nexus_lane_finality_lag_slots
-        .with_label_values(&[lane_label.as_str(), dataspace_label.as_str()])
-        .get();
-    assert_eq!(
-        finality_lag_metric, lane_snapshot.finality_lag_slots,
-        "finality lag gauge should mirror lane snapshot lag"
-    );
-    assert_eq!(
-        m.nexus_scheduler_dataspace_teu_backlog
-            .with_label_values(&[lane_label.as_str(), "0"])
-            .get(),
-        0
-    );
+    state
+        .commit_executed_block_for_testing(sb, cb)
+        .expect("publish canonical transaction outputs");
+    assert_eq!(state.view().height(), 2);
+    // The sole execution owner serializes canonical outputs. DAG scheduling
+    // counters must not pretend that detached scheduling ran on this path.
+    assert_eq!(metrics.pipeline_layer_count.get(), 0);
+    assert_eq!(metrics.pipeline_peak_layer_width.get(), 0);
+    assert_eq!(metrics.pipeline_layer_avg_width.get(), 0);
+    assert_eq!(metrics.pipeline_scheduler_utilization_pct.get(), 0);
 }
 #[test]
 #[cfg(feature = "telemetry")]

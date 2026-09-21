@@ -304,14 +304,17 @@ impl AllocationReservation {
         self.remaining
     }
 
-    /// Move part of this prepaid layout sum into another original reservation.
+    /// Whether this original reservation belongs to the exact budget pool.
+    /// Equal limits or available-byte observations never establish this identity.
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        Arc::ptr_eq(&self.pool, &budget.pool)
+    }
+
+    /// Move part of one already prepaid sum into a second move-only reservation.
     ///
-    /// This partitions one successful admission across component executors. It
-    /// neither acquires pool credits nor allocates storage, and the sum may be
-    /// larger than any single `Layout`. Each component must still split exact
-    /// allocation layouts from its reservation before constructing their owners.
-    /// Refusal leaves the parent unchanged. Both unused remainders and allocated
-    /// charges retain the same pool and refund their own credits exactly once.
+    /// No pool CAS, allocation, refund or notification occurs. Both remainders
+    /// retain the same original pool and together own exactly the previous sum.
+    /// A refused partition leaves the original owner unchanged.
     pub fn try_partition_bytes(&mut self, bytes: usize) -> Result<Self, InsufficientReservation> {
         if bytes > self.remaining {
             return Err(InsufficientReservation {
@@ -418,3 +421,6 @@ impl Drop for AllocationCharge {
 #[cfg(test)]
 #[path = "allocation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::without_allocations;

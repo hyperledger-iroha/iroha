@@ -53,7 +53,7 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 #[global_allocator]
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
-fn without_allocations<R>(operation: impl FnOnce() -> R) -> R {
+pub(crate) fn without_allocations<R>(operation: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
@@ -785,4 +785,49 @@ fn checked_aggregate_bytes_need_no_fabricated_single_allocation_layout() {
         budget.try_reserve_bytes(bytes + 1),
         Err(AllocationRefusal::ExceedsLimit { .. })
     ));
+}
+
+#[test]
+fn partition_retains_exact_original_pool_and_conserves_real_credits() {
+    let budget = AllocationBudget::new(64);
+    let equal_but_foreign = AllocationBudget::new(64);
+    let mut whole = budget.try_reserve_bytes(64).unwrap();
+    assert!(whole.belongs_to(&budget.clone()));
+    assert!(!whole.belongs_to(&equal_but_foreign));
+    let mut part = without_allocations(|| whole.try_partition_bytes(24).unwrap());
+    assert!(part.belongs_to(&budget));
+    assert_eq!(whole.remaining_bytes(), 40);
+    assert_eq!(part.remaining_bytes(), 24);
+    assert_eq!(budget.reserved_bytes(), 64);
+    let error = without_allocations(|| whole.try_partition_bytes(41).unwrap_err());
+    assert_eq!(
+        error,
+        InsufficientReservation {
+            requested_bytes: 41,
+            remaining_bytes: 40
+        }
+    );
+    let mut wait = capacity_wait(budget.try_reserve_bytes(1).unwrap_err());
+    let wakes = Arc::new(WakeCount::default());
+    assert!(poll(&mut wait, &wakes).is_pending());
+    let zero = without_allocations(|| whole.try_partition_bytes(0).unwrap());
+    assert!(zero.belongs_to(&budget));
+    without_allocations(|| drop(zero));
+    assert_eq!(wakes.0.load(SeqCst), 0);
+    let charge = without_allocations(|| {
+        part.try_split(Layout::from_size_align(16, 8).unwrap())
+            .unwrap()
+    });
+    budget.with_deferred_refund_notifications(|| {
+        without_allocations(|| drop(part));
+        assert_eq!(budget.reserved_bytes(), 56);
+        assert_eq!(wakes.0.load(SeqCst), 0);
+        without_allocations(|| drop(whole));
+        assert_eq!(budget.reserved_bytes(), 16);
+    });
+    assert_eq!(wakes.0.load(SeqCst), 1);
+    assert!(poll(&mut wait, &wakes).is_ready());
+    assert_eq!(equal_but_foreign.reserved_bytes(), 0);
+    without_allocations(|| drop(charge));
+    assert_eq!(budget.reserved_bytes(), 0);
 }

@@ -1,5 +1,5 @@
 #[test]
-fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
+fn fee_enabled_single_transfer_uses_canonical_output_owner() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -124,7 +124,7 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
         "fee-enabled transfer should be accepted: {errors:?}"
     );
     let snapshot = crate::sumeragi::status::snapshot();
-    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 1);
+    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     assert_eq!(
         snapshot
@@ -150,7 +150,7 @@ fn fee_enabled_single_transfer_uses_detached_merge_without_fee_fallback() {
     );
 }
 #[test]
-fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
+fn fee_enabled_account_metadata_uses_canonical_output_owner() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -251,27 +251,27 @@ fn fee_enabled_supported_non_transfer_uses_fee_postprocessing_fallback() {
             .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
             .next()
             .is_none(),
-        "supported non-transfer fee transaction should be accepted through sequential fallback"
+        "supported non-transfer fee transaction should be accepted by its canonical owner"
     );
     let snapshot = crate::sumeragi::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(
-        snapshot.pipeline_execution.detached_fallback_total, 1,
-        "account metadata requires the live sequential authorization path"
+        snapshot.pipeline_execution.detached_fallback_total, 0,
+        "canonical execution does not create detached fallback attempts"
     );
     assert_eq!(
         snapshot
             .pipeline_execution
             .detached_fallback_fee_postprocessing_total,
         0,
-        "live authorization takes precedence over fee postprocessing as the fallback reason"
+        "fee postprocessing remains within the same canonical owner"
     );
     assert_eq!(
         snapshot
             .pipeline_execution
             .detached_fallback_unsupported_instruction_total,
-        1,
-        "metadata writes are deliberately unsupported by detached execution"
+        0,
+        "canonical metadata writes do not enter detached execution"
     );
     let assets = state_block.world.assets();
     assert_eq!(
@@ -450,7 +450,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
     );
 }
 #[test]
-fn fee_enabled_single_transfer_with_active_data_trigger_uses_durable_state_fallback() {
+fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -594,11 +594,11 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_durable_state_fallb
             .filter_map(|(index, result)| result.as_ref().err().map(|reason| (index, reason)))
             .next()
             .is_none(),
-        "fee-enabled transfer with an active data trigger should be accepted through fallback"
+        "fee-enabled transfer and its callback must share the same canonical output owner"
     );
     let snapshot = crate::sumeragi::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     assert_eq!(
         snapshot
             .pipeline_execution
@@ -609,7 +609,7 @@ fn fee_enabled_single_transfer_with_active_data_trigger_uses_durable_state_fallb
         snapshot
             .pipeline_execution
             .detached_fallback_durable_state_total,
-        1
+        0
     );
     let assets = state_block.world.assets();
     assert_eq!(
@@ -1109,7 +1109,7 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
     );
 }
 #[test]
-fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
+fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_work() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
@@ -1218,12 +1218,12 @@ fn fee_enabled_transfer_fee_same_asset_rejects_without_partial_state() {
     );
     let snapshot = crate::sumeragi::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
-    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 1);
+    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     let assets = state_block.world.assets();
     assert_eq!(
-        assets.get(&payer_asset).expect("payer rose").0,
-        Quantity::from(1_u32),
-        "transfer must not leak when post-transfer fee debit fails"
+        assets.get(&payer_asset).map_or_else(Quantity::zero, |asset| asset.0.clone()),
+        Quantity::zero(),
+        "the rejected transfer must retain exactly its execution-owned base fee"
     );
     assert_eq!(
         assets.get(&recipient_asset).expect("recipient rose").0,
@@ -1375,12 +1375,12 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
     );
     let snapshot = crate::sumeragi::status::snapshot();
     assert_eq!(
-        snapshot.pipeline_execution.detached_merged_total, 1,
-        "one transfer should stay on the detached merge path"
+        snapshot.pipeline_execution.detached_merged_total, 0,
+        "the accepted transfer executes within the canonical output owner"
     );
     assert_eq!(
         snapshot.pipeline_execution.detached_fallback_total, 0,
-        "signed fee admission must reject after the first debit drains the balance, before detached execution"
+        "signed fee admission must reject after the first debit drains the balance"
     );
     let (_, rejection) = valid_block
         .as_ref()
@@ -1547,6 +1547,16 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
             .map(|(idx, _)| idx),
         Some(0),
         "the failing instruction after the transfer must reject the whole transaction"
+    );
+    let snapshot = crate::sumeragi::status::snapshot();
+    assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
+    assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
+    assert_eq!(
+        snapshot
+            .pipeline_execution
+            .detached_fallback_unsupported_instruction_total,
+        0,
+        "multi-instruction transfer transactions share one canonical execution owner"
     );
     assert_eq!(
         valid_block.as_ref().output_results().count(),
@@ -2363,6 +2373,7 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
         crypto_cfg.as_ref(),
     )
     .expect("admission should accept transaction shape");
+    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
     let unverified_block = BlockBuilder::new(vec![tx])
         .chain(0, state.view().latest_block().as_deref())
         .sign(keypair.private_key())

@@ -1,26 +1,6 @@
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::too_many_lines)]
 async fn gossip_accepts_restricted_route_match() {
-    let temp_dir = tempdir().expect("temp dir");
-    let kura_cfg = KuraConfig {
-        init_mode: iroha_config::kura::InitMode::Strict,
-        store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
-        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
-        block_hash_history_bytes: iroha_config::parameters::defaults::kura::BLOCK_HASH_HISTORY_BYTES,
-        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        debug_output_new_blocks: false,
-        merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: FsyncMode::Batched,
-        fsync_interval: defaults::kura::FSYNC_INTERVAL,
-    };
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
-            .expect("init kura");
-    let live_query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
     let restricted_dataspace = DataSpaceId::new(7);
     let restricted_lane = LaneId::new(1);
     let lane_catalog = LaneCatalog::new(
@@ -51,19 +31,22 @@ async fn gossip_accepts_restricted_route_match() {
         },
     ])
     .expect("dataspace catalog");
-    {
-        let mut nexus = state.nexus.write();
-        nexus.autoscale.enabled = false;
-        nexus.fees.base_fee = Quantity::zero();
-        nexus.fees.per_byte_fee = Quantity::zero();
-        nexus.fees.per_instruction_fee = Quantity::zero();
-        nexus.fees.per_gas_unit_fee = Quantity::zero();
-        nexus.lane_catalog = lane_catalog.clone();
-        nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
-        nexus.dataspace_catalog = dataspace_catalog;
-        nexus.routing_policy.default_lane = restricted_lane;
-        nexus.routing_policy.default_dataspace = restricted_dataspace;
-    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.autoscale.enabled = false;
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+    nexus.dataspace_catalog = dataspace_catalog;
+    nexus.routing_policy.default_lane = restricted_lane;
+    nexus.routing_policy.default_dataspace = restricted_dataspace;
+    let state = Arc::new(State::new_with_nexus_for_testing(
+        world_with_alice(),
+        nexus,
+        LiveQueryStore::start_test(),
+    ));
     assert!(state.is_lane_active_for_authority(restricted_lane));
     let queue = Arc::new(Queue::test(
         QueueConfig::default(),

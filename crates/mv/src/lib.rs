@@ -1,9 +1,11 @@
-//! Multi-version storage for deterministic State execution and retained publication.
+//! Multi-version storage and cells used by Iroha's production State owners.
 //!
-//! Cells and ordered maps preserve their original current and undo generations
-//! through private edits, rollback, detached publication and retained readers.
-//! Explicit prepaid modes attach layout credits to their actual allocation owners;
-//! callers must separately admit nested payloads and aggregate execution work.
+//! Current values, block undo preimages and retained readers share the original
+//! Concread generations. Explicit prepaid storage admits node, writer and copied
+//! payload custody through a finite allocation pool. This is not complete World
+//! admission: publication/release control storage and the remaining mutation
+//! families require their own allocation owners. Borrowed ordered scans retain
+//! traversal state inline without allocating.
 use core::fmt::Debug;
 /// Finite prepaid custody for explicitly enumerated allocation layouts.
 pub mod allocation;

@@ -28,7 +28,7 @@ Consumers must compare their canonical value projections before committing a
 semantic delta. The storage layer does not choose a serialization, hash, read
 witness, or complete State commitment; a delta alone does not bind untouched data.
 
-`Block::try_detach` consumes the actual Cell or Storage block after a caller
+`Block::try_detach` consumes the actual Cell or Untracked Storage block after a caller
 admission callback. The detached owner retains that callback's resource guard,
 the original ordinary/replacement mode, the published current/undo identity,
 and exact candidate touches. Capture moves the original current and undo
@@ -104,34 +104,49 @@ opening no longer deep-clones prior undo values before clearing them. Transactio
 retain both parent checkpoints and borrow their original preimages; abort restores
 both roots without inverse edits, allocation or cloning. Apply resolves both
 checkpoints only after checking failures and dropping transaction touch keys.
-Storage now carries the same sealed mode through its original current, undo and
-touch owners. Prepaid insertion and removal reserve all tree/copy/touch demand
-once before changing any owner; refusal leaves the original owners unchanged.
-Removal borrows the query and returns the original private value. Missing-key
-removal still records an explicit first absence and touch without making a clean
-block dirty; repeated absence needs no additional storage once both witnesses
-exist. Parent apply retains
-both checkpoints' cleanup until their transfers finish, leaving the parent
-unpublishable on cleanup panic. Pair publication prepares both physical owners,
-installs both roots and their shared identity, then releases locks before arbitrary
-retirement or wake callbacks. Direct and detached publication share this path.
-Direct `Storage::insert` preserves undo and rotates identity before releasing its
-current writer, with retirement and notifications after the identity unlocks.
-See [joint admission](../../docs/history/2026-09-20/joint-storage-admission.md)
-and the [removal validation record](../../docs/history/2026-09-21/joint-storage-removal.md).
-Production State remains Untracked pending native lock/runtime and identity
-storage, real model payload policies, general closed mutation/replacement,
-generation-refusal propagation and configured aggregate memory/work admission. Sorted touched-key
-insertion has an explicit heap bound; its shifting cost is not a CPU work bound.
+Both retained checkpoint successors transfer before either retired allocation is
+destroyed; cleanup stays under the original parent failure guard.
+`Storage<K, V, Prepaid<P>>::try_new_admitted` constructs this same storage family
+with one original finite pool. Construction and writer startup each reserve one
+checked sum for both maps and partition that reservation without reacquiring
+credits. `try_with_admitted_block` holds both original writers inside the pool's
+refund scope, clears the actual undo tree through admitted reset, and lends a
+private block to a synchronous callback. Its `try_insert_admitted` and
+`try_remove_admitted` fund current and missing first-preimage edits together.
+Removal records an explicit None for an absent key and marks dirty only when
+a value was present. The owned query drops under the original pair failure guard.
+Success publishes the original pair; refusal or callback error leaves the
+published pair intact. Both successors and their shared identity become visible
+before old owners are destroyed or retries wake. A caught edit panic makes the
+aggregate unusable, including when the callback returns success.
+`try_with_admitted_replacement` restores the held undo preimages before lending
+the block to the same bounded callback. Each restoration admits incoming copies
+and the map edit together; refusal discards the whole private restored prefix.
+The new undo journal records preimages from the restored state, and even an empty
+replacement retains replacement mode and advances publication identity.
+`try_from_snapshot_admitted` copies exact current and undo images into a private
+destination under one owned pool. Source entries remain borrowed for retry;
+callers authenticate the snapshot schema and fence its acquisition by generation.
+Read-only views and exclusive history retain original allocation owners.
+`StorageReadOnly` exposes concrete double-ended iterators and range iterators
+whose traversal state stays inline. Views, blocks and transactions can scan a
+fully exhausted pool without copying payloads or allocating iterator storage.
 
-Read traversal uses the original tree's concrete associated iterator types.
-Views, blocks and transactions no longer box read iterators, and both B+tree
-traversal paths are inline arrays bounded by `usize::BITS + 1`. Construction,
-forward/reverse traversal and destruction allocate nothing, including reads
-from a prepaid map whose pool is full. No payload is cloned. Full iteration
-retains exact length across mixed-direction traversal; ranges preserve borrowed
-query keys and their inclusive/exclusive bounds. See the
-[allocation-free scan record](../../docs/history/2026-09-21/allocation-free-state-scans.md).
+`Block::try_transaction_admitted` lends both original checkpoints to a private
+transaction. Both admitted insertion and removal join the canonical current/undo
+demand with the exact ordered touch-array growth and policy-owned key copy before one
+reservation. Repeated touches preserve the first owned key. `touched_entries`
+borrows a sorted slice without iterator allocation; no-op insertions and absent
+removals remain explicit. Dropping the child restores both parent roots without
+allocation.
+Applying first destroys its touch keys under both rollback guards, then keeps
+both private successors before retiring displaced checkpoint storage. Cleanup
+panic also makes the original block unusable.
+
+World storage remains Untracked pending native lock/runtime and publication
+control storage, mutable access, detached capture, concrete model payload policies
+and configured aggregate integration. Replacement and snapshot restoration admit
+each edit; they do not bound aggregate restoration work or complete State admission.
 
 TODO: compose these component publications with exact aggregate State predecessor
 ownership, membership, hash history, archive/resource reservations and finality.

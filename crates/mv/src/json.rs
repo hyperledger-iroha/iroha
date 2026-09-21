@@ -10,7 +10,7 @@ use crate::{
     storage::{Block as StorageBlock, Storage, StorageMode, StorageReadOnly},
 };
 use concread::{
-    bptree::{BptreeMap, BptreeMapReadTxn, MapMode},
+    bptree::{BptreeMap, BptreeMapReadTxn, MapMode, NodeCloning},
     ebrcell::EbrCell,
 };
 use core::{fmt, marker::PhantomData};
@@ -349,6 +349,7 @@ where
         let revert = revert.ok_or_else(|| json::MapVisitor::missing_field("revert"))?;
         let blocks = blocks.ok_or_else(|| json::MapVisitor::missing_field("blocks"))?;
         Ok(Storage {
+            allocation: None,
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
@@ -655,8 +656,10 @@ where
     }
     out.push('}');
 }
-fn write_blocks<K, V, M: MapMode>(blocks: &BptreeMapReadTxn<'_, K, V, M>, out: &mut String)
-where
+fn write_blocks<K, V, M: MapMode + NodeCloning<K, V>>(
+    blocks: &BptreeMapReadTxn<'_, K, V, M>,
+    out: &mut String,
+) where
     K: JsonKeyCodec + Clone + Ord + fmt::Debug + Send + Sync + 'static,
     V: JsonSerialize + Clone + Send + Sync + 'static,
 {

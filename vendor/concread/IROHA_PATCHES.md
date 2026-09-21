@@ -4,6 +4,12 @@ This is the source of the locked `concread` 0.5.10 crate (crates.io archive
 SHA-256 `6588e9e68e11207fb9a5aabd88765187969e6bcba98763c40bcad87b2a73e9f5`),
 with its MPL-2.0 license retained in `LICENSE.md`.
 
+The vendored package is an explicit workspace member, but not a default member.
+Its unit tests therefore use the checked-in workspace lockfile and the maintained
+Cargo metadata/build gate without a temporary harness. MV production still
+disables default features and selects `ebr`, `maps`, and `foldhash`; the release
+gate checks shipping binaries separately from the broader test feature graph.
+
 The local EBR change binds typed resource custody to the real allocated generation,
 including abandoned writers and epoch-delayed reclamation. It does not measure
 nested payloads or establish an aggregate Iroha memory quota. Consumer regression
@@ -173,7 +179,7 @@ mutation while borrowed or reference escape while a child is live. The logical
 failed-edit flag covers both admitted and ordinary mutation, preventing use after
 a caught mutation or cleanup panic even before the physical mutex unwinds.
 Public commit and detach check this flag before consuming their original shells.
-Prepaid checkpoints expose admitted insertion and whole-tree clear; unrestricted mutation
+Prepaid checkpoints expose only closed admitted operations; unrestricted mutation
 belongs to Untracked mode. The original funded writer and all checkpoint lifetimes
 must remain inside the original refund-deferral scope.
 
@@ -184,7 +190,42 @@ incorrectly kept the original length after consumption. Range iteration retains
 its separate conservative upper-bound contract. These operations support native
 Storage undo ownership without cloning a separate standard-map read image.
 
-The closed writer now exposes read-only checked insertion/clear demand and real
+### Closed prepaid current/undo insertion
+
+`try_insert_with_undo_owned_admitted` reattaches both exact retained map owners,
+plans the current edit and a missing first-preimage undo edit together, and
+consumes one move-only provider under both original writer locks. Existing undo
+entries, including `None`, are neither rewritten nor checkpointed. Checkpoints
+retain original roots and tracking storage for allocation-free abort; final
+provider cleanup and both private applies precede either returned owner.
+
+Callers bind the intended map pair and common budget and retain the budget's
+synchronous refund-notification deferral scope. This primitive covers closed
+insertion, not removal, clear, arbitrary payload mutation, touch-key storage,
+MV/World activation or complete carrier admission.
+
+Borrowed writer/checkpoint `try_insert_with_undo_admitted` uses the same pair
+planner and executor without releasing either physical writer. Nested applies
+transfer original saved buffers to their matching parent checkpoints. A stack
+failure guard outlives both child checkpoints and marks both cursors unusable on
+unwind, including cleanup after one apply. Typed refusal preserves both inputs
+and cursors. The caller must enclose the entire original writer lifetime in its
+common budget's refund-notification deferral scope; a scope around only one edit
+is insufficient. Ordered MV touch-key admission remains a separate prerequisite.
+
+### Closed prepaid empty-root reset
+
+`try_clear_admitted` on an original writer or checkpoint plans one empty root and
+all required fixed bookkeeping replacements before its one admission callback.
+A bounded stack visits the actual held tree without an allocating iterator or
+payload copy. Every prior node remains in the original retirement chain; old
+readers keep their preimages and charges until release. A child checkpoint retains
+exact parent tracking buffers for no-credit abort. Caught callback, provider and
+apply-cleanup panics leave the cursor unusable. The original physical writer's
+whole lifetime stays inside its budget's refund-notification deferral scope.
+This reset primitive does not activate MV/World or admit transaction touch keys.
+
+The closed writer exposes read-only checked insertion/clear demand and real
 nonblocking admitted acquisition. Map-level clear combines original shells and
 actual whole-tree retirement under one callback, permitting joint MV admission
 while both original locks are held. Shared allocation-free postorder traversal
@@ -209,8 +250,7 @@ release. Only then does retirement pin and defer reclamation through the origina
 reader grace period. Preparation and transfer invoke no user cleanup; existing
 readers retain their exact values and charges until physical reclamation.
 
-
-## Closed admitted removal
+### Closed admitted removal
 
 Held prepaid writers and borrowed checkpoints expose `removal_demand` and
 `try_remove_admitted`. The planner borrows the original path and possible
@@ -221,8 +261,15 @@ an absent key skips admission entirely. The generic recursive removal engine
 passes the same original funding provider through node clones, rebalancing and
 separator updates. Ordinary removal delegates to this engine. Checkpoint abort
 restores original roots and buffers without allocation or inverse edits.
-`MapAdmissionError` replaces the insertion-specific name across closed operations.
+`MapAdmissionError` is the common error for closed single-map operations.
 Actual allocator and MV-credit regressions cover both edge directions, interior
 removals, root demotion, retained readers, nested rollback at full capacity,
-preflight refusal and clone unwind. This does not activate funded State or
-complete joint Storage undo/touched-key admission for removal.
+preflight refusal and clone unwind.
+
+Borrowed writer/checkpoint `try_remove_with_undo_admitted` uses that same removal
+planner and engine while admitting the missing first-preimage insertion and its
+payload copies together. Missing current values require no current-tree allocation
+but still record the first `None` in undo. One original provider covers both trees;
+the pair remains failed through owned query, provider and checkpoint cleanup.
+Touched-key storage is admitted by the enclosing Storage owner. This primitive
+does not activate funded State or admit a complete carrier.

@@ -1556,9 +1556,13 @@ mod tests {
     }
     #[test]
     fn parent_snapshot_enforces_retained_validator_capacity() {
-        let mut state = fresh_state();
-        state.nexus.get_mut().staking.max_validators =
-            NonZeroU32::new(1).expect("non-zero validator cap");
+        let state = fresh_state();
+        // This negative fixture exceeds the retained, consensus-visible owner
+        // capacity. Changing the local Nexus cache cannot change that policy.
+        let mut runtime = state.canonical_runtime.block();
+        runtime.get_mut().owner_policy.max_validators = 1;
+        runtime.commit();
+        assert_eq!(state.nexus_snapshot().staking.max_validators.get(), 1);
         install_one_block_delay_npos(&state);
         let peers = roster();
         add_validator_record(&state, &peers[0]);

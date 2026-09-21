@@ -53,8 +53,8 @@ most two additional separator copies per level. Complete admission precedes
 buffer growth or mutation. Missing keys need no admission or allocation. The
 same removal engine serves both modes; no alternate tree or inverse-insert
 rollback is introduced. `MapAdmissionError` names refusal for acquisition and
-all closed map edits. Storage removal combines that demand with its original
-undo and touched-key owners as described below.
+all closed map edits. Storage removal joins this plan with its original undo
+and touched-key demand before acquiring any new credits.
 
 Attached writers in either map mode lend exclusive transaction checkpoints. A
 new private generation tag forces edits to copy parent nodes; nested guards
@@ -68,7 +68,8 @@ identity, allowing resolved checkpoints to reuse the pointer niche. Apply keeps
 edits private until the original writer commits. Caught mutation or cleanup panic makes that cursor unusable, including
 for reading, detaching and publishing. Borrowed current and saved-root values
 cannot outlive or mutate their checkpoint. Prepaid mode exposes only closed
-admitted insertion, removal and clear; generic checkpoint support does not grant ordinary mutation.
+admitted insertion, removal and reset; generic checkpoints do not grant ordinary
+mutation.
 
 Production Storage now retains both current and block-undo maps in this same
 B+tree engine. Block opening clears a private undo root without deep-cloning the
@@ -81,60 +82,77 @@ Production transactions retain checkpoints of both trees and borrow transaction
 preimages from the saved current root. Dropping a transaction restores both
 original trees without cloning, allocating or replaying inverse edits. Apply
 checks both cursors and destroys ordered touch keys while both rollback guards
-remain armed, then transfers both private changes and the dirty flag. Caught
+remain armed, then transfers both private changes and the dirty flag before
+either checkpoint retirement can invoke user cleanup. Caught
 preimage-clone or owned query-key destruction panic cannot apply partial edits.
 Direct block edits retain their own failure state through first-preimage cloning
 and owned-query destruction, including work outside either tree cursor. Every
 value read, new edit, capture and publication preflights that state and both
 cursor states. A caught child undo-cursor panic therefore cannot publish a
 healthy current tree before discovering the failed undo owner.
-The explicit prepaid Storage mode jointly reserves current/first-undo/touch demand
-before insertion or removal. Missing-key removal still admits a first absence
-and touch witness; it does not set dirty. A borrowed query avoids an owned-key
-cleanup gap, and the removed private value keeps its original charge through
-return to the caller. The [removal record](../../docs/history/2026-09-21/joint-storage-removal.md)
-tracks validation. Its ordered initialized-prefix key buffer owns its actual layout
-charge, moves keys on growth, and drains them before buffer refund. Component
-reservations partition one original admission without another pool acquisition.
-Both map construction demands and block shell/undo-clear demands are likewise
-combined before allocation. Busy acquisition returns the original release observer.
+The explicit prepaid insertion/removal transaction retains these same two checkpoints.
+Checked generation refusal occurs before admission or payload copying. Its ordered
+local touches use a concrete `Box<[MaybeUninit<K>]>` plus the original exact array
+charge. Planning extends the canonical pair demand with checked array growth and
+`ClonePlanning::plan_key`; the one original provider prepares the key and optional
+array before either map edit. Existing keys move without cloning. Repeated touches
+add no demand and preserve the original owned key. Installation has no payload
+callbacks and returns the emptied old array for explicit cleanup while aggregate
+failure remains armed. Abandonment leaves the original touch storage unchanged.
 
-Prepaid block replacement now acquires the original undo and current writers in
-that order and funds their shells together. It borrows the held undo preimages,
-admits each restoration's map edit and incoming payload copies, then admits undo
-clear. Capacity or planning refusal discards both private trees, including an
-already restored prefix. Successful acquisition retains replacement mode and a
-fresh empty undo tree; subsequent edits record preimages from that restored state.
-Second-plan refusal remains typed, and provider cleanup completes before a block
-can escape. The [replacement record](../../docs/history/2026-09-21/admitted-storage-replacement.md)
-describes allocator and retry controls. This is per-edit admission, not a bound
-on complete replacement work or aggregate State execution.
+Touch destruction removes each key from the initialized prefix before its Drop;
+if one destructor unwinds, a stack cleanup guard drains the remaining prefix.
+The real array deallocates before its concrete charge refunds. A second destructor
+panic retains ordinary Rust fail-stop behavior. Ordered iteration borrows the
+initialized slice without allocating. Transaction cleanup, including a caught
+checkpoint-apply panic, poisons the original block before it can publish.
+These component operations do not enable prepaid State transactions; concrete
+model payload policies and configured aggregate admission remain required.
 
-Private apply moves both checkpoints' retired bookkeeping without destruction,
+The same MV Storage family also exposes explicit prepaid construction and
+insertion/removal blocks. One checked startup reservation is partitioned between both
+map owners; `Arc::ptr_eq` authenticates the original pool, independently of equal
+limits or available counts. Both writer shells are admitted together, then a
+closed reset admits the actual empty undo root and retirement bookkeeping.
+Insertion uses one complete current/first-preimage demand while retaining both
+original locks. A higher-ranked callback prevents writer guards from escaping
+the whole-block refund scope. Node charges are actual `AllocationCharge` owners;
+copied nested payloads require an explicit `AdmittedStoragePolicy`. Removal
+preserves a first None preimage even when the queried key is absent and marks
+dirty only for a present value. Owned query cleanup stays inside pair failure
+guards. Both maps and their shared identity publish before any retired allocation
+cleanup or retry notification, including an untouched current generation.
+
+Prepaid replacement uses `try_with_admitted_replacement` inside the same closed
+refund scope. It acquires undo before current, funds both shells together, then
+borrows held undo preimages and admits each restoration's edit and incoming copies.
+Undo clear follows all restorations. Capacity or planning refusal discards both
+private trees, including an already restored prefix. Replanning refusal remains
+typed; policy identity and demand are checked against the original pool.
+Subsequent edits retain preimages from the restored state. Callback failure leaves
+the published pair unchanged, and no physical writer escapes the callback.
+
+`try_from_snapshot_admitted` restores both exact images into a private destination
+using the same pool and payload policy. Borrowed snapshot and history accessors
+support both map modes without copying entries. Explicit absent preimages survive
+restoration; current values never stand in for missing undo information. Refusal
+keeps source owners reusable and discards all private destination allocations.
+Callers still authenticate source schema and generation-fence snapshot acquisition.
+These operations admit each edit, not aggregate restoration work.
+
+Private apply moves both checkpoints' retired bookkeeping before destruction,
 then releases it with the parent failure flag still armed. Final pair publication
-prepares both map owners before node transfer, retains physical guards and cleanup
-through both root publications and pair identity rotation, unlocks all participants,
-then destroys retirement and issues notifications. A cleanup panic cannot leave a
-current-only publication. Original old readers still own their nodes until actual
-reclamation. The [joint admission record](../../docs/history/2026-09-20/joint-storage-admission.md)
-records scoped evidence and remaining boundaries.
+prepares both owners before transfer, publishes both roots and pair identity,
+unlocks all participants, then destroys retirement and issues notifications.
+Original readers retain their nodes until physical reclamation.
 
-Production State still instantiates Untracked maps. Initial root and reader blocks
-carry exact original charges, but native mutex/runtime and MV identity/notification
-storage remain outside constructor admission. Real model payload policies,
-general closed mutation, funded restore/history, State generation refusal and configured
-aggregate execution memory/work remain unfinished. Sorted touched-key insertion
-shifts its suffix and needs a bounded work policy before activation. Final-tree
+World currently instantiates Untracked Storage. Native mutex/runtime and
+publication/release control storage remain outside constructor admission. Real
+model payload policies, detached capture, mutable access, State generation-refusal
+propagation and aggregate execution/restore work admission remain unfinished.
+Sorted touched-key insertion shifts its suffix and still needs a bounded work policy. Borrowed map iterators and ranges retain bounded traversal
+state inline and make no heap allocations. Final-tree
 teardown walks original child pointers with a bounded stack and allocates nothing.
-
-Read traversal also allocates nothing: `StorageReadOnly` exposes concrete
-associated iterator types, and Concread retains both original traversal paths
-inline using the same valid-tree height bound as teardown. The arrays borrow
-nodes and their charge lifetimes without owning or cloning payloads. This trades
-two growable heap buffers and the MV iterator box for about 2 KiB of bounded
-inline traversal state on 64-bit hosts; default-stack consumer tests remain
-required. Exact full-iterator lengths and mixed-direction range semantics are
-preserved. Actual allocator controls include a completely occupied prepaid pool.
 
 Extract node charges before destroying their cache-padded Box and refund only
 after deallocation returns. Dropping an ordinary charge field happens too early.
@@ -313,8 +331,8 @@ Abort destroys the entire private successor without obtaining more capacity.
 without fabricating one aggregate Layout. Actual allocations still split exact
 layouts and retain their own charges through physical free. Initial node, root
 and reader custody is explicit; native mutex/runtime ownership, real model
-payload policies, MV undo storage and configured aggregate State integration
-remain open.
+payload policies, remaining MV mutation paths and configured aggregate State
+integration remain open.
 Real callback-bearing charges need their original notification-deferral scope
 around physical guards and destruction. The [closed insertion record](../../docs/history/2026-09-20/closed-admitted-insertion.md)
 records the initial operation. The [retained edit record](../../docs/history/2026-09-20/retained-admitted-edits.md)

@@ -6,7 +6,6 @@
 //! sidecar. Restart may observe Kura/WSV already at the decided height while
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
-use mv::storage::StorageReadOnly as _;
 
 use super::{
     message::CanonicalExecutedBlockNeedV1,

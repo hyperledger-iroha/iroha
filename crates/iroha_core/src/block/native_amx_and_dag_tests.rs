@@ -50,17 +50,15 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     world
         .uaid_dataspaces_mut_for_testing()
         .insert(authority_uaid, bindings);
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura,
-        query_handle,
-        chain_id.clone(),
-        native_amx_test_network_id(),
-    );
-    {
-        let mut nexus = state.nexus_snapshot();
+    for domain in [
+        DomainId::try_new("merchant", "paynet").expect("merchant domain"),
+        DomainId::try_new("treasury", "cbuae").expect("treasury domain"),
+    ] {
+        seed_domain_name_lease(&mut world, &authority, &domain);
+        world.domains.insert(domain.clone(), Domain::new(domain).build(&authority));
+    }
+    let nexus = {
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.lane_catalog = LaneCatalog::new(
             nonzero!(4_u32),
             vec![
@@ -83,10 +81,11 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = native_amx_test_catalog(paynet, cbuae);
-        state
-            .set_nexus(nexus)
-            .expect("install complete Native AMX lane incarnations before execution");
-    }
+        nexus
+    };
+    let (mut state, _) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
+        world, nexus, LiveQueryStore::start_test(), chain_id.clone(), native_amx_test_network_id(),
+    );
     install_test_lane_manifests(&state);
     for (dataspace, lane) in [(paynet, LaneId::new(1)), (cbuae, LaneId::new(2))] {
         state.set_axt_policy(
@@ -108,12 +107,16 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([
-        InstructionBox::from(Register::domain(Domain::new(
+        InstructionBox::from(SetKeyValue::domain(
             DomainId::try_new("merchant", "paynet").expect("domain id"),
-        ))),
-        InstructionBox::from(Register::domain(Domain::new(
+            "native_amx_receipt".parse::<Name>().expect("metadata key"),
+            Json::new(true),
+        )),
+        InstructionBox::from(SetKeyValue::domain(
             DomainId::try_new("treasury", "cbuae").expect("domain id"),
-        ))),
+            "native_amx_receipt".parse::<Name>().expect("metadata key"),
+            Json::new(true),
+        )),
     ])
     .sign(signer.private_key());
     let accepted_for_plan = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
@@ -124,12 +127,12 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
             &accepted_for_plan,
             view.world(),
             u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
-            1,
+            2,
         )
         .expect("mixed dataspace write targets should build a native AMX plan")
     };
     assert!(matches!(plan, crate::queue::RoutingPlan::NativeAmx(_)));
-    let block_height = 1;
+    let block_height = 2;
     let mut source_id = [0_u8; iroha_crypto::Hash::LENGTH];
     source_id.copy_from_slice(tx.hash().as_ref());
     let coordinator = plan.coordinator_route();
@@ -145,6 +148,7 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
             current_slot: 0,
         },
     );
+    state.seed_genesis_for_testing().expect("authenticate the native AMX ordinary predecessor");
     let mut validator_set = keypairs
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -205,7 +209,7 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     let execution_context = BlockExecutionContextBundle::new(vec![context])
         .with_lane_payload_ownerships(vec![ownership]);
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    time_handle.advance(Duration::from_millis(1));
+    time_handle.advance(Duration::from_millis(2));
     let block = BlockBuilder::new_with_time_source(vec![accepted], time_source)
         .chain(0, state.view().latest_block().as_deref())
         .with_execution_context(Some(execution_context))
@@ -658,7 +662,7 @@ fn lane_relay_envelopes_attach_manifest_roots() {
         .expect("FastPQ proof material must validate");
 }
 #[test]
-fn dag_fingerprint_stability_smoke() {
+fn canonical_output_repeat_validation_is_deterministic() {
     // Build a small world and a block with two independent txs to exercise access-set derivation
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, bob_keypair) = iroha_test_samples::gen_account_in("wonderland");
@@ -714,10 +718,11 @@ fn dag_fingerprint_stability_smoke() {
         .into_iter()
         .map(|t| crate::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
         .collect();
-    // Run twice and ensure both runs succeed (determinism covered by other tests);
-    // pipeline persistence is best-effort in tests without a store dir.
+    // Replay the same signed inputs against an unchanged predecessor and compare
+    // the complete canonical outputs, including each transaction result.
+    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
     let new_block = BlockBuilder::new(acc.clone())
-        .chain(0, None)
+        .chain(0, state.view().latest_block().as_deref())
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     assert!(
@@ -730,15 +735,16 @@ fn dag_fingerprint_stability_smoke() {
     );
     let mut sb = state.block(new_block.header());
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
-    let cb = vb.commit_unchecked().unpack(|_| {});
-    let _ = sb.apply_without_execution(&cb, Vec::new());
+    let first_outputs = vb.as_ref().execution_outputs().to_vec();
+    assert!(first_outputs.iter().all(|output| output.result().is_ok()),
+        "both independent transaction effects must execute successfully");
     drop(sb);
     let new_block2 = BlockBuilder::new(acc)
-        .chain(0, None)
+        .chain(0, state.view().latest_block().as_deref())
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     let mut sb2 = state.block(new_block2.header());
     let vb2 = ValidBlock::validate_unchecked(new_block2.into(), &mut sb2).unpack(|_| {});
-    let cb2 = vb2.commit_unchecked().unpack(|_| {});
-    let _ = sb2.apply_without_execution(&cb2, Vec::new());
+    assert_eq!(vb2.as_ref().execution_outputs(), first_outputs.as_slice(),
+        "canonical execution output bytes must be deterministic for the same predecessor and inputs");
 }

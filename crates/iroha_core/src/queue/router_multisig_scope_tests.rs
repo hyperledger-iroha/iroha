@@ -57,8 +57,8 @@ fn account_alias_domain_permission_grant_routes_by_scope() {
             .expect("domain alias permission state requirement should be deterministic"),
         None
     );
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     assert_eq!(
         router
             .try_route_with_state(&tx, &state)
@@ -96,8 +96,8 @@ fn account_alias_resolution_delegation_routes_by_exact_scope() {
             .expect("alias-resolution delegation state requirement should be deterministic"),
         None
     );
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     assert_eq!(
         router
             .try_route_with_state(&tx, &state)
@@ -131,8 +131,8 @@ fn asset_definition_alias_domain_permission_defers_to_sns_state() {
     );
 
     assert_eq!(router.try_route_without_state(&tx), Ok(None));
-    let state = blank_state();
-    install_router_nexus(&state, &router);
+    let mut state = blank_state();
+    install_router_nexus(&mut state, &router);
     assert_eq!(
         router
             .try_route_with_state(&tx, &state)
@@ -183,8 +183,8 @@ fn account_scope_directory_scope_matches_destination_account_permission_route() 
         dataspace_id,
         AccountAliasDomain::from("hbl".parse::<Name>().expect("domain label")),
     );
-    let state = state_with_account_scope_entries(&[(holder_id.clone(), scope_entry)], catalog);
-    state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+    let mut state = state_with_account_scope_entries(&[(holder_id.clone(), scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, router.lane_catalog.as_ref().clone());
     let state_view = state.view();
     assert_eq!(
         state_view
@@ -246,8 +246,8 @@ fn world_validation_routes_account_permission_holder_by_scope() {
     );
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(dataspace_id);
-    let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog.clone();
+    let mut state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, lane_catalog.clone());
     let state_view = state.view();
     let expected = RoutingDecision::new(lane_id, dataspace_id);
     assert_eq!(
@@ -310,12 +310,11 @@ fn state_view_routing_uses_committed_nexus_policy_not_cached_router_policy() {
     );
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(dataspace_id);
-    let state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
-    {
-        let mut nexus = state.nexus.write();
-        nexus.routing_policy = committed_policy;
-        nexus.lane_catalog = lane_catalog;
-    }
+    let mut state = state_with_account_scope_entries(&[(holder_id, scope_entry)], catalog);
+    let mut nexus = state.nexus_snapshot();
+    nexus.routing_policy = committed_policy;
+    nexus.lane_catalog = lane_catalog;
+    replace_router_fixture_nexus(&mut state, nexus);
     let state_view = state.view();
     assert_eq!(
         router
@@ -360,8 +359,8 @@ fn account_metadata_write_routes_to_single_scope_dataspace_with_state() {
     );
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(dataspace_id);
-    let state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
-    state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+    let mut state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, router.lane_catalog.as_ref().clone());
     assert_eq!(
         router
             .try_route_without_state(&tx)
@@ -428,14 +427,14 @@ fn multisig_contract_trigger_proposal_routes_by_immutable_contract_dataspace() {
             None,
         ))],
     );
-    let state = state_with_account_scope_entries(
+    let mut state = state_with_account_scope_entries(
         &[
             (submitter_id, account_scope_entry(DataSpaceId::new(7))),
             (multisig_id, account_scope_entry(DataSpaceId::new(8))),
         ],
         catalog,
     );
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     let expected_route = RoutingDecision::new(LaneId::new(4), contract_dataspace);
     let expected_plan = RoutingPlan::single(expected_route);
     assert_eq!(
@@ -514,7 +513,7 @@ fn multisig_contract_trigger_same_transaction_approval_keeps_contract_route() {
         ),
         ("proved overlay", sample_proved_executable(sibling_pair())),
     ];
-    let state = state_with_account_scope_entries(
+    let mut state = state_with_account_scope_entries(
         &[
             (
                 submitter_id.clone(),
@@ -527,7 +526,7 @@ fn multisig_contract_trigger_same_transaction_approval_keeps_contract_route() {
         ],
         catalog,
     );
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     let expected = RoutingPlan::single(RoutingDecision::new(LaneId::new(4), contract_dataspace));
     for (label, executable) in executables {
         let tx = sample_executable_transaction(
@@ -602,7 +601,7 @@ fn multisig_contract_trigger_later_approval_reads_persisted_contract_route() {
         ],
         catalog,
     );
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     let proposal_state = MultisigProposalState::new(
         multisig_id.clone(),
         instructions_hash,
@@ -660,11 +659,11 @@ fn nested_trigger_instruction_and_proved_overlay_route_to_contract_dataspace() {
         ),
     );
     let tx = sample_transaction(&submitter_id, submitter_keypair.private_key(), vec![outer]);
-    let state = state_with_account_scope_entries(
+    let mut state = state_with_account_scope_entries(
         &[(submitter_id, account_scope_entry(DataSpaceId::new(7)))],
         catalog,
     );
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     assert_eq!(
         router
             .try_route_without_state(&tx)
@@ -703,14 +702,14 @@ fn conflicting_nested_contract_triggers_build_amx_plan_or_fail_strictly() {
         "cross_dataspace_contract_wrapper",
         Executable::Instructions(nested.into()),
     );
-    let state = state_with_account_scope_entries(
+    let mut state = state_with_account_scope_entries(
         &[(
             submitter_id.clone(),
             account_scope_entry(DataSpaceId::new(7)),
         )],
         catalog,
     );
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     let tx = sample_transaction(
         &submitter_id,
         submitter_keypair.private_key(),
@@ -802,14 +801,14 @@ fn non_contract_trigger_keeps_multisig_account_fallback() {
             None,
         ))],
     );
-    let state = state_with_account_scope_entries(
+    let mut state = state_with_account_scope_entries(
         &[
             (submitter_id, account_scope_entry(DataSpaceId::new(7))),
             (multisig_id, account_scope_entry(DataSpaceId::new(8))),
         ],
         catalog,
     );
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     assert_eq!(
         router
             .try_route_with_view(&tx, &state.view())
@@ -829,8 +828,8 @@ fn multisig_propose_routes_by_embedded_instruction_dataspace() {
             None,
         ))],
     );
-    let state = state_with_account_scope_entries(&[], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    let mut state = state_with_account_scope_entries(&[], catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     let expected_route = RoutingDecision::new(lane_id, dataspace_id);
     let expected_plan = RoutingPlan::single(expected_route);
     assert_eq!(
@@ -889,8 +888,8 @@ fn multisig_propose_plan_prefers_embedded_dataspace_over_multiscope_account() {
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
     scope_entry.ensure_dataspace(dataspace_id);
-    let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    let mut state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     let expected_route = RoutingDecision::new(lane_id, dataspace_id);
     let expected_plan = RoutingPlan::single(expected_route);
     assert_eq!(
@@ -931,8 +930,8 @@ fn multisig_same_transaction_approve_uses_sibling_proposal_route() {
     );
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
-    let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    let mut state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     let expected_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
     assert_eq!(
         router
@@ -986,8 +985,8 @@ fn multisig_approve_before_sibling_proposal_keeps_account_scope_target() {
     );
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(account_dataspace);
-    let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    let mut state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     let expected_plan = RoutingPlan::native_amx(
         RoutingDecision::new(proposed_lane, proposed_dataspace),
         vec![
@@ -1031,8 +1030,8 @@ fn custom_multisig_propose_defers_and_routes_by_embedded_instruction_dataspace()
             )),
         ))],
     );
-    let state = state_with_account_scope_entries(&[], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    let mut state = state_with_account_scope_entries(&[], catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     assert_eq!(
         router
             .try_route_without_state(&tx)
@@ -1071,8 +1070,8 @@ fn multisig_approve_routes_by_multisig_account_scope() {
     );
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(dataspace_id);
-    let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    let mut state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     assert_eq!(
         router
             .try_route_without_state(&tx)
@@ -1112,8 +1111,8 @@ fn custom_multisig_approve_defers_and_routes_by_multisig_account_scope() {
     );
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(dataspace_id);
-    let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    let mut state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, lane_catalog);
     assert_eq!(
         router
             .try_route_without_state(&tx)
@@ -1151,7 +1150,7 @@ fn multisig_approve_routes_by_persisted_proposal_when_scope_is_missing() {
         ))],
     );
     let mut state = state_with_account_scope_entries(&[], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     let proposal_state = MultisigProposalState::new(
         multisig_id.clone(),
         instructions_hash,
@@ -1224,7 +1223,7 @@ fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
     scope_entry.ensure_dataspace(dataspace_id);
     let mut state =
         state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     state.world.smart_contract_state_mut_for_testing().insert(
         multisig_proposal_state_key(&multisig_id, &instructions_hash),
         b"not a multisig proposal state".to_vec(),
@@ -1305,7 +1304,7 @@ fn multisig_approve_ignores_unrelated_persisted_proposal_hash() {
     scope_entry.ensure_dataspace(account_dataspace);
     let mut state =
         state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     let stale_state = MultisigProposalState::new(
         multisig_id.clone(),
         stale_hash,
@@ -1369,7 +1368,7 @@ fn multisig_approve_plan_prefers_visible_proposal_over_multiscope_account() {
     scope_entry.ensure_dataspace(dataspace_id);
     let mut state =
         state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
-    state.nexus.write().lane_catalog = lane_catalog;
+    install_router_lane_catalog(&mut state, lane_catalog);
     let proposal_state = MultisigProposalState::new(
         multisig_id.clone(),
         instructions_hash,

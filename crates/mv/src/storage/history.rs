@@ -1,8 +1,8 @@
 //! Borrowed committed and prior images for validation and derived storage.
 
-use super::{Storage, StorageMode, StorageReadOnly, View};
+use super::{Iter, Storage, StorageMode, StorageReadOnly, View};
 use crate::{Key, Value};
-use concread::bptree::{BptreeMapReadTxn, Iter, Untracked};
+use concread::bptree::{BptreeMapReadTxn, Untracked};
 use std::{borrow::Borrow, cmp::Ordering, iter::Peekable, marker::PhantomData};
 
 /// Read-only guard over a storage's current state and retained undo history.
@@ -11,7 +11,7 @@ use std::{borrow::Borrow, cmp::Ordering, iter::Peekable, marker::PhantomData};
 /// and inspected. Reading history does not begin a block or consume the undo log.
 pub struct History<'storage, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
     current: View<'storage, K, V, M>,
-    revert: BptreeMapReadTxn<'storage, K, Option<V>, M::Undo>,
+    revert: BptreeMapReadTxn<'storage, K, Option<V>, M>,
     _exclusive: PhantomData<&'storage mut Storage<K, V, M>>,
 }
 
@@ -37,14 +37,6 @@ impl<'storage, K: Key, V: Value, M: StorageMode<K, V>> History<'storage, K, V, M
         &self.current
     }
 
-    /// Borrow touched keys and their values before the last committed block.
-    ///
-    /// `None` records prior absence; it is not a missing undo entry. Untouched
-    /// keys inherit their current values in the prior image.
-    pub fn revert_map(&self) -> &BptreeMapReadTxn<'storage, K, Option<V>, M::Undo> {
-        &self.revert
-    }
-
     /// Read a value in the image before the latest committed block.
     pub fn get_before_block<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -55,6 +47,14 @@ impl<'storage, K: Key, V: Value, M: StorageMode<K, V>> History<'storage, K, V, M
             Some(previous) => previous.as_ref(),
             None => self.current.get(key),
         }
+    }
+
+    /// Borrow touched keys and their values before the last committed block.
+    ///
+    /// `None` records prior absence; it is not a missing undo entry. Untouched
+    /// keys inherit their current values in the prior image.
+    pub fn revert_map(&self) -> &BptreeMapReadTxn<'storage, K, Option<V>, M> {
+        &self.revert
     }
 
     /// Iterate over the prior image in canonical key order without cloning values.
@@ -88,6 +88,7 @@ impl<K: Key, V: Value> History<'_, K, V> {
             .map(|(key, previous)| (key.clone(), previous.as_ref().and_then(&project)))
             .collect::<concread::bptree::BptreeMap<_, _>>();
         Storage {
+            allocation: None,
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
@@ -97,12 +98,12 @@ impl<K: Key, V: Value> History<'_, K, V> {
     }
 }
 
-struct BeforeBlockIter<'a, K: Key, V: Value, C: Send + Sync + 'static> {
+struct BeforeBlockIter<'a, K: Key, V: Value, C> {
     current: Peekable<Iter<'a, K, V, C>>,
     revert: Peekable<Iter<'a, K, Option<V>, C>>,
 }
 
-impl<'a, K: Key, V: Value, C: Send + Sync + 'static> Iterator for BeforeBlockIter<'a, K, V, C> {
+impl<'a, K: Key, V: Value, C> Iterator for BeforeBlockIter<'a, K, V, C> {
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {

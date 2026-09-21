@@ -2228,7 +2228,7 @@ pub(crate) mod tests {
         state: &crate::state::State,
         receipt: &PrivateSettlementReceiptV1,
         validator_keys: &[KeyPair],
-    ) {
+    ) -> std::sync::Arc<crate::governance::manifest::LaneManifestRegistry> {
         use crate::{
             governance::manifest::{
                 GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
@@ -2314,7 +2314,9 @@ pub(crate) mod tests {
                 },
             );
         }
-        state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
+        let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&registry);
+        registry
     }
 
     pub(crate) fn fixture() -> (
@@ -3376,7 +3378,7 @@ pub(crate) mod tests {
             ChainId::from("private-settlement-wsv-test"),
             receipt.manifest.network_id.clone(),
         );
-        install_private_settlement_authority_fixture(
+        let lane_manifests = install_private_settlement_authority_fixture(
             &state,
             &receipt,
             &sidecar_fixture.validator_keys,
@@ -3389,6 +3391,9 @@ pub(crate) mod tests {
             0,
         );
         let mut block = state.block(header);
+        // This component fixture supplies its receipt-bound route authority on
+        // the same block scope as the catalogs below.
+        block.lane_manifests = lane_manifests;
         block.nexus.atomic_private_settlement.enabled = true;
         block.nexus.atomic_private_settlement.activation_height = Some(2);
         block
@@ -3416,6 +3421,7 @@ pub(crate) mod tests {
                     id: leg.route.lane_id,
                     dataspace_id: leg.route.dataspace_id,
                     alias: format!("private-settlement-{}", leg.route.lane_id.as_u32()),
+                    governance: Some("parliament".to_owned()),
                     ..LaneConfig::default()
                 })
                 .collect(),

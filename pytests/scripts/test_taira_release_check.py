@@ -15,44 +15,23 @@ import sys
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import MagicMock, patch
 
 
-# Existing Mac census 852/1030, plus eight inspector, nine supervisor, five quiescence,
-# seven generation-admission, nineteen reset integration, two PendingKura and one
-# public-admission boundary control, 22 producer controls after two renames, and one
-# early supervisor build-identity control, six typed status contention controls,
-# three generated ledger/HTTP operator custody controls, and eleven finality witness
-# and native inspection controls, four prebuilt portability/admission controls,
-# three linked PendingKura owner recovery controls, 56 MV ownership controls,
-# four typed lane-manifest controls, authenticated default genesis staging,
-# canonical Taira stake-asset selection during no-config signing, and one
-# inert PendingKura validation preview control, and six invocation-owned
-# authenticated finality prefix controls, and two faucet-policy doctor controls.
-# Four occupied-runtime and component-owned supervisor cleanup controls and two
-# candidate funding-policy admission controls are mandatory, together with two
-# content-bound journal/original-seed controls for metadata timestamp collisions.
-# The configured initial-catalog/network control also runs before CLI checks.
-# Two private-key fixture controls cover immutable-source signing and custody.
-# Three explicit Torii listener controls preserve P2P and generated API ports.
-# Five real execution publication controls retain witness, wire and State ownership.
-# Twenty transaction-admission controls retain exact requests, deadlines and receipts.
-# Twenty-two dispatcher controls preserve reversible upgrade custody and native preparation.
-# Two native canary receipt controls retain unsuccessful evidence and exact proof bindings.
-# Fifty-one native connection controls preserve transport, Queue and retained execution owners.
-# Sixty-two additional closed-custody controls cover the complete current admitted-map
-# and Concread source census plus seven funded Storage replacement unit tests.
-# Linux additionally
-# selects OpenSSH, native worker identity and three Linux generation controls.
+# Exact current-source native census. Both scopes retain the closed MV/Concread
+# ownership suite, including funded replacement/snapshot and deletion controls.
+# Linux additionally selects OpenSSH, native worker identity and three generation
+# controls; its beacon network selector replaces the corresponding Mac selector.
 EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::epoch_maintenance::production_epoch_supervisor_renews_and_resumes_after_owned_restart'
     if sys.platform == "linux" else
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 5 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 852 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 40 + 62 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1030 + 8 + 9 + 5 + 7 + 19 + 2 + 1 + 22 + 1 + 6 + 3 + 11 + 4 + 3 + 56 + 4 + 2 + 1 + 6 + 2 + 1 + 4 + 2 + 2 + 1 + 2 + 3 + 5 + 20 + 22 + 2 + 77 + 40 + 62 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1362 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1540 + PLATFORM_REGRESSION_COUNT
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -491,13 +470,48 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.addCleanup(inspector.stop)
 
     def test_mv_ownership_census_is_exact_required_and_focused_on_both_platforms(self):
+        root = Path(gate.__file__).resolve().parents[1]
+        gate.validate_mv_test_registration(root)
+        paths = ("scripts/formal/sumeragi_v2_rust_text.py", "crates/mv/src/lib.rs",
+                 "crates/mv/src/allocation.rs", "crates/mv/src/allocation_tests.rs",
+                 "crates/mv/src/release.rs", "crates/mv/src/release_tests.rs",
+                 "crates/mv/src/cell.rs", "crates/mv/src/cell/charged_allocation_tests.rs",
+                 "crates/mv/src/storage.rs", "crates/mv/src/storage/publication_tests.rs",
+                 "crates/mv/src/storage/detached_tests.rs", "crates/mv/src/storage/touches.rs",
+                 "crates/mv/src/storage/touches_tests.rs", "crates/mv/src/storage/admitted_tests.rs")
+        with tempfile.TemporaryDirectory() as temporary:
+            copied = Path(temporary)
+            for relative in paths:
+                target = copied / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((root / relative).read_bytes())
+            gate.validate_mv_test_registration(copied)
+            release = copied / "crates/mv/src/release_tests.rs"
+            original = release.read_text()
+            canonical = "storage_revert_preimage_clone_panic_wakes_an_already_registered_retry"
+            stale = "storage_first_undo_clone_panic_wakes_an_already_registered_retry"
+            for fake in ("", "\n/*\n#[test]\nfn " + canonical + "() {}\n*/\n",
+                         '\nconst FAKE: &str = r"#[test]\nfn ' + canonical + '() {}";\n'):
+                release.write_text(original.replace("fn " + canonical + "(", "fn " + stale + "(") + fake)
+                with self.assertRaisesRegex(gate.CheckError, canonical), \
+                     patch.object(gate.subprocess, "run") as command, \
+                     patch.object(gate, "validate_torii_lifecycle_test_registration") as next_guard:
+                    gate.run_lifecycle_source_checks(copied, {}, ())
+                command.assert_not_called()
+                next_guard.assert_not_called()
+            release.write_text(original)
+            owner = copied / "crates/mv/src/release.rs"
+            owner.write_text(owner.read_text().replace('path = "release_tests.rs"', 'path = "foreign_tests.rs"'))
+            with self.assertRaisesRegex(gate.CheckError, "module edge differs"):
+                gate.validate_mv_test_registration(copied)
         library_groups = {
-            "allocation::tests::": 6,
+            "allocation::tests::": 7,
             "release::tests::": 11,
             "cell::charged_allocation_tests::": 7,
             "storage::publication_tests::": 9,
             "storage::detached_tests::": 9,
-            "storage::admitted_tests::": 7,
+            "storage::admitted_tests::": 9,
+            "storage::touches::tests::": 6,
         }
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("mv_ownership_gate", gate.__file__)
@@ -508,10 +522,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for scope in selected_gate.QUALIFICATION_SCOPES:
                 selected = selected_gate.qualification_stages(scope)
                 library = [test for _, tests in selected["mv"] for test in tests]
-                self.assertEqual(len(library), 49)
+                self.assertEqual(len(library), 58)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 49), ("mv-ebr", 5), ("mv-map", 9), ("mv-admitted-map", 43), ("concread", 50)):
+                for harness, count in (("mv", 58), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 54), ("concread", 109)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -529,8 +543,38 @@ class BasicReleaseQualificationTests(unittest.TestCase):
 
     def test_admitted_map_and_concread_select_the_actual_closed_source_test_census(self):
         root = Path(gate.__file__).resolve().parents[1]
-        names = lambda text: re.findall(r"#\[test\]\s*fn\s+(\w+)", text)
+        workspace = tomllib.loads((root / "Cargo.toml").read_text())
+        patched_path = workspace["patch"]["crates-io"]["concread"]["path"]
+        self.assertEqual(patched_path, "vendor/concread")
+        members = workspace["workspace"]["members"]
+
+        self.assertIn(patched_path, members,
+                      "patched Concread must be a workspace member for native library tests")
+        self.assertNotIn(patched_path, workspace["workspace"]["default-members"])
+        self.assertNotIn(patched_path, workspace["workspace"].get("exclude", ()))
+        owner = tomllib.loads((root / patched_path / "Cargo.toml").read_text())
+        _, target, kind, arguments = gate.HARNESS_TARGETS["concread"]
+        self.assertEqual((owner["package"]["name"], owner["lib"]["name"], kind),
+                         ("concread", target, "lib"))
+        self.assertEqual(arguments, ["-p", owner["package"]["name"], "--lib"])
+        self.assertEqual(owner["lib"]["path"], "src/lib.rs")
+        self.assertTrue((root / patched_path / owner["lib"]["path"]).is_file())
+        self.assertEqual(gate.native_package_root(root, owner["package"]["name"]),
+                         root / patched_path)
+        for _, _, _, arguments in gate.HARNESS_TARGETS.values():
+            package = arguments[1]
+            if package != "concread":
+                self.assertEqual(gate.native_package_root(root, package), root / "crates" / package)
+        for unknown in ("foreign", "../concread", "vendor/concread"):
+            with self.assertRaisesRegex(gate.CheckError, "maintained source owner"):
+                gate.native_package_root(root, unknown)
+        lexer = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        namespace = {"__name__": "closed_source_test_census", "__file__": str(lexer)}
+        exec(compile(lexer.read_bytes(), str(lexer), "exec"), namespace)
+        names = lambda text: re.findall(r"#\[test\]\s*fn\s+(\w+)", namespace["mask_rust_comments"](text))
         admitted = names((root / "crates/mv/tests/admitted_map_custody.rs").read_text())
+        storage = names((root / "crates/mv/tests/admitted_map_custody/storage.rs").read_text())
+        mapped = names((root / "crates/mv/tests/map_owned_generations.rs").read_text())
         admission_source = (root / "vendor/concread/src/bptree/admission_tests.rs").read_text()
         ordinary, writer = admission_source.split("mod writer_start {", 1)
         checkpoint = names((root / "vendor/concread/src/internals/bptree/checkpoint_tests.rs").read_text())
@@ -540,21 +584,79 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         self.assertEqual(len(replacement), 7)
         self.assertIn('#[path = "storage/admitted_tests.rs"]\nmod admitted_tests;',
                       (root / "crates/mv/src/storage.rs").read_text())
+        paired = names((root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
+        borrowed = names((root / "vendor/concread/src/bptree/borrowed_pair_tests.rs").read_text())
+        clear = names((root / "vendor/concread/src/bptree/clear_admission_tests.rs").read_text())
+        canonical_remove = [name for name in names((root / "vendor/concread/src/internals/bptree/cursor.rs").read_text())
+                            if name.startswith("test_bptree2_cursor_remove_")]
+        checked_remove = names((root / "vendor/concread/src/internals/bptree/remove_tests.rs").read_text())
+        deletion = names((root / "vendor/concread/src/bptree/delete_admission_tests.rs").read_text())
+        deletion_payload = names((root / "vendor/concread/src/bptree/delete_payload_tests.rs").read_text())
+        self.assertEqual((len(deletion), len(deletion_payload)), (7, 3))
+        self.assertEqual((len(canonical_remove), len(checked_remove)), (23, 3))
+        self.assertNotIn("test_bptree2_cursor_remove_stress_7", canonical_remove,
+                         "the disabled comment fixture must not qualify as executable coverage")
         expected = {
-            "mv-admitted-map": admitted,
+            "mv-admitted-map": [*admitted, *("storage_custody::" + name for name in storage)],
+            "mv-map": mapped,
             "concread": [*("bptree::admission::tests::" + name for name in names(ordinary)),
                          *("bptree::admission::tests::writer_start::" + name for name in names(writer)),
-                         *("internals::bptree::cursor::checkpoint::tests::" + name for name in checkpoint)],
+                         *("internals::bptree::cursor::checkpoint::tests::" + name for name in checkpoint),
+                         *("bptree::admission::pair_admission::tests::" + name for name in paired),
+                         *("bptree::admission::pair_admission::tests::borrowed::" + name for name in borrowed),
+                         *("bptree::admission::pair_admission::tests::clear::" + name for name in clear),
+                         *("internals::bptree::cursor::tests::" + name for name in canonical_remove),
+                         *("internals::bptree::cursor::remove::tests::" + name for name in checked_remove),
+                         *("bptree::admission::pair_admission::tests::deletion::" + name for name in deletion),
+                         *("bptree::admission::pair_admission::tests::deletion::payload::" + name for name in deletion_payload)],
         }
-        self.assertEqual((len(admitted), len(names(ordinary)), len(names(writer)), len(checkpoint)), (43, 35, 6, 9))
+        self.assertEqual((len(admitted), len(storage), len(mapped), len(names(ordinary)), len(names(writer)), len(checkpoint), len(paired), len(borrowed), len(clear)), (29, 25, 24, 35, 6, 9, 9, 7, 7))
+        self.assertIn('#[path = "admitted_map_custody/storage.rs"]\nmod storage_custody;',
+                      (root / "crates/mv/tests/admitted_map_custody.rs").read_text())
+        self.assertIn('#[path = "clear_admission_tests.rs"]\nmod clear;',
+                      (root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
+        self.assertIn('#[path = "remove.rs"]\nmod remove;',
+                      (root / "vendor/concread/src/internals/bptree/cursor.rs").read_text())
+        self.assertIn('#[path = "remove_tests.rs"]\nmod tests;',
+                      (root / "vendor/concread/src/internals/bptree/remove.rs").read_text())
+        self.assertIn('#[path = "delete_admission.rs"]\nmod delete_admission;',
+                      (root / "vendor/concread/src/bptree/admission.rs").read_text())
+        self.assertIn('#[path = "borrowed_delete.rs"]\nmod borrowed_delete;',
+                      (root / "vendor/concread/src/bptree/delete_admission.rs").read_text())
+        self.assertIn('#[path = "delete_admission_tests.rs"]\nmod deletion;',
+                      (root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
+        self.assertIn('#[path = "delete_payload_tests.rs"]\nmod payload;',
+                      (root / "vendor/concread/src/bptree/delete_admission_tests.rs").read_text())
+        touch_names = names((root / "crates/mv/src/storage/touches_tests.rs").read_text())
+        self.assertEqual(len(touch_names), 6)
+        self.assertIn('#[path = "storage/touches.rs"]\nmod touches;',
+                      (root / "crates/mv/src/storage.rs").read_text())
+        self.assertIn('#[path = "touches_tests.rs"]\nmod tests;',
+                      (root / "crates/mv/src/storage/touches.rs").read_text())
+        partition = "allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits"
+        self.assertEqual(names((root / "crates/mv/src/allocation_tests.rs").read_text()).count(partition.rsplit("::", 1)[1]), 1)
+        self.assertIn('#[path = "allocation_tests.rs"]\nmod tests;',
+                      (root / "crates/mv/src/allocation.rs").read_text())
         self.assertIn('#[path = "admission_tests.rs"]\nmod tests;',
                       (root / "vendor/concread/src/bptree/admission.rs").read_text())
+        self.assertIn('#[path = "pair_admission.rs"]\nmod pair_admission;',
+                      (root / "vendor/concread/src/bptree/admission.rs").read_text())
+        self.assertIn('#[path = "pair_admission_tests.rs"]\nmod tests;',
+                      (root / "vendor/concread/src/bptree/pair_admission.rs").read_text())
+        self.assertIn('#[path = "borrowed_pair.rs"]\nmod borrowed_pair;',
+                      (root / "vendor/concread/src/bptree/pair_admission.rs").read_text())
+        self.assertIn('#[path = "borrowed_pair_tests.rs"]\nmod borrowed;',
+                      (root / "vendor/concread/src/bptree/pair_admission_tests.rs").read_text())
         self.assertIn('#[path = "checkpoint.rs"]\nmod checkpoint;',
                       (root / "vendor/concread/src/internals/bptree/cursor.rs").read_text())
         self.assertIn('#[path = "checkpoint_tests.rs"]\nmod tests;',
                       (root / "vendor/concread/src/internals/bptree/checkpoint.rs").read_text())
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
+            self.assertEqual([name for _, names in selected["mv"] for name in names].count(partition), 1)
+            self.assertEqual([name for _, names in selected["mv"] for name in names
+                              if name.startswith("storage::touches::tests::")],
+                             ["storage::touches::tests::" + name for name in touch_names])
             for harness, actual_source_names in expected.items():
                 self.assertEqual([name for _, names in selected[harness] for name in names], actual_source_names)
             prefix = "storage::admitted_tests::admitted_replacement_"
@@ -564,6 +666,22 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                              ["storage::admitted_tests::" + name for name in replacement])
         self.assertEqual(gate.HARNESS_TARGETS["mv-admitted-map"][3], ["-p", "mv", "--test", "admitted_map_custody"])
         self.assertEqual(gate.HARNESS_TARGETS["concread"][3], ["-p", "concread", "--lib"])
+
+    def test_public_contract_fee_admission_fixture_is_required_and_focused_in_both_scopes(self):
+        name = "block::tests::public_contract_creation_fees::public_contract_artifact_stages_pay_fees_without_management_grants"
+        startup = [test for _, tests in gate.CORE_STARTUP_STAGES for test in tests]
+        self.assertEqual(startup.count(name), 1)
+        for scope in gate.QUALIFICATION_SCOPES:
+            with self.subTest(scope=scope):
+                stages = gate.qualification_stages(scope)["core"]
+                selected = [test for _, tests in stages for test in tests]
+                self.assertEqual(selected.count(name), 1)
+                focused = gate.focused_regression_stages(scope, ("core=" + name,))
+                self.assertEqual(tuple(focused), ("core",))
+                self.assertEqual([test for _, tests in focused["core"] for test in tests], [name])
+                listing = "\n".join(test + ": test" for test in selected if test != name)
+                with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                    gate.require_tests(listing, stages)
 
     def test_wallet_extraction_preserves_http_cpu_and_canonical_policy_coverage(self):
         expected = {
@@ -1948,7 +2066,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 94)
+            self.assertEqual(len(requested), 250)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -1972,7 +2090,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("94 focused regressions", output.getvalue())
+            self.assertIn("250 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
@@ -3948,8 +4066,10 @@ class NativeArtifactIsolationTests(unittest.TestCase):
             executable.parent.mkdir(mode=0o700, exist_ok=True)
         executable.write_bytes(payload)
         executable.chmod(0o700)
+        package_directory = (self.source / "vendor" / "concread" if package == "concread"
+                             else self.source / "crates" / package)
         row = {"name": name, "executable": str(executable), "profile": {"test": is_test},
-               "manifest_path": str(self.source / "crates" / package / "Cargo.toml")}
+               "manifest_path": str(package_directory / "Cargo.toml")}
         event = {"reason": "compiler-artifact", "target": {"name": name, "kind": [kind]},
                  **{key: value for key, value in row.items() if key != "name"}}
         return executable, row, event
@@ -3971,6 +4091,35 @@ class NativeArtifactIsolationTests(unittest.TestCase):
 
     def isolate(self, rows):
         return gate.isolate_native_artifacts(self.source, self.env, rows)
+
+    def test_vendor_concread_manifest_uses_exact_owner_and_real_artifact_custody(self):
+        executable, row, _ = self.artifact("concread")
+        self.assertEqual(row["manifest_path"], str(self.source / "vendor/concread/Cargo.toml"))
+        self.metadata.return_value = {"concread"}
+        original = executable.read_bytes()
+        with self.isolate({"concread": row}) as copied:
+            destination = Path(copied["concread"])
+            self.assertNotEqual(destination, executable)
+            self.assertEqual(destination.read_bytes(), original)
+            self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o500)
+            self.assertEqual(destination.stat().st_nlink, 1)
+            self.assertNotEqual(destination.stat().st_ino, executable.stat().st_ino)
+        self.assertEqual(executable.read_bytes(), original)
+        self.assertFalse(destination.exists())
+        self.assert_profile_unlocked()
+
+    def test_vendor_concread_rejects_crates_and_foreign_manifest_before_custody_or_copy(self):
+        _, row, _ = self.artifact("concread")
+        for manifest in (self.source / "crates/concread/Cargo.toml",
+                         self.source / "vendor/foreign/Cargo.toml",
+                         self.directory / "foreign/vendor/concread/Cargo.toml"):
+            with self.subTest(manifest=manifest), \
+                 patch.object(gate, "native_artifact_guard") as guard:
+                with self.assertRaisesRegex(gate.CheckError, "manifest differs from the selected source"):
+                    self.isolate({"concread": row | {"manifest_path": str(manifest)}})
+                guard.assert_not_called()
+        self.metadata.assert_not_called()
+        self.assertEqual(list(self.target.glob("taira-native-artifacts-*")), [])
 
     def test_cargo_publication_pair_is_copied_under_lock_without_changing_aliases(self):
         import taira_cargo_artifact as cargo
@@ -4805,6 +4954,7 @@ class PureFsmGateTests(unittest.TestCase):
         results = [subprocess.CompletedProcess([], 0, "", "source asset audit passed"),
                    subprocess.CompletedProcess([], 0, "", "native instruction audit passed")] + self.results()
         with patch.object(gate.subprocess, "run", side_effect=results) as run, \
+             patch.object(gate, "validate_mv_test_registration"), \
              patch.object(gate, "validate_torii_lifecycle_test_registration") as registration, \
              contextlib.redirect_stdout(io.StringIO()) as output:
             gate.run_lifecycle_source_checks(Path("/frozen"), self.env, (77, 88))
@@ -4828,6 +4978,7 @@ class PureFsmGateTests(unittest.TestCase):
         results = [subprocess.CompletedProcess([], 0, "", ""),
                    subprocess.CompletedProcess([], 1, "", "missing reviewed disposition\n")]
         with patch.object(gate.subprocess, "run", side_effect=results) as run, \
+             patch.object(gate, "validate_mv_test_registration"), \
              patch.object(gate, "validate_torii_lifecycle_test_registration"), \
              patch.object(gate, "_run_standalone_checks") as rust, \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as error:
@@ -4841,6 +4992,7 @@ class PureFsmGateTests(unittest.TestCase):
         env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}
         diagnostic = "AssertionError: invalid region edge: from/before\n"
         with patch.object(gate, "run_pure_fsm_checks"), \
+             patch.object(gate, "validate_mv_test_registration"), \
              patch.object(gate, "validate_torii_lifecycle_test_registration"), \
              patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", diagnostic)) as run, \
              patch.object(gate, "_run_standalone_checks") as rust, \

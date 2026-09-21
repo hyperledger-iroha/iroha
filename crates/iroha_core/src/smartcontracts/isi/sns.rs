@@ -906,12 +906,12 @@ mod tests {
     fn ensure_alias_rejects_public_claim_of_catalogued_dataspace_before_mutation() {
         let authority = another_owner();
         let dataspace = DataSpaceId::new(7);
-        let state = State::new_for_testing(
+        let mut state = State::new_for_testing(
             World::with([], [Account::new(authority.clone()).build(&authority)], []),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        state.nexus.write().dataspace_catalog = governance_dataspace_catalog(dataspace);
+        state.set_dataspace_catalog_for_testing(governance_dataspace_catalog(dataspace));
         let ensure = catalogued_dataspace_ensure(authority.clone(), dataspace);
         let selector =
             crate::alias_setup::selector_for_resolved_alias_target(&ensure.intent.target())
@@ -953,12 +953,12 @@ mod tests {
         let ensure = catalogued_dataspace_ensure(authority.clone(), dataspace);
         let mut world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         seed_active_dataspace_lease(&mut world, "governance", dataspace, &authority);
-        let state = State::new_for_testing(
+        let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        state.nexus.write().dataspace_catalog = governance_dataspace_catalog(dataspace);
+        state.set_dataspace_catalog_for_testing(governance_dataspace_catalog(dataspace));
         let permissions = crate::alias_setup::exact_alias_permission_bundle(&ensure.intent);
         let mut block = state.block(next_header(&state));
         let mut transaction = block.transaction();
@@ -1086,22 +1086,24 @@ mod tests {
         world
             .account_permissions
             .insert(authority.clone(), permissions);
-        let state = State::new_for_testing(
+        let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
         configure_test_fee_asset(&state, &payment_asset);
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: dataspace,
-                alias: "is".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("is dataspace catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: dataspace,
+                    alias: "is".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("is dataspace catalog"),
+        );
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
@@ -1333,7 +1335,7 @@ mod tests {
             header.set_height(NonZeroU64::new(2).unwrap());
         }
         let mut block = state.block(header.clone());
-        let outputs = crate::state::run_empty_network_owner_fixture(&mut block);
+        let outputs = crate::state::run_empty_network_owner_fixture(&mut block, None);
         assert!(
             outputs.is_empty(),
             "native maintenance must not invent trigger outputs"
@@ -2336,16 +2338,18 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: DataSpaceId::new(9),
-                alias: "trade".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: DataSpaceId::new(9),
+                    alias: "trade".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("catalog"),
+        );
         let owner = owner();
         let selector =
             seed_active_dataspace_lease(&mut state.world, "trade", DataSpaceId::new(9), &owner);
@@ -2377,16 +2381,18 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: DataSpaceId::new(9),
-                alias: "trade".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: DataSpaceId::new(9),
+                    alias: "trade".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("catalog"),
+        );
         let owner = owner();
         let target = AliasTargetV1::Dataspace(ResolvedDataSpaceV1::new(
             "trade".parse().expect("canonical alias"),
@@ -2785,22 +2791,24 @@ mod tests {
         world
             .account_permissions
             .insert(authority.clone(), permissions);
-        let state = State::new_for_testing(
+        let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
         configure_test_fee_asset(&state, &payment_asset_definition_id);
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: sbp,
-                alias: "sbp".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("sbp dataspace catalog");
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: sbp,
+                    alias: "sbp".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("sbp dataspace catalog"),
+        );
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
@@ -3176,15 +3184,14 @@ mod tests {
             &payment_asset_definition_id.to_string(),
         );
         seed_active_dataspace_lease(&mut world, "paynet", paynet, &collector);
-        let state = State::new_for_testing(
+        let mut state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        {
-            let mut nexus = state.nexus.write();
-            nexus.fees.fee_asset_id = payment_asset_definition_id.to_string();
-            nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+        state.nexus.write().fees.fee_asset_id = payment_asset_definition_id.to_string();
+        state.set_dataspace_catalog_for_testing(
+            DataSpaceCatalog::new(vec![
                 DataSpaceMetadata::default(),
                 DataSpaceMetadata {
                     id: paynet,
@@ -3193,8 +3200,8 @@ mod tests {
                     fault_tolerance: 1,
                 },
             ])
-            .expect("dataspace catalog");
-        }
+            .expect("dataspace catalog"),
+        );
         let alias = AccountAlias::domainless("retail".parse().expect("label"), paynet);
         let mut block = state.block(next_header(&state));
         let mut stx = block.transaction();

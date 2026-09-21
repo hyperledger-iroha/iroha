@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 /// with its publication generation and discard it if that generation changes.
 pub struct Snapshot<'a, K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
     current: View<'a, K, V, M>,
-    revert: BptreeMapReadTxn<'a, K, Option<V>, M::Undo>,
+    revert: BptreeMapReadTxn<'a, K, Option<V>, M>,
 }
 
 impl<K: Key, V: Value, M: StorageMode<K, V>> Storage<K, V, M> {
@@ -31,6 +31,7 @@ impl<K: Key, V: Value> Storage<K, V> {
     /// constructor; neither undo nor deleted entries are inferred from current data.
     pub fn from_snapshot_parts(current: BTreeMap<K, V>, revert: BTreeMap<K, Option<V>>) -> Self {
         Self {
+            allocation: None,
             publication: crate::publication::Publication::new(),
             revert_released: crate::ReleaseNotification::default(),
             blocks_released: crate::ReleaseNotification::default(),
@@ -47,7 +48,7 @@ impl<'a, K: Key, V: Value, M: StorageMode<K, V>> Snapshot<'a, K, V, M> {
     }
 
     /// Borrow exact touched keys, including deleted values and prior absence.
-    pub fn revert_map(&self) -> &BptreeMapReadTxn<'a, K, Option<V>, M::Undo> {
+    pub fn revert_map(&self) -> &BptreeMapReadTxn<'a, K, Option<V>, M> {
         &self.revert
     }
 }

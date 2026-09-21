@@ -844,7 +844,7 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "sumeragi::v2_lifecycle_recovery::tests::empty_queue_reconciliation_returns_the_same_checked_receipt",
     "sumeragi::v2_lifecycle_recovery::tests::retired_nonqueue_replica_release_pending_resumes_on_startup_without_queue_owner",
     "sumeragi::authoritative_runtime_gate_tests::ingress_stays_closed_until_replay_owner_acknowledges_ready",
-)), ("fee sponsor activation and prospective account bootstrap", (
+)), ("fee sponsor activation and public fee admission", (
     "smartcontracts::isi::world::isi::tests::fee_sponsor_activation_instruction_uses_requested_height_as_lower_bound",
     "smartcontracts::isi::world::isi::tests::fee_sponsor_elapsed_activation_preserves_readiness_and_authority_guards",
     "smartcontracts::isi::world::isi::tests::prospective_fee_sponsor_enrollment_funds_only_exact_self_bootstrap",
@@ -855,6 +855,7 @@ CORE_ADMISSION_STARTUP_STAGES = (("empty Queue startup admission fence", (
     "state::tests::fee_sponsor_revision_activation_materializes_at_scheduled_block_height",
     "state::tests::fee_sponsor_revision_activation_waits_for_old_lease_to_drain",
     "executor::tests::sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain",
+    "block::tests::public_contract_creation_fees::public_contract_artifact_stages_pay_fees_without_management_grants",
 )),)
 CORE_ADMISSION_STARTUP_STAGES += (("completed consensus outputs after durable restart", (
     "sumeragi::v2_lifecycle_coordinator::concrete_admission::tests::terminal_signed_outputs_rejoin_after_durable_restart",
@@ -1649,6 +1650,13 @@ class SelectedRegressionFailures(CheckError):
                          + "; ".join(self.failures))
 
 
+def native_package_root(root: Path, package: str) -> Path:
+    """Bind each maintained native package to its one captured source owner."""
+    if package not in {target[3][1] for target in HARNESS_TARGETS.values()}:
+        raise CheckError("native package lacks a maintained source owner")
+    return root / ("vendor" if package == "concread" else "crates") / package
+
+
 def shipping_harnesses(root: Path) -> tuple[str, ...]:
     """Reconcile shipping binaries with manifests and early native compilation.
 
@@ -1677,7 +1685,7 @@ def shipping_harnesses(root: Path) -> tuple[str, ...]:
                        and arguments == ["-p", package, "--bin", name]]
             if len(matches) != 1:
                 raise CheckError("shipping binary lacks exact early native coverage: " + name)
-            package_root = root / "crates" / package
+            package_root = native_package_root(root, package)
             manifest = tomllib.loads((package_root / "Cargo.toml").read_text())
             targets = [target for target in manifest.get("bin", []) if target.get("name") == name]
             if manifest.get("package", {}).get("name") != package or len(targets) != 1:
@@ -1917,6 +1925,7 @@ MV_OWNERSHIP_STAGES = (
         'allocation::tests::finite_limit_overflow_and_zero_never_change_credit_on_refusal',
         'allocation::tests::real_epoch_reclamation_returns_capacity_and_its_release_notification',
         'allocation::tests::splitting_prepaid_credits_refunds_only_unused_remainder_and_owned_charges',
+        'allocation::tests::partition_retains_exact_original_pool_and_conserves_real_credits',
     )),
     ('actual writer release observations', (
         'release::tests::a_nonpoisoning_guard_unwind_does_not_poison_later_contention',
@@ -1928,7 +1937,7 @@ MV_OWNERSHIP_STAGES = (
         'release::tests::partial_writer_acquisition_does_not_wake_its_own_refused_lock',
         'release::tests::release_before_registration_is_retained_and_other_sources_do_not_wake',
         'release::tests::release_racing_first_poll_cannot_be_lost',
-        'release::tests::storage_first_undo_clone_panic_wakes_an_already_registered_retry',
+        'release::tests::storage_revert_preimage_clone_panic_wakes_an_already_registered_retry',
         'release::tests::storage_prepared_drop_abort_and_publish_release_the_original_writers',
     )),
     ('charged current and undo Cell ownership', (
@@ -1963,14 +1972,27 @@ MV_OWNERSHIP_STAGES = (
         'storage::detached_tests::unchanged_replacement_and_undo_only_commit_have_distinct_pair_identity',
     )),
     ('funded replacement restores original current and undo owners', (
-        'storage::admitted_tests::admitted_replacement_retains_mode_and_restored_preimages_through_detachment',
+        'storage::admitted_tests::admitted_replacement_retains_mode_and_restored_preimages_through_callback_abort',
         'storage::admitted_tests::admitted_replacement_contention_names_only_the_original_held_writer',
         'storage::admitted_tests::admitted_replacement_of_empty_undo_still_records_replace_mode',
         'storage::admitted_tests::admitted_replacement_final_undo_clear_refusal_preserves_original_pair',
-        'storage::admitted_tests::admitted_replacement_factory_cleanup_cannot_return_a_partial_owner',
+        'storage::admitted_tests::admitted_replacement_callback_cleanup_cannot_publish_a_partial_owner',
         'storage::admitted_tests::admitted_replacement_second_plan_refusal_returns_a_healthy_original_pair',
         'storage::admitted_tests::admitted_replacement_planning_refusal_discards_the_restored_private_prefix',
     )),
+    ('funded snapshot restoration retains exact history and source custody', (
+        'storage::admitted_tests::admitted_snapshot_preserves_exact_current_undo_and_replacement_history',
+        'storage::admitted_tests::admitted_snapshot_capacity_and_planning_refusals_leave_source_reusable',
+    )),
+    ('finite transaction touch-key custody', (
+        'storage::touches::tests::touch_sorted_unique_growth_moves_original_key_allocations_without_copying',
+        'storage::touches::tests::touch_exact_joined_capacity_and_one_byte_below_preserve_original_state',
+        'storage::touches::tests::touch_preparation_abandonment_and_copy_panic_leave_old_array_and_keys_exact',
+        'storage::touches::tests::touch_arbitrary_key_drop_panic_drains_remaining_prefix_and_refunds_real_owners',
+        'storage::touches::tests::touch_refused_payload_and_checked_growth_overflow_allocate_nothing',
+        'storage::touches::tests::touch_plan_extends_original_demand_and_preserves_exact_provider_remainder',
+    )),
+
 )
 
 MV_EBR_STAGES = (("actual epoch allocation and retained capacity custody", (
@@ -1982,15 +2004,30 @@ MV_EBR_STAGES = (("actual epoch allocation and retained capacity custody", (
 )),)
 
 MV_MAP_STAGES = (("original owned map successors across refusal and publication", (
+    'storage_reads_allocate_nothing_across_retained_views_edits_and_rollback',
+    'storage_history_and_borrowed_string_ranges_allocate_nothing',
     'original_payloads_survive_detach_busy_retry_abort_and_publication_without_clones',
     'foreign_stale_and_equal_content_aba_refusals_return_the_exact_original_owner',
     'detached_owner_keeps_shared_nodes_after_source_drop_and_cross_thread_transfer',
     'old_reader_chain_retains_removed_payloads_across_splits_abort_and_later_commits',
+    'final_map_destruction_allocates_nothing_and_frees_every_original_layout',
+    'retained_reader_chain_and_final_tree_reclamation_do_not_allocate',
+    'final_detached_owner_reclaims_unpublished_nodes_and_retained_root_without_allocation',
+    'stale_detached_owner_reclaims_its_old_base_and_newer_committed_root_without_allocation',
     'sibling_candidate_cannot_adopt_after_another_commit_but_retains_its_shared_base',
     'poisoned_writer_refuses_adoption_without_consuming_the_original_generation',
     'clear_successor_preserves_old_reader_until_its_exact_payloads_are_released',
     'scalar_detach_contention_retry_abort_and_commit_allocate_no_new_successor',
     'fresh_map_first_commit_without_a_reader_allocates_no_new_successor',
+    'storage_transaction_abort_restores_both_parent_trees_without_allocating_or_cloning',
+    'storage_transaction_apply_keeps_original_current_and_undo_payloads_without_allocating',
+    'caught_transaction_preimage_clone_panic_cannot_apply_partial_touches',
+    'caught_remove_query_destructor_panic_cannot_apply_partial_transaction',
+    'caught_block_insert_preimage_panic_cannot_publish_an_unrevertible_mutation',
+    'caught_block_remove_preimage_panic_cannot_publish_an_unrevertible_mutation',
+    'caught_block_mutable_preimage_panic_cannot_reuse_or_publish_the_owner',
+    'caught_block_query_destructor_panic_cannot_commit_or_detach',
+    'caught_child_undo_cursor_panic_cannot_publish_the_healthy_current_tree',
 )),)
 
 
@@ -2117,36 +2154,57 @@ MV_ADMITTED_MAP_STAGES = (
         'checkpoint_capacity_refusal_keeps_child_state_and_original_input_for_retry',
         'checkpoint_buffer_refund_panic_restores_parent_ownership_and_forbids_publication',
     )),
-    ('funded replacement and joint Storage allocation custody', (
-        'storage_replacement_funds_every_copy_and_preserves_original_readers',
-        'storage_replacement_capacity_refusal_restores_both_roots_after_partial_work',
-        'storage_replacement_copy_panic_aborts_original_pair_and_poisons_retry',
-        'prepaid_storage_reads_need_no_heap_credit_or_payload_copy',
-        'storage_joint_construction_refuses_before_any_original_tree_allocation',
-        'storage_block_refusal_preserves_both_original_trees_and_contention_wake',
-        'storage_insertion_reserves_whole_pair_before_copies_and_retries_original_inputs',
-        'storage_charged_splits_abort_without_allocation_and_preserve_sibling_first_absence',
-        'storage_clone_unwind_cannot_apply_part_of_the_original_pair',
-        'storage_touched_key_destructor_unwind_drains_original_buffer_before_refund',
-        'storage_pair_apply_retirement_panic_forbids_parent_publication',
-        'storage_touched_buffer_growth_panic_preserves_single_custody_of_moved_keys',
-    )),
-    ('funded map removal and joint Storage preimages', (
+    ('funded map removal and original retained generations', (
         'admitted_removal_funds_all_path_sibling_and_separator_copies_until_empty',
         'admitted_removal_refusal_and_absence_preserve_original_private_generation',
         'admitted_removal_nested_abort_restores_original_nodes_at_full_capacity',
         'admitted_removal_clone_unwind_cannot_publish_and_refunds_private_copies',
-        'storage_missing_removal_admits_first_absence_and_touch_before_remaining_clean',
-        'storage_removal_reserves_the_whole_pair_and_retains_returned_value_after_abort',
-        'storage_removal_merges_abort_at_full_budget_and_preserve_sibling_first_absence',
-        'storage_removal_copy_panic_before_and_after_undo_forbids_partial_apply',
-        'storage_removal_factory_cleanup_panic_keeps_transaction_rollback_armed',
-        'storage_missing_removal_planning_refusal_preserves_unmodified_witness_owners',
     )),
     ('original admitted writer start', (
         'admitted_empty_writer_starts_without_edits_and_grows_under_separate_admission',
         'admitted_populated_writer_shares_original_entries_and_aborts_without_allocations',
         'admitted_writer_start_refuses_one_byte_below_and_accepts_exact_complete_demand',
+    )),
+    ('joint current and undo map admission', (
+        'pair_complete_demand_refusal_preserves_original_inputs_and_exact_budget_retry',
+        'pair_first_none_and_some_preimages_survive_replacement_growth_and_reader_custody',
+        'pair_callback_and_nested_clone_panics_preserve_both_published_roots_and_reclaim_private_storage',
+        'pair_foreign_and_busy_roles_return_original_nested_inputs_without_readmission',
+    )),
+    ('production Storage admission and original block custody', (
+        'storage_custody::actual_storage_resets_first_none_and_some_between_blocks_and_aborts_parent',
+        'storage_custody::actual_storage_joined_refusal_precedes_clone_and_exact_budget_retry_preserves_input',
+        'storage_custody::actual_storage_old_reader_owns_nested_bytes_and_credits_until_physical_release',
+        'storage_custody::actual_storage_refund_wake_reenters_only_after_both_original_writers_release',
+        'storage_custody::actual_storage_constructor_rejects_foreign_and_short_policy_without_retained_credits',
+        'storage_custody::actual_storage_edit_rejects_foreign_and_short_policy_before_cloning_or_mutation',
+        'storage_custody::actual_storage_summed_startup_and_reset_refusal_preserve_both_committed_images',
+        'storage_custody::actual_storage_caught_edit_panic_cannot_publish_and_reclaims_private_credits',
+    )),
+    ('production Transaction admission and original parent custody', (
+        'storage_custody::actual_transaction_joined_touch_and_pair_refusal_preserves_inputs_for_exact_retry',
+        'storage_custody::actual_transaction_ordered_unique_touches_preserve_noop_and_sibling_preimages',
+        'storage_custody::actual_transaction_full_budget_abort_restores_parent_and_outer_abort_preserves_readers',
+        'storage_custody::actual_transaction_caught_touch_and_pair_copy_panics_cannot_apply_or_publish',
+        'storage_custody::actual_transaction_touch_destructor_panic_cannot_apply_or_publish',
+    )),
+    ('production Block and Transaction deletion custody', (
+        'storage_custody::actual_block_removal_preserves_first_preimages_and_absent_dirty_semantics',
+        'storage_custody::actual_transaction_removal_orders_explicit_absence_and_sibling_preimages',
+        'storage_custody::actual_block_removal_refusal_preserves_exact_query_for_complete_budget_retry',
+        'storage_custody::actual_transaction_removal_refusal_joins_touch_and_pair_before_exact_query_retry',
+        'storage_custody::actual_transaction_removal_exhausted_abort_restores_parent_and_outer_reader_custody',
+        'storage_custody::actual_removal_caught_copy_and_consumed_query_panics_cannot_publish',
+    )),
+    ('funded Storage reads and retained removal ownership', (
+        'storage_custody::prepaid_storage_reads_need_no_heap_credit_or_payload_copy',
+        'storage_custody::missing_removal_planning_refusal_preserves_original_query_and_touch_owners',
+        'storage_custody::removed_value_retains_its_original_allocation_after_transaction_and_block_abort',
+    )),
+    ('funded replacement restores original Storage preimages', (
+        'storage_custody::actual_storage_replacement_funds_copies_and_preserves_original_readers',
+        'storage_custody::actual_storage_replacement_capacity_refusal_restores_roots_after_partial_work',
+        'storage_custody::actual_storage_replacement_copy_panic_aborts_original_pair_and_poisons_retry',
     )),
 )
 
@@ -2207,6 +2265,80 @@ CONCREAD_STAGES = (
         'internals::bptree::cursor::checkpoint::tests::caught_untracked_insert_remove_and_mutable_clone_panics_fail_the_original_cursor',
         'internals::bptree::cursor::checkpoint::tests::untracked_checkpoint_retains_only_live_rollback_metadata',
     )),
+    ('joint current and undo admission custody', (
+        'bptree::admission::pair_admission::tests::exact_joined_limit_and_one_byte_below_preserve_original_owners',
+        'bptree::admission::pair_admission::tests::joined_growth_keeps_first_none_and_some_without_rewriting_existing_undo',
+        'bptree::admission::pair_admission::tests::both_checkpoints_abort_to_prior_private_roots_without_credit',
+        'bptree::admission::pair_admission::tests::undo_generation_is_required_only_for_missing_first_preimage',
+        'bptree::admission::pair_admission::tests::current_generation_refusal_preserves_both_inputs_before_callback',
+        'bptree::admission::pair_admission::tests::foreign_stale_busy_and_poisoned_roles_refuse_before_joined_admission',
+        'bptree::admission::pair_admission::tests::callback_clone_and_remainder_drop_panics_poison_both_without_publication',
+        'bptree::admission::pair_admission::tests::single_borrowed_edit_keeps_failure_armed_through_provider_drop',
+        'bptree::admission::pair_admission::tests::joined_sum_rejects_byte_and_allocation_overflow_without_changing_demand',
+    )),
+    ('borrowed current and undo admission custody', (
+        'bptree::admission::pair_admission::tests::borrowed::borrowed_writers_keep_original_locks_and_first_preimages',
+        'bptree::admission::pair_admission::tests::borrowed::parent_refusal_and_full_budget_abort_preserve_exact_original_buffers',
+        'bptree::admission::pair_admission::tests::borrowed::parent_apply_keeps_private_successors_and_outer_abort_restores_custody',
+        'bptree::admission::pair_admission::tests::borrowed::borrowed_parent_generation_refuses_before_callback_and_skips_existing_undo',
+        'bptree::admission::pair_admission::tests::borrowed::caught_callback_clone_and_provider_panics_invalidate_both_borrowed_parents',
+        'bptree::admission::pair_admission::tests::borrowed::first_and_second_apply_cleanup_failures_invalidate_both_attached_writers',
+        'bptree::admission::pair_admission::tests::borrowed::prefailed_parent_entry_invalidates_the_other_original_cursor_before_admission',
+    )),
+    ('admitted clear and original cursor reset custody', (
+        'bptree::admission::pair_admission::tests::clear::clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations',
+        'bptree::admission::pair_admission::tests::clear::clear_publication_retains_actual_old_reader_preimages_and_charges',
+        'bptree::admission::pair_admission::tests::clear::clear_nested_apply_and_repeated_resets_keep_full_budget_outer_abort',
+        'bptree::admission::pair_admission::tests::clear::clear_generation_refusal_precedes_callback_and_preserves_writer_and_parent',
+        'bptree::admission::pair_admission::tests::clear::clear_caught_callback_and_provider_panics_leave_original_parent_unusable',
+        'bptree::admission::pair_admission::tests::clear::clear_apply_cleanup_panic_cannot_expose_a_usable_partial_writer',
+        'bptree::admission::pair_admission::tests::clear::clear_empty_root_has_exact_finite_layouts_and_never_copies_payloads',
+    )),
+
+    ('canonical B+ tree deletion and rebalance', (
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_01_p0',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_01_p1',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_02',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_03',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_04p0',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_04p1',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_05',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_06',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_07',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_08',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_09',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_10',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_11',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_12',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_13',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_14',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_15',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_1',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_2',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_3',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_4',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_5',
+        'internals::bptree::cursor::tests::test_bptree2_cursor_remove_stress_6',
+    )),
+    ('checked original removal tracking custody', (
+        'internals::bptree::cursor::remove::tests::remove_tracking_bound_is_checked_for_root_branch_and_overflow',
+        'internals::bptree::cursor::remove::tests::remove_fixed_slot_preflight_preserves_original_root_and_skips_absent_keys',
+        'internals::bptree::cursor::remove::tests::remove_exact_root_slots_preserve_original_reader_and_skip_absent_clone',
+    )),
+
+    ('admitted paired removal and nested sibling custody', (
+        'bptree::admission::pair_admission::tests::deletion::removal_retains_first_some_and_explicit_none_under_original_writers',
+        'bptree::admission::pair_admission::tests::deletion::repeated_absent_joint_removal_needs_no_current_or_undo_allocation',
+        'bptree::admission::pair_admission::tests::deletion::removal_whole_demand_refusal_and_exact_retry_preserve_parent_custody',
+        'bptree::admission::pair_admission::tests::deletion::removal_orders_rebalance_and_abort_without_credit_or_reader_changes',
+        'bptree::admission::pair_admission::tests::deletion::removal_generation_refuses_before_callback_and_skips_existing_undo',
+        'bptree::admission::pair_admission::tests::deletion::removal_caught_callback_clone_and_provider_panics_invalidate_both_parents',
+        'bptree::admission::pair_admission::tests::deletion::removal_prefailed_parent_invalidates_other_owner_before_admission',
+        'bptree::admission::pair_admission::tests::deletion::payload::nonuniform_sibling_and_repair_payloads_fit_complete_demand_and_old_readers',
+        'bptree::admission::pair_admission::tests::deletion::payload::nonuniform_copy_and_query_drop_failures_poison_both_original_parents',
+        'bptree::admission::pair_admission::tests::deletion::payload::replacement_input_key_drop_preserves_previous_value_custody',
+    )),
+
 )
 
 WALLET_STAGES = (("bounded faucet proof-of-work deadline", (
@@ -3070,7 +3202,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
                        "iroha3d-message-control": "irohad"}.get(selection)
             if package is None:
                 package = HARNESS_TARGETS[selection][3][1]
-            if record["manifest_path"] != str(root / "crates" / package / "Cargo.toml"):
+            if record["manifest_path"] != str(native_package_root(root, package) / "Cargo.toml"):
                 raise CheckError("native Cargo artifact manifest differs from the selected source")
             path = Path(record["executable"])
             if (not path.is_absolute() or path.resolve(strict=True) != path
@@ -3550,6 +3682,63 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
         label="pure FSM", description="pure consensus FSM (exact production reducer)")
 
 
+def validate_mv_test_registration(root: Path) -> None:
+    """Reject stale registered MV names before Cargo; native listing stays authoritative.
+
+    This is a bounded lexical guard for seven explicit, flat test modules, not a
+    Rust parser or a claim that the selected subset exhausts each module.
+    The existing pure lexer runs from the same captured source as this gate.
+    """
+    owners = (
+        ("allocation::tests::", "allocation.rs", "allocation_tests.rs", "tests"),
+        ("release::tests::", "release.rs", "release_tests.rs", "tests"),
+        ("cell::charged_allocation_tests::", "cell.rs", "cell/charged_allocation_tests.rs", "charged_allocation_tests"),
+        ("storage::publication_tests::", "storage.rs", "storage/publication_tests.rs", "publication_tests"),
+        ("storage::detached_tests::", "storage.rs", "storage/detached_tests.rs", "detached_tests"),
+        ("storage::admitted_tests::", "storage.rs", "storage/admitted_tests.rs", "admitted_tests"),
+        ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
+    )
+    try:
+        helper = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        namespace = {"__name__": "taira_mv_source_text", "__file__": str(helper)}
+        exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
+        mask = namespace["mask_rust_comments"]
+        package = root / "crates/mv/src"
+        sources = {}
+        def source(relative):
+            if relative not in sources:
+                text = (package / relative).read_text()
+                sources[relative] = (text, mask(text))
+            return sources[relative]
+        def edge(parent, child, name):
+            text, masked = source(parent)
+            pattern = r'^#\[path = "' + re.escape(child) + r'"\]\s*\nmod ' + re.escape(name) + r';'
+            matches = [match for match in re.finditer(pattern, text, re.MULTILINE)
+                       if masked[match.start():match.start() + 2] == "#["]
+            if len(matches) != 1:
+                raise ValueError(f"registered MV module edge differs: {parent} -> {child}")
+        lib = source("lib.rs")[1]
+        for module in ("allocation", "release", "cell", "storage"):
+            if len(re.findall(r'^(?:pub )?mod ' + module + r';$', lib, re.MULTILINE)) != 1:
+                raise ValueError(f"registered MV crate module differs: {module}")
+        edge("storage.rs", "storage/touches.rs", "touches")
+        available = []
+        for prefix, parent, child, module in owners:
+            relative = str(Path(child).relative_to(Path(parent).parent))
+            edge(parent, relative, module)
+            masked = source(child)[1]
+            for match in re.finditer(r'^#\[test\]\s*\nfn (\w+)\s*\(', masked, re.MULTILINE):
+                before = masked[:match.start()]
+                if before.count("{") == before.count("}"):
+                    available.append(prefix + match.group(1))
+        selected = [name for _, names in MV_OWNERSHIP_STAGES for name in names]
+        missing = [name for name in selected if available.count(name) != 1]
+        if len(selected) != len(set(selected)) or missing:
+            raise ValueError("registered MV test lacks one actual source definition: " + ", ".join(missing))
+    except (OSError, UnicodeError, KeyError, TypeError, ValueError) as error:
+        raise CheckError("MV test source registration failed: " + str(error)) from error
+
+
 def validate_torii_lifecycle_test_registration(root: Path) -> None:
     """Bind lifecycle selectors to the explicit grouped Cargo target before build."""
     try:
@@ -3593,6 +3782,7 @@ def validate_torii_lifecycle_test_registration(root: Path) -> None:
 
 def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
     """Reject invalid source assets, then run shared contracts before Cargo."""
+    validate_mv_test_registration(root)
     validate_torii_lifecycle_test_registration(root)
     started = time.monotonic()
     print("[taira-check] start source-asset grammar and inventory audit", flush=True)

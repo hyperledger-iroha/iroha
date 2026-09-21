@@ -742,7 +742,9 @@ impl<K: Ord + Clone + Debug, V: Clone, C> Leaf<K, V, C> {
             Ok(idx) => {
                 // It exists at idx, replace
                 let prev = unsafe { self.values[idx].as_mut_ptr().replace(v) };
-                // Prev now contains the original value, return it!
+                // The replacement slot is initialized before arbitrary input
+                // cleanup. Keep the previous value local until that succeeds.
+                drop(k);
                 LeafInsertState::Ok(Some(prev))
             }
             Err(idx) => {
@@ -800,9 +802,13 @@ impl<K: Ord + Clone + Debug, V: Clone, C> Leaf<K, V, C> {
             None => LeafRemoveState::Ok(None),
             Some(idx) => {
                 // Get the kv out
-                let _pk = unsafe { slice_remove(&mut self.key, idx).assume_init() };
+                let removed_key = unsafe { slice_remove(&mut self.key, idx).assume_init() };
                 let pv = unsafe { slice_remove(&mut self.values, idx).assume_init() };
                 self.dec_count();
+                // Keep the removed value in local custody until key cleanup
+                // succeeds. A tail return would move it before an implicit key
+                // destructor can unwind, orphaning its allocation and charge.
+                drop(removed_key);
                 if self.count() == 0 {
                     LeafRemoveState::Shrink(Some(pv))
                 } else {

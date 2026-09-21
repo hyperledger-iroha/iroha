@@ -218,6 +218,57 @@ impl SnapshotNexusRuntime {
 }
 
 impl State {
+    /// Install a fixture's physical dataspace baseline through validated H0 configuration.
+    ///
+    /// Updating the process-local Nexus cache does not update canonical World/Cell
+    /// projections. Fixtures which add alias namespaces must use the same baseline
+    /// installation boundary as fresh node startup.
+    #[cfg(test)]
+    pub(crate) fn set_dataspace_catalog_for_testing(&mut self, catalog: DataSpaceCatalog) {
+        assert_eq!(self.committed_height(), 0, "dataspace fixtures require H0");
+        let mut nexus = self.nexus_snapshot();
+        nexus.dataspace_catalog = catalog.clone();
+        nexus.configured_dataspace_catalog = catalog;
+        self.set_nexus_from_config(nexus)
+            .expect("install valid pre-genesis fixture dataspace baseline");
+    }
+
+    /// Seed the canonical read model for isolated routing tests, including corrupt snapshots.
+    ///
+    /// This deliberately skips startup and lifecycle validation so negative router tests can
+    /// inspect malformed policies. It does not install physical lane storage and must not be
+    /// used by execution, commit, recovery, or storage fixtures.
+    #[cfg(test)]
+    pub(crate) fn install_synthetic_routing_snapshot_for_testing(
+        &self,
+        mut nexus: iroha_config::parameters::actual::Nexus,
+    ) {
+        assert!(
+            runtime_catalog_from_world(&self.world.view())
+                .unwrap()
+                .is_none()
+        );
+        nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        let lineage = derive_static_lane_incarnations(&nexus.lane_catalog)
+            .into_iter()
+            .map(|(lane_id, incarnation)| {
+                (
+                    lane_id,
+                    LaneIncarnationLineage {
+                        generation: 0,
+                        incarnation,
+                        activation_height: 0,
+                    },
+                )
+            })
+            .collect();
+        self.install_canonical_runtime_projection(&nexus, &lineage, &VecDeque::new())
+            .expect("synthetic routing snapshot has complete lane lineage");
+        *self.nexus.write() = nexus;
+    }
+
     /// Acquire the original same-cut runtime writers before State publication fences.
     pub(super) fn acquire_canonical_runtime_replacement(
         &self,

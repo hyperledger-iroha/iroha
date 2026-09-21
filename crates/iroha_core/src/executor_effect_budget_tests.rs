@@ -429,7 +429,9 @@ seiyaku ActualEffectGroups {
                 assert_limit(&result.unwrap_err(), &format!("quarantine cycle budget exceeded: {cap}"));
                 assert_eq!(cycles, cap);
                 assert!(tx.last_tx_gas_used > segment_gas[0]);
-                assert!(Some(tx.last_tx_gas_used) < successful_batch_gas);
+                // The exhausted cycle allowance refuses the final HALT, whose
+                // canonical gas cost is zero; all metered work is retained.
+                assert_eq!(Some(tx.last_tx_gas_used), successful_batch_gas);
                 assert!(tx.world.account(&ALICE_ID).unwrap().metadata().get("effect_second").is_none());
                 assert!(!tx.execution_effects_allow_apply());
                 drop(tx);

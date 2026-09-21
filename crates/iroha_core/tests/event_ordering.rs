@@ -39,6 +39,9 @@ fn data_events_follow_instruction_order_in_tx() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
+    let genesis = state
+        .seed_signed_genesis_for_testing(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("publish fixture genesis");
     // Single transaction: three instructions in a fixed order
     let asset = AssetId::of(
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -70,13 +73,15 @@ fn data_events_follow_instruction_order_in_tx() {
     // Build and validate block with one tx
     let acc = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let new_block = BlockBuilder::new(vec![acc])
-        .chain(0, None)
+        .chain(0, Some(&genesis))
         .sign(kp.private_key())
         .unpack(|_| {});
     let mut sb = state.block(new_block.header());
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});
     let cb = vb.commit_unchecked().unpack(|_| {});
-    let events = sb.apply_without_execution(&cb, Vec::new());
+    let events = state
+        .commit_executed_block_for_testing(sb, cb)
+        .expect("publish ordered effects");
     // Extract Data events in emission order
     let data_events: Vec<_> = events
         .into_iter()

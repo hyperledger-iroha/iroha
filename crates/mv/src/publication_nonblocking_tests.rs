@@ -1,7 +1,6 @@
 //! Publication identity contention must not block detached preparation.
 
 use super::*;
-use crate::storage::StorageReadOnly;
 
 #[test]
 fn cell_identity_contention_retains_original_journal_without_admission() {

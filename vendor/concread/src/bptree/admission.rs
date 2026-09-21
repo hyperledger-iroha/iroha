@@ -7,6 +7,44 @@ use crate::internals::lincowcell::{InitialCharges, WriterAdmission, WriterCharge
 use crossbeam_utils::CachePadded;
 use std::alloc::Layout;
 
+#[path = "pair_admission.rs"]
+mod pair_admission;
+pub use pair_admission::PairInsertError;
+
+#[path = "clear_admission.rs"]
+mod clear_admission;
+
+#[path = "delete_admission.rs"]
+mod delete_admission;
+pub use delete_admission::PairRemoveError;
+
+// This guard must precede, and therefore outlive, every nested checkpoint. A
+// caller may catch an unwind while keeping both physical writers: lock poison
+// alone cannot protect their partly applied or failed private generations.
+struct BorrowedPair<'c, 'u, K, V, P>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    current: &'c mut CursorWrite<K, V, Prepaid<P>>,
+    undo: &'u mut CursorWrite<K, Option<V>, Prepaid<P>>,
+    resolved: bool,
+}
+impl<K, V, P> Drop for BorrowedPair<'_, '_, K, V, P>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
+{
+    fn drop(&mut self) {
+        if !self.resolved {
+            self.current.poison_joined_edit();
+            self.undo.poison_joined_edit();
+        }
+    }
+}
+
 /// Checked sum of actual requested allocation layouts, not encoded sizes or RSS.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AllocationDemand {
@@ -120,6 +158,15 @@ where
     P: NodeCloning<K, V>,
 {
     checked_next_generation(source.txid).ok_or(PlanningError::Overflow)?;
+    writer_start_plan::<K, V, P>(shells)
+}
+
+fn writer_start_plan<K, V, P>(shells: WriterLayouts) -> Result<WriterStartPlan, PlanningError>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: NodeCloning<K, V>,
+{
     type Buffer<K, V, C> = FixedTrackingBuffer<*mut Node<K, V, C>, C>;
     let tracking_layout =
         Buffer::<K, V, P::Charge>::allocation_layout(0).map_err(|_| PlanningError::Overflow)?;
@@ -271,7 +318,7 @@ fn plan_tracking_growth<K, V, P>(
 where
     K: Clone + Ord + Debug,
     V: Clone,
-    P: ClonePlanning<K, V>,
+    P: NodeCloning<K, V>,
 {
     let needed = initialized
         .checked_add(required)
@@ -341,7 +388,7 @@ unsafe fn plan_tree_clear<K, V, P>(
 where
     K: Clone + Ord + Debug,
     V: Clone,
-    P: ClonePlanning<K, V>,
+    P: NodeCloning<K, V>,
 {
     let retired = unsafe { Node::tree_node_count(root) }.ok_or(PlanningError::Overflow)?;
     let mut demand = AllocationDemand::new();
@@ -360,9 +407,10 @@ fn plan_clear<K, V, P>(cursor: &CursorWrite<K, V, Prepaid<P>>) -> Result<EditPla
 where
     K: Clone + Ord + Debug,
     V: Clone,
-    P: ClonePlanning<K, V>,
+    P: NodeCloning<K, V>,
 {
     cursor.assert_operable();
+    checked_next_generation(cursor.get_txid()).ok_or(PlanningError::Overflow)?;
     // SAFETY: the original exclusive cursor owns its root and retained base.
     unsafe { plan_tree_clear::<K, V, P>(cursor.get_root(), cursor.admitted_tracking()) }
 }
@@ -465,14 +513,9 @@ where
     )?;
     // Each path node and at most one sibling per branch may clone. Retirement
     // additionally records one merged node per level and one demoted root.
-    let new_nodes = branches
-        .checked_mul(2)
-        .and_then(|n| n.checked_add(1))
-        .ok_or(PlanningError::Overflow)?;
-    let retired_nodes = branches
-        .checked_mul(3)
-        .and_then(|n| n.checked_add(2))
-        .ok_or(PlanningError::Overflow)?;
+    let [new_nodes, retired_nodes] =
+        crate::internals::bptree::cursor::remove_tracking_slots(branches)
+            .ok_or(PlanningError::Overflow)?;
     let [(first_len, first_capacity), (last_len, last_capacity)] = cursor.admitted_tracking();
     let first = plan_tracking_growth::<K, V, P>(first_len, first_capacity, new_nodes, &mut demand)?;
     let last =
@@ -491,7 +534,7 @@ fn allocate_tracking<K, V, P>(
 where
     K: Clone + Ord + Debug,
     V: Clone,
-    P: ClonePlanning<K, V>,
+    P: NodeCloning<K, V>,
 {
     growth.map(|growth| {
         let charge = provider.take_node_charge(growth.layout);
@@ -506,6 +549,29 @@ where
     V: Clone + Send + Sync + 'static,
     P: NodeCloning<K, V>,
 {
+    /// Exact layout-only demand for the original no-edit writer start.
+    ///
+    /// This grants no lock or generation authority. `try_write_admitted` repeats
+    /// generation preflight and the same concrete plan under the original lock.
+    pub fn writer_start_allocation_demand() -> Result<AllocationDemand, PlanningError> {
+        Ok(
+            writer_start_plan::<K, V, P>(MapCell::<K, V, Prepaid<P>>::writer_allocation_layouts())?
+                .demand,
+        )
+    }
+
+    /// Exact initial node/root/reader layouts used by node-custody construction.
+    /// Native lock and runtime control storage remain outside this demand.
+    pub fn node_custody_allocation_demand() -> Result<AllocationDemand, PlanningError> {
+        let initial = MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts();
+        let mut demand = AllocationDemand::new();
+        demand.add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())?;
+        for layout in [initial.root, initial.reader] {
+            demand.add_layout(layout)?;
+        }
+        Ok(demand)
+    }
+
     /// Admit an original writer without inserting or copying any tree entry.
     ///
     /// The callback runs once under the original nonblocking writer lock, after
@@ -586,15 +652,8 @@ where
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
     ) -> Result<Self, E> {
         let initial = MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts();
-        let mut demand = AllocationDemand::new();
-        demand
-            .add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())
+        let demand = Self::node_custody_allocation_demand()
             .expect("three concrete initial layouts fit usize");
-        for layout in [initial.root, initial.reader] {
-            demand
-                .add_layout(layout)
-                .expect("three concrete initial layouts fit usize");
-        }
         let mut provider = Prepaid(Some(admit(demand)?));
         // The initial node takes its own original charge immediately before
         // allocation. The still-owned SuperBlock reclaims it if setup unwinds.
@@ -811,6 +870,31 @@ where
     }
 }
 
+// Consume only a plan made under this same held original writer. No caller can
+// mutate its tree/tracking between planning and execution; a private checkpoint
+// may advance only its generation, covered by the full-path clone bound.
+fn execute_edit<K, V, P>(
+    cursor: &mut CursorWrite<K, V, Prepaid<P>>,
+    key: K,
+    value: V,
+    mut provider: P,
+    plan: EditPlan,
+    saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
+) -> Option<V>
+where
+    K: Clone + Ord + Debug,
+    V: Clone,
+    P: ClonePlanning<K, V>,
+{
+    let first = allocate_tracking::<K, V, P>(plan.first, &mut provider);
+    let last = allocate_tracking::<K, V, P>(plan.last, &mut provider);
+    cursor.begin_admitted_edit();
+    cursor.resume_admitted_funding(provider, first, last, saved);
+    cursor
+        .try_insert(key, value)
+        .unwrap_or_else(|_| unreachable!("complete tracking bound planned under original writer"))
+}
+
 impl<K, V, P> BptreeMapOwned<K, V, Prepaid<P>>
 where
     K: Clone + Ord + Debug + Send + Sync + 'static,
@@ -948,48 +1032,19 @@ where
     V: Clone,
     P: ClonePlanning<K, V>,
 {
-    cursor.assert_operable();
-    let preparation = (|| {
-        // Replan under this same exclusive cursor immediately before admission;
-        // a previously observed demand is not accepted as authority for an edit.
-        let plan = plan_edit(cursor, &key).map_err(MapAdmissionError::Planning)?;
-        let mut provider = admit(plan.demand).map_err(MapAdmissionError::Refused)?;
-        let first = allocate_tracking::<K, V, P>(plan.first, &mut provider);
-        let last = allocate_tracking::<K, V, P>(plan.last, &mut provider);
-        Ok((provider, first, last))
-    })();
-    let (provider, first, last) = match preparation {
-        Ok(prepared) => prepared,
-        Err(error) => return Err(((key, value), error)),
+    let plan = match plan_edit::<K, V, P>(cursor, &key) {
+        Ok(plan) => plan,
+        Err(error) => return Err(((key, value), MapAdmissionError::Planning(error))),
     };
-    cursor.begin_admitted_edit();
-    cursor.resume_admitted_funding(provider, first, last, saved);
-    let previous = cursor
-        .try_insert(key, value)
-        .unwrap_or_else(|_| unreachable!("complete tracking bound planned under original writer"));
+    let provider = match admit(plan.demand) {
+        Ok(provider) => provider,
+        Err(error) => return Err(((key, value), MapAdmissionError::Refused(error))),
+    };
+    let previous = execute_edit(cursor, key, value, provider, plan, saved);
+    // Keep the existing single-map contract: cleanup must finish before clearing
+    // edit_failed, including when callers catch a panic inside a borrowed writer.
     cursor.finish_admitted_funding();
     Ok(previous)
-}
-
-fn clear_admitted<K, V, P, E>(
-    cursor: &mut CursorWrite<K, V, Prepaid<P>>,
-    admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    saved: Option<&mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
-) -> Result<(), MapAdmissionError<E>>
-where
-    K: Clone + Ord + Debug,
-    V: Clone,
-    P: ClonePlanning<K, V>,
-{
-    let plan = plan_clear(cursor).map_err(MapAdmissionError::Planning)?;
-    let mut provider = admit(plan.demand).map_err(MapAdmissionError::Refused)?;
-    let first = allocate_tracking::<K, V, P>(plan.first, &mut provider);
-    let last = allocate_tracking::<K, V, P>(plan.last, &mut provider);
-    cursor.begin_admitted_edit();
-    cursor.resume_admitted_funding(provider, first, last, saved);
-    cursor.try_clear().expect("complete original clear plan");
-    cursor.finish_admitted_funding();
-    Ok(())
 }
 
 fn remove_admitted<K, V, P, E>(
@@ -1124,16 +1179,6 @@ where
     /// Planning is allocation-free and retains this original private tree.
     pub fn clear_demand(&self) -> Result<AllocationDemand, PlanningError> {
         plan_clear(self.inner.as_ref()).map(|plan| plan.demand)
-    }
-
-    /// Admit clearing this original private tree without changing its writer.
-    /// Refusal retains every original node, input buffer and allocation owner.
-    /// A later call replans; keep the operation inside the budget's refund scope.
-    pub fn try_clear_admitted<E>(
-        &mut self,
-        admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<(), MapAdmissionError<E>> {
-        clear_admitted(self.inner.as_mut(), admit, None)
     }
 
     /// Admit one closed insertion while retaining this original physical writer.
@@ -1326,17 +1371,6 @@ where
     /// No payload copies, allocations or mutation occur during observation.
     pub fn clear_demand(&self) -> Result<AllocationDemand, PlanningError> {
         plan_clear(self.inner.as_ref()).map(|plan| plan.demand)
-    }
-
-    /// Admit a private clear while keeping exact checkpoint rollback ownership.
-    /// Abort restores the original root and both original bookkeeping buffers.
-    /// Keep this operation inside the original budget's refund deferral scope.
-    pub fn try_clear_admitted<E>(
-        &mut self,
-        admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<(), MapAdmissionError<E>> {
-        let (cursor, buffers) = self.inner.edit_parts();
-        clear_admitted(cursor, admit, Some(buffers))
     }
 
     /// Admit one closed edit while retaining exact parent rollback ownership.

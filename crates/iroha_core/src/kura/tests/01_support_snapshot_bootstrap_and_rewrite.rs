@@ -1792,6 +1792,23 @@ fn blank_kura_for_testing_uses_isolated_canonical_primary_storage() {
         expected_merge.is_file(),
         "canonical primary merge ledger must exist"
     );
+    assert_eq!(
+        kura.configured_lane_catalog_baseline().unwrap(),
+        Some(LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default())),
+    );
+    assert!(
+        kura.lane_storage_entry(LaneId::SINGLE).is_err(),
+        "configured catalog alone does not authenticate a network or lane instance"
+    );
+    let state = State::new(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+    );
+    let primary = kura.lane_storage_entry(LaneId::SINGLE).unwrap();
+    assert_eq!(primary.network_id, state.network_id);
+    kura.require_retained_lane_storage_entry(&primary)
+        .expect("State fixture provisioning retains the exact authenticated journal reference");
 }
 #[test]
 fn blank_kura_applies_staged_pre_genesis_nexus_geometry() {
@@ -3681,9 +3698,16 @@ fn v2_finality_cache_invalidates_same_inode_parent_path_relocation() {
 fn bridge_and_sccp_proof_builders_reuse_exact_finality_sidecar_verification() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
+    let artifact = v2_finality_artifact_for_block(&block);
+    let state = State::new_with_chain_and_network_id_for_testing(
+        World::default(),
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        ChainId::from("kura-v2-finality-test"),
+        artifact.height_context.network_id,
+    );
     kura.store_block(Arc::clone(&block))
         .expect("store canonical block");
-    let artifact = v2_finality_artifact_for_block(&block);
     let _receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist and verify finality artifact");
@@ -3691,13 +3715,6 @@ fn bridge_and_sccp_proof_builders_reuse_exact_finality_sidecar_verification() {
         kura.v2_finality_crypto_verifications
             .load(Ordering::Relaxed),
         1
-    );
-    let state = State::new_with_chain_and_network_id_for_testing(
-        World::default(),
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-        ChainId::from("kura-v2-finality-test"),
-        artifact.height_context.network_id,
     );
     for _ in 0..4 {
         let proof = crate::bridge::build_finality_proof(&state, artifact.height)

@@ -5,11 +5,9 @@ async fn tx_order_same_in_validation_and_revalidation() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
     let account = Account::new(alice_id.clone()).build(&alice_id);
     let domain = Domain::new(domain_id).build(&alice_id);
-    let domain_a_id = DomainId::try_new("domain-a", "universal").unwrap();
-    let domain_b_id = DomainId::try_new("domain-b", "universal").unwrap();
-    let mut world = World::with([domain], [account], []);
-    seed_domain_name_lease(&mut world, &alice_id, &domain_a_id);
-    seed_domain_name_lease(&mut world, &alice_id, &domain_b_id);
+    let (account_a_id, _) = gen_account_in("wonderland");
+    let (account_b_id, _) = gen_account_in("wonderland");
+    let world = World::with([domain], [account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world, kura, query_handle);
@@ -20,14 +18,14 @@ async fn tx_order_same_in_validation_and_revalidation() {
         (params.sumeragi().max_clock_drift(), params.transaction())
     };
     // Two independent register instructions (no ordering dependencies)
-    let domain_a = Register::domain(Domain::new(domain_a_id));
-    let domain_b = Register::domain(Domain::new(domain_b_id));
+    let register_a = Register::account(Account::new(account_a_id));
+    let register_b = Register::account(Account::new(account_b_id));
     let tx = TransactionBuilder::new(
         state.network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_instructions::<InstructionBox>([domain_a.into()])
+    .with_instructions::<InstructionBox>([register_a.into()])
     .sign(alice_keypair.private_key());
     let crypto_cfg = state.crypto();
     let tx = AcceptedTransaction::accept(
@@ -38,9 +36,9 @@ async fn tx_order_same_in_validation_and_revalidation() {
         crypto_cfg.as_ref(),
     )
     .expect("Valid");
-    let fail_domain_id = DomainId::try_new("missing-domain", "universal").expect("valid id");
-    let fail_instruction = Unregister::domain(fail_domain_id);
-    let succeed_instruction = domain_b;
+    let (missing_account_id, _) = gen_account_in("wonderland");
+    let fail_instruction = Unregister::account(missing_account_id);
+    let succeed_instruction = register_b;
     let tx0 = TransactionBuilder::new(
         state.network_id,
         alice_id.clone(),
@@ -76,6 +74,7 @@ async fn tx_order_same_in_validation_and_revalidation() {
     let succeed_hash = tx2.as_ref().hash_as_entrypoint();
     // Creating a block of two identical transactions and validating it
     let transactions = vec![tx0, tx, tx2];
+    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
     let unverified_block = BlockBuilder::new(transactions)
         .chain(0, state.view().latest_block().as_deref())
         .sign(alice_keypair.private_key())
@@ -84,7 +83,9 @@ async fn tx_order_same_in_validation_and_revalidation() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-    state_block.commit().unwrap();
+    state.commit_executed_block_for_testing(
+        state_block, valid_block.clone().commit_unchecked().unpack(|_| {}),
+    ).expect("publish exact validated fixture outputs");
     // The 1st transaction should fail and 2nd succeed
     let block_ref = valid_block.as_ref();
     let outcomes: Vec<_> = block_ref

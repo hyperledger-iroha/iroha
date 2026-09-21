@@ -841,6 +841,7 @@ impl Kura {
                                 )
                             })?;
                             self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                                &entry,
                                 pending_canonical_bytes,
                                 Some(pending_canonical_bytes),
                                 &executable_payload,
@@ -1647,6 +1648,7 @@ impl Kura {
             })?;
         if current.artifact.executable_payload == *payload {
             self.require_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                entry,
                 payload,
                 retirement,
                 queue_disposition,
@@ -4310,6 +4312,7 @@ impl Kura {
                                 )
                             })?;
                             self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                                &entry,
                                 pending_canonical_bytes,
                                 Some(pending_canonical_bytes),
                                 payload,
@@ -4990,6 +4993,7 @@ impl Kura {
                     )
                 })?;
                 self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                    entry,
                     pending_canonical_bytes,
                     None,
                     payload,
@@ -5090,6 +5094,7 @@ impl Kura {
                             )
                         })?;
                         self.complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
+                            entry,
                             pending_canonical_bytes,
                             Some(pending_canonical_bytes),
                             payload,

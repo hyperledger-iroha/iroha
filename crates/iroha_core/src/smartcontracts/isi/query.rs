@@ -8227,6 +8227,13 @@ mod tests {
         // canonical bodies but do not copy their finality artifacts: finalized
         // history above must remain immutable under the same pruning API.
         let pruning_kura = Kura::blank_kura_for_testing();
+        let _pruning_state = State::new_with_chain_and_network_id_for_testing(
+            World::default(),
+            Arc::clone(&pruning_kura),
+            LiveQueryStore::start_test(),
+            state_view.chain_id().clone(),
+            *state_view.network_id(),
+        );
         for height in 1..=num_blocks {
             let body = state_view
                 .kura()

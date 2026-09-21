@@ -24,6 +24,10 @@ use std::sync::OnceLock;
 mod checkpoint;
 pub(crate) use checkpoint::{CheckpointBuffers, CursorCheckpoint};
 
+#[path = "remove.rs"]
+mod remove;
+pub(crate) use remove::remove_tracking_slots;
+
 /// One shared bound for planning, cursor construction and private checkpoints.
 pub(crate) fn checked_next_generation(txid: u64) -> Option<u64> {
     txid.checked_add(1)
@@ -66,19 +70,19 @@ where
 }
 
 unsafe impl<
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    M: CursorMode<K, V>,
-> Send for SuperBlock<K, V, M>
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V>,
+    > Send for SuperBlock<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-    K: Clone + Ord + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
-    M: CursorMode<K, V>,
-> Sync for SuperBlock<K, V, M>
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V>,
+    > Sync for SuperBlock<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -198,6 +202,23 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> SuperBlock<K, V, M> 
         (leaves > 0).then_some((leaves, branches))
     }
 
+    /// Adopt one real test leaf without bypassing published node-count invariants.
+    #[cfg(test)]
+    pub(crate) fn from_leaf_test(root: *mut Node<K, V, M::Charge>, size: usize, txid: u64) -> Self {
+        // SAFETY: test fixtures transfer their exclusive initialized leaf here.
+        assert!(unsafe { &*root }.is_leaf());
+        let leaf = unsafe { &*root.cast::<Leaf<K, V, M::Charge>>() };
+        assert_eq!(leaf.get_txid(), txid);
+        assert_eq!(leaf.count(), size);
+        Node::make_ro_raw(root);
+        Self {
+            root,
+            size,
+            txid,
+            node_counts: (1, 0),
+        }
+    }
+
     /// The caller must put this unique root under the original linear owner.
     pub(crate) unsafe fn new_with_funding(funding: &mut M) -> Self {
         let root = Node::<K, V, M::Charge>::new_leaf(1, funding).cast();
@@ -269,19 +290,19 @@ where
 }
 
 unsafe impl<
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    M: CursorMode<K, V>,
-> Send for CursorRead<K, V, M>
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V>,
+    > Send for CursorRead<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-    K: Clone + Ord + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
-    M: CursorMode<K, V>,
-> Sync for CursorRead<K, V, M>
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V>,
+    > Sync for CursorRead<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -304,19 +325,19 @@ where
 }
 
 unsafe impl<
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    M: CursorMode<K, V> + Send,
-> Send for CursorWrite<K, V, M>
+        K: Clone + Ord + Debug + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        M: CursorMode<K, V> + Send,
+    > Send for CursorWrite<K, V, M>
 where
     M::Charge: Send + Sync,
 {
 }
 unsafe impl<
-    K: Clone + Ord + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
-    M: CursorMode<K, V> + Send + Sync,
-> Sync for CursorWrite<K, V, M>
+        K: Clone + Ord + Debug + Sync + Send + 'static,
+        V: Clone + Sync + Send + 'static,
+        M: CursorMode<K, V> + Send + Sync,
+    > Sync for CursorWrite<K, V, M>
 where
     M::Charge: Send + Sync,
 {
@@ -590,69 +611,6 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
         Ok(r)
     }
 
-    /// Remove with the original provider after membership and tracking preflight.
-    /// An absent key does not clone or allocate, even with empty fixed buffers.
-    /// As with `try_insert`, the caller retains the edit-failure scope until
-    /// every mutation and unused-funding destructor has completed.
-    pub(crate) fn try_remove(&mut self, k: &K) -> Result<Option<V>, ()> {
-        if !self.remove_tracking_fits(k)? {
-            return Ok(None);
-        }
-        let r = match clone_and_remove(
-            self.root,
-            self.txid,
-            k,
-            self.last_seen.as_mut().expect("original retirement buffer"),
-            &mut self.first_seen,
-            &mut self.funding,
-        ) {
-            CRRemoveState::NoClone(res) => res,
-            CRRemoveState::Clone(res, mut nnode) => {
-                mem::swap(&mut self.root, &mut nnode);
-                res
-            }
-            CRRemoveState::Shrink(res) => {
-                if self_meta_shared!(self.root).is_leaf() {
-                    // No action - we have an empty tree.
-                    res
-                } else {
-                    // Root is being demoted, get the last branch and
-                    // promote it to the root.
-                    self.last_seen
-                        .as_mut()
-                        .expect("original retirement buffer")
-                        .push(self.root);
-                    let rmut = branch_ref!(self.root, K, V, M::Charge);
-                    let mut pnode = rmut.extract_last_node();
-                    mem::swap(&mut self.root, &mut pnode);
-                    res
-                }
-            }
-            CRRemoveState::CloneShrink(res, mut nnode) => {
-                if self_meta_shared!(nnode).is_leaf() {
-                    // The tree is empty, but we cloned the root to get here.
-                    mem::swap(&mut self.root, &mut nnode);
-                    res
-                } else {
-                    // Our root is getting demoted here, get the remaining branch
-                    self.last_seen
-                        .as_mut()
-                        .expect("original retirement buffer")
-                        .push(nnode);
-                    let rmut = branch_ref!(nnode, K, V, M::Charge);
-                    let mut pnode = rmut.extract_last_node();
-                    // Promote it to the new root
-                    mem::swap(&mut self.root, &mut pnode);
-                    res
-                }
-            }
-        };
-        if r.is_some() {
-            self.length -= 1;
-        }
-        Ok(r)
-    }
-
     /// Clear using this mode's original provider and checked bookkeeping slots.
     /// No original node is mutated or freed; its retirement follows the reader.
     pub(crate) fn try_clear(&mut self) -> Option<()> {
@@ -684,53 +642,6 @@ impl<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>> CursorWrite<K, V, M>
         self.root = empty;
         self.length = 0;
         Some(())
-    }
-
-    fn remove_tracking_fits(&self, key: &K) -> Result<bool, ()> {
-        // Read the original path without taking mutable aliases to shared nodes.
-        // Membership is checked before any clone or fixed-buffer requirement.
-        let mut node = self.root;
-        let mut branches = 0usize;
-        while !self_meta_shared!(node).is_leaf() {
-            branches = branches.checked_add(1).ok_or(())?;
-            if branches >= usize::BITS as usize {
-                return Err(());
-            }
-            let branch = branch_ref_shared!(node, K, V, M::Charge);
-            node = branch.get_idx_unchecked(branch.locate_node(key));
-        }
-        if leaf_ref_shared!(node, K, V, M::Charge)
-            .get_ref(key)
-            .is_none()
-        {
-            return Ok(false);
-        }
-        // At most b+1 original path nodes and b adjacent siblings are cloned.
-        // Each clone retires its source; each of b rebalances can additionally
-        // retire one merged node, and root demotion retires one final branch.
-        // Removal never splits or allocates another kind of node.
-        let new_required = branches
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(1))
-            .ok_or(())?;
-        let retired_required = branches
-            .checked_mul(3)
-            .and_then(|n| n.checked_add(2))
-            .ok_or(())?;
-        if self
-            .first_seen
-            .remaining_capacity()
-            .is_some_and(|n| n < new_required)
-            || self
-                .last_seen
-                .as_ref()
-                .expect("original retirement buffer")
-                .remaining_capacity()
-                .is_some_and(|n| n < retired_required)
-        {
-            return Err(());
-        }
-        Ok(true)
     }
 
     fn insert_tracking_fits(&self, key: &K) -> bool {
@@ -814,6 +725,49 @@ impl<K: Clone + Ord + Debug, V: Clone, P: NodeCloning<K, V>>
                 drop(old);
             }
         }
+    }
+
+    /// Observe the original tracking allocations in custody regression tests.
+    #[cfg(test)]
+    pub(crate) fn admitted_tracking_addresses(&self) -> [usize; 2] {
+        self.assert_operable();
+        [
+            self.first_seen.as_ptr() as usize,
+            self.last_seen
+                .as_ref()
+                .expect("original retirement buffer")
+                .as_ptr() as usize,
+        ]
+    }
+
+    /// Move the completed edit's exact provider into a closed joined operation.
+    /// Keep failure armed through final cleanup under both original writers.
+    pub(crate) fn take_completed_admitted_funding(&mut self) -> P {
+        assert!(
+            self.edit_failed,
+            "only a completed unsealed edit can transfer funding"
+        );
+        self.funding.0.take().expect("original completed provider")
+    }
+
+    /// Seal after the one moved provider has been destroyed successfully.
+    /// Both original checkpoints and writer guards remain held by the caller.
+    pub(crate) fn seal_joined_admitted_edit(&mut self) {
+        assert!(
+            self.edit_failed,
+            "joined edit must remain unsealed through cleanup"
+        );
+        assert!(
+            self.funding.0.is_none(),
+            "joined remainder must have moved out"
+        );
+        self.edit_failed = false;
+    }
+
+    /// Keep a caught joined-operation unwind from exposing either partial cursor.
+    /// This is infallible and does not release storage or invoke user callbacks.
+    pub(crate) fn poison_joined_edit(&mut self) {
+        self.edit_failed = true;
     }
 
     /// Seal the one closed edit, returning only unused original admission.
@@ -1380,171 +1334,6 @@ fn path_clone<K: Clone + Ord + Debug, V: Clone>(
                 CRCloneState::NoClone
             }
         }
-    }
-}
-
-fn clone_and_remove<K: Clone + Ord + Debug, V: Clone, M: CursorMode<K, V>>(
-    node: *mut Node<K, V, M::Charge>,
-    txid: u64,
-    k: &K,
-    last_seen: &mut M::Buffer,
-    first_seen: &mut M::Buffer,
-    funding: &mut M,
-) -> CRRemoveState<K, V, M::Charge> {
-    if self_meta_shared!(node).is_leaf() {
-        leaf_ref_shared!(node, K, V, M::Charge)
-            .req_clone(txid, funding)
-            .map(|cnode| {
-                first_seen.push(cnode);
-                // println!("ls push 10 {:?}", node);
-                last_seen.push(node);
-                let mref = leaf_ref!(cnode, K, V, M::Charge);
-                match mref.remove(k) {
-                    LeafRemoveState::Ok(res) => CRRemoveState::Clone(res, cnode),
-                    LeafRemoveState::Shrink(res) => CRRemoveState::CloneShrink(res, cnode),
-                }
-            })
-            .unwrap_or_else(|| {
-                let mref = leaf_ref!(node, K, V, M::Charge);
-                match mref.remove(k) {
-                    LeafRemoveState::Ok(res) => CRRemoveState::NoClone(res),
-                    LeafRemoveState::Shrink(res) => CRRemoveState::Shrink(res),
-                }
-            })
-    } else {
-        // Locate the node we need to work on and then react if it
-        // requests a shrink.
-        branch_ref_shared!(node, K, V, M::Charge)
-            .req_clone(txid, funding)
-            .map(|cnode| {
-                first_seen.push(cnode);
-                // println!("ls push 11 {:?}", node);
-                last_seen.push(node);
-                // Done mm
-                let nmref = branch_ref!(cnode, K, V, M::Charge);
-                let anode_idx = nmref.locate_node(k);
-                let anode = nmref.get_idx_unchecked(anode_idx);
-                match clone_and_remove(anode, txid, k, last_seen, first_seen, funding) {
-                    CRRemoveState::NoClone(_res) => {
-                        unreachable!("Should never occur");
-                    }
-                    CRRemoveState::Clone(res, lnode) => {
-                        nmref.replace_by_idx(anode_idx, lnode);
-                        CRRemoveState::Clone(res, cnode)
-                    }
-                    CRRemoveState::Shrink(_res) => {
-                        unreachable!("This represents a corrupt tree state");
-                    }
-                    CRRemoveState::CloneShrink(res, nnode) => {
-                        // Put our cloned child into the tree at the correct location, don't worry,
-                        // the shrink_decision will deal with it.
-                        nmref.replace_by_idx(anode_idx, nnode);
-
-                        // Now setup the sibling, to the left *or* right.
-                        let right_idx = nmref
-                            .clone_sibling_idx(txid, anode_idx, last_seen, first_seen, funding);
-                        // Okay, now work out what we need to do.
-                        match nmref.shrink_decision(right_idx, funding) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::Clone(res, cnode)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                debug_assert!(!last_seen.as_slice().contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Clone(res, cnode)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now fallen under the needed
-                                // amount of values.
-                                debug_assert!(!last_seen.as_slice().contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::CloneShrink(res, cnode)
-                            }
-                        }
-                    }
-                }
-            })
-            .unwrap_or_else(|| {
-                // We are already part of this txn
-                let nmref = branch_ref!(node, K, V, M::Charge);
-                let anode_idx = nmref.locate_node(k);
-                let anode = nmref.get_idx_unchecked(anode_idx);
-                match clone_and_remove(anode, txid, k, last_seen, first_seen, funding) {
-                    CRRemoveState::NoClone(res) => CRRemoveState::NoClone(res),
-                    CRRemoveState::Clone(res, lnode) => {
-                        nmref.replace_by_idx(anode_idx, lnode);
-                        CRRemoveState::NoClone(res)
-                    }
-                    CRRemoveState::Shrink(res) => {
-                        let right_idx = nmref
-                            .clone_sibling_idx(txid, anode_idx, last_seen, first_seen, funding);
-                        match nmref.shrink_decision(right_idx, funding) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                //
-                                // A quirk here is based on how clone_sibling_idx works. We may actually
-                                // start with anode_idx of 0, which triggers a right clone, so it's
-                                // *already* in the mm lists. But here right is "last seen" now if
-                                //
-                                // println!("ls push 22 {:?}", dnode);
-                                debug_assert!(!last_seen.as_slice().contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now fallen under the needed
-                                // amount of values, so we begin to shrink up.
-                                // println!("ls push 23 {:?}", dnode);
-                                debug_assert!(!last_seen.as_slice().contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Shrink(res)
-                            }
-                        }
-                    }
-                    CRRemoveState::CloneShrink(res, nnode) => {
-                        // We don't need to clone, just work on the nmref we have.
-                        //
-                        // Swap in the cloned node to the correct location.
-                        nmref.replace_by_idx(anode_idx, nnode);
-                        // Now setup the sibling, to the left *or* right.
-                        let right_idx = nmref
-                            .clone_sibling_idx(txid, anode_idx, last_seen, first_seen, funding);
-                        match nmref.shrink_decision(right_idx, funding) {
-                            BranchShrinkState::Balanced => {
-                                // K:V were distributed through left and right,
-                                // so no further action needed.
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Merge(dnode) => {
-                                // Right was merged to left, and we remain
-                                // valid
-                                // println!("ls push 24 {:?}", dnode);
-                                debug_assert!(!last_seen.as_slice().contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::NoClone(res)
-                            }
-                            BranchShrinkState::Shrink(dnode) => {
-                                // Right was merged to left, but we have now fallen under the needed
-                                // amount of values.
-                                // println!("ls push 25 {:?}", dnode);
-                                debug_assert!(!last_seen.as_slice().contains(&dnode));
-                                last_seen.push(dnode);
-                                CRRemoveState::Shrink(res)
-                            }
-                        }
-                    }
-                }
-            }) // end unwrap_or_else
     }
 }
 

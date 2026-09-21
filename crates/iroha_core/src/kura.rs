@@ -3395,6 +3395,14 @@ impl Kura {
         // lane-geometry paths appear to escape the Kura root.
         let store_root = std::fs::canonicalize(temp_store_dir.path())
             .expect("canonicalize temporary Kura directory for tests");
+        let store_root_lock_file = Self::acquire_store_root_lock(&store_root, true)
+            .expect("lock temporary Kura directory for tests");
+        Self::establish_or_verify_configured_lane_catalog_baseline_with_lock(
+            &store_root,
+            LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
+            &store_root_lock_file,
+        )
+        .expect("authenticate default configured catalog before opening test storage");
         let (blocks_root, merge_log_path) = Self::canonical_storage_paths(&store_root);
         std::fs::create_dir_all(&blocks_root)
             .expect("create temporary Kura block directory for tests");
@@ -3430,7 +3438,7 @@ impl Kura {
             ),
             #[cfg(all(unix, not(target_os = "espidf")))]
             store_root_directory,
-            _store_root_lock_file: None,
+            _store_root_lock_file: Some(store_root_lock_file),
             block_store: Mutex::new(block_store),
             canonical_chain_lock: PublicationMutex::default(),
             block_store_write_lock: Mutex::new(()),
@@ -33010,15 +33018,16 @@ impl Kura {
     }
     fn require_autonomous_lane_entrypoint_claims_released_for_replica_locked(
         &self,
+        entry: &LaneStorageEntry,
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
         queue_disposition: AutonomousLifecycleReplicaQueueDispositionV1,
     ) -> Result<()> {
         let retirement_hash = retirement.digest()?;
-        let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+        self.require_active_lane_artifact(entry, &payload.origin_proposal.descriptor)?;
         let replica_complete_outcome_hash = self
             .autonomous_lifecycle_replica_terminal_outcome_is_complete_locked(
-                &entry,
+                entry,
                 payload,
                 retirement,
                 queue_disposition,
@@ -33165,6 +33174,7 @@ impl Kura {
     }
     fn complete_autonomous_lane_entrypoint_claims_released_for_replica_locked(
         &self,
+        entry: &LaneStorageEntry,
         pending_canonical_bytes: u64,
         current_attempt_view_recovery_bytes: Option<u64>,
         payload: &LaneExecutablePayloadV1,
@@ -33187,10 +33197,18 @@ impl Kura {
         outcome.validate_for_payload(payload).map_err(|message| {
             Self::invalid_lane_artifact_error(self.store_root.clone(), message)
         })?;
-        let entry = self.lane_storage_entry(payload.origin_proposal.descriptor.lane_id)?;
+        // Startup authenticates retained physical entries before State installs
+        // its active routing map. Keep that exact namespace throughout sealing.
+        self.require_active_lane_artifact(entry, &payload.origin_proposal.descriptor)?;
+        if entry.network_id != payload.network_id {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "replica claim completion belongs to another network",
+            ));
+        }
         let current = self
             .read_current_autonomous_lane_block_record_self_context_locked(
-                &entry,
+                entry,
                 payload.origin_proposal.descriptor.lane_block_height,
                 current_attempt_view_recovery_bytes,
             )?
@@ -33203,7 +33221,7 @@ impl Kura {
         let exact_attempt_is_current = current.artifact.executable_payload == *payload;
         if !exact_attempt_is_current {
             self.require_autonomous_lane_replica_release_completed_or_superseded_locked(
-                &entry,
+                entry,
                 payload,
                 retirement,
                 queue_disposition,
@@ -40721,6 +40739,20 @@ impl Kura {
         let (data_path, index_path) =
             Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
         let _sidecar = self.sidecar_lock.lock();
+        // The receipt owner can resume its own exact append, but cannot adopt
+        // a concurrent rewrite of the raw lane evidence it authenticates.
+        let (raw_data_path, raw_index_path) =
+            Self::lane_artifact_paths_for_entry(&entry, &self.store_root);
+        if !self.bound_progress_sidecar_directory_is_absent(&raw_data_path, &raw_index_path)? {
+            let raw_namespace =
+                self.open_bound_progress_namespace(&raw_data_path, &raw_index_path)?;
+            self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
+                &raw_namespace,
+                &raw_data_path,
+                &raw_index_path,
+                "receipt append raw evidence preflight",
+            )?;
+        }
         if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
             return Ok(());
         }

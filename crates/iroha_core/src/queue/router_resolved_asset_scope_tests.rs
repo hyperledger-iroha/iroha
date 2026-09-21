@@ -77,8 +77,8 @@ fn account_metadata_write_with_multiple_scopes_falls_back_to_default_route() {
     let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
     scope_entry.ensure_dataspace(first_dataspace);
     scope_entry.ensure_dataspace(second_dataspace);
-    let state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
-    state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
+    let mut state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
+    install_router_lane_catalog(&mut state, router.lane_catalog.as_ref().clone());
     assert_eq!(
         router
             .try_route_without_state(&tx)
