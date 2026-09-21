@@ -1477,7 +1477,7 @@ SHARED_TLC_RESULT_SPECIALIZED_CALLERS = (
 )
 SHARED_TLC_RESULT_CONTRACT_SHA256 = {
     SHARED_TLC_RESULT_CONTRACT: (
-        "f74b5f668830daf9f434fb8ad3234cac13ffafd44a3e8341841d616a27ec03ea"
+        "17f76f30172c21e76f86bfc2d46e11900e6260233915870f2f1b051922a2f6c9"
     ),
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh": (
         "47175c5815cb5073b5ef97cc5f23d2609d15f4cf6caae6068633250c648d79ba"
@@ -1492,7 +1492,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "a69da1a117bb8e6f3a73d5c6ce99eb88286b1372b59238e0da2ccf555eeafb0e"
     ),
     "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh": (
-        "2d2db5fa7d443b1fff766ff70074525de8d99ac80238e0affc9a56a2a2a97d1c"
+        "c8851a25c1fd840fdc4975c476ab2f77f80548adcfeb9e80dc07e6f1c5683cb6"
     ),
     "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh": (
         "2c88484904aa3fb104ea8d33cc9d7ba53859fb51c50ad2aeb30cd0e35fb506b5"
@@ -1525,7 +1525,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "a167d46e931ebe08e8933c27a1cc2efb26898cd7fd5dbeb2b006924c590d31f6"
     ),
     "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
-        "bbcc562f826e5a3366e6a084e20f653aa2b20f70bff12ba1fc46c0d5a454a66e"
+        "fe9e096d304c0d94b04abbf18dbac11e79004a21604c6047ef484dcb5c2fd325"
     ),
     "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh": (
         "1cd0bee3b981d6a0cc814587543b82c02ef6d220ae92a12c2afc55e0faf4032a"
@@ -1610,7 +1610,7 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
     ),
     "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh": (
         6,
-        41,
+        40,
         0,
         0,
         0,
@@ -1687,7 +1687,7 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
     ),
     "scripts/formal/run_sumeragi_v2_inflight_first_release.sh": (
         1,
-        9,
+        25,
         0,
         0,
         0,
@@ -1894,7 +1894,7 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "8574f346c2a613fe29f452c887f716ba1f5b66fd0c71cbac009f9f3ea8bb2303"
+    "9eb7261aaeac99d83e78789bee644992918c9b38d1f3f59230f1931096bf2191"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
     "1f802a03156468b1edd273fe1048db5be71c46c83cfa56b6535fa0131d286d71"

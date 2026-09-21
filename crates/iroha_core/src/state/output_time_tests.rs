@@ -888,13 +888,21 @@ mod retry_and_periodic {
             },
             true,
         );
-        let state = State::new_with_chain_and_network_id_for_testing(
+        // This configured Kura already owns its authenticated physical primary.
+        // Use the same fallible reader construction as the committed-proof
+        // fixtures; a fresh-State test constructor would provision another H0.
+        let prior_wire = history.target_disk_bytes();
+        let mut state = State::try_new_with_chain_and_network_id(
             World::default(),
             Arc::clone(&history.kura),
             LiveQueryStore::start_test(),
             (*crate::state::DEFAULT_TEST_CHAIN_ID).clone(),
             history.artifacts[0].height_context.network_id,
-        );
+            #[cfg(feature = "telemetry")]
+            Default::default(),
+        )
+        .expect("actual State startup over the original authenticated header source");
+        state.configure_test_runtime_defaults();
         {
             let mut parameters = state.world.parameters.block();
             let mut policy = ExecutionOutputPolicyV1::bootstrap();
@@ -932,6 +940,7 @@ mod retry_and_periodic {
             hashes.push(block.hash());
         }
         hashes.commit();
+        assert_eq!(history.target_disk_bytes(), prior_wire);
         let previous = history.target();
         let timestamp =
             u64::try_from(previous.header().creation_time().as_millis()).unwrap() + 180_000;

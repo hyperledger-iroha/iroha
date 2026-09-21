@@ -383,7 +383,8 @@ def synthetic_producer_inputs(tmp_path, monkeypatch, mutation=None):
     monkeypatch.setattr(producer.native,"verify_manifest",verify)
     dependencies=[]
     for i,module in enumerate(sorted(producer.DEPENDENCIES)):
-        path=tmp_path/(str(i)+".jar");raw=zip_bytes([("dependency/Owner"+str(i)+".class",class_bytes("dependency/Owner"+str(i),"Dependency.java"))]);path.write_bytes(raw)
+        owner = {"org.junit.jupiter:junit-jupiter-engine": contract.DEPENDENCY_RUNTIME_OWNERS[0], "org.junit.platform:junit-platform-launcher": contract.DEPENDENCY_RUNTIME_OWNERS[1]}.get(module, "dependency/Owner" + str(i))
+        path=tmp_path/(str(i)+".jar");raw=zip_bytes([(owner+".class",class_bytes(owner,"Dependency.java"))]);path.write_bytes(raw)
         dependencies.append({"module":module,"version":"1.0","path":str(path),**contract.identity(raw)})
     dependency_path=tmp_path/"dependencies.json";dependency_path.write_bytes(contract.canonical_json({"schema":"sorafs.java_consumer.dependencies.v1","jars":dependencies}))
     jdk=tmp_path/"jdk";jdk.mkdir()
@@ -399,11 +400,21 @@ def synthetic_producer_inputs(tmp_path, monkeypatch, mutation=None):
             owner=contract.SUITE.replace(".","/");raw=class_bytes(owner,"SorafsReferenceValidatorsJavaConsumerTest.java",contract.GROUPS)
             if mutation=="compiled_owner":owner="unowned/Source"
             path=classes/(owner+".class");path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
+            for name in ("SorafsJavaConsumerQualificationRunner", *(["SorafsAndroidPackageLinkProbe"] if lane == "android-host" else [])):
+                if mutation == "missing_runner" and name == "SorafsJavaConsumerQualificationRunner":
+                    continue
+                if mutation == "missing_probe" and name == "SorafsAndroidPackageLinkProbe":
+                    continue
+                qualified = "org/hyperledger/iroha/qualification/" + name
+                path = classes / (qualified + ".class")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(class_bytes(qualified, name + ".java"))
         elif command[-1].endswith("SorafsAndroidPackageLinkProbe"):
-            log.write_bytes(load_log({work/"packages/android-classes.jar":{contract.ANDROID_OWNER:b""}})+b"\n")
+            log.write_bytes(load_log({work/"packages/android-classes.jar":{contract.ANDROID_OWNER:b""}, classes:{"org/hyperledger/iroha/qualification/SorafsAndroidPackageLinkProbe":b""}})+b"\n")
         else:
-            jars={work/"packages/core.jar":core(),classes:{contract.SUITE.replace(".","/"):b""}}
-            log.write_bytes(load_log(jars)+b"\n"+b"[0.1s][info][library] Loaded library "+str(work/"native"/expected_native).encode()+b", handle 0x1\n"+producer.REPORT_PREFIX+base64.b64encode(ET.tostring(report()))+b"\n")
+            jars={work/"packages/core.jar":core(),classes:{contract.SUITE.replace(".","/"):b"", "org/hyperledger/iroha/qualification/SorafsJavaConsumerQualificationRunner":b""}}
+            dependency_jars = contract.dependency_classpath({entry["module"]: Path(entry["path"]).read_bytes() for entry in dependencies}, work)
+            log.write_bytes(load_log(jars)+b"\n"+load_log(dependency_jars)+b"\n"+b"[0.1s][info][library] Loaded library "+str(work/"native"/expected_native).encode()+b", handle 0x1\n"+producer.REPORT_PREFIX+base64.b64encode(ET.tostring(report()))+b"\n")
             if lane=="jvm":
                 mutations={
                     "original_package":core_path,"private_package":work/"packages/core.jar",
@@ -437,7 +448,23 @@ def test_producer_joins_retained_exact_bytes_in_mocked_process_unit_boundary(tmp
     assert not any(key in manifest for key in ("qualified","production_ready","passed"))
 
 
-@pytest.mark.parametrize("mutation", ["original_package","private_package","original_source","private_source","original_fixture","private_fixture","compiled_drift","tool_drift","producer_copy","report_after_validation","compiled_owner"])
+@pytest.mark.parametrize("relative", ["target/qualification", "build/qualification", "sources/qualification"])
+def test_producer_only_allows_in_tree_outputs_under_target(tmp_path, monkeypatch, relative):
+    args, _, _ = synthetic_producer_inputs(tmp_path, monkeypatch)
+    args.work_dir = args.source_root / relative
+    args.work_dir.parent.mkdir(parents=True)
+    def stop_at_capture(*_args):
+        raise RuntimeError("reached original input capture")
+    monkeypatch.setattr(producer, "read_file", stop_at_capture)
+    if relative.startswith("target/"):
+        with pytest.raises(RuntimeError, match="reached original input capture"): producer.produce(args)
+        assert args.work_dir.is_dir()
+    else:
+        with pytest.raises(contract.ArtifactError, match="under target/"): producer.produce(args)
+        assert not args.work_dir.exists()
+
+
+@pytest.mark.parametrize("mutation", ["original_package","private_package","original_source","private_source","original_fixture","private_fixture","compiled_drift","tool_drift","producer_copy","report_after_validation","compiled_owner","missing_runner","missing_probe"])
 def test_producer_preserves_refusal_instead_of_packaging_drift(tmp_path,monkeypatch,mutation):
     args,_commands,_checks=synthetic_producer_inputs(tmp_path,monkeypatch,mutation)
     with pytest.raises((ValueError,OSError)):producer.produce(args)

@@ -4,7 +4,7 @@
 Every selection needs the independently pinned signed-manifest source context
 and a signed-manifest artifact. A dry-run checks the closed command plan only;
 the checker authenticates sources through the required native ReleaseManifest
-hardware receipt verifier, rejecting missing support.
+custody and completed-operation receipt verifier, rejecting missing support.
 """
 
 from __future__ import annotations

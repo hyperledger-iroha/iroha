@@ -12,6 +12,10 @@ use crate::{
 mod physical;
 use physical::PreparedCellWriters;
 pub use physical::PublishedPublication;
+
+#[path = "cell/writers.rs"]
+mod writers;
+use writers::{CellWriters, OriginalCellWriters};
 /// Multi-version storage for a single value.
 ///
 /// Charged cells require both original allocation owners before cloning either
@@ -151,28 +155,18 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
         &self,
         charges: CellAllocationCharges<Charge>,
     ) -> CurrentReplacement<'_, V, Charge> {
-        let (revert, blocks) = self.acquire_charged_writers(charges);
         CurrentReplacement {
-            blocks,
-            _revert: revert,
-            publication: &self.publication,
+            writers: self.acquire_charged_writers(charges),
         }
     }
 
     /// Create a block using a prepaid current/undo pair before either clone.
     /// Preimage copies and later payload growth require separate admission.
     pub fn block_charged(&self, charges: CellAllocationCharges<Charge>) -> Block<'_, V, Charge> {
-        let (mut revert, blocks) = self.acquire_charged_writers(charges);
+        let mut writers = self.acquire_charged_writers(charges);
         let predecessor = self.publication.capture();
-        *revert.get_mut() = None;
-        Block::new(
-            revert,
-            blocks,
-            false,
-            &self.publication,
-            predecessor,
-            BlockMode::Ordinary,
-        )
+        *writers.as_mut().revert.get_mut() = None;
+        Block::new(writers, false, predecessor, BlockMode::Ordinary)
     }
 
     /// Undo the published tip before staging a replacement with prepaid owners.
@@ -181,25 +175,19 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
         &self,
         charges: CellAllocationCharges<Charge>,
     ) -> Block<'_, V, Charge> {
-        let (mut revert, mut blocks) = self.acquire_charged_writers(charges);
+        let mut writers = self.acquire_charged_writers(charges);
         let predecessor = self.publication.capture();
-        if let Some(revert) = core::mem::take(revert.get_mut()) {
-            *blocks.get_mut() = revert;
+        let original = writers.as_mut();
+        if let Some(revert) = core::mem::take(original.revert.get_mut()) {
+            *original.blocks.get_mut() = revert;
         }
-        Block::new(
-            revert,
-            blocks,
-            true,
-            &self.publication,
-            predecessor,
-            BlockMode::Replace,
-        )
+        Block::new(writers, true, predecessor, BlockMode::Replace)
     }
 
     fn acquire_charged_writers(
         &self,
         charges: CellAllocationCharges<Charge>,
-    ) -> (CellWriter<'_, Option<V>, Charge>, CellWriter<'_, V, Charge>) {
+    ) -> CellWriters<'_, V, Charge> {
         let CellAllocationCharges { current, undo } = charges;
         let revert = self
             .revert_released
@@ -209,15 +197,21 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
                     .unwrap_or_else(|never| match never {})
             });
         let revert = self.revert_released.poisoning_guard(revert);
-        let blocks = self
-            .blocks_released
+        self.blocks_released
             .with_acquisition_unwind_notification(|| {
-                self.blocks
+                // Own the first writer inside the second acquisition's unwind
+                // scope. If that acquisition panics, its raw lock drops first,
+                // then this original undo writer drops before either native
+                // release callback can run. Both poison verdicts are already
+                // fixed by that same unwind; neither lock is repaired here.
+                let revert = revert;
+                let blocks = self
+                    .blocks
                     .write_charged(|_, _| Ok::<_, std::convert::Infallible>(current))
-                    .unwrap_or_else(|never| match never {})
-            });
-        let blocks = self.blocks_released.poisoning_guard(blocks);
-        (revert, blocks)
+                    .unwrap_or_else(|never| match never {});
+                let blocks = self.blocks_released.poisoning_guard(blocks);
+                CellWriters::new(self, revert, blocks)
+            })
     }
 }
 
@@ -259,35 +253,25 @@ pub use view::View;
 /// This is physical custody only, not authorization for a new block or State.
 #[must_use = "retain this owner until same-cut publication or abandonment"]
 pub struct CurrentReplacement<'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
-    // Drop the current writer before the outer undo writer on abandonment.
-    blocks: CellWriter<'storage, V, Charge>,
-    _revert: CellWriter<'storage, Option<V>, Charge>,
-    publication: &'storage Publication,
+    writers: CellWriters<'storage, V, Charge>,
 }
 
 impl<V: Value, Charge: Send + Sync + 'static> CurrentReplacement<'_, V, Charge> {
     /// Borrow the original current value while both writers remain held.
     pub fn get(&self) -> &V {
-        &self.blocks
+        &self.writers.as_ref().blocks
     }
 
     /// Publish the replacement once without changing or clearing retained undo.
     /// The caller must already hold its complete cross-field visibility boundary.
-    pub fn publish(self, value: V) {
-        let Self {
-            _revert,
-            mut blocks,
-            publication,
-        } = self;
-        *blocks.get_mut() = value;
-        publish_pair(
-            blocks,
-            _revert,
-            publication,
-            NextPublication::new(),
-            true,
-            false,
-        );
+    pub fn publish(mut self, value: V) {
+        *self.writers.as_mut().blocks.get_mut() = value;
+        // Retain the whole original pair if payload replacement or identity
+        // construction unwinds before the consuming publication transition.
+        let next = NextPublication::new();
+        let publication = &self.writers.target().publication;
+        let OriginalCellWriters { revert, blocks } = self.writers.into_original();
+        publish_pair(blocks, revert, publication, next, true, false);
     }
 }
 
@@ -587,27 +571,21 @@ mod block {
     use std::ops::{Deref, DerefMut};
     /// Batched update to the storage that can be reverted later
     pub struct Block<'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
-        pub(crate) revert: CellWriter<'storage, Option<V>, Charge>,
-        pub(crate) blocks: CellWriter<'storage, V, Charge>,
+        pub(super) writers: CellWriters<'storage, V, Charge>,
         pub(super) dirty: bool,
-        pub(super) publication: &'storage Publication,
         pub(super) predecessor: CapturedPublication,
         pub(super) mode: BlockMode,
     }
     impl<'storage, V: Value, Charge: Send + Sync + 'static> Block<'storage, V, Charge> {
         pub(super) fn new(
-            revert: CellWriter<'storage, Option<V>, Charge>,
-            blocks: CellWriter<'storage, V, Charge>,
+            writers: CellWriters<'storage, V, Charge>,
             dirty: bool,
-            publication: &'storage Publication,
             predecessor: CapturedPublication,
             mode: BlockMode,
         ) -> Self {
             Self {
-                revert,
-                blocks,
+                writers,
                 dirty,
-                publication,
                 predecessor,
                 mode,
             }
@@ -626,24 +604,19 @@ mod block {
         }
         /// Apply aggregated changes to the storage
         pub fn commit(self) {
+            // Keep the original pair through successor-identity allocation.
+            let next = NextPublication::new();
             let Self {
-                revert,
-                blocks,
+                writers,
                 dirty,
-                publication,
                 predecessor: _,
                 mode: _,
             } = self;
+            let publication = &writers.target().publication;
+            let OriginalCellWriters { revert, blocks } = writers.into_original();
             // Even an untouched block publishes its clear-undo transition and
             // rotates pair identity before either writer can notify a waiter.
-            publish_pair(
-                blocks,
-                revert,
-                publication,
-                NextPublication::new(),
-                dirty,
-                true,
-            );
+            publish_pair(blocks, revert, publication, next, dirty, true);
         }
 
         /// Admit metadata retention, then release writers around their original allocations.
@@ -660,15 +633,12 @@ mod block {
             let admission = admit(&self)?;
             let next = NextPublication::new();
             let Self {
-                revert,
-                blocks,
+                writers,
                 dirty,
                 predecessor,
                 mode,
-                publication: _,
             } = self;
-            let blocks = blocks.release_with(|writer| writer.detach());
-            let revert = revert.release_with(|writer| writer.detach());
+            let (blocks, revert) = writers.detach();
             Ok(Detached {
                 revert,
                 blocks,
@@ -687,7 +657,11 @@ mod block {
         /// not alter it. For `block_and_revert`, it is the value after undoing
         /// the prior block, not that discarded block's final value.
         pub fn get_before_block(&self) -> &V {
-            self.revert.as_ref().unwrap_or_else(|| self.get())
+            self.writers
+                .as_ref()
+                .revert
+                .as_ref()
+                .unwrap_or_else(|| self.get())
         }
 
         /// Borrow the exact block preimage and current value, if touched.
@@ -697,10 +671,14 @@ mod block {
         /// `None`. Reverting a previous block happens before this overlay starts
         /// and does not by itself count as a touch.
         pub fn touched_value(&self) -> Option<TouchedValue<'_, V>> {
-            self.revert.as_ref().map(|before| TouchedValue {
-                before,
-                after: self.get(),
-            })
+            self.writers
+                .as_ref()
+                .revert
+                .as_ref()
+                .map(|before| TouchedValue {
+                    before,
+                    after: self.get(),
+                })
         }
 
         /// Return the actual acquisition mode, including an untouched replacement.
@@ -726,14 +704,21 @@ mod block {
         }
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self) -> &mut V {
-            let value = self.blocks.get_mut();
-            self.revert.get_or_insert_with(|| value.clone());
+            let original = self.writers.as_mut();
+            let value = original.blocks.get_mut();
+            original.revert.get_or_insert_with(|| value.clone());
             self.dirty = true;
             value
         }
         /// Read entry from the storage up to certain version non-inclusive
         pub fn get(&self) -> &V {
-            &self.blocks
+            &self.writers.as_ref().blocks
+        }
+
+        /// Borrow the exact original undo/current values for the existing codec.
+        pub(crate) fn snapshot_values(&self) -> (&Option<V>, &V) {
+            let original = self.writers.as_ref();
+            (&original.revert, &original.blocks)
         }
     }
     impl<V: Value, Charge: Send + Sync + 'static> Deref for Block<'_, V, Charge> {
@@ -763,6 +748,8 @@ mod block {
         /// still-unapplied mutation cannot replace the block preimage.
         pub fn get_before_block(&self) -> &V {
             self.block
+                .writers
+                .as_ref()
                 .revert
                 .as_ref()
                 .or(self.revert.as_ref())
@@ -791,20 +778,20 @@ mod block {
         /// Apply aggregated changes of [`Transaction`] to the [`Block`]
         pub fn apply(mut self) {
             if let Some(prev_value) = core::mem::take(&mut self.revert) {
-                self.block.revert.get_or_insert(prev_value);
+                self.block.writers.as_mut().revert.get_or_insert(prev_value);
             }
             self.applied = true;
         }
         /// Get mutable access to the value stored in cell
         pub fn get_mut(&mut self) -> &mut V {
-            let value = self.block.blocks.get_mut();
+            let value = self.block.writers.as_mut().blocks.get_mut();
             self.revert.get_or_insert_with(|| value.clone());
             self.block.dirty = true;
             value
         }
         /// Read entry from the cell
         pub fn get(&self) -> &V {
-            &self.block.blocks
+            &self.block.writers.as_ref().blocks
         }
     }
     impl<'block, 'store: 'block, V: Value, Charge: Send + Sync + 'static> Drop
@@ -817,7 +804,7 @@ mod block {
             // revert changes made so far by current transaction
             // if transaction was applied set would be empty
             if let Some(prev_value) = core::mem::take(&mut self.revert) {
-                *self.block.blocks.get_mut() = prev_value;
+                *self.block.writers.as_mut().blocks.get_mut() = prev_value;
             }
             self.block.dirty = self.dirty_before;
         }
@@ -996,3 +983,11 @@ mod detached_tests;
 #[cfg(test)]
 #[path = "cell/charged_allocation_tests.rs"]
 mod charged_allocation_tests;
+
+#[cfg(test)]
+#[path = "cell/executing_writers_tests.rs"]
+mod executing_writers_tests;
+
+#[cfg(test)]
+#[path = "cell/partial_acquisition_tests.rs"]
+mod partial_acquisition_tests;

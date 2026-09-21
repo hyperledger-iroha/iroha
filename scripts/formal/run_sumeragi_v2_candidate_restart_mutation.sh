@@ -227,4 +227,4 @@ echo "[tlc] exact candidate identity distinguishes context, view, generation, pa
 echo "[tlc] compact crash/replay reconstruction replaces the volatile signature witness with exact crash authority and retains body and application negative controls without preserving the obsolete exclusive RestartReplay order"
 echo "[tlc] stale-generation completion and dropped reconstruction mutants fail their named invariants"
 echo "[tlc] exact outer Progress and runtime Progress/Normal/bypass partitions reject every single-family mutation"
-echo "[tlc] 6 repaired cases passed; 41 mutants failed their named invariants"
+echo "[tlc] 6 repaired cases passed; 40 mutants failed their named invariants"
